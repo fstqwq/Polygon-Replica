@@ -243,18 +243,29 @@ def _assert_workspace_build_access(ctx: dict, build_id: str) -> None:
 
 
 def _assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
-    params = [artifact_id, ctx["problem"]["id"], ctx["workspace"]["id"]]
-    build_row = db.fetch_one(
-        "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-        params,
+    row = db.fetch_one(
+        """
+        SELECT id FROM (
+            SELECT id
+            FROM builds
+            WHERE id=? AND problem_id=? AND workspace_id=?
+            UNION ALL
+            SELECT id
+            FROM previews
+            WHERE id=? AND problem_id=? AND workspace_id=?
+        )
+        LIMIT 1
+        """,
+        [
+            artifact_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            artifact_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+        ],
     )
-    if build_row is not None:
-        return
-    preview_row = db.fetch_one(
-        "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
-        params,
-    )
-    if preview_row is not None:
+    if row is not None:
         return
     raise HTTPException(status_code=404, detail="artifact not found in workspace")
 

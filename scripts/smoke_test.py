@@ -980,6 +980,21 @@ def main() -> None:
             )
         if "latex.log" not in preview_page_with_bad_log.text:
             raise RuntimeError("preview page did not render latex.log section for non-utf8 log")
+        preview_artifact_browse = client.get(
+            f"/problems/sample/alice/artifacts/{preview_id}/browse",
+            params={"rel": "logs"},
+        )
+        if preview_artifact_browse.status_code != 200:
+            raise RuntimeError(
+                "preview artifact browse should be accessible in workspace"
+                f", status={preview_artifact_browse.status_code}"
+            )
+        preview_artifact_file = client.get(f"/problems/sample/alice/artifacts/{preview_id}/logs/latex.log")
+        if preview_artifact_file.status_code != 200:
+            raise RuntimeError(
+                "preview artifact file should be accessible in workspace"
+                f", status={preview_artifact_file.status_code}"
+            )
     manifest = json.loads((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "manifest.json").read_text(encoding="utf-8"))
     manifest_paths = [str(item.get("path")) for item in manifest.get("files", []) if isinstance(item, dict)]
     if manifest_paths != sorted(manifest_paths):
