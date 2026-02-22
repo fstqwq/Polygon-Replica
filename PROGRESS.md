@@ -62,6 +62,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Added preview history API: `/api/problems/{problem}/workspaces/{user}/recent-previews`.
 - Added `recent_preview` field to workspace status API.
 - Added global branch switching control in the shared header across all UI pages.
+- Added artifact directory zip download endpoint and UI links (`tests.zip`, `ans.zip`, `feedback_dir.zip`).
 - Build failure summaries now include `failed_step` and `failed_test`.
 - Run execution now supports submission source from workspace path or direct file upload.
 - Run compile diagnostics are parsed and surfaced in UI with file/line links when linkable.
@@ -69,6 +70,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Multi-pass feedback is isolated per test/pass to prevent cross-test contamination.
 - Run detail now exposes concrete artifact links for interactive transcripts and key feedback files.
 - Commit-based snapshot creation now uses `git archive` extraction (faster and avoids clone overhead).
+- Build/solve/validate execution paths now use direct stdin/stdout process wiring (fewer shell invocations).
 - Ephemeral snapshot directories are cleaned after build/preview jobs.
 - Preview service now fails gracefully when `pdflatex` is unavailable.
 - Export generation hardened with metadata checks and guaranteed temp directory cleanup.
@@ -84,7 +86,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 
 - `python3 -m compileall app`: pass.
 - Local smoke validation (venv, UI/API routing, build/preview/run/export path, upload run path): pass under local `./var` roots.
-- `./scripts/smoke_test.py` (with `.venv/bin/python`): pass.
+- `./scripts/smoke_test.py` (with `.venv/bin/python`, includes directory zip endpoint checks): pass.
 
 ## Known Operational Notes
 

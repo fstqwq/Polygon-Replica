@@ -25,23 +25,51 @@ def run_cmd(
     timeout: int = 120,
     input_text: str | None = None,
     env: dict[str, str] | None = None,
+    stdin_path: Path | None = None,
+    stdout_path: Path | None = None,
 ) -> CmdResult:
     start = monotonic()
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        input=input_text,
-        env=env,
-        check=False,
-    )
+    if input_text is not None and stdin_path is not None:
+        raise ValueError("input_text and stdin_path are mutually exclusive")
+
+    stdin_fh = None
+    stdout_fh = None
+    try:
+        kwargs: dict[str, Any] = {
+            "cwd": cwd,
+            "text": True,
+            "timeout": timeout,
+            "env": env,
+            "check": False,
+        }
+        if input_text is not None:
+            kwargs["input"] = input_text
+        if stdin_path is not None:
+            stdin_fh = stdin_path.open("r", encoding="utf-8", errors="replace")
+            kwargs["stdin"] = stdin_fh
+
+        if stdout_path is not None:
+            stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            stdout_fh = stdout_path.open("w", encoding="utf-8")
+            kwargs["stdout"] = stdout_fh
+            kwargs["stderr"] = subprocess.PIPE
+        else:
+            kwargs["capture_output"] = True
+
+        proc = subprocess.run(cmd, **kwargs)
+    finally:
+        if stdin_fh is not None:
+            stdin_fh.close()
+        if stdout_fh is not None:
+            stdout_fh.close()
+
+    stdout_text = "" if stdout_path is not None else (proc.stdout or "")
+    stderr_text = proc.stderr or ""
     return CmdResult(
         command=cmd,
         returncode=proc.returncode,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
+        stdout=stdout_text,
+        stderr=stderr_text,
         elapsed_ms=int((monotonic() - start) * 1000),
     )
 
@@ -70,4 +98,8 @@ def ensure_dir(path: Path) -> Path:
 def copytree(src: Path, dst: Path) -> None:
     if dst.exists():
         shutil.rmtree(dst)
-    shutil.copytree(src, dst)
+    shutil.copytree(
+        src,
+        dst,
+        ignore=shutil.ignore_patterns(".git", ".polygonlike.lock", "__pycache__", "*.pyc"),
+    )

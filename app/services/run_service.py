@@ -4,7 +4,6 @@ import json
 import os
 import re
 import selectors
-import shlex
 import subprocess
 import time
 import uuid
@@ -143,20 +142,12 @@ class RunService:
     ) -> tuple[int, int, int]:
         if time_file.exists():
             time_file.unlink()
-        quoted_bin = shlex.quote(str(submission_bin))
-        quoted_in = shlex.quote(str(input_file))
-        quoted_out = shlex.quote(str(output_file))
-        quoted_time = shlex.quote(str(time_file))
-
         if Path("/usr/bin/time").exists():
-            cmd = (
-                f"/usr/bin/time -f %M -o {quoted_time} "
-                f"{quoted_bin} < {quoted_in} > {quoted_out}"
-            )
+            cmd = ["/usr/bin/time", "-f", "%M", "-o", str(time_file), str(submission_bin)]
         else:
-            cmd = f"{quoted_bin} < {quoted_in} > {quoted_out}"
+            cmd = [str(submission_bin)]
 
-        proc = run_cmd(["bash", "-lc", cmd], timeout=timeout_sec)
+        proc = run_cmd(cmd, stdin_path=input_file, stdout_path=output_file, timeout=timeout_sec)
         mem_kb = 0
         if time_file.exists():
             raw = time_file.read_text(encoding="utf-8").strip()

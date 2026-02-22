@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import random
 import re
-import shlex
 import shutil
 import uuid
 from pathlib import Path
@@ -173,8 +172,7 @@ class BuildService:
             vlogs = []
             for t in test_files:
                 failing_test = t.name
-                cmd = f"{shlex.quote(str(validator))} < {shlex.quote(str(t))}"
-                proc = run_cmd(["bash", "-lc", cmd], timeout=30)
+                proc = run_cmd([str(validator)], stdin_path=t, timeout=30)
                 vlogs.append(f"{t.name}: rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
                 if proc.returncode != 0:
                     raise RuntimeError(f"validator failed on {t.name}")
@@ -187,10 +185,7 @@ class BuildService:
             for t in test_files:
                 failing_test = t.name
                 out = artifact_paths.ans / t.name.replace(".in", ".ans")
-                cmd = (
-                    f"{shlex.quote(str(accepted))} < {shlex.quote(str(t))} > {shlex.quote(str(out))}"
-                )
-                proc = run_cmd(["bash", "-lc", cmd], timeout=30)
+                proc = run_cmd([str(accepted)], stdin_path=t, stdout_path=out, timeout=30)
                 slog.append(f"{t.name}: rc={proc.returncode}\n{proc.stderr}\n")
                 if proc.returncode != 0:
                     raise RuntimeError(f"accepted solution failed on {t.name}")

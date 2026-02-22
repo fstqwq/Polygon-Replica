@@ -10,6 +10,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build pipeline (`compile -> generate -> validate -> solve -> persist`) with failed-step metadata
 - Runner page with pass-fail / interactive / multi-pass modes and workspace-or-upload submissions
 - Exporter page for Kattis / DOMjudge / Polygon zips
+- Artifact browsing plus directory zip download endpoints for generated outputs
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
 

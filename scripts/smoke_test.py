@@ -22,7 +22,25 @@ def main() -> None:
         sys.path.insert(0, str(root))
     ensure_local_env()
 
-    from app.main import build_service, db, export_service, preview_service, run_service, workspace_service
+    from fastapi.testclient import TestClient
+    from app.main import app, build_service, db, export_service, preview_service, run_service, workspace_service
+
+    with TestClient(app) as client:
+        for path in [
+            "/problems/sample/alice/files",
+            "/problems/sample/alice/git",
+            "/problems/sample/alice/build",
+            "/problems/sample/alice/preview",
+            "/problems/sample/alice/run",
+            "/problems/sample/alice/export",
+            "/api/problems/sample/workspaces/alice/status",
+            "/api/problems/sample/workspaces/alice/branches",
+            "/api/problems/sample/workspaces/alice/recent-builds",
+            "/api/problems/sample/workspaces/alice/recent-previews",
+        ]:
+            r = client.get(path)
+            if r.status_code != 200:
+                raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
 
     ctx = workspace_service.workspace_context("sample", "alice")
     ws = Path(ctx["workspace"]["path"])
@@ -85,6 +103,14 @@ def main() -> None:
         out = export_service.create_export("sample", build_id, export_type)
         if not out.exists():
             raise RuntimeError(f"missing export {export_type}")
+
+    with TestClient(app) as client:
+        r = client.get(
+            f"/problems/sample/alice/artifacts/{build_id}/download-dir",
+            params={"rel": "tests"},
+        )
+        if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
+            raise RuntimeError(f"download-dir failed status={r.status_code}")
 
     print("smoke_ok", preview_id, build_id, run_id_ws, run_id_upload)
 

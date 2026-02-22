@@ -26,7 +26,9 @@
     <p><a href="/api/problems/{{ ctx.problem.slug }}/builds/{{ detail.id }}/manifest">manifest.json</a></p>
     <p>
       <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=tests">tests/</a> |
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=ans">ans/</a>
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=ans">ans/</a> |
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/download-dir?rel=tests">tests.zip</a> |
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/download-dir?rel=ans">ans.zip</a>
     </p>
     {% if summary and summary.steps %}
     <h3>Steps</h3>

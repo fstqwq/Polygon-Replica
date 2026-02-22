@@ -51,7 +51,10 @@
       </tr>
       {% endfor %}
     </table>
-    <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/browse?rel=logs/run-{{ detail.id }}/feedback_dir">feedback_dir/</a></p>
+    <p>
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/browse?rel=logs/run-{{ detail.id }}/feedback_dir">feedback_dir/</a> |
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/download-dir?rel=logs/run-{{ detail.id }}/feedback_dir">feedback_dir.zip</a>
+    </p>
     {% else %}
     <pre>{{ summary }}</pre>
     {% endif %}

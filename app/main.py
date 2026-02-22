@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
+import zipfile
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -9,6 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
 
 from app.db import DB, now_iso
 from app.services.artifact_service import ArtifactService
@@ -71,6 +75,16 @@ def _safe_artifact_path(problem: str, build_id: str, rel: str) -> Path:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="artifact file not found")
     return path
+
+
+def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Path]:
+    root = (settings.artifacts_root / problem / build_id).resolve()
+    path = (root / rel).resolve()
+    if root not in path.parents and root != path:
+        raise HTTPException(status_code=400, detail="invalid artifact path")
+    if not path.exists() or not path.is_dir():
+        raise HTTPException(status_code=404, detail="artifact directory not found")
+    return root, path
 
 
 def _audit(actor_user_id: int, problem_id: int, action: str, details: dict) -> None:
@@ -443,28 +457,42 @@ def export_create(problem: str, user: str, build_id: str = Form(...), export_typ
     return RedirectResponse(f"/problems/{problem}/{user}/export?message={quote_plus(msg)}", status_code=303)
 
 
-@app.get("/problems/{problem}/{user}/artifacts/{build_id}/{rel_path:path}")
-def artifact_file(problem: str, user: str, build_id: str, rel_path: str):
+@app.get("/problems/{problem}/{user}/artifacts/{build_id}/download-dir")
+def artifact_download_dir(problem: str, user: str, build_id: str, rel: str):
     _ = page_ctx(problem, user)
-    file_path = _safe_artifact_path(problem, build_id, rel_path)
-    return FileResponse(file_path, filename=file_path.name)
+    root, target = _safe_artifact_dir(problem, build_id, rel)
+    fd, tmp_zip = tempfile.mkstemp(prefix=f"{build_id}-", suffix=".zip")
+    os.close(fd)
+    tmp_path = Path(tmp_zip)
+    with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(target.rglob("*")):
+            if p.is_file():
+                zf.write(p, arcname=str(p.relative_to(root)))
+    name = f"{Path(rel).name or 'artifacts'}-{build_id}.zip"
+    return FileResponse(
+        tmp_path,
+        filename=name,
+        background=BackgroundTask(lambda: tmp_path.unlink(missing_ok=True)),
+    )
 
 
 @app.get("/problems/{problem}/{user}/artifacts/{build_id}/browse", response_class=HTMLResponse)
 def artifact_browse(request: Request, problem: str, user: str, build_id: str, rel: str = "tests"):
     ctx = page_ctx(problem, user)
-    root = (settings.artifacts_root / problem / build_id).resolve()
-    target = (root / rel).resolve()
-    if root not in target.parents and root != target:
-        raise HTTPException(status_code=400, detail="invalid artifact path")
-    if not target.exists() or not target.is_dir():
-        raise HTTPException(status_code=404, detail="artifact directory not found")
+    root, target = _safe_artifact_dir(problem, build_id, rel)
     files = sorted([str(p.relative_to(root)) for p in target.rglob("*") if p.is_file()])
     return templates.TemplateResponse(
         request,
         "artifact_browser.html",
         {"ctx": ctx, "build_id": build_id, "rel": rel, "files": files},
     )
+
+
+@app.get("/problems/{problem}/{user}/artifacts/{build_id}/{rel_path:path}")
+def artifact_file(problem: str, user: str, build_id: str, rel_path: str):
+    _ = page_ctx(problem, user)
+    file_path = _safe_artifact_path(problem, build_id, rel_path)
+    return FileResponse(file_path, filename=file_path.name)
 
 
 @app.get("/api/problems")

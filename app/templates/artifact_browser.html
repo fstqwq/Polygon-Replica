@@ -2,6 +2,7 @@
 {% block content %}
 <h1>Artifact Browser</h1>
 <p><strong>Build:</strong> {{ build_id }} <strong>Path:</strong> {{ rel }}</p>
+<p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ build_id }}/download-dir?rel={{ rel }}">Download This Directory (zip)</a></p>
 <ul>
   {% for f in files %}
   <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ build_id }}/{{ f }}">{{ f }}</a></li>
