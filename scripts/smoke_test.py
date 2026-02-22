@@ -129,6 +129,13 @@ def main() -> None:
 
     snapshot_repo = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-check-{uuid.uuid4().hex[:8]}"
     snapshot_repo.mkdir(parents=True, exist_ok=True)
+    snapshot_symlink_source = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-link-source-{uuid.uuid4().hex[:8]}.txt"
+    snapshot_symlink_source.write_text("snapshot-link-source\n", encoding="utf-8")
+    snapshot_symlink_supported = True
+    try:
+        (snapshot_repo / "tracked-link.txt").symlink_to(snapshot_symlink_source)
+    except (OSError, NotImplementedError):
+        snapshot_symlink_supported = False
     for cmd in [
         ["git", "init", str(snapshot_repo)],
         ["git", "-C", str(snapshot_repo), "config", "user.email", "smoke@polygonlike.local"],
@@ -151,14 +158,24 @@ def main() -> None:
         raise RuntimeError("clean snapshot path did not preserve tracked files")
     if (clean_snapshot / "untracked.txt").exists():
         raise RuntimeError("clean snapshot unexpectedly contained untracked files")
+    if snapshot_symlink_supported and (clean_snapshot / "tracked-link.txt").exists():
+        raise RuntimeError("clean snapshot should strip committed symlinks")
     shutil.rmtree(clean_snapshot.parent, ignore_errors=True)
 
     (snapshot_repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+    if snapshot_symlink_supported:
+        try:
+            (snapshot_repo / "dirty-link.txt").symlink_to(snapshot_symlink_source)
+        except (OSError, NotImplementedError):
+            snapshot_symlink_supported = False
     dirty_snapshot = workspace_service.create_snapshot(snapshot_repo, None)
     if not (dirty_snapshot / "untracked.txt").exists():
         raise RuntimeError("dirty snapshot path did not preserve untracked files")
+    if snapshot_symlink_supported and (dirty_snapshot / "dirty-link.txt").exists():
+        raise RuntimeError("dirty snapshot should strip workspace symlinks")
     shutil.rmtree(dirty_snapshot.parent, ignore_errors=True)
     shutil.rmtree(snapshot_repo, ignore_errors=True)
+    snapshot_symlink_source.unlink(missing_ok=True)
 
     ctx = workspace_service.workspace_context("sample", "alice")
     ws = Path(ctx["workspace"]["path"])
@@ -1030,6 +1047,62 @@ def main() -> None:
         raise RuntimeError("run config did not preserve checker_mode=kattis")
     if not kattis_summary.get("tests") or len(kattis_summary["tests"][0].get("passes", [])) < 2:
         raise RuntimeError("kattis checker multi-pass run did not execute multiple passes")
+
+    export_symlink_problem = f"exportsymlink-{uuid.uuid4().hex[:8]}"
+    export_symlink_user = f"u-{uuid.uuid4().hex[:6]}"
+    workspace_service.ensure_problem(export_symlink_problem, "Export Symlink Hardening Problem")
+    workspace_service.ensure_workspace(export_symlink_problem, export_symlink_user)
+    export_symlink_ctx = workspace_service.workspace_context(export_symlink_problem, export_symlink_user)
+    export_symlink_ws = Path(export_symlink_ctx["workspace"]["path"])
+    for d in ["solutions", "validators", "checkers", "tests/manual", "config", "statement"]:
+        (export_symlink_ws / d).mkdir(parents=True, exist_ok=True)
+    (export_symlink_ws / "tests/manual/001.in").write_text("1\n", encoding="utf-8")
+    (export_symlink_ws / "solutions/accepted.cpp").write_text(
+        "#include <bits/stdc++.h>\nusing namespace std; int main(){ long long x=0; if(cin>>x) cout<<x<<\"\\n\"; }\n",
+        encoding="utf-8",
+    )
+    (export_symlink_ws / "validators/validator.cpp").write_text(
+        "#include <bits/stdc++.h>\nint main(){return 42;}\n",
+        encoding="utf-8",
+    )
+    (export_symlink_ws / "checkers/checker.cpp").write_text(
+        "#include <bits/stdc++.h>\nint main(){return 42;}\n",
+        encoding="utf-8",
+    )
+    (export_symlink_ws / "config/build.json").write_text(
+        json.dumps({"generator_runs": 0}),
+        encoding="utf-8",
+    )
+    (export_symlink_ws / "statement/main.tex").write_text(
+        "\\documentclass{article}\\begin{document}export\\end{document}\n",
+        encoding="utf-8",
+    )
+    export_symlink_source = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"export-link-source-{uuid.uuid4().hex[:8]}.txt"
+    export_symlink_source.write_text("export-symlink-leak\n", encoding="utf-8")
+    export_symlink_supported = True
+    try:
+        (export_symlink_ws / "statement/leak.tex").symlink_to(export_symlink_source)
+    except (OSError, NotImplementedError):
+        export_symlink_supported = False
+    for cmd in [
+        ["git", "-C", str(export_symlink_ws), "config", "user.email", "smoke@polygonlike.local"],
+        ["git", "-C", str(export_symlink_ws), "config", "user.name", "Smoke Test"],
+        ["git", "-C", str(export_symlink_ws), "add", "."],
+        ["git", "-C", str(export_symlink_ws), "commit", "-m", "seed export symlink smoke data"],
+    ]:
+        proc = run_cmd(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"export symlink setup command failed: {' '.join(cmd)}")
+    if export_symlink_supported:
+        export_symlink_build_id = build_service.run_build(export_symlink_problem, export_symlink_user)
+        export_symlink_build_row = db.fetch_one("SELECT status FROM builds WHERE id=?", [export_symlink_build_id])
+        if export_symlink_build_row is None or export_symlink_build_row["status"] != "ok":
+            raise RuntimeError(f"export symlink hardening build failed: {export_symlink_build_row}")
+        export_symlink_zip = export_service.create_export(export_symlink_problem, export_symlink_build_id, "kattis")
+        export_symlink_entries = _zip_entries(export_symlink_zip)
+        if _has_suffix(export_symlink_entries, "statement/leak.tex"):
+            raise RuntimeError("kattis export should not copy symlinked statement assets from source snapshot")
+    export_symlink_source.unlink(missing_ok=True)
 
     export_outputs: dict[str, Path] = {}
     for export_type in ["kattis", "domjudge", "polygon-standard", "polygon-full"]:

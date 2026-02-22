@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from app.db import DB, now_iso
-from app.services.util import copytree, run_cmd, sha256_file
+from app.services.util import copytree, remove_symlinks, run_cmd, sha256_file
 
 
 class ExportService:
@@ -102,7 +102,7 @@ class ExportService:
         if ws_row is None:
             return None
         workspace = Path(ws_row["path"])
-        if not workspace.exists():
+        if not workspace.exists() or not workspace.is_dir():
             return None
 
         snapshot = tmp_root / "_source"
@@ -116,6 +116,7 @@ class ExportService:
             )
             proc = run_cmd(["bash", "-lc", cmd], timeout=120)
             if proc.returncode == 0:
+                remove_symlinks(snapshot)
                 return snapshot
             shutil.rmtree(snapshot, ignore_errors=True)
             detail = (proc.stderr or proc.stdout).strip()
@@ -124,6 +125,7 @@ class ExportService:
             )
 
         copytree(workspace, snapshot)
+        remove_symlinks(snapshot)
         return snapshot
 
     def _copy_statement(self, snapshot: Path | None, build_root: Path, dst_statement: Path) -> None:

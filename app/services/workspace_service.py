@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.db import DB, now_iso
 from app.settings import Settings
-from app.services.util import ensure_dir, run_cmd
+from app.services.util import copytree, ensure_dir, remove_symlinks, run_cmd
 
 
 class WorkspaceService:
@@ -221,9 +221,8 @@ class WorkspaceService:
                 head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                 self._extract_commit_snapshot(workspace, head, snap)
             else:
-                from app.services.util import copytree
-
                 copytree(workspace, snap)
+        remove_symlinks(snap)
         git_dir = snap / ".git"
         if git_dir.exists():
             import shutil

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -102,4 +103,28 @@ def copytree(src: Path, dst: Path) -> None:
         src,
         dst,
         ignore=shutil.ignore_patterns(".git", ".polygonlike.lock", "__pycache__", "*.pyc"),
+        symlinks=True,
     )
+
+
+def remove_symlinks(root: Path) -> int:
+    removed = 0
+    if not root.exists() or not root.is_dir():
+        return removed
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        dir_root = Path(dirpath)
+        keep_dirs: list[str] = []
+        for name in dirnames:
+            p = dir_root / name
+            if p.is_symlink():
+                p.unlink(missing_ok=True)
+                removed += 1
+                continue
+            keep_dirs.append(name)
+        dirnames[:] = keep_dirs
+        for name in filenames:
+            p = dir_root / name
+            if p.is_symlink():
+                p.unlink(missing_ok=True)
+                removed += 1
+    return removed
