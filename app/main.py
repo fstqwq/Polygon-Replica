@@ -231,6 +231,10 @@ def _parse_summary_json(raw: str | None, label: str) -> dict | None:
     return {"error": f"summary_json for {label} must be a JSON object"}
 
 
+def _read_text_safe(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> RedirectResponse:
     return RedirectResponse("/problems/sample/alice/files")
@@ -460,7 +464,7 @@ def build_page(request: Request, problem: str, user: str):
         root = Path(detail["artifact_path"]) / "logs"
         if root.exists():
             for p in sorted(root.glob("*.log")):
-                logs.append({"name": p.name, "content": p.read_text(encoding="utf-8")})
+                logs.append({"name": p.name, "content": _read_text_safe(p)})
         summary = _parse_summary_json(detail["summary_json"], "build")
         if summary:
             maybe_diagnostics = summary.get("diagnostics", [])
@@ -505,7 +509,7 @@ def preview_page(request: Request, problem: str, user: str):
         pdf = root / "statement_preview" / "statement.pdf"
         pdf_exists = pdf.exists()
         if lp.exists():
-            log = lp.read_text(encoding="utf-8")
+            log = _read_text_safe(lp)
             tex_ref = re.compile(r"(?P<file>[\\w./-]+\\.tex):(?P<line>\\d+)")
             for line in log.splitlines():
                 m = tex_ref.search(line)

@@ -383,6 +383,25 @@ def main() -> None:
     brow = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])
     if brow is None or brow["status"] != "ok":
         raise RuntimeError(f"build failed: {brow}")
+    preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_id
+    (preview_root / "logs" / "latex.log").write_bytes(b"preview\xfflog\n")
+    build_logs_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs"
+    (build_logs_root / "invalid-utf8.log").write_bytes(b"\xff\xfebuild-log\n")
+    with TestClient(app) as client:
+        build_page_with_bad_log = client.get("/problems/sample/alice/build", params={"build_id": build_id})
+        if build_page_with_bad_log.status_code != 200:
+            raise RuntimeError(
+                f"build page should tolerate non-utf8 logs, status={build_page_with_bad_log.status_code}"
+            )
+        if "invalid-utf8.log" not in build_page_with_bad_log.text:
+            raise RuntimeError("build page did not render non-utf8 log entry")
+        preview_page_with_bad_log = client.get("/problems/sample/alice/preview", params={"preview_id": preview_id})
+        if preview_page_with_bad_log.status_code != 200:
+            raise RuntimeError(
+                f"preview page should tolerate non-utf8 latex logs, status={preview_page_with_bad_log.status_code}"
+            )
+        if "latex.log" not in preview_page_with_bad_log.text:
+            raise RuntimeError("preview page did not render latex.log section for non-utf8 log")
     manifest = json.loads((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "manifest.json").read_text(encoding="utf-8"))
     generation_params = manifest.get("generation_params", {})
     if int(generation_params.get("max_passes", 0)) != 8:
