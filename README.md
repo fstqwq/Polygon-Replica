@@ -17,6 +17,8 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
 - Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`
+- Validator/checker/interactor compatibility: accepts both testlib-style (`0`) and Kattis-style (`42/43`) verdict exit codes
+- Run source safety: workspace submission paths are validated to stay within workspace root
 
 ## Quick Start
 
@@ -41,4 +43,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows, missing-submission failure handling, and export zip structure checks.
+  - Covers pass-fail, multi-pass, and interactive run flows, missing-submission failure handling, workspace path-boundary rejection, and export zip structure checks.

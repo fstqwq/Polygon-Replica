@@ -56,6 +56,22 @@ class RunService:
             )
         return result
 
+    def _resolve_submission_source(self, workspace: Path, submission_path: str) -> Path:
+        source = (workspace / submission_path).resolve()
+        ws_resolved = workspace.resolve()
+        if ws_resolved not in source.parents:
+            raise RuntimeError("submission_path must be inside the workspace")
+        if not source.exists() or not source.is_file():
+            raise RuntimeError(f"submission source not found: {submission_path}")
+        return source
+
+    def _validator_style_verdict(self, rc: int) -> str:
+        if rc in {0, 42}:
+            return "OK"
+        if rc == 43:
+            return "WA"
+        return "FAIL"
+
     def _run_interactive_case(
         self,
         interactor_bin: Path,
@@ -132,10 +148,11 @@ class RunService:
                 err = sub.stderr.read() if sub.stderr else b""
                 tf.write(f"submission stderr:\n{err.decode('utf-8', errors='replace')}\n")
                 return "RE", int((time.monotonic() - start) * 1000), 0
-            if itr.returncode != 0:
+            itr_verdict = self._validator_style_verdict(itr.returncode or 0)
+            if itr_verdict != "OK":
                 err = itr.stderr.read() if itr.stderr else b""
                 tf.write(f"interactor stderr:\n{err.decode('utf-8', errors='replace')}\n")
-                return "WA", int((time.monotonic() - start) * 1000), 0
+                return itr_verdict, int((time.monotonic() - start) * 1000), 0
             return "OK", int((time.monotonic() - start) * 1000), 0
 
     def _run_pass(
@@ -226,7 +243,7 @@ class RunService:
             else:
                 if not submission_path:
                     raise RuntimeError("submission_path is required when upload is not provided")
-                sub_src = workspace / submission_path
+                sub_src = self._resolve_submission_source(workspace, submission_path)
                 source_label = submission_path
                 compile_workspace = workspace
 
@@ -329,7 +346,7 @@ class RunService:
                             check_proc.stdout + check_proc.stderr,
                             encoding="utf-8",
                         )
-                        checker_verdict = "OK" if check_proc.returncode == 0 else "WA"
+                        checker_verdict = self._validator_style_verdict(check_proc.returncode)
                     else:
                         checker_verdict = "OK" if ans.exists() and ans.read_text(encoding="utf-8") == out.read_text(encoding="utf-8") else "WA"
 

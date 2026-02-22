@@ -87,15 +87,15 @@ def main() -> None:
         encoding="utf-8",
     )
     (ws / "validators/validator.cpp").write_text(
-        "#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 1; if(x<0) return 2; string rest; getline(cin,rest); return 0;}",
+        "#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 43; if(x<0) return 43; string rest; getline(cin,rest); return 42;}",
         encoding="utf-8",
     )
     (ws / "checkers/checker.cpp").write_text(
-        "#include <bits/stdc++.h>\n#include <filesystem>\nusing namespace std; int main(int argc,char** argv){ifstream out(argv[2]); long long a=0; if(!(out>>a)) return 1; const char* fb=getenv(\"FEEDBACK_DIR\"); if(fb){ filesystem::create_directories(fb); ofstream(string(fb)+\"/judgemessage.txt\")<<\"judge\"; ofstream(string(fb)+\"/teammessage.txt\")<<\"team\"; if(a>0){ ofstream(string(fb)+\"/nextpass.in\")<<(a-1)<<\"\\n\"; } } return a>=0?0:1; }",
+        "#include <bits/stdc++.h>\n#include <filesystem>\nusing namespace std; int main(int argc,char** argv){ifstream out(argv[2]); long long a=0; if(!(out>>a)) return 1; const char* fb=getenv(\"FEEDBACK_DIR\"); if(fb){ filesystem::create_directories(fb); ofstream(string(fb)+\"/judgemessage.txt\")<<\"judge\"; ofstream(string(fb)+\"/teammessage.txt\")<<\"team\"; if(a>0){ ofstream(string(fb)+\"/nextpass.in\")<<(a-1)<<\"\\n\"; } } return a>=0?42:43; }",
         encoding="utf-8",
     )
     (ws / "interactors/interactor.cpp").write_text(
-        "#include <bits/stdc++.h>\n#include <filesystem>\nusing namespace std; int main(int argc,char** argv){ if(argc<2) return 1; ifstream in(argv[1]); long long x=0; if(!(in>>x)) return 2; cout<<x<<endl; long long y=0; if(!(cin>>y)) return 3; const char* fb=getenv(\"FEEDBACK_DIR\"); if(fb){ filesystem::create_directories(fb); ofstream(string(fb)+\"/judgemessage.txt\")<<\"judge\"; ofstream(string(fb)+\"/teammessage.txt\")<<\"team\"; } return x==y?0:1; }",
+        "#include <bits/stdc++.h>\n#include <filesystem>\nusing namespace std; int main(int argc,char** argv){ if(argc<2) return 1; ifstream in(argv[1]); long long x=0; if(!(in>>x)) return 1; cout<<x<<endl; long long y=0; if(!(cin>>y)) return 1; const char* fb=getenv(\"FEEDBACK_DIR\"); if(fb){ filesystem::create_directories(fb); ofstream(string(fb)+\"/judgemessage.txt\")<<\"judge\"; ofstream(string(fb)+\"/teammessage.txt\")<<\"team\"; } return x==y?42:43; }",
         encoding="utf-8",
     )
     (ws / "generators/gen.cpp").write_text('#include <bits/stdc++.h>\nint main(){std::cout<<1<<"\\n";}', encoding="utf-8")
@@ -160,6 +160,20 @@ def main() -> None:
     missing_summary = json.loads(rrow_missing["summary_json"])
     if missing_summary.get("compile_log") != "compile.log":
         raise RuntimeError("missing-source failure did not expose compile.log")
+
+    run_id_traversal = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        submission_path="../outside.cpp",
+        mode="pass-fail",
+    )
+    rrow_traversal = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_traversal])
+    if rrow_traversal is None or rrow_traversal["status"] != "failed":
+        raise RuntimeError(f"path traversal run should fail: {rrow_traversal}")
+    traversal_summary = json.loads(rrow_traversal["summary_json"])
+    if "workspace" not in str(traversal_summary.get("error", "")):
+        raise RuntimeError("path traversal failure did not include workspace boundary error")
 
     export_outputs: dict[str, Path] = {}
     for export_type in ["kattis", "domjudge", "polygon-standard", "polygon-full"]:

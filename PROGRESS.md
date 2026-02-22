@@ -81,9 +81,12 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Export generation now produces format-structured Kattis (`2025-09`) and DOMjudge legacy-icpc package layouts with statement/data/submissions/validators paths.
 - Polygon exports are now slimmed to manifest + build step logs + statement preview (+ tests/ans only for full) and exclude heavy run replay payloads.
 - Run submission flow now records deterministic failed run metadata (`summary.json`, `compile.log`) even when setup/compile throws before test execution.
+- Build validator acceptance now supports both return code `0` and Kattis-style success code `42`.
+- Runner checker/interactor verdict mapping now supports both testlib (`0`) and Kattis output-validator (`42=OK`, `43=WA`) conventions.
+- Run submission source paths are now constrained to workspace boundaries to prevent path traversal.
 - Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Added reusable local validation script: `scripts/smoke_test.py`.
-- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, and export zip structure assertions.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, and export zip structure assertions.
 
 ## Upstream Dependency Integration
 

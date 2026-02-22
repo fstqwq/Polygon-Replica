@@ -100,6 +100,9 @@ class BuildService:
             )
         return result
 
+    def _validator_ok(self, returncode: int) -> bool:
+        return returncode in {0, 42}
+
     def run_build(self, problem: str, username: str, commit: str | None = None, ref: str | None = None) -> str:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
@@ -229,7 +232,7 @@ class BuildService:
                 failing_test = t.name
                 proc = run_cmd([str(validator)], stdin_path=t, timeout=30)
                 vlogs.append(f"{t.name}: rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
-                if proc.returncode != 0:
+                if not self._validator_ok(proc.returncode):
                     raise RuntimeError(f"validator failed on {t.name}")
             (logs_dir / "validate.log").write_text("\n".join(vlogs), encoding="utf-8")
             steps.append({"step": "validate", "status": "ok", "log": "logs/validate.log"})
