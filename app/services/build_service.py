@@ -17,6 +17,7 @@ from app.services.workspace_service import WorkspaceService
 
 
 DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<level>warning|error|note):\s*(?P<msg>.*)$")
+CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 
 
 class BuildService:
@@ -26,23 +27,43 @@ class BuildService:
         self.artifacts = artifacts
         self.toolchain = toolchain
 
+    def _is_safe_source_in_dir(self, root: Path, path: Path, root_resolved: Path | None = None) -> bool:
+        if path.is_symlink() or not path.exists() or not path.is_file():
+            return False
+        try:
+            resolved_root = root_resolved if root_resolved is not None else root.resolve()
+            resolved = path.resolve()
+        except OSError:
+            return False
+        return resolved_root in resolved.parents or resolved_root == resolved
+
     def _find_cpp(self, root: Path, folder: str, preferred: str | None = None) -> Path | None:
         base = root / folder
-        if not base.exists():
+        if not base.exists() or not base.is_dir():
+            return None
+        try:
+            base_resolved = base.resolve()
+        except OSError:
             return None
         if preferred:
             exact = base / preferred
-            if exact.exists():
+            if self._is_safe_source_in_dir(base, exact, root_resolved=base_resolved):
                 return exact
             stem = Path(preferred).stem
-            for ext in [".cpp", ".cc", ".cxx", ".c++"]:
+            for ext in CPP_EXTENSIONS:
                 candidate = base / f"{stem}{ext}"
-                if candidate.exists():
+                if self._is_safe_source_in_dir(base, candidate, root_resolved=base_resolved):
                     return candidate
-        files: list[Path] = []
-        for pat in ["*.cpp", "*.cc", "*.cxx", "*.c++"]:
-            files.extend(sorted(base.glob(pat)))
-        return sorted(files)[0] if files else None
+        try:
+            entries = sorted(base.iterdir(), key=lambda p: p.name)
+        except OSError:
+            return None
+        for candidate in entries:
+            if candidate.suffix not in CPP_EXTENSIONS:
+                continue
+            if self._is_safe_source_in_dir(base, candidate, root_resolved=base_resolved):
+                return candidate
+        return None
 
     def _resolve_source(self, snapshot: Path, rel_path: str) -> Path:
         p = (snapshot / rel_path).resolve()

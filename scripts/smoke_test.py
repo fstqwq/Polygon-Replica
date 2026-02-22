@@ -946,6 +946,29 @@ def main() -> None:
     )
     if manual_symlink_test.read_text(encoding="utf-8") != "11\n":
         raise RuntimeError("manual symlink filtering should keep only real manual test files")
+    find_cpp_probe_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"findcpp-probe-{uuid.uuid4().hex[:8]}"
+    find_cpp_probe_dir = find_cpp_probe_root / "sources"
+    find_cpp_probe_dir.mkdir(parents=True, exist_ok=True)
+    (find_cpp_probe_dir / "b.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+    (find_cpp_probe_dir / "a.cc").write_text("int main(){return 0;}\n", encoding="utf-8")
+    find_cpp_outside = find_cpp_probe_root / "outside.cpp"
+    find_cpp_outside.write_text("int main(){return 1;}\n", encoding="utf-8")
+    find_cpp_symlink_supported = True
+    try:
+        (find_cpp_probe_dir / "0.cpp").symlink_to(find_cpp_outside)
+    except (OSError, NotImplementedError):
+        find_cpp_symlink_supported = False
+    find_cpp_selected = build_service._find_cpp(find_cpp_probe_root, "sources")
+    if find_cpp_selected is None or find_cpp_selected.name != "a.cc":
+        raise RuntimeError("build source auto-discovery should pick deterministic first safe C++ source")
+    find_cpp_preferred = build_service._find_cpp(find_cpp_probe_root, "sources", preferred="0.cpp")
+    if find_cpp_preferred is None:
+        raise RuntimeError("build source auto-discovery should return a fallback source when preferred is unsafe")
+    if find_cpp_symlink_supported and find_cpp_preferred.name == "0.cpp":
+        raise RuntimeError("build source auto-discovery should reject preferred symlinked sources outside folder")
+    find_cpp_stem = build_service._find_cpp(find_cpp_probe_root, "sources", preferred="b")
+    if find_cpp_stem is None or find_cpp_stem.name != "b.cpp":
+        raise RuntimeError("build source auto-discovery should preserve preferred-stem extension lookup")
 
     for d in ["solutions", "validators", "checkers", "generators", "tests/manual", "config", "statement"]:
         (ws / d).mkdir(parents=True, exist_ok=True)
