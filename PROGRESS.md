@@ -91,11 +91,12 @@ This file tracks implementation status against `AGENTS.md` milestones.
   - `testlib`: `<checker> <input> <team_output> <answer>`
   - `kattis`: `<checker> <input> <answer> <feedback_dir>` with team output on stdin
 - Toolchain compile cache keys are now dependency-aware for local quoted includes (`#include "..."`), preventing stale cache hits when header-only changes occur.
+- Toolchain dependency cache keys now normalize dependency identities to source/include-relative paths (instead of absolute paths), restoring cache reuse across ephemeral snapshot roots.
 - Build source discovery now resolves preferred C++ file stems across `.cpp/.cc/.cxx/.c++` variants.
 - Runner fallback output checking now uses streaming file comparison (memory-safe for large outputs).
 - Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Added reusable local validation script: `scripts/smoke_test.py`.
-- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, testlib checker mode, kattis checker mode, compile-cache header-dependency invalidation, C++ `.cc` accepted-source builds, and export zip structure assertions.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, testlib checker mode, kattis checker mode, compile-cache reuse checks, compile-cache header-dependency invalidation, C++ `.cc` accepted-source builds, and export zip structure assertions.
 
 ## Upstream Dependency Integration
 

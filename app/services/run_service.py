@@ -331,9 +331,19 @@ class RunService:
 
             if compile_workspace is not None:
                 with self.workspace_service.workspace_lock(workspace):
-                    ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
+                    ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(
+                        sub_src,
+                        sub_bin,
+                        include_dirs,
+                        path_roots=[compile_workspace],
+                    )
             else:
-                ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
+                ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(
+                    sub_src,
+                    sub_bin,
+                    include_dirs,
+                    path_roots=[run_root, workspace],
+                )
 
             compile_log = f"{cout}\n{cerr}".strip()
             compile_log_file.write_text((compile_log + "\n") if compile_log else "", encoding="utf-8")

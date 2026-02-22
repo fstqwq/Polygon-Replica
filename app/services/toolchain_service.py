@@ -49,18 +49,44 @@ class ToolchainService:
 
         return sorted(seen, key=lambda p: str(p))
 
+    def _canonical_dep_id(self, dep: Path, roots: list[Path]) -> str:
+        dep_resolved = dep.resolve()
+        best: str | None = None
+        for idx, root in enumerate(roots):
+            try:
+                rel = dep_resolved.relative_to(root)
+            except ValueError:
+                continue
+            candidate = f"r{idx}:{rel.as_posix()}"
+            if best is None or len(candidate) < len(best):
+                best = candidate
+        if best is not None:
+            return best
+        suffix = "/".join(dep_resolved.parts[-4:])
+        return f"tail:{suffix}"
+
     def compile_cpp(
         self,
         source: Path,
         output: Path,
         include_dirs: list[Path],
+        path_roots: list[Path] | None = None,
         cxx: str = "g++",
         cxxflags: list[str] | None = None,
     ) -> tuple[bool, str, str, str]:
         cxxflags = cxxflags or ["-O2", "-std=c++20", "-pipe", "-static"]
         toolchain_digest = self.digest(cxx, cxxflags)
         dep_files = self._dependency_files(source, include_dirs)
-        key_parts = [f"{p}:{sha256_file(p)}" for p in dep_files]
+        normalized_roots: list[Path] = []
+        for root in [*(path_roots or []), source.parent, *include_dirs]:
+            resolved = root.resolve()
+            if resolved not in normalized_roots:
+                normalized_roots.append(resolved)
+        key_parts = []
+        for p in dep_files:
+            dep_id = self._canonical_dep_id(p, normalized_roots)
+            key_parts.append(f"{dep_id}:{sha256_file(p)}")
+        key_parts.sort()
         source_hash = hashlib.sha256("\n".join(key_parts).encode("utf-8")).hexdigest()
         cache_bin = self.cache_root / toolchain_digest / f"{source_hash}.bin"
         cache_bin.parent.mkdir(parents=True, exist_ok=True)

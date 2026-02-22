@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sys
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -170,27 +171,45 @@ def main() -> None:
     if not interactive_summary.get("tests") or interactive_summary["tests"][0].get("verdict") != "OK":
         raise RuntimeError("interactive run did not produce OK verdict")
 
-    (ws / "solutions/cache_dep.h").write_text("#define ANSWER_VALUE 1\n", encoding="utf-8")
-    (ws / "solutions/cache_dep.cpp").write_text(
-        '#include "cache_dep.h"\n#include <bits/stdc++.h>\nusing namespace std; int main(){ cout<<ANSWER_VALUE<<"\\n"; }\n',
+    cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
+    cache_count = lambda: len(list(cache_root.rglob("*.bin")))
+    dep_stem = f"cache_dep_{uuid.uuid4().hex[:8]}"
+    dep_header = ws / f"solutions/{dep_stem}.h"
+    dep_source = ws / f"solutions/{dep_stem}.cpp"
+    dep_header.write_text("#define ANSWER_VALUE 1\n", encoding="utf-8")
+    dep_source.write_text(
+        f'#include "{dep_stem}.h"\n#include <bits/stdc++.h>\nusing namespace std; int main(){{ cout<<ANSWER_VALUE<<"\\n"; }}\n',
         encoding="utf-8",
     )
-    run_id_cache_first = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/cache_dep.cpp", mode="pass-fail")
+    cache_before = cache_count()
+    run_id_cache_first = run_service.run_submission("sample", "alice", build_id, submission_path=f"solutions/{dep_stem}.cpp", mode="pass-fail")
     rrow_cache_first = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_cache_first])
     if rrow_cache_first is None or rrow_cache_first["status"] != "ok":
         raise RuntimeError(f"cache dependency first run failed: {rrow_cache_first}")
     cache_first_summary = json.loads(rrow_cache_first["summary_json"])
     if cache_first_summary["tests"][0]["verdict"] != "OK":
         raise RuntimeError("cache dependency first run should be OK")
+    cache_after_first = cache_count()
 
-    (ws / "solutions/cache_dep.h").write_text("#define ANSWER_VALUE -1\n", encoding="utf-8")
-    run_id_cache_second = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/cache_dep.cpp", mode="pass-fail")
+    run_id_cache_repeat = run_service.run_submission("sample", "alice", build_id, submission_path=f"solutions/{dep_stem}.cpp", mode="pass-fail")
+    rrow_cache_repeat = db.fetch_one("SELECT status FROM runs WHERE id=?", [run_id_cache_repeat])
+    if rrow_cache_repeat is None or rrow_cache_repeat["status"] != "ok":
+        raise RuntimeError(f"cache dependency repeat run failed: {rrow_cache_repeat}")
+    cache_after_repeat = cache_count()
+    if cache_after_repeat != cache_after_first:
+        raise RuntimeError("compile cache did not reuse unchanged source build")
+
+    dep_header.write_text("#define ANSWER_VALUE -1\n", encoding="utf-8")
+    run_id_cache_second = run_service.run_submission("sample", "alice", build_id, submission_path=f"solutions/{dep_stem}.cpp", mode="pass-fail")
     rrow_cache_second = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_cache_second])
     if rrow_cache_second is None or rrow_cache_second["status"] != "ok":
         raise RuntimeError(f"cache dependency second run failed: {rrow_cache_second}")
     cache_second_summary = json.loads(rrow_cache_second["summary_json"])
     if cache_second_summary["tests"][0]["verdict"] == "OK":
         raise RuntimeError("compile cache did not invalidate after header dependency change")
+    cache_after_second = cache_count()
+    if cache_after_second <= cache_after_repeat or cache_after_first < cache_before:
+        raise RuntimeError("compile cache counters were inconsistent during dependency checks")
 
     run_id_missing = run_service.run_submission(
         "sample",

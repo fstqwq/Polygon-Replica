@@ -191,7 +191,12 @@ class BuildService:
                 if source is None:
                     compile_log.append(f"[{name}] missing source\n")
                     continue
-                ok, out, err, toolchain_digest = self.toolchain.compile_cpp(source, output, include_dirs)
+                ok, out, err, toolchain_digest = self.toolchain.compile_cpp(
+                    source,
+                    output,
+                    include_dirs,
+                    path_roots=[snapshot],
+                )
                 merged = f"{out}\n{err}".strip()
                 diagnostics.extend(self._collect_diagnostics(snapshot, merged))
                 compile_log.append(f"[{name}] source={source}\n{merged}\n")
