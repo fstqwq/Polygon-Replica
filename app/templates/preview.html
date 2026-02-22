@@ -5,6 +5,12 @@
   <input name="commit" placeholder="optional commit SHA" />
   <button type="submit">Compile TeX</button>
 </form>
+<h2>Recent Previews</h2>
+<ul>
+  {% for p in previews %}
+  <li><a href="?preview_id={{ p.id }}">{{ p.id }}</a> {{ p.status }} {{ p.created_at }}</li>
+  {% endfor %}
+</ul>
 {% if preview_id %}
 <p>Preview build: {{ preview_id }}</p>
 <p>PDF present: {{ "yes" if pdf_exists else "no" }}</p>

@@ -67,6 +67,21 @@ CREATE TABLE IF NOT EXISTS builds (
     FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
 );
 
+CREATE TABLE IF NOT EXISTS previews (
+    id TEXT PRIMARY KEY,
+    problem_id INTEGER NOT NULL,
+    workspace_id INTEGER,
+    source_commit TEXT,
+    source_ref TEXT,
+    status TEXT NOT NULL,
+    summary_json TEXT,
+    artifact_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    finished_at TEXT,
+    FOREIGN KEY(problem_id) REFERENCES problems(id),
+    FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
@@ -105,6 +120,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     FOREIGN KEY(actor_user_id) REFERENCES users(id),
     FOREIGN KEY(problem_id) REFERENCES problems(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_problem_user ON workspaces(problem_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_builds_problem_created ON builds(problem_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_problem_created ON runs(problem_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
 """
 
 

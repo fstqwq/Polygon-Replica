@@ -25,6 +25,8 @@ class ExportService:
             raise ValueError("unsupported export type")
 
         build_root = self.artifacts_root / problem / build_id
+        if not build_root.exists():
+            raise ValueError(f"unknown build artifacts: {build_id}")
         export_dir = build_root / "export"
         export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -38,35 +40,39 @@ class ExportService:
         if export_type in {"kattis", "domjudge"}:
             include_paths = ["manifest.json", "tests", "ans"]
 
-        for rel in include_paths:
-            src = build_root / rel
-            if not src.exists():
-                continue
-            dst = tmp_root / rel
-            if src.is_dir():
-                shutil.copytree(src, dst, dirs_exist_ok=True)
-            else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
+        try:
+            for rel in include_paths:
+                src = build_root / rel
+                if not src.exists():
+                    continue
+                dst = tmp_root / rel
+                if src.is_dir():
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
 
-        archive = shutil.make_archive(str(export_dir / base_name), "zip", root_dir=tmp_root)
-        out = Path(archive)
-        digest = hashlib.sha256(out.read_bytes()).hexdigest()
+            archive = shutil.make_archive(str(export_dir / base_name), "zip", root_dir=tmp_root)
+            out = Path(archive)
+            digest = hashlib.sha256(out.read_bytes()).hexdigest()
 
-        build_row = self.db.fetch_one("SELECT problem_id,source_commit FROM builds WHERE id=?", [build_id])
-        self.db.execute(
-            "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            [
-                f"e-{uuid.uuid4().hex[:10]}",
-                build_row["problem_id"],
-                build_id,
-                export_type,
-                out.name,
-                digest,
-                out.stat().st_size,
-                build_row["source_commit"],
-                now_iso(),
-            ],
-        )
-        shutil.rmtree(tmp_root)
-        return out
+            build_row = self.db.fetch_one("SELECT problem_id,source_commit FROM builds WHERE id=?", [build_id])
+            if build_row is None:
+                raise ValueError(f"build metadata not found: {build_id}")
+            self.db.execute(
+                "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                [
+                    f"e-{uuid.uuid4().hex[:10]}",
+                    build_row["problem_id"],
+                    build_id,
+                    export_type,
+                    out.name,
+                    digest,
+                    out.stat().st_size,
+                    build_row["source_commit"],
+                    now_iso(),
+                ],
+            )
+            return out
+        finally:
+            shutil.rmtree(tmp_root, ignore_errors=True)

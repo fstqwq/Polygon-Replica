@@ -139,11 +139,15 @@ class WorkspaceService:
         latest_build = self.db.fetch_one(
             "SELECT id,status,created_at FROM builds WHERE problem_id=? ORDER BY created_at DESC LIMIT 1", [p["id"]]
         )
+        latest_preview = self.db.fetch_one(
+            "SELECT id,status,created_at FROM previews WHERE problem_id=? ORDER BY created_at DESC LIMIT 1", [p["id"]]
+        )
         return {
             "problem": dict(p),
             "user": dict(u),
             "workspace": dict(ws),
             "latest_build": dict(latest_build) if latest_build else None,
+            "latest_preview": dict(latest_preview) if latest_preview else None,
         }
 
     def create_snapshot(self, workspace: Path, commit: str | None) -> Path:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import shlex
 import subprocess
@@ -14,10 +15,45 @@ from app.services.util import run_cmd
 from app.services.workspace_service import WorkspaceService
 
 
+DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<level>warning|error|note):\s*(?P<msg>.*)$")
+
+
 class RunService:
     def __init__(self, db: DB, workspace_service: WorkspaceService):
         self.db = db
         self.workspace_service = workspace_service
+
+    def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
+        result: list[dict] = []
+        for line in text.splitlines():
+            m = DIAG_RE.match(line.strip())
+            if not m:
+                continue
+            file_path = Path(m.group("file"))
+            rel = str(file_path)
+            can_link = False
+            if workspace is not None:
+                try:
+                    if file_path.is_absolute():
+                        rel = str(file_path.resolve().relative_to(workspace.resolve()))
+                    else:
+                        abs_path = (workspace / file_path).resolve()
+                        rel = str(abs_path.relative_to(workspace.resolve()))
+                    can_link = True
+                except Exception:
+                    rel = str(file_path)
+                    can_link = False
+            result.append(
+                {
+                    "file": rel,
+                    "line": int(m.group("line")),
+                    "column": int(m.group("col")),
+                    "level": m.group("level"),
+                    "message": m.group("msg"),
+                    "can_link": can_link,
+                }
+            )
+        return result
 
     def _run_interactive_case(
         self,
@@ -27,7 +63,7 @@ class RunService:
         ans: Path,
         transcript: Path,
         timeout_sec: int = 30,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, int]:
         sub = subprocess.Popen(
             [str(submission_bin)],
             stdin=subprocess.PIPE,
@@ -56,7 +92,7 @@ class RunService:
                     if time.monotonic() - start > timeout_sec:
                         sub.kill()
                         itr.kill()
-                        return "TLE", int((time.monotonic() - start) * 1000)
+                        return "TLE", int((time.monotonic() - start) * 1000), 0
                     events = sel.select(timeout=0.2)
                     for key, _ in events:
                         stream_owner, _stream_kind = key.data
@@ -90,21 +126,64 @@ class RunService:
             if sub.returncode != 0:
                 err = sub.stderr.read() if sub.stderr else b""
                 tf.write(f"submission stderr:\n{err.decode('utf-8', errors='replace')}\n")
-                return "RE", int((time.monotonic() - start) * 1000)
+                return "RE", int((time.monotonic() - start) * 1000), 0
             if itr.returncode != 0:
                 err = itr.stderr.read() if itr.stderr else b""
                 tf.write(f"interactor stderr:\n{err.decode('utf-8', errors='replace')}\n")
-                return "WA", int((time.monotonic() - start) * 1000)
-            return "OK", int((time.monotonic() - start) * 1000)
+                return "WA", int((time.monotonic() - start) * 1000), 0
+            return "OK", int((time.monotonic() - start) * 1000), 0
+
+    def _run_pass(
+        self,
+        submission_bin: Path,
+        input_file: Path,
+        output_file: Path,
+        timeout_sec: int,
+        time_file: Path,
+    ) -> tuple[int, int, int]:
+        if time_file.exists():
+            time_file.unlink()
+        quoted_bin = shlex.quote(str(submission_bin))
+        quoted_in = shlex.quote(str(input_file))
+        quoted_out = shlex.quote(str(output_file))
+        quoted_time = shlex.quote(str(time_file))
+
+        if Path("/usr/bin/time").exists():
+            cmd = (
+                f"/usr/bin/time -f %M -o {quoted_time} "
+                f"{quoted_bin} < {quoted_in} > {quoted_out}"
+            )
+        else:
+            cmd = f"{quoted_bin} < {quoted_in} > {quoted_out}"
+
+        proc = run_cmd(["bash", "-lc", cmd], timeout=timeout_sec)
+        mem_kb = 0
+        if time_file.exists():
+            raw = time_file.read_text(encoding="utf-8").strip()
+            if raw.isdigit():
+                mem_kb = int(raw)
+        return proc.returncode, proc.elapsed_ms, mem_kb
+
+    def _feedback_key_files(self, test_feedback_dir: Path, run_root: Path) -> list[str]:
+        keys = []
+        for name in ["judgemessage.txt", "teammessage.txt", "nextpass.in"]:
+            for p in sorted(test_feedback_dir.rglob(name)):
+                keys.append(str(p.relative_to(run_root)))
+        return keys
 
     def run_submission(
         self,
         problem: str,
         username: str,
         build_id: str,
-        submission_path: str,
+        submission_path: str | None = None,
         mode: str = "pass-fail",
+        upload_content: bytes | None = None,
+        upload_filename: str | None = None,
     ) -> str:
+        if mode not in {"pass-fail", "interactive", "multi-pass"}:
+            raise ValueError(f"unsupported run mode: {mode}")
+
         run_id = f"r-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         artifact_root = Path(self.workspace_service.settings.artifacts_root) / problem / build_id
@@ -133,46 +212,101 @@ class RunService:
         feedback_dir.mkdir(parents=True, exist_ok=True)
 
         workspace = Path(ctx["workspace"]["path"])
-        sub_src = workspace / submission_path
         sub_bin = run_root / "submission"
+        compile_diagnostics: list[dict] = []
+        source_label = submission_path or "upload"
 
-        with self.workspace_service.workspace_lock(workspace):
-            cproc = run_cmd(["g++", "-O2", "-std=c++20", str(sub_src), "-o", str(sub_bin)])
+        if upload_content:
+            suffix = Path(upload_filename or "submission.cpp").suffix or ".cpp"
+            sub_src = run_root / f"uploaded_submission{suffix}"
+            sub_src.write_bytes(upload_content)
+            source_label = upload_filename or sub_src.name
+            compile_workspace = None
+        else:
+            if not submission_path:
+                raise RuntimeError("submission_path is required when upload is not provided")
+            sub_src = workspace / submission_path
+            source_label = submission_path
+            compile_workspace = workspace
+
+        compile_cmd = ["g++", "-O2", "-std=c++20", str(sub_src), "-o", str(sub_bin)]
+        include_dir = workspace / "third_party" / "testlib"
+        if include_dir.exists():
+            compile_cmd.extend(["-I", str(include_dir)])
+
+        if compile_workspace is not None:
+            with self.workspace_service.workspace_lock(workspace):
+                cproc = run_cmd(compile_cmd)
+        else:
+            cproc = run_cmd(compile_cmd)
+
+        compile_diagnostics = self._collect_diagnostics(compile_workspace, f"{cproc.stdout}\n{cproc.stderr}")
         if cproc.returncode != 0:
             (run_root / "compile.log").write_text(cproc.stdout + cproc.stderr, encoding="utf-8")
             self.db.execute(
                 "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["failed", json.dumps({"error": "compile_error", "compile_log": "compile.log"}), now_iso(), run_id],
+                [
+                    "failed",
+                    json.dumps(
+                        {
+                            "error": "compile_error",
+                            "compile_log": "compile.log",
+                            "compile_diagnostics": compile_diagnostics,
+                            "source": source_label,
+                        }
+                    ),
+                    now_iso(),
+                    run_id,
+                ],
             )
             return run_id
 
         verdicts = []
         try:
-            for test in sorted(tests_dir.glob("*.in")):
+            tests = sorted(tests_dir.glob("*.in"))
+            if not tests:
+                raise RuntimeError("selected build has no tests")
+
+            for test in tests:
                 ans = ans_dir / f"{test.stem}.ans"
-                test_result = {"test": test.name, "passes": [], "verdict": "OK", "time_ms": 0, "memory_kb": 0}
+                test_feedback_dir = feedback_dir / test.stem
+                test_feedback_dir.mkdir(parents=True, exist_ok=True)
+                test_result = {
+                    "test": test.name,
+                    "passes": [],
+                    "verdict": "OK",
+                    "time_ms": 0,
+                    "memory_kb": 0,
+                    "feedback_files": [],
+                }
 
                 if mode == "interactive":
                     if not interactor.exists():
                         raise RuntimeError("interactive mode requested but interactor is missing in build artifacts")
                     transcript = run_root / f"{test.stem}.transcript.txt"
-                    verdict, elapsed = self._run_interactive_case(interactor, sub_bin, test, ans, transcript)
-                    test_result["passes"].append({"pass": 1, "verdict": verdict, "time_ms": elapsed, "memory_kb": 0})
+                    verdict, elapsed, mem_kb = self._run_interactive_case(interactor, sub_bin, test, ans, transcript)
+                    test_result["passes"].append({"pass": 1, "verdict": verdict, "time_ms": elapsed, "memory_kb": mem_kb})
                     test_result["verdict"] = verdict
                     test_result["time_ms"] = elapsed
+                    test_result["memory_kb"] = mem_kb
+                    test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, run_root)
                     verdicts.append(test_result)
                     continue
 
                 current_input = test
                 pass_idx = 1
                 total_time = 0
+                peak_mem = 0
                 while True:
+                    pass_feedback_dir = test_feedback_dir / f"pass{pass_idx}"
+                    pass_feedback_dir.mkdir(parents=True, exist_ok=True)
                     out = run_root / f"{test.stem}.pass{pass_idx}.out"
-                    exec_cmd = f"{shlex.quote(str(sub_bin))} < {shlex.quote(str(current_input))} > {shlex.quote(str(out))}"
-                    exec_proc = run_cmd(["bash", "-lc", exec_cmd], timeout=30)
-                    total_time += exec_proc.elapsed_ms
-                    if exec_proc.returncode != 0:
-                        p = {"pass": pass_idx, "verdict": "RE", "time_ms": exec_proc.elapsed_ms, "memory_kb": 0}
+                    time_file = pass_feedback_dir / "time.txt"
+                    exec_rc, exec_ms, exec_mem = self._run_pass(sub_bin, current_input, out, 30, time_file)
+                    total_time += exec_ms
+                    peak_mem = max(peak_mem, exec_mem)
+                    if exec_rc != 0:
+                        p = {"pass": pass_idx, "verdict": "RE", "time_ms": exec_ms, "memory_kb": exec_mem}
                         test_result["passes"].append(p)
                         test_result["verdict"] = "RE"
                         break
@@ -180,25 +314,29 @@ class RunService:
                     checker_verdict = "OK"
                     if checker.exists():
                         env = dict(os.environ)
-                        env["FEEDBACK_DIR"] = str(feedback_dir)
+                        env["FEEDBACK_DIR"] = str(pass_feedback_dir)
                         check_proc = run_cmd(
                             [str(checker), str(test), str(out), str(ans)],
                             timeout=30,
-                            cwd=feedback_dir,
+                            cwd=pass_feedback_dir,
                             env=env,
+                        )
+                        (pass_feedback_dir / "checker.log").write_text(
+                            check_proc.stdout + check_proc.stderr,
+                            encoding="utf-8",
                         )
                         checker_verdict = "OK" if check_proc.returncode == 0 else "WA"
                     else:
                         checker_verdict = "OK" if ans.exists() and ans.read_text(encoding="utf-8") == out.read_text(encoding="utf-8") else "WA"
 
-                    p = {"pass": pass_idx, "verdict": checker_verdict, "time_ms": exec_proc.elapsed_ms, "memory_kb": 0}
+                    p = {"pass": pass_idx, "verdict": checker_verdict, "time_ms": exec_ms, "memory_kb": exec_mem}
                     test_result["passes"].append(p)
 
                     if mode != "multi-pass":
                         test_result["verdict"] = checker_verdict
                         break
 
-                    next_pass = feedback_dir / "nextpass.in"
+                    next_pass = pass_feedback_dir / "nextpass.in"
                     if checker_verdict != "OK" or not next_pass.exists() or pass_idx >= 16:
                         test_result["verdict"] = checker_verdict
                         break
@@ -207,16 +345,31 @@ class RunService:
                     pass_idx += 1
 
                 test_result["time_ms"] = total_time
+                test_result["memory_kb"] = peak_mem
+                test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, run_root)
                 verdicts.append(test_result)
 
-            summary = {"mode": mode, "tests": verdicts, "feedback_dir": str(feedback_dir)}
+            summary = {
+                "mode": mode,
+                "source": source_label,
+                "tests": verdicts,
+                "feedback_dir": str(feedback_dir),
+                "compile_diagnostics": compile_diagnostics,
+            }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self.db.execute(
                 "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
                 ["ok", json.dumps(summary), now_iso(), run_id],
             )
         except Exception as exc:
-            summary = {"error": str(exc), "mode": mode, "tests": verdicts, "feedback_dir": str(feedback_dir)}
+            summary = {
+                "error": str(exc),
+                "mode": mode,
+                "source": source_label,
+                "tests": verdicts,
+                "feedback_dir": str(feedback_dir),
+                "compile_diagnostics": compile_diagnostics,
+            }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self.db.execute(
                 "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",

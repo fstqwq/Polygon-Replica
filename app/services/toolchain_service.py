@@ -25,7 +25,12 @@ class ToolchainService:
     ) -> tuple[bool, str, str, str]:
         cxxflags = cxxflags or ["-O2", "-std=c++20", "-pipe", "-static"]
         toolchain_digest = self.digest(cxx, cxxflags)
-        source_hash = sha256_file(source)
+        key_parts = [sha256_file(source)]
+        for include_dir in include_dirs:
+            header = include_dir / "testlib.h"
+            if header.exists():
+                key_parts.append(sha256_file(header))
+        source_hash = hashlib.sha256("\n".join(key_parts).encode("utf-8")).hexdigest()
         cache_bin = self.cache_root / toolchain_digest / f"{source_hash}.bin"
         cache_bin.parent.mkdir(parents=True, exist_ok=True)
         if cache_bin.exists():
@@ -39,6 +44,6 @@ class ToolchainService:
             cmd += ["-I", str(inc)]
         cmd += [str(source), "-o", str(output)]
         proc = run_cmd(cmd)
-        if proc.returncode == 0:
+        if proc.returncode == 0 and output.exists():
             cache_bin.write_bytes(output.read_bytes())
         return proc.returncode == 0, proc.stdout, proc.stderr, toolchain_digest

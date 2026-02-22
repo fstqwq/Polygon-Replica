@@ -7,8 +7,8 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Minimum metadata database schema (`problems`, `users`, `repo_acl`, `workspaces`, `builds`, `runs`, `exports`, `audit_log`)
 - Unified compiler layer with cache key `(toolchain_digest, source_hash)` and `testlib.h` include path support
 - TeX preview compilation and log capture
-- Build pipeline (`compile -> generate -> validate -> solve -> persist`)
-- Runner page with pass-fail / interactive / multi-pass modes
+- Build pipeline (`compile -> generate -> validate -> solve -> persist`) with failed-step metadata
+- Runner page with pass-fail / interactive / multi-pass modes and workspace-or-upload submissions
 - Exporter page for Kattis / DOMjudge / Polygon zips
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries

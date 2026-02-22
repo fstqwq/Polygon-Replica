@@ -102,6 +102,8 @@ class BuildService:
         random.seed(seed)
         diagnostics: list[dict] = []
         build_cfg = self._load_build_config(snapshot)
+        current_step = "compile"
+        failing_test: str | None = None
 
         try:
             include_dirs = [snapshot / "third_party/testlib"]
@@ -139,6 +141,7 @@ class BuildService:
             (logs_dir / "compile.log").write_text("\n".join(compile_log), encoding="utf-8")
             steps.append({"step": "compile", "status": "ok", "log": "logs/compile.log"})
 
+            current_step = "generate"
             tests = sorted((snapshot / "tests/manual").glob("*")) if (snapshot / "tests/manual").exists() else []
             test_files: list[Path] = []
             counter = 1
@@ -165,9 +168,11 @@ class BuildService:
             (logs_dir / "generate.log").write_text(f"generated_tests={len(test_files)}\n", encoding="utf-8")
             steps.append({"step": "generate", "status": "ok", "log": "logs/generate.log"})
 
+            current_step = "validate"
             validator = compiled_bins["validator"]
             vlogs = []
             for t in test_files:
+                failing_test = t.name
                 cmd = f"{shlex.quote(str(validator))} < {shlex.quote(str(t))}"
                 proc = run_cmd(["bash", "-lc", cmd], timeout=30)
                 vlogs.append(f"{t.name}: rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
@@ -176,9 +181,11 @@ class BuildService:
             (logs_dir / "validate.log").write_text("\n".join(vlogs), encoding="utf-8")
             steps.append({"step": "validate", "status": "ok", "log": "logs/validate.log"})
 
+            current_step = "solve"
             accepted = compiled_bins["accepted_solution"]
             slog = []
             for t in test_files:
+                failing_test = t.name
                 out = artifact_paths.ans / t.name.replace(".in", ".ans")
                 cmd = (
                     f"{shlex.quote(str(accepted))} < {shlex.quote(str(t))} > {shlex.quote(str(out))}"
@@ -207,15 +214,29 @@ class BuildService:
             )
         except Exception as exc:
             (logs_dir / "failure.log").write_text(str(exc), encoding="utf-8")
-            steps.append({"step": "failed", "status": "error", "log": "logs/failure.log"})
+            steps.append({"step": current_step, "status": "error", "log": "logs/failure.log"})
             self.db.execute(
                 "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["failed", json.dumps({"error": str(exc), "steps": steps, "diagnostics": diagnostics}), now_iso(), build_id],
+                [
+                    "failed",
+                    json.dumps(
+                        {
+                            "error": str(exc),
+                            "failed_step": current_step,
+                            "failed_test": failing_test,
+                            "steps": steps,
+                            "diagnostics": diagnostics,
+                        }
+                    ),
+                    now_iso(),
+                    build_id,
+                ],
             )
         finally:
             self.db.execute(
                 "UPDATE workspaces SET recent_build_status=? WHERE id=?",
                 [self.db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])["status"], ws_row["id"]],
             )
+            shutil.rmtree(snapshot.parent, ignore_errors=True)
 
         return build_id

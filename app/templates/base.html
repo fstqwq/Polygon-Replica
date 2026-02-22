@@ -10,7 +10,11 @@
   <header class="topbar">
     <div><strong>Problem:</strong> {{ ctx.problem.slug }} | <strong>Workspace:</strong> {{ ctx.user.username }}</div>
     <div><strong>Branch:</strong> {{ ctx.workspace.branch or "-" }} | <strong>HEAD:</strong> {{ ctx.workspace.head_commit or "-" }}</div>
-    <div><strong>Dirty:</strong> {{ "yes" if ctx.workspace.dirty else "no" }} | <strong>Recent build:</strong> {{ ctx.latest_build.id if ctx.latest_build else "none" }} {{ ctx.latest_build.status if ctx.latest_build else "" }}</div>
+    <div>
+      <strong>Dirty:</strong> {{ "yes" if ctx.workspace.dirty else "no" }} |
+      <strong>Recent build:</strong> {{ ctx.latest_build.id if ctx.latest_build else "none" }} {{ ctx.latest_build.status if ctx.latest_build else "" }} |
+      <strong>Recent preview:</strong> {{ ctx.latest_preview.id if ctx.latest_preview else "none" }} {{ ctx.latest_preview.status if ctx.latest_preview else "" }}
+    </div>
     <form method="post" action="/switch-workspace">
       <input name="problem" value="{{ ctx.problem.slug }}" />
       <input name="user" value="{{ ctx.user.username }}" />

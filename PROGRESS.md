@@ -4,10 +4,11 @@ This file tracks implementation status against `AGENTS.md` milestones.
 
 ## Current Status
 
-- Overall: `Milestone 0` through `Milestone 7` implemented in baseline form.
+- Overall: `Milestone 0` through `Milestone 7` implemented with a post-baseline optimization pass.
 - Source of truth: Git history on `main`.
-- Latest high-level completion commit before this tracker: `ef3a51f`.
+- Latest high-level completion commit before optimization pass: `ef3a51f`.
 - Upstream asset integration commit: `6dc2851`.
+- Latest tracker update commit before current working tree: `8225ed5`.
 
 ## Milestone Tracking
 
@@ -25,19 +26,19 @@ This file tracks implementation status against `AGENTS.md` milestones.
 
 4. Milestone 3: testlib.h + Unified Toolchain + Diagnostics
 - Status: Done
-- Notes: Unified C++ compile path with cache key `(toolchain_digest, source_hash)`, include path for `third_party/testlib`, diagnostics parsing + file/line links.
+- Notes: Unified C++ compile path with cache key `(toolchain_digest, source_hash + testlib hash)`, include path for `third_party/testlib`, diagnostics parsing + file/line links.
 
 5. Milestone 4: TeX Preview + Preview UI
 - Status: Done
-- Notes: TeX compile flow, `statement.pdf` output, `latex.log` capture, PDF preview and log references in UI.
+- Notes: TeX compile flow, `statement.pdf` output, `latex.log` capture, PDF preview and log references in UI, preview run status persisted.
 
 6. Milestone 5: Build Pipeline + Build UI
 - Status: Done
-- Notes: compile -> generate -> validate -> solve pipeline, step logs, failure surface, tests/ans browse/download paths.
+- Notes: compile -> generate -> validate -> solve pipeline, step logs, explicit failed step/test metadata, tests/ans browse/download paths.
 
 7. Milestone 6: Runner + Run UI
 - Status: Done
-- Notes: pass-fail, interactive broker path, multi-pass loop using `feedback_dir/nextpass.in`, per-test/pass verdict reporting and run artifacts.
+- Notes: pass-fail, interactive broker path, multi-pass with per-test feedback isolation, per-test/pass verdict and memory reporting, workspace or upload submission source.
 
 8. Milestone 7: Exporters + Export UI
 - Status: Done
@@ -50,10 +51,23 @@ This file tracks implementation status against `AGENTS.md` milestones.
   - Notes: lock file based workspace lock used for mutating operations.
 - Always-visible workspace context in UI:
   - Status: Done
-  - Notes: problem/workspace/branch/head/dirty/recent build shown in shared header.
+  - Notes: problem/workspace/branch/head/dirty/recent build and recent preview shown in shared header.
 - Audit logging:
   - Status: Done
   - Notes: mutating actions write to `audit_log`.
+
+## Optimization Pass (Latest)
+
+- Added DB `previews` table and indexes for `workspaces/builds/previews/runs/exports/audit_log` hot paths.
+- Added preview history API: `/api/problems/{problem}/workspaces/{user}/recent-previews`.
+- Build failure summaries now include `failed_step` and `failed_test`.
+- Run execution now supports submission source from workspace path or direct file upload.
+- Run compile diagnostics are parsed and surfaced in UI with file/line links when linkable.
+- Added per-pass memory usage capture using `/usr/bin/time` when available (`0` fallback).
+- Multi-pass feedback is isolated per test/pass to prevent cross-test contamination.
+- Ephemeral snapshot directories are cleaned after build/preview jobs.
+- Preview service now fails gracefully when `pdflatex` is unavailable.
+- Export generation hardened with metadata checks and guaranteed temp directory cleanup.
 
 ## Upstream Dependency Integration
 
@@ -64,13 +78,14 @@ This file tracks implementation status against `AGENTS.md` milestones.
 ## Validation Snapshot
 
 - `python3 -m compileall app`: pass.
-- Local smoke validation (venv, UI/API routing, build/run/export path): pass under local `./var` roots.
+- Local smoke validation (venv, UI/API routing, build/preview/run/export path, upload run path): pass under local `./var` roots.
 
 ## Known Operational Notes
 
 - Host default roots (`/srv`, `/var/lib`, `/var/cache`) require appropriate filesystem permissions.
 - For local development without elevated permissions, use env-mapped roots under `./var/`.
-- Seeded repositories now copy vendored `testlib.h` when available.
+- Seeded repositories copy vendored `testlib.h` when available.
+- TeX preview status is recorded even if LaTeX binaries are missing; preview compilation will be marked failed with a log entry.
 
 ## Update Policy
 

@@ -298,6 +298,10 @@ def build_run(problem: str, user: str, commit: str = Form("")):
 def preview_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     preview_id = request.query_params.get("preview_id", "")
+    previews = db.fetch_all(
+        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM previews WHERE problem_id=? ORDER BY created_at DESC LIMIT 30",
+        [ctx["problem"]["id"]],
+    )
     log = ""
     pdf_exists = False
     log_refs = []
@@ -316,7 +320,14 @@ def preview_page(request: Request, problem: str, user: str):
     return templates.TemplateResponse(
         request,
         "preview.html",
-        {"ctx": ctx, "preview_id": preview_id, "log": log, "pdf_exists": pdf_exists, "log_refs": log_refs},
+        {
+            "ctx": ctx,
+            "preview_id": preview_id,
+            "previews": previews,
+            "log": log,
+            "pdf_exists": pdf_exists,
+            "log_refs": log_refs,
+        },
     )
 
 
@@ -348,16 +359,39 @@ def run_execute(
     problem: str,
     user: str,
     build_id: str = Form(...),
-    submission_path: str = Form(...),
+    submission_path: str = Form(""),
     mode: str = Form("pass-fail"),
+    submission_upload: UploadFile | None = File(None),
 ):
-    run_id = run_service.run_submission(problem, user, build_id, submission_path, mode=mode)
+    upload_content = None
+    upload_filename = None
+    if submission_upload is not None:
+        upload_content = submission_upload.file.read()
+        upload_filename = submission_upload.filename or None
+        if upload_content == b"":
+            upload_content = None
+
+    run_id = run_service.run_submission(
+        problem,
+        user,
+        build_id,
+        submission_path=submission_path or None,
+        mode=mode,
+        upload_content=upload_content,
+        upload_filename=upload_filename,
+    )
     ctx = page_ctx(problem, user)
     _audit(
         ctx["user"]["id"],
         ctx["problem"]["id"],
         "run.execute",
-        {"run_id": run_id, "build_id": build_id, "submission_path": submission_path, "mode": mode},
+        {
+            "run_id": run_id,
+            "build_id": build_id,
+            "submission_path": submission_path or None,
+            "uploaded": bool(upload_content),
+            "mode": mode,
+        },
     )
     return RedirectResponse(f"/problems/{problem}/{user}/run?run_id={run_id}", status_code=303)
 
@@ -445,6 +479,16 @@ def api_recent_builds(problem: str, user: str):
     ctx = page_ctx(problem, user)
     rows = db.fetch_all(
         "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM builds WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
+        [ctx["problem"]["id"]],
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/problems/{problem}/workspaces/{user}/recent-previews")
+def api_recent_previews(problem: str, user: str):
+    ctx = page_ctx(problem, user)
+    rows = db.fetch_all(
+        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM previews WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
         [ctx["problem"]["id"]],
     )
     return [dict(r) for r in rows]

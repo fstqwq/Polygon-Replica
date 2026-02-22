@@ -1,14 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Run</h1>
-<form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
+<form method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
   <label>Build</label>
   <select name="build_id">
     {% for b in builds %}
     <option value="{{ b.id }}">{{ b.id }} ({{ b.status }})</option>
     {% endfor %}
   </select>
-  <input name="submission_path" placeholder="solutions/main.cpp" />
+  <input name="submission_path" placeholder="workspace path (e.g. solutions/main.cpp)" />
+  <label>or upload</label>
+  <input type="file" name="submission_upload" />
   <select name="mode">
     <option value="pass-fail">pass-fail</option>
     <option value="interactive">interactive</option>
@@ -45,6 +47,22 @@
     <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/browse?rel=logs/run-{{ detail.id }}/feedback_dir">feedback_dir/</a></p>
     {% else %}
     <pre>{{ summary }}</pre>
+    {% endif %}
+    {% if summary and summary.compile_diagnostics %}
+    <h3>Compile Diagnostics</h3>
+    <ul>
+      {% for d in summary.compile_diagnostics %}
+      <li>
+        [{{ d.level }}]
+        {% if d.can_link %}
+        <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ d.file }}&line={{ d.line }}">{{ d.file }}:{{ d.line }}:{{ d.column }}</a>
+        {% else %}
+        {{ d.file }}:{{ d.line }}:{{ d.column }}
+        {% endif %}
+        {{ d.message }}
+      </li>
+      {% endfor %}
+    </ul>
     {% endif %}
     <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/logs/run-{{ detail.id }}/summary.json">summary.json</a></p>
     {% endif %}

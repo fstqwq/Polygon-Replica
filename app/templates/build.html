@@ -19,6 +19,10 @@
     {% if detail %}
     <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }}</p>
     <p><strong>Source:</strong> {{ detail.source_commit }} ({{ detail.source_ref }})</p>
+    {% if summary and summary.error %}
+    <p><strong>Error:</strong> {{ summary.error }}</p>
+    <p><strong>Failed Step:</strong> {{ summary.failed_step or "-" }} <strong>Failed Test:</strong> {{ summary.failed_test or "-" }}</p>
+    {% endif %}
     <p><a href="/api/problems/{{ ctx.problem.slug }}/builds/{{ detail.id }}/manifest">manifest.json</a></p>
     <p>
       <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=tests">tests/</a> |
