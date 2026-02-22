@@ -748,6 +748,33 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    reuse_symlink_id = f"p-symlink-{uuid.uuid4().hex[:8]}"
+    reuse_symlink_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / reuse_problem / reuse_symlink_id
+    (reuse_symlink_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+    (reuse_symlink_root / "logs").mkdir(parents=True, exist_ok=True)
+    reuse_symlink_outside_pdf = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"preview-reuse-leak-{uuid.uuid4().hex[:8]}.pdf"
+    reuse_symlink_outside_pdf.write_bytes(b"%PDF-1.4\n% preview symlink leak\n")
+    reuse_symlink_supported = True
+    try:
+        (reuse_symlink_root / "statement_preview" / "statement.pdf").symlink_to(reuse_symlink_outside_pdf)
+    except (OSError, NotImplementedError):
+        reuse_symlink_supported = False
+    (reuse_symlink_root / "logs" / "latex.log").write_text("poison symlink candidate\n", encoding="utf-8")
+    if reuse_symlink_supported:
+        db.execute(
+            "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                reuse_symlink_id,
+                reuse_ctx["problem"]["id"],
+                reuse_ctx["workspace"]["id"],
+                reuse_head,
+                reuse_ctx["workspace"].get("branch") or "main",
+                "ok",
+                str(reuse_symlink_root),
+                "9999-12-31T23:59:59Z",
+                "9999-12-31T23:59:59Z",
+            ],
+        )
     reused_head_preview_id = preview_service.compile_preview(reuse_problem, reuse_user)
     reused_head_preview = db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [reused_head_preview_id])
     if reused_head_preview is None or reused_head_preview["status"] != "ok":
@@ -756,6 +783,8 @@ def main() -> None:
     reused_head_from = reused_head_summary.get("reused_from")
     if not reused_head_from:
         raise RuntimeError(f"workspace-head preview did not reuse cached artifact: {reused_head_summary}")
+    if reuse_symlink_supported and reused_head_from == reuse_symlink_id:
+        raise RuntimeError("workspace-head preview reuse should ignore symlinked preview artifacts")
     head_source_row = db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [reused_head_from])
     if head_source_row is None:
         raise RuntimeError(f"workspace-head preview reuse source missing: {reused_head_from}")
@@ -769,6 +798,7 @@ def main() -> None:
         head_source_root / "logs" / "latex.log"
     ).read_text(encoding="utf-8"):
         raise RuntimeError("workspace-head reused preview log mismatch")
+    reuse_symlink_outside_pdf.unlink(missing_ok=True)
 
     build_ref_problem = f"buildref-{uuid.uuid4().hex[:8]}"
     build_ref_user = f"u-{uuid.uuid4().hex[:6]}"

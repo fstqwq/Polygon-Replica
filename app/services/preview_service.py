@@ -18,6 +18,16 @@ class PreviewService:
         self.workspace_service = workspace_service
         self.artifacts = artifacts
 
+    def _is_safe_regular_file(self, root: Path, path: Path, root_resolved: Path | None = None) -> bool:
+        if path.is_symlink() or not path.exists() or not path.is_file():
+            return False
+        try:
+            resolved_root = root_resolved if root_resolved is not None else root.resolve()
+            resolved = path.resolve()
+        except OSError:
+            return False
+        return resolved_root in resolved.parents or resolved_root == resolved
+
     def _try_reuse_preview(
         self,
         problem: str,
@@ -60,9 +70,15 @@ class PreviewService:
                 root = self._preview_artifact_root(problem, str(row["id"]))
                 if root is None:
                     continue
+                try:
+                    root_resolved = root.resolve()
+                except OSError:
+                    continue
                 src_pdf = root / "statement_preview" / "statement.pdf"
                 src_log = root / "logs" / "latex.log"
-                if not src_pdf.exists() or not src_log.exists():
+                if not self._is_safe_regular_file(root, src_pdf, root_resolved=root_resolved):
+                    continue
+                if not self._is_safe_regular_file(root, src_log, root_resolved=root_resolved):
                     continue
 
                 artifacts.statement_preview.mkdir(parents=True, exist_ok=True)
