@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -29,38 +30,89 @@ class ExportService:
         out = "".join(ch.lower() for ch in slug if ch.isalnum())
         return out or "problem"
 
+    def _is_safe_regular_file(self, root: Path, p: Path) -> bool:
+        if p.is_symlink() or not p.exists() or not p.is_file():
+            return False
+        root_resolved = root.resolve()
+        try:
+            resolved = p.resolve()
+        except OSError:
+            return False
+        return root_resolved in resolved.parents or root_resolved == resolved
+
+    def _safe_descendant_files(self, root: Path) -> list[Path]:
+        if not root.exists() or not root.is_dir():
+            return []
+        root_resolved = root.resolve()
+        files: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            dir_root = Path(dirpath)
+            keep_dirs: list[str] = []
+            for name in dirnames:
+                d = dir_root / name
+                if d.is_symlink():
+                    continue
+                try:
+                    resolved = d.resolve()
+                except OSError:
+                    continue
+                if root_resolved in resolved.parents or root_resolved == resolved:
+                    keep_dirs.append(name)
+            dirnames[:] = keep_dirs
+            for name in filenames:
+                p = dir_root / name
+                if p.is_symlink():
+                    continue
+                try:
+                    resolved = p.resolve()
+                except OSError:
+                    continue
+                if root_resolved not in resolved.parents and root_resolved != resolved:
+                    continue
+                if not p.is_file():
+                    continue
+                files.append(p)
+        files.sort(key=lambda p: str(p.relative_to(root)))
+        return files
+
     def _copy_path(self, src: Path, dst: Path) -> None:
         if not src.exists():
             return
+        if src.is_symlink():
+            return
         if src.is_dir():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            self._copy_dir_contents(src, dst)
+            return
+        if not src.is_file():
+            return
+        if not self._is_safe_regular_file(src.parent, src):
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
 
     def _copy_dir_contents(self, src: Path, dst: Path) -> None:
         if not src.exists() or not src.is_dir():
             return
-        for p in sorted(src.rglob("*")):
+        for p in self._safe_descendant_files(src):
             rel = p.relative_to(src)
             target = dst / rel
-            if p.is_dir():
-                target.mkdir(parents=True, exist_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(p, target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
 
     def _find_first_source(self, folder: Path, preferred: list[str] | None = None) -> Path | None:
         if not folder.exists() or not folder.is_dir():
             return None
         for name in preferred or []:
             p = folder / name
-            if p.exists() and p.is_file():
+            if self._is_safe_regular_file(folder, p):
                 return p
         matches: list[Path] = []
         for pat in ["*.cpp", "*.cc", "*.cxx", "*.c", "*.py", "*.java"]:
             matches.extend(sorted(folder.glob(pat)))
-        return matches[0] if matches else None
+        for p in matches:
+            if self._is_safe_regular_file(folder, p):
+                return p
+        return None
 
     def _problem_mode(self, snapshot: Path | None) -> str:
         allowed = {"pass-fail", "interactive", "multi-pass"}
@@ -171,7 +223,7 @@ class ExportService:
     def _copy_test_data(self, build_root: Path, data_root: Path) -> None:
         tests_dir = build_root / "tests"
         ans_dir = build_root / "ans"
-        tests = sorted(tests_dir.glob("*.in"))
+        tests = [p for p in sorted(tests_dir.glob("*.in")) if self._is_safe_regular_file(tests_dir, p)]
         if not tests:
             raise ValueError("build has no tests to export")
 
@@ -185,7 +237,7 @@ class ExportService:
             out_ans = secret / f"{t.stem}.ans"
             shutil.copy2(t, out_in)
             src_ans = ans_dir / f"{t.stem}.ans"
-            if src_ans.exists():
+            if self._is_safe_regular_file(ans_dir, src_ans):
                 shutil.copy2(src_ans, out_ans)
             else:
                 out_ans.write_text("", encoding="utf-8")
@@ -193,7 +245,7 @@ class ExportService:
         first = tests[0]
         shutil.copy2(first, sample / "1.in")
         first_ans = ans_dir / f"{first.stem}.ans"
-        if first_ans.exists():
+        if self._is_safe_regular_file(ans_dir, first_ans):
             shutil.copy2(first_ans, sample / "1.ans")
         else:
             (sample / "1.ans").write_text("", encoding="utf-8")

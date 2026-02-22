@@ -1165,6 +1165,18 @@ def main() -> None:
             raise RuntimeError("kattis export should not copy symlinked statement assets from source snapshot")
     export_symlink_source.unlink(missing_ok=True)
 
+    export_artifact_leak_source = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"export-artifact-leak-{uuid.uuid4().hex[:8]}.txt"
+    export_artifact_leak_source.write_text("export-artifact-leak\n", encoding="utf-8")
+    export_artifact_escape_name = f"999.export-escape-{uuid.uuid4().hex[:6]}.in"
+    export_artifact_escape_link = (
+        Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "tests" / export_artifact_escape_name
+    )
+    export_artifact_symlink_supported = True
+    try:
+        export_artifact_escape_link.symlink_to(export_artifact_leak_source)
+    except (OSError, NotImplementedError):
+        export_artifact_symlink_supported = False
+
     export_outputs: dict[str, Path] = {}
     for export_type in ["kattis", "domjudge", "polygon-standard", "polygon-full"]:
         out = export_service.create_export("sample", build_id, export_type)
@@ -1208,6 +1220,8 @@ def main() -> None:
     _expect_suffix(kattis_entries, "data/secret/001.in", "kattis")
     _expect_suffix(kattis_entries, "submissions/accepted/accepted.cpp", "kattis")
     _expect_suffix(kattis_entries, "input_validators/validator.cpp", "kattis")
+    if export_artifact_symlink_supported and _has_suffix(kattis_entries, f"data/secret/{export_artifact_escape_name}"):
+        raise RuntimeError("kattis export should not copy symlinked tests from build artifacts")
 
     domjudge_entries = _zip_entries(export_outputs["domjudge"])
     _expect_suffix(domjudge_entries, "problem.yaml", "domjudge")
@@ -1227,6 +1241,10 @@ def main() -> None:
     _expect_suffix(polygon_full_entries, "tests/001.in", "polygon-full")
     _expect_suffix(polygon_full_entries, "ans/001.ans", "polygon-full")
     _expect_absent_fragment(polygon_full_entries, "/logs/run-", "polygon-full")
+    if export_artifact_symlink_supported and _has_suffix(polygon_full_entries, f"tests/{export_artifact_escape_name}"):
+        raise RuntimeError("polygon-full export should not copy symlinked tests from build artifacts")
+    export_artifact_escape_link.unlink(missing_ok=True)
+    export_artifact_leak_source.unlink(missing_ok=True)
 
     with TestClient(app) as client:
         r = client.get(
