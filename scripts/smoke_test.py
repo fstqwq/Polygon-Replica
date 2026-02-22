@@ -926,9 +926,15 @@ def main() -> None:
     (ws / "statement/main.tex").write_text("\\documentclass{article}\\begin{document}ok\\end{document}\n", encoding="utf-8")
 
     preview_id = preview_service.compile_preview("sample", "alice")
-    prow = db.fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
+    prow = db.fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
     if prow is None:
         raise RuntimeError("preview record missing")
+    preview_row_root = Path(str(prow["artifact_path"] or "")).resolve()
+    expected_preview_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_id).resolve()
+    if preview_row_root != expected_preview_root:
+        raise RuntimeError(
+            f"preview artifact_path should be persisted at preview creation: {preview_row_root} != {expected_preview_root}"
+        )
 
     build_id = build_service.run_build("sample", "alice")
     brow = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])

@@ -97,14 +97,13 @@ class PreviewService:
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
         workspace_id = int(ctx["workspace"]["id"])
+        artifacts = self.artifacts.prepare(problem, build_id)
         source_commit = "" if commit else (ctx["workspace"].get("head_commit") or "").strip()
         source_ref = commit or (ctx["workspace"].get("branch") or "main")
         self.db.execute(
             "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            [build_id, ctx["problem"]["id"], workspace_id, source_commit, source_ref, "running", "", now_iso()],
+            [build_id, ctx["problem"]["id"], workspace_id, source_commit, source_ref, "running", str(artifacts.root), now_iso()],
         )
-        artifacts = self.artifacts.prepare(problem, build_id)
-        self.db.execute("UPDATE previews SET artifact_path=? WHERE id=?", [str(artifacts.root), build_id])
 
         log = artifacts.logs / "latex.log"
         status = "ok"
