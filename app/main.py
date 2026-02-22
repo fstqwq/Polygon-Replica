@@ -624,9 +624,11 @@ def run_execute(
     upload_filename = None
     uploaded = False
     if submission_upload is not None:
-        upload_stream = submission_upload.file
-        upload_filename = submission_upload.filename or None
-        uploaded = True
+        normalized_name = (submission_upload.filename or "").strip()
+        if normalized_name:
+            upload_stream = submission_upload.file
+            upload_filename = normalized_name
+            uploaded = True
     try:
         run_id = run_service.run_submission(
             problem,
