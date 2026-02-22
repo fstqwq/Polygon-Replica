@@ -180,26 +180,64 @@ class WorkspaceService:
             run_cmd(["git", "-C", str(workspace), "push", "origin", "main"])
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
-        status_out = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"]).stdout
-        branch = "main"
-        for raw in status_out.splitlines():
-            line = raw.strip()
-            if not line.startswith("## "):
-                continue
-            branch_line = line[3:]
-            if branch_line.startswith("HEAD"):
-                branch = "main"
+        status_v2 = run_cmd(["git", "-C", str(workspace), "status", "--porcelain=2", "--branch"])
+        if status_v2.returncode == 0:
+            branch, head, dirty = self._parse_status_v2(status_v2.stdout)
+        else:
+            status_out = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"]).stdout
+            branch = "main"
+            for raw in status_out.splitlines():
+                line = raw.strip()
+                if not line.startswith("## "):
+                    continue
+                branch_line = line[3:]
+                if branch_line.startswith("HEAD"):
+                    branch = "main"
+                    break
+                branch = branch_line.split("...", 1)[0].strip() or "main"
                 break
-            branch = branch_line.split("...", 1)[0].strip() or "main"
-            break
-        head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-        dirty_status = status_out
-        dirty = 1 if self._is_status_dirty(dirty_status) else 0
+            head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+            dirty = 1 if self._is_status_dirty(status_out) else 0
         self.db.execute(
             "UPDATE workspaces SET branch=?, head_commit=?, dirty=?, updated_at=? WHERE problem_id=? AND user_id=?",
             [branch, head, dirty, now_iso(), problem_id, user_id],
         )
         return {"branch": branch, "head_commit": head, "dirty": dirty}
+
+    def _parse_status_v2(self, status_output: str) -> tuple[str, str, int]:
+        branch = "main"
+        head = ""
+        dirty = 0
+        for raw in status_output.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("# branch.head "):
+                head_name = line[len("# branch.head ") :].strip()
+                if head_name and head_name not in {"(detached)", "(unknown)"}:
+                    branch = head_name
+                continue
+            if line.startswith("# branch.oid "):
+                oid = line[len("# branch.oid ") :].strip()
+                if oid != "(initial)":
+                    head = oid
+                continue
+            if line.startswith("# "):
+                continue
+
+            path = ""
+            if line.startswith("? ") or line.startswith("! "):
+                path = line[2:].strip()
+            elif line.startswith("1 ") or line.startswith("2 ") or line.startswith("u "):
+                path = line.rsplit(" ", 1)[-1].split("\t", 1)[0].strip()
+            else:
+                path = line
+
+            if path == ".polygonlike.lock" or path.endswith("/.polygonlike.lock"):
+                continue
+            dirty = 1
+            break
+        return branch, head, dirty
 
     def refresh_workspace_status(self, problem: str, username: str) -> dict[str, str | int | None]:
         p = self._problem_row(problem)

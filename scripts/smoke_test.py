@@ -74,6 +74,11 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+        status_payload = client.get("/api/problems/sample/workspaces/alice/status").json()
+        if not str(status_payload.get("head") or "").strip():
+            raise RuntimeError("workspace status API should expose a non-empty HEAD commit")
+        if not str(status_payload.get("branch") or "").strip():
+            raise RuntimeError("workspace status API should expose a non-empty branch")
         alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
         alice_ws = Path(alice_ctx["workspace"]["path"])
         tracked_file = alice_ws / "README.problem.md"
