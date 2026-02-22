@@ -361,6 +361,7 @@ class ExportService:
         export_dir.mkdir(parents=True, exist_ok=True)
 
         base_name = self.TYPES[export_type].replace(".zip", "")
+        export_id = f"e-{uuid.uuid4().hex[:10]}"
         tmp_root = export_dir / f"tmp-{uuid.uuid4().hex[:8]}"
         package_root = tmp_root / self._package_root_name(problem_row["slug"])
         package_root.mkdir(parents=True, exist_ok=True)
@@ -394,8 +395,9 @@ class ExportService:
             elif export_type == "polygon-full":
                 self._build_polygon(package_root, build_root, full=True)
 
+            archive_prefix = export_dir / f"{base_name}-{build_id}-{export_id}"
             archive = shutil.make_archive(
-                str(export_dir / base_name),
+                str(archive_prefix),
                 "zip",
                 root_dir=tmp_root,
                 base_dir=package_root.name,
@@ -406,7 +408,7 @@ class ExportService:
             self.db.execute(
                 "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 [
-                    f"e-{uuid.uuid4().hex[:10]}",
+                    export_id,
                     problem_row["id"],
                     build_id,
                     export_type,

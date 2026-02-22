@@ -603,6 +603,22 @@ def main() -> None:
             raise RuntimeError(f"missing export {export_type}")
         export_outputs[export_type] = out
 
+    second_kattis = export_service.create_export("sample", build_id, "kattis")
+    if not second_kattis.exists():
+        raise RuntimeError("second kattis export missing")
+    if second_kattis.name == export_outputs["kattis"].name:
+        raise RuntimeError("duplicate kattis export overwrote previous filename")
+    if not export_outputs["kattis"].exists():
+        raise RuntimeError("first kattis export should still exist after second export")
+    recent_kattis = db.fetch_all(
+        "SELECT filename FROM exports WHERE problem_id=? AND build_id=? AND export_type='kattis' ORDER BY created_at DESC LIMIT 2",
+        [ctx["problem"]["id"], build_id],
+    )
+    if len(recent_kattis) < 2:
+        raise RuntimeError("expected at least two kattis export records")
+    if str(recent_kattis[0]["filename"]) == str(recent_kattis[1]["filename"]):
+        raise RuntimeError("kattis export records should preserve distinct filenames per generation")
+
     kattis_entries = _zip_entries(export_outputs["kattis"])
     _expect_suffix(kattis_entries, "problem.yaml", "kattis")
     _expect_suffix(kattis_entries, "statement/problem.en.tex", "kattis")
