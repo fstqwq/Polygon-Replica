@@ -1933,12 +1933,17 @@ def main() -> None:
     export_artifact_leak_source = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"export-artifact-leak-{uuid.uuid4().hex[:8]}.txt"
     export_artifact_leak_source.write_text("export-artifact-leak\n", encoding="utf-8")
     export_artifact_escape_name = f"999.export-escape-{uuid.uuid4().hex[:6]}.in"
+    export_artifact_sample_escape_name = f"000.export-sample-escape-{uuid.uuid4().hex[:6]}.in"
     export_artifact_escape_link = (
         Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "tests" / export_artifact_escape_name
+    )
+    export_artifact_sample_escape_link = (
+        Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "tests" / export_artifact_sample_escape_name
     )
     export_artifact_symlink_supported = True
     try:
         export_artifact_escape_link.symlink_to(export_artifact_leak_source)
+        export_artifact_sample_escape_link.symlink_to(export_artifact_leak_source)
     except (OSError, NotImplementedError):
         export_artifact_symlink_supported = False
 
@@ -2001,6 +2006,19 @@ def main() -> None:
     _expect_suffix(kattis_entries, "input_validators/validator.cpp", "kattis")
     if export_artifact_symlink_supported and _has_suffix(kattis_entries, f"data/secret/{export_artifact_escape_name}"):
         raise RuntimeError("kattis export should not copy symlinked tests from build artifacts")
+    if export_artifact_symlink_supported and _has_suffix(kattis_entries, f"data/secret/{export_artifact_sample_escape_name}"):
+        raise RuntimeError("kattis export should not copy low-sort symlinked tests from build artifacts")
+    with zipfile.ZipFile(export_outputs["kattis"]) as kattis_zip:
+        sample_in = None
+        for name in kattis_zip.namelist():
+            stripped = name.rstrip("/")
+            if stripped.endswith("/data/sample/1.in"):
+                sample_in = kattis_zip.read(name)
+                break
+        if sample_in is None:
+            raise RuntimeError("kattis export missing data/sample/1.in")
+        if sample_in != b"1\n":
+            raise RuntimeError("kattis export sample test should come from first real test input, not symlinked entries")
 
     domjudge_entries = _zip_entries(export_outputs["domjudge"])
     _expect_suffix(domjudge_entries, "problem.yaml", "domjudge")
@@ -2022,7 +2040,10 @@ def main() -> None:
     _expect_absent_fragment(polygon_full_entries, "/logs/run-", "polygon-full")
     if export_artifact_symlink_supported and _has_suffix(polygon_full_entries, f"tests/{export_artifact_escape_name}"):
         raise RuntimeError("polygon-full export should not copy symlinked tests from build artifacts")
+    if export_artifact_symlink_supported and _has_suffix(polygon_full_entries, f"tests/{export_artifact_sample_escape_name}"):
+        raise RuntimeError("polygon-full export should not copy low-sort symlinked tests from build artifacts")
     export_artifact_escape_link.unlink(missing_ok=True)
+    export_artifact_sample_escape_link.unlink(missing_ok=True)
     export_artifact_leak_source.unlink(missing_ok=True)
 
     with TestClient(app) as client:

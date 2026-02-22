@@ -244,16 +244,8 @@ class ExportService:
             tests_dir_resolved = tests_dir.resolve()
         except OSError:
             tests_dir_resolved = None
-        tests = (
-            [
-                p
-                for p in sorted(tests_dir.glob("*.in"))
-                if tests_dir_resolved is not None
-                and self._is_safe_regular_file(tests_dir, p, root_resolved=tests_dir_resolved)
-            ]
-        )
-        if not tests:
-            raise ValueError("build has no tests to export")
+        first_test: Path | None = None
+        test_count = 0
         try:
             ans_dir_resolved = ans_dir.resolve()
         except OSError:
@@ -264,7 +256,14 @@ class ExportService:
         secret.mkdir(parents=True, exist_ok=True)
         sample.mkdir(parents=True, exist_ok=True)
 
-        for t in tests:
+        for t in sorted(tests_dir.glob("*.in")):
+            if tests_dir_resolved is None or not self._is_safe_regular_file(
+                tests_dir, t, root_resolved=tests_dir_resolved
+            ):
+                continue
+            if first_test is None:
+                first_test = t
+            test_count += 1
             out_in = secret / t.name
             out_ans = secret / f"{t.stem}.ans"
             shutil.copy2(t, out_in)
@@ -276,7 +275,10 @@ class ExportService:
             else:
                 out_ans.write_text("", encoding="utf-8")
 
-        first = tests[0]
+        if first_test is None or test_count <= 0:
+            raise ValueError("build has no tests to export")
+
+        first = first_test
         shutil.copy2(first, sample / "1.in")
         first_ans = ans_dir / f"{first.stem}.ans"
         if ans_dir_resolved is not None and self._is_safe_regular_file(
