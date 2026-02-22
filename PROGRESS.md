@@ -142,6 +142,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Added workspace-scoped run-artifact endpoints (`/runs/{run_id}/artifacts/{rel}` and `/runs/{run_id}/download-dir`) and updated Run UI links to use run ownership instead of build-id path assumptions.
 - Run artifact path resolution now supports both current run-root-relative paths and legacy `logs/run-<id>/...` paths for backward compatibility.
 - Artifact directory browse/zip and run-artifact browse/zip now enforce symlink-safe file enumeration (no symlink-directory traversal, skip symlink entries, and skip out-of-root resolved targets).
+- Artifact/run-artifact zip and export directory-copy flows now use iterator-based safe traversal streams instead of pre-materialized file lists (lower memory overhead for large trees).
 - Run summaries now normalize `feedback_dir` to the stable relative token `feedback_dir` (avoids leaking host-absolute run paths in API/UI payloads).
 - Switch workspace/branch routes now normalize posted page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`) for redirect correctness without JS dependency.
 - Build/Run detail pages now parse `summary_json` defensively and surface fallback errors for malformed JSON instead of raising 500 errors.

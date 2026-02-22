@@ -55,15 +55,14 @@ class ExportService:
             return False
         return root_resolved in resolved.parents or root_resolved == resolved
 
-    def _safe_descendant_files(self, root: Path) -> list[Path]:
+    def _iter_safe_descendant_files(self, root: Path):
         if not root.exists() or not root.is_dir():
-            return []
+            return
         root_resolved = root.resolve()
-        files: list[Path] = []
         for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             keep_dirs: list[str] = []
-            for name in dirnames:
+            for name in sorted(dirnames):
                 d = dir_root / name
                 if d.is_symlink():
                     continue
@@ -74,7 +73,7 @@ class ExportService:
                 if root_resolved in resolved.parents or root_resolved == resolved:
                     keep_dirs.append(name)
             dirnames[:] = keep_dirs
-            for name in filenames:
+            for name in sorted(filenames):
                 p = dir_root / name
                 if p.is_symlink():
                     continue
@@ -86,9 +85,7 @@ class ExportService:
                     continue
                 if not p.is_file():
                     continue
-                files.append(p)
-        files.sort(key=lambda p: str(p.relative_to(root)))
-        return files
+                yield p
 
     def _copy_path(self, src: Path, dst: Path) -> None:
         if not src.exists():
@@ -108,7 +105,7 @@ class ExportService:
     def _copy_dir_contents(self, src: Path, dst: Path) -> None:
         if not src.exists() or not src.is_dir():
             return
-        for p in self._safe_descendant_files(src):
+        for p in self._iter_safe_descendant_files(src):
             rel = p.relative_to(src)
             target = dst / rel
             target.parent.mkdir(parents=True, exist_ok=True)

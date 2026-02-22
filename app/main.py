@@ -132,13 +132,12 @@ def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Pat
     return root, path
 
 
-def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
+def _iter_safe_descendant_files(root: Path, target: Path):
     root_resolved = root.resolve()
-    safe_files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(target, topdown=True, followlinks=False):
         dir_root = Path(dirpath)
         pruned_dirs: list[str] = []
-        for name in dirnames:
+        for name in sorted(dirnames):
             d = dir_root / name
             if d.is_symlink():
                 continue
@@ -150,7 +149,7 @@ def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
                 pruned_dirs.append(name)
         dirnames[:] = pruned_dirs
 
-        for name in filenames:
+        for name in sorted(filenames):
             p = dir_root / name
             if p.is_symlink():
                 continue
@@ -160,9 +159,11 @@ def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
                 continue
             if root_resolved not in resolved.parents and root_resolved != resolved:
                 continue
-            safe_files.append(p)
-    safe_files.sort(key=lambda p: str(p.relative_to(root)))
-    return safe_files
+            yield p
+
+
+def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
+    return sorted(_iter_safe_descendant_files(root, target), key=lambda p: str(p.relative_to(root)))
 
 
 def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
@@ -773,7 +774,7 @@ def artifact_download_dir(problem: str, user: str, build_id: str, rel: str):
     os.close(fd)
     tmp_path = Path(tmp_zip)
     with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in _safe_descendant_files(root, target):
+        for p in _iter_safe_descendant_files(root, target):
             zf.write(p, arcname=str(p.relative_to(root)))
     name = f"{Path(rel).name or 'artifacts'}-{build_id}.zip"
     return FileResponse(
@@ -812,7 +813,7 @@ def run_artifact_download_dir(problem: str, user: str, run_id: str, rel: str = "
     os.close(fd)
     tmp_path = Path(tmp_zip)
     with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in _safe_descendant_files(root, target):
+        for p in _iter_safe_descendant_files(root, target):
             zf.write(p, arcname=str(p.relative_to(root)))
     name = f"{Path(rel).name or 'run-artifacts'}-{run_id}.zip"
     return FileResponse(
