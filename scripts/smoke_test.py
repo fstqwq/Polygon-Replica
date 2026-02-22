@@ -538,6 +538,28 @@ def main() -> None:
     if invalid_runs_root.resolve() not in Path(rrow_missing_artifacts["artifact_path"]).resolve().parents:
         raise RuntimeError("missing-artifacts run was not isolated under run_root/invalid-runs")
 
+    build_id_missing_tests_dir = build_service.run_build("sample", "alice")
+    brow_missing_tests_dir = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_missing_tests_dir])
+    if brow_missing_tests_dir is None or brow_missing_tests_dir["status"] != "ok":
+        raise RuntimeError(f"missing-tests-dir build failed unexpectedly: {brow_missing_tests_dir}")
+    missing_tests_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id_missing_tests_dir
+    shutil.rmtree(missing_tests_root / "tests", ignore_errors=True)
+    run_id_missing_tests_dir = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id_missing_tests_dir,
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    rrow_missing_tests_dir = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_missing_tests_dir])
+    if rrow_missing_tests_dir is None or rrow_missing_tests_dir["status"] != "failed":
+        raise RuntimeError(f"missing-tests-dir run should fail: {rrow_missing_tests_dir}")
+    missing_tests_summary = json.loads(rrow_missing_tests_dir["summary_json"])
+    if "artifact directory missing: tests/" not in str(missing_tests_summary.get("error", "")):
+        raise RuntimeError("missing-tests-dir run did not report required artifact-directory preflight failure")
+    if invalid_runs_root.resolve() not in Path(rrow_missing_tests_dir["artifact_path"]).resolve().parents:
+        raise RuntimeError("missing-tests-dir run was not isolated under run_root/invalid-runs")
+
     (ws / "config/build.json").write_text(
         json.dumps(
             {

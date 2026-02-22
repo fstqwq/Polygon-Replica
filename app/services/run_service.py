@@ -403,14 +403,27 @@ class RunService:
         run_id = f"r-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         artifact_root = Path(self.workspace_service.settings.artifacts_root) / problem / build_id
-        build_artifact_exists = artifact_root.exists()
         build_row = self.db.fetch_one("SELECT problem_id,status FROM builds WHERE id=?", [build_id])
-        preflight_ok = bool(
-            build_row is not None
-            and build_row["problem_id"] == ctx["problem"]["id"]
-            and build_row["status"] == "ok"
-            and build_artifact_exists
-        )
+        preflight_reasons: list[str] = []
+        if build_row is None:
+            preflight_reasons.append("build metadata missing")
+        else:
+            if build_row["problem_id"] != ctx["problem"]["id"]:
+                preflight_reasons.append("build does not belong to selected problem")
+            if build_row["status"] != "ok":
+                preflight_reasons.append(f"build status is {build_row['status']}")
+
+        if not artifact_root.exists():
+            preflight_reasons.append("artifact root missing")
+        else:
+            for required_dir in ["tests", "ans"]:
+                if not (artifact_root / required_dir).is_dir():
+                    preflight_reasons.append(f"artifact directory missing: {required_dir}/")
+
+        preflight_ok = not preflight_reasons
+        preflight_error = f"build not runnable: {build_id}"
+        if preflight_reasons:
+            preflight_error += " (" + "; ".join(preflight_reasons) + ")"
         if preflight_ok:
             run_root = artifact_root / "logs" / f"run-{run_id}"
         else:
@@ -433,7 +446,7 @@ class RunService:
         )
 
         if not preflight_ok:
-            error = f"build not runnable: {build_id}"
+            error = preflight_error
             compile_log_file.write_text(error + "\n", encoding="utf-8")
             summary = {
                 "error": error,
