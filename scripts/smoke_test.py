@@ -74,6 +74,38 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+        invalid_problem_switch = client.post(
+            "/switch-workspace",
+            data={"problem": "..", "user": "alice", "page": "files"},
+            follow_redirects=False,
+        )
+        if invalid_problem_switch.status_code != 400:
+            raise RuntimeError(
+                "switch-workspace should reject invalid problem identifiers"
+                f", status={invalid_problem_switch.status_code}"
+            )
+        invalid_user_switch = client.post(
+            "/switch-workspace",
+            data={"problem": "sample", "user": "..", "page": "files"},
+            follow_redirects=False,
+        )
+        if invalid_user_switch.status_code != 400:
+            raise RuntimeError(
+                "switch-workspace should reject invalid user identifiers"
+                f", status={invalid_user_switch.status_code}"
+            )
+        invalid_problem_status = client.get("/api/problems/%2E%2E/workspaces/alice/status")
+        if invalid_problem_status.status_code != 400:
+            raise RuntimeError(
+                "workspace status API should reject invalid problem identifiers"
+                f", status={invalid_problem_status.status_code}"
+            )
+        invalid_user_status = client.get("/api/problems/sample/workspaces/%2E%2E/status")
+        if invalid_user_status.status_code != 400:
+            raise RuntimeError(
+                "workspace status API should reject invalid user identifiers"
+                f", status={invalid_user_status.status_code}"
+            )
         race_user = f"wsrace-{uuid.uuid4().hex[:8]}"
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = [

@@ -5,6 +5,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+import re
 
 from app.db import DB, now_iso
 from app.settings import Settings
@@ -12,9 +13,17 @@ from app.services.util import copytree, ensure_dir, extract_git_archive, remove_
 
 
 class WorkspaceService:
+    IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
     def __init__(self, db: DB, settings: Settings):
         self.db = db
         self.settings = settings
+
+    def _validate_identifier(self, value: str, label: str) -> str:
+        ident = str(value or "").strip()
+        if not self.IDENT_RE.fullmatch(ident):
+            raise ValueError(f"invalid {label}")
+        return ident
 
     def ensure_layout(self) -> None:
         for p in [
@@ -27,6 +36,7 @@ class WorkspaceService:
             ensure_dir(p)
 
     def ensure_problem(self, slug: str, name: str) -> None:
+        slug = self._validate_identifier(slug, "problem")
         self.ensure_layout()
         repo_name = f"{slug}.git"
         bare = self.settings.bare_root / repo_name
@@ -40,6 +50,7 @@ class WorkspaceService:
             )
 
     def ensure_user(self, username: str) -> None:
+        username = self._validate_identifier(username, "user")
         row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
         if row is None:
             self.db.execute(
@@ -48,12 +59,14 @@ class WorkspaceService:
             )
 
     def _problem_row(self, slug: str):
+        slug = self._validate_identifier(slug, "problem")
         row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
         if row is None:
             raise ValueError(f"Unknown problem: {slug}")
         return row
 
     def _user_row(self, username: str):
+        username = self._validate_identifier(username, "user")
         row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
         if row is None:
             raise ValueError(f"Unknown user: {username}")

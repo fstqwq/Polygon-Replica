@@ -52,6 +52,8 @@ def page_ctx(problem: str, user: str, include_branches: bool = True, refresh_sta
     try:
         workspace_service.ensure_workspace(problem, user, refresh_status=refresh_status)
         ctx = workspace_service.workspace_context(problem, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     if include_branches:
@@ -286,8 +288,11 @@ def home() -> RedirectResponse:
 
 @app.post("/switch-workspace")
 def switch_workspace(problem: str = Form(...), user: str = Form(...), page: str = Form("files")):
-    workspace_service.ensure_problem(problem, f"{problem.title()} Problem")
-    workspace_service.ensure_workspace(problem, user)
+    try:
+        workspace_service.ensure_problem(problem, f"{problem.title()} Problem")
+        workspace_service.ensure_workspace(problem, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     target_page = _normalize_page_target(page)
     return RedirectResponse(f"/problems/{problem}/{user}/{target_page}", status_code=303)
 
