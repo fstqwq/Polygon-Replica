@@ -1366,6 +1366,20 @@ def main() -> None:
     brow_polygon_snapshotless = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_polygon_snapshotless])
     if brow_polygon_snapshotless is None or brow_polygon_snapshotless["status"] != "ok":
         raise RuntimeError(f"polygon snapshotless build failed unexpectedly: {brow_polygon_snapshotless}")
+    build_id_missing_source_commit = build_service.run_build("sample", "alice")
+    brow_missing_source_commit = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_missing_source_commit])
+    if brow_missing_source_commit is None or brow_missing_source_commit["status"] != "ok":
+        raise RuntimeError(f"missing-source-commit build failed unexpectedly: {brow_missing_source_commit}")
+    db.execute("UPDATE builds SET source_commit=? WHERE id=?", ["", build_id_missing_source_commit])
+    try:
+        export_service.create_export("sample", build_id_missing_source_commit, "kattis")
+        raise RuntimeError("kattis export should fail when build source_commit is missing")
+    except ValueError as exc:
+        if "source_commit missing" not in str(exc):
+            raise RuntimeError(f"kattis missing-source-commit export rejection reason mismatch: {exc}")
+    poly_missing_source_commit = export_service.create_export("sample", build_id_missing_source_commit, "polygon-standard")
+    if not poly_missing_source_commit.exists():
+        raise RuntimeError("polygon-standard export should not require source_commit metadata")
     db.execute("UPDATE builds SET source_commit=? WHERE id=?", ["deadbeefdeadbeef", build_id_polygon_snapshotless])
     poly_snapshotless = export_service.create_export("sample", build_id_polygon_snapshotless, "polygon-standard")
     if not poly_snapshotless.exists():

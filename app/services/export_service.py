@@ -422,6 +422,9 @@ class ExportService:
             raise ValueError(f"build {build_id} does not belong to problem {problem}")
         if build_row["status"] != "ok":
             raise ValueError(f"build not exportable: {build_id} (status={build_row['status']})")
+        source_commit = str(build_row["source_commit"] or "").strip()
+        if export_type in {"kattis", "domjudge"} and not source_commit:
+            raise ValueError(f"build source_commit missing: {build_id}")
 
         build_root = self._canonical_build_root(problem, build_id)
         if not build_root.exists():
@@ -443,7 +446,6 @@ class ExportService:
         package_root = tmp_root / self._package_root_name(problem_row["slug"])
         package_root.mkdir(parents=True, exist_ok=True)
 
-        source_commit = build_row["source_commit"]
         snapshot: Path | None = None
         try:
             mode = "pass-fail"
