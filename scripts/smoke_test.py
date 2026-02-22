@@ -906,6 +906,9 @@ def main() -> None:
     brow = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])
     if brow is None or brow["status"] != "ok":
         raise RuntimeError(f"build failed: {brow}")
+    ws_recent = db.fetch_one("SELECT recent_build_status FROM workspaces WHERE id=?", [ctx["workspace"]["id"]])
+    if ws_recent is None or ws_recent["recent_build_status"] != "ok":
+        raise RuntimeError(f"workspace recent_build_status mismatch after successful build: {ws_recent}")
     preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_id
     (preview_root / "logs" / "latex.log").write_bytes(b"preview\xfflog\n")
     build_logs_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs"

@@ -178,17 +178,16 @@ class BuildService:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
+        workspace_id = int(ctx["workspace"]["id"])
         source_commit = "" if commit else str(ctx["workspace"].get("head_commit") or "").strip()
         source_ref = ref or commit or ctx["workspace"].get("branch") or "main"
-
-        ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [ctx["problem"]["id"], ctx["user"]["id"]])
         artifact_paths = self.artifacts.prepare(problem, build_id)
         logs_dir = artifact_paths.logs
         bin_dir = artifact_paths.root / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         self.db.execute(
             "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            [build_id, ctx["problem"]["id"], ws_row["id"], source_commit, source_ref, "running", str(artifact_paths.root), now_iso()],
+            [build_id, ctx["problem"]["id"], workspace_id, source_commit, source_ref, "running", str(artifact_paths.root), now_iso()],
         )
 
         steps: list[dict] = []
@@ -200,6 +199,7 @@ class BuildService:
         current_step = "compile"
         failing_test: str | None = None
         snapshot: Path | None = None
+        final_status = "running"
 
         try:
             if commit:
@@ -211,10 +211,16 @@ class BuildService:
                 with self.workspace_service.workspace_lock(workspace):
                     source_commit = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                     branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip()
+                    dirty = self.workspace_service.workspace_is_dirty(workspace)
                     if branch:
                         source_ref = ref or branch
                     self.db.execute("UPDATE builds SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
-                    snapshot = self.workspace_service.create_snapshot(workspace, commit)
+                    snapshot = self.workspace_service.create_snapshot(
+                        workspace,
+                        None,
+                        workspace_head=source_commit,
+                        workspace_dirty=dirty,
+                    )
 
             build_cfg = self._load_build_config(snapshot)
             include_dirs = [snapshot / "third_party/testlib"]
@@ -426,6 +432,7 @@ class BuildService:
                 "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
                 ["ok", json.dumps({"steps": steps, "diagnostics": diagnostics}), now_iso(), build_id],
             )
+            final_status = "ok"
         except Exception as exc:
             (logs_dir / "failure.log").write_text(str(exc), encoding="utf-8")
             steps.append({"step": current_step, "status": "error", "log": "logs/failure.log"})
@@ -446,11 +453,13 @@ class BuildService:
                     build_id,
                 ],
             )
+            final_status = "failed"
         finally:
-            self.db.execute(
-                "UPDATE workspaces SET recent_build_status=? WHERE id=?",
-                [self.db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])["status"], ws_row["id"]],
-            )
+            if final_status != "running":
+                self.db.execute(
+                    "UPDATE workspaces SET recent_build_status=? WHERE id=?",
+                    [final_status, workspace_id],
+                )
             if snapshot is not None:
                 shutil.rmtree(snapshot.parent, ignore_errors=True)
 

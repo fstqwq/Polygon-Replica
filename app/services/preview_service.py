@@ -96,15 +96,12 @@ class PreviewService:
         build_id = f"p-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
+        workspace_id = int(ctx["workspace"]["id"])
         source_commit = "" if commit else (ctx["workspace"].get("head_commit") or "").strip()
         source_ref = commit or (ctx["workspace"].get("branch") or "main")
-        ws_row = self.db.fetch_one(
-            "SELECT id FROM workspaces WHERE problem_id=? AND user_id=?",
-            [ctx["problem"]["id"], ctx["user"]["id"]],
-        )
         self.db.execute(
             "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            [build_id, ctx["problem"]["id"], ws_row["id"], source_commit, source_ref, "running", "", now_iso()],
+            [build_id, ctx["problem"]["id"], workspace_id, source_commit, source_ref, "running", "", now_iso()],
         )
         artifacts = self.artifacts.prepare(problem, build_id)
         self.db.execute("UPDATE previews SET artifact_path=? WHERE id=?", [str(artifacts.root), build_id])
@@ -142,7 +139,12 @@ class PreviewService:
                         if reused_from is not None:
                             summary = {"pdf": "statement_preview/statement.pdf", "reused_from": reused_from}
                             return build_id
-                    snapshot = self.workspace_service.create_snapshot(workspace, None)
+                    snapshot = self.workspace_service.create_snapshot(
+                        workspace,
+                        None,
+                        workspace_head=head,
+                        workspace_dirty=dirty,
+                    )
 
             tex = snapshot / "statement/main.tex"
             if not tex.exists():

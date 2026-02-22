@@ -316,7 +316,13 @@ class WorkspaceService:
             return True
         return False
 
-    def create_snapshot(self, workspace: Path, commit: str | None) -> Path:
+    def create_snapshot(
+        self,
+        workspace: Path,
+        commit: str | None,
+        workspace_head: str | None = None,
+        workspace_dirty: bool | None = None,
+    ) -> Path:
         run_id = f"snapshot-{uuid.uuid4().hex[:12]}"
         snap = self.settings.run_root / run_id / "src"
         ensure_dir(snap.parent)
@@ -324,8 +330,11 @@ class WorkspaceService:
             self._extract_commit_snapshot(workspace, commit, snap)
         else:
             # Fast path for clean workspaces: archive current HEAD instead of copying entire tree.
-            if not self._workspace_dirty(workspace):
-                head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+            dirty = workspace_dirty if workspace_dirty is not None else self._workspace_dirty(workspace)
+            if not dirty:
+                head = (workspace_head or "").strip()
+                if not head:
+                    head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                 self._extract_commit_snapshot(workspace, head, snap)
             else:
                 copytree(workspace, snap)
