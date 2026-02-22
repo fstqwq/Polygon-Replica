@@ -250,6 +250,11 @@ class ExportService:
             ans_dir_resolved = ans_dir.resolve()
         except OSError:
             ans_dir_resolved = None
+        safe_answers: dict[str, Path] = {}
+        if ans_dir_resolved is not None:
+            for ap in sorted(ans_dir.glob("*.ans")):
+                if self._is_safe_regular_file(ans_dir, ap, root_resolved=ans_dir_resolved):
+                    safe_answers[ap.name] = ap
 
         secret = data_root / "secret"
         sample = data_root / "sample"
@@ -267,10 +272,8 @@ class ExportService:
             out_in = secret / t.name
             out_ans = secret / f"{t.stem}.ans"
             shutil.copy2(t, out_in)
-            src_ans = ans_dir / f"{t.stem}.ans"
-            if ans_dir_resolved is not None and self._is_safe_regular_file(
-                ans_dir, src_ans, root_resolved=ans_dir_resolved
-            ):
+            src_ans = safe_answers.get(f"{t.stem}.ans")
+            if src_ans is not None:
                 shutil.copy2(src_ans, out_ans)
             else:
                 out_ans.write_text("", encoding="utf-8")
@@ -280,10 +283,8 @@ class ExportService:
 
         first = first_test
         shutil.copy2(first, sample / "1.in")
-        first_ans = ans_dir / f"{first.stem}.ans"
-        if ans_dir_resolved is not None and self._is_safe_regular_file(
-            ans_dir, first_ans, root_resolved=ans_dir_resolved
-        ):
+        first_ans = safe_answers.get(f"{first.stem}.ans")
+        if first_ans is not None:
             shutil.copy2(first_ans, sample / "1.ans")
         else:
             (sample / "1.ans").write_text("", encoding="utf-8")

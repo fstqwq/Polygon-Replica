@@ -2010,15 +2010,24 @@ def main() -> None:
         raise RuntimeError("kattis export should not copy low-sort symlinked tests from build artifacts")
     with zipfile.ZipFile(export_outputs["kattis"]) as kattis_zip:
         sample_in = None
+        sample_ans = None
+        secret_ans = None
         for name in kattis_zip.namelist():
             stripped = name.rstrip("/")
             if stripped.endswith("/data/sample/1.in"):
                 sample_in = kattis_zip.read(name)
-                break
+            elif stripped.endswith("/data/sample/1.ans"):
+                sample_ans = kattis_zip.read(name)
+            elif stripped.endswith("/data/secret/001.ans"):
+                secret_ans = kattis_zip.read(name)
         if sample_in is None:
             raise RuntimeError("kattis export missing data/sample/1.in")
         if sample_in != b"1\n":
             raise RuntimeError("kattis export sample test should come from first real test input, not symlinked entries")
+        if sample_ans != b"1\n":
+            raise RuntimeError("kattis export sample answer should match first real test answer")
+        if secret_ans != b"1\n":
+            raise RuntimeError("kattis export secret answer should match build answer data")
 
     domjudge_entries = _zip_entries(export_outputs["domjudge"])
     _expect_suffix(domjudge_entries, "problem.yaml", "domjudge")
