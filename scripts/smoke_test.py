@@ -1073,6 +1073,14 @@ def main() -> None:
     test_inputs_first.append(test_inputs_marker)
     if test_inputs_marker in test_inputs_second:
         raise RuntimeError("run test-input cache should return independent copies")
+    answer_files_first = run_service._load_answer_files(run_cfg_root)
+    answer_files_second = run_service._load_answer_files(run_cfg_root)
+    if not answer_files_second:
+        raise RuntimeError("run answer-file cache should expose available answers")
+    answer_files_marker = f"mutated-{uuid.uuid4().hex[:8]}.ans"
+    answer_files_first.append(answer_files_marker)
+    if answer_files_marker in answer_files_second:
+        raise RuntimeError("run answer-file cache should return independent copies")
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()

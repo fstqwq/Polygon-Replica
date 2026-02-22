@@ -30,6 +30,7 @@ class RunService:
         self.toolchain = toolchain
         self._run_config_cache: dict[str, dict[str, object]] = {}
         self._test_input_cache: dict[str, list[str]] = {}
+        self._answer_file_cache: dict[str, list[str]] = {}
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
@@ -137,6 +138,16 @@ class RunService:
         tests_dir = artifact_root / "tests"
         names = [p.name for p in self._safe_matching_files(tests_dir, "*.in")]
         self._test_input_cache[cache_key] = list(names)
+        return list(names)
+
+    def _load_answer_files(self, artifact_root: Path) -> list[str]:
+        cache_key = str(artifact_root.resolve())
+        cached = self._answer_file_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+        ans_dir = artifact_root / "ans"
+        names = [p.name for p in self._safe_matching_files(ans_dir, "*.ans")]
+        self._answer_file_cache[cache_key] = list(names)
         return list(names)
 
     def _effective_run_jobs(self, configured: object, test_count: int) -> int:
@@ -657,6 +668,7 @@ class RunService:
             test_names = self._load_test_inputs(artifact_root)
             if not test_names:
                 raise RuntimeError("selected build has no tests")
+            answer_names = set(self._load_answer_files(artifact_root))
             effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(test_names))
             run_cfg["run_jobs_effective"] = effective_run_jobs
 
@@ -669,9 +681,10 @@ class RunService:
                 for test_name in test_names:
                     test = tests_dir / test_name
                     test_stem = Path(test_name).stem
-                    ans = ans_dir / f"{test_stem}.ans"
-                    if not self._is_safe_regular_file(ans_dir, ans):
+                    ans_name = f"{test_stem}.ans"
+                    if ans_name not in answer_names:
                         raise RuntimeError(f"answer file missing or invalid for {test_name}")
+                    ans = ans_dir / ans_name
                     test_feedback_dir = feedback_dir / test_stem
                     test_feedback_dir.mkdir(parents=True, exist_ok=True)
                     test_result = {
@@ -703,8 +716,8 @@ class RunService:
                     verdicts.append(test_result)
             elif mode != "interactive" and effective_run_jobs > 1:
                 for test_name in test_names:
-                    ans = ans_dir / f"{Path(test_name).stem}.ans"
-                    if not self._is_safe_regular_file(ans_dir, ans):
+                    ans_name = f"{Path(test_name).stem}.ans"
+                    if ans_name not in answer_names:
                         raise RuntimeError(f"answer file missing or invalid for {test_name}")
                 with ThreadPoolExecutor(max_workers=effective_run_jobs) as pool:
                     future_map = {
@@ -733,9 +746,10 @@ class RunService:
                 for test_name in test_names:
                     test = tests_dir / test_name
                     test_stem = Path(test_name).stem
-                    ans = ans_dir / f"{test_stem}.ans"
-                    if not self._is_safe_regular_file(ans_dir, ans):
+                    ans_name = f"{test_stem}.ans"
+                    if ans_name not in answer_names:
                         raise RuntimeError(f"answer file missing or invalid for {test_name}")
+                    ans = ans_dir / ans_name
                     verdicts.append(
                         self._run_noninteractive_test(
                             mode,
