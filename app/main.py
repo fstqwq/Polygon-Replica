@@ -570,23 +570,26 @@ def run_execute(
     mode: str = Form("pass-fail"),
     submission_upload: UploadFile | None = File(None),
 ):
-    upload_content = None
+    upload_stream = None
     upload_filename = None
+    uploaded = False
     if submission_upload is not None:
-        upload_content = submission_upload.file.read()
+        upload_stream = submission_upload.file
         upload_filename = submission_upload.filename or None
-        if upload_content == b"":
-            upload_content = None
-
-    run_id = run_service.run_submission(
-        problem,
-        user,
-        build_id,
-        submission_path=submission_path or None,
-        mode=mode,
-        upload_content=upload_content,
-        upload_filename=upload_filename,
-    )
+        uploaded = True
+    try:
+        run_id = run_service.run_submission(
+            problem,
+            user,
+            build_id,
+            submission_path=submission_path or None,
+            mode=mode,
+            upload_stream=upload_stream,
+            upload_filename=upload_filename,
+        )
+    finally:
+        if submission_upload is not None:
+            submission_upload.file.close()
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     _audit(
         ctx["user"]["id"],
@@ -596,7 +599,7 @@ def run_execute(
             "run_id": run_id,
             "build_id": build_id,
             "submission_path": submission_path or None,
-            "uploaded": bool(upload_content),
+            "uploaded": uploaded,
             "mode": mode,
         },
     )
