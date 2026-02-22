@@ -20,6 +20,7 @@ This repository implements a local Polygon-like problem authoring system aligned
   - `checker_args`
   - `max_passes`
 - Build source discovery now supports C++ variants (`.cpp`, `.cc`, `.cxx`, `.c++`) with preferred-name resolution (`accepted.*`, etc.)
+- Manual test ingestion now prefers `tests/manual/**/*.in` when present, so sidecar files like `.ans` are not treated as input tests
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
 - Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`
@@ -31,6 +32,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Compile cache correctness: cache keys now include recursively discovered local `#include "..."` dependencies (source dir + include dirs), so header-only changes invalidate stale binaries
 - Compile cache keys now use canonical dependency identities (relative to source/include roots) rather than absolute filesystem paths, preserving cache reuse across snapshot directories
 - Run fallback judging (when no checker binary is available) now performs chunked file comparison to avoid loading full outputs into memory
+- Export zip hashing now streams file contents (no full-archive memory read during digest computation)
 
 ## Quick Start
 
@@ -55,4 +57,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows, compile cache reuse/invalidation checks, missing-submission failure handling, invalid-build/missing-artifacts preflight handling, workspace path-boundary rejection, and export zip structure checks.
+  - Covers pass-fail, multi-pass, and interactive run flows, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts preflight handling, workspace path-boundary rejection, and export zip structure checks.

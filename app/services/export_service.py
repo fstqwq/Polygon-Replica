@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import shlex
 import shutil
@@ -8,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from app.db import DB, now_iso
-from app.services.util import copytree, run_cmd
+from app.services.util import copytree, run_cmd, sha256_file
 
 
 class ExportService:
@@ -389,7 +388,7 @@ class ExportService:
                 base_dir=package_root.name,
             )
             out = Path(archive)
-            digest = hashlib.sha256(out.read_bytes()).hexdigest()
+            digest = sha256_file(out)
 
             self.db.execute(
                 "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",

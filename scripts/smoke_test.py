@@ -92,6 +92,7 @@ def main() -> None:
         encoding="utf-8",
     )
     (ws / "tests/manual/001.in").write_text("1\n", encoding="utf-8")
+    (ws / "tests/manual/001.ans").write_text("ignored sidecar answer\n", encoding="utf-8")
     (ws / "solutions/accepted.cpp").write_text(
         '#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n";}',
         encoding="utf-8",
@@ -132,6 +133,8 @@ def main() -> None:
     generation_params = manifest.get("generation_params", {})
     if int(generation_params.get("max_passes", 0)) != 8:
         raise RuntimeError(f"manifest generation_params missing max_passes: {generation_params}")
+    if int(manifest.get("summary", {}).get("tests_count", -1)) != 2:
+        raise RuntimeError("manual sidecar files should not be treated as test inputs")
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()

@@ -127,6 +127,17 @@ class BuildService:
     def _validator_ok(self, returncode: int) -> bool:
         return returncode in {0, 42}
 
+    def _manual_test_sources(self, snapshot: Path) -> list[Path]:
+        manual_root = snapshot / "tests" / "manual"
+        if not manual_root.exists():
+            return []
+        files = sorted(
+            [p for p in manual_root.rglob("*") if p.is_file()],
+            key=lambda p: str(p.relative_to(manual_root)),
+        )
+        in_files = [p for p in files if p.suffix.lower() == ".in"]
+        return in_files if in_files else files
+
     def run_build(self, problem: str, username: str, commit: str | None = None, ref: str | None = None) -> str:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
@@ -218,15 +229,14 @@ class BuildService:
             steps.append({"step": "compile", "status": "ok", "log": "logs/compile.log"})
 
             current_step = "generate"
-            tests = sorted((snapshot / "tests/manual").glob("*")) if (snapshot / "tests/manual").exists() else []
+            tests = self._manual_test_sources(snapshot)
             test_files: list[Path] = []
             counter = 1
             for t in tests:
-                if t.is_file():
-                    dst = artifact_paths.tests / f"{counter:03d}.in"
-                    shutil.copy2(t, dst)
-                    test_files.append(dst)
-                    counter += 1
+                dst = artifact_paths.tests / f"{counter:03d}.in"
+                shutil.copy2(t, dst)
+                test_files.append(dst)
+                counter += 1
 
             generator_bins = [compiled_bins[name] for name, _, _ in generator_targets if name in compiled_bins]
             gen_logs: list[str] = []
@@ -249,7 +259,11 @@ class BuildService:
             if not test_files:
                 raise RuntimeError("no tests were generated (manual + generator)")
             (logs_dir / "generate.log").write_text(
-                f"generated_tests={len(test_files)}\n" + "\n".join(gen_logs),
+                (
+                    f"manual_tests={len(tests)}\n"
+                    f"generated_tests={len(test_files)}\n"
+                    + "\n".join(gen_logs)
+                ),
                 encoding="utf-8",
             )
             steps.append({"step": "generate", "status": "ok", "log": "logs/generate.log"})
