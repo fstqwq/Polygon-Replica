@@ -166,6 +166,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run config loading now caches parsed per-build manifest runner settings in-process (copy-on-read), reducing repeated `manifest.json` reads/parses across submissions.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
+- Runner safe file-matching now resolves artifact roots once per scan, reducing repeated path-resolution overhead during test/answer discovery.
 - Switch workspace/branch routes now normalize posted page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`) for redirect correctness without JS dependency.
 - Build/Run detail pages now parse `summary_json` defensively and surface fallback errors for malformed JSON instead of raising 500 errors.
 - Run artifact endpoints now validate filesystem-relative run-root shape (`<build>/logs/run-<run_id>` under problem artifacts, or `invalid-runs/<run_id>`) independent of DB-provided build-id strings, and reject DB-poisoned path overrides.

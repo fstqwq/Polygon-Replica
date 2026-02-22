@@ -102,6 +102,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run config loading now caches parsed per-build manifest runner settings in-process (copy-on-read), reducing repeated `manifest.json` reads/parses across submissions.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
+- Runner safe file-matching now resolves artifact roots once per scan, reducing repeated path-resolution overhead during test/answer discovery.
 - Workspace/branch switch routes now normalize page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`), so redirects remain valid even without client-side page-target JS.
 - Build/Run detail pages now handle malformed `summary_json` rows defensively (no 500 on corrupted metadata; fallback error shown in UI).
 - Run artifact endpoints now validate filesystem-relative run-root shape (`<build>/logs/run-<run_id>` under problem artifacts, or `invalid-runs/<run_id>`) independent of DB-provided build-id strings, and reject DB-poisoned path overrides.

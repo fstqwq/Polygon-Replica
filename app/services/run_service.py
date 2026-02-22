@@ -173,28 +173,32 @@ class RunService:
             raise RuntimeError("invalid build artifact id")
         return root
 
-    def _is_safe_path_within(self, root: Path, path: Path) -> bool:
+    def _is_safe_path_within(self, root: Path, path: Path, root_resolved: Path | None = None) -> bool:
         try:
-            root_resolved = root.resolve()
+            resolved_root = root_resolved if root_resolved is not None else root.resolve()
             resolved = path.resolve()
         except OSError:
             return False
-        return root_resolved in resolved.parents or root_resolved == resolved
+        return resolved_root in resolved.parents or resolved_root == resolved
 
     def _is_safe_dir(self, root: Path, path: Path) -> bool:
         if path.is_symlink() or not path.exists() or not path.is_dir():
             return False
         return self._is_safe_path_within(root, path)
 
-    def _is_safe_regular_file(self, root: Path, path: Path) -> bool:
+    def _is_safe_regular_file(self, root: Path, path: Path, root_resolved: Path | None = None) -> bool:
         if path.is_symlink() or not path.exists() or not path.is_file():
             return False
-        return self._is_safe_path_within(root, path)
+        return self._is_safe_path_within(root, path, root_resolved=root_resolved)
 
     def _safe_matching_files(self, root: Path, pattern: str) -> list[Path]:
+        try:
+            root_resolved = root.resolve()
+        except OSError:
+            return []
         files: list[Path] = []
         for p in sorted(root.glob(pattern)):
-            if self._is_safe_regular_file(root, p):
+            if self._is_safe_regular_file(root, p, root_resolved=root_resolved):
                 files.append(p)
         return files
 
