@@ -105,8 +105,10 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Export archive SHA-256 computation now streams file contents instead of reading full zip bytes into memory.
 - Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Workspace snapshot creation now fast-paths clean workspaces with `git archive` and falls back to copy-tree for dirty workspaces to preserve uncommitted/untracked content.
+- Preview service now reuses cached successful artifacts for identical commit-based preview requests (copying existing PDF/log).
+- Build generator execution now streams stdout directly into test files (memory-safe for large generated tests).
 - Added reusable local validation script: `scripts/smoke_test.py`.
-- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, snapshot clean/dirty path checks, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, invalid-run path isolation, testlib checker mode, kattis checker mode, unchanged-build compile-cache reuse checks, compile-cache header-dependency invalidation, compile-jobs/validate-jobs/solve-jobs/run-jobs propagation, effective validate/solve/run worker reporting (including multi-pass), manual-sidecar answer filtering, C++ `.cc` accepted-source builds, and export zip structure assertions.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, snapshot clean/dirty path checks, commit-preview cache reuse checks, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, invalid-run path isolation, testlib checker mode, kattis checker mode, unchanged-build compile-cache reuse checks, compile-cache header-dependency invalidation, compile-jobs/validate-jobs/solve-jobs/run-jobs propagation, effective validate/solve/run worker reporting (including multi-pass), manual-sidecar answer filtering, C++ `.cc` accepted-source builds, and export zip structure assertions.
 
 ## Upstream Dependency Integration
 

@@ -285,14 +285,14 @@ class BuildService:
                 for gen_index, gen in enumerate(generator_bins, start=1):
                     for i in range(runs):
                         dst = artifact_paths.tests / f"{counter:03d}.in"
-                        proc = run_cmd([str(gen), *generator_args], timeout=30)
+                        proc = run_cmd([str(gen), *generator_args], stdout_path=dst, timeout=30)
                         gen_logs.append(
                             f"generator={gen_index} case={i + 1} rc={proc.returncode}\n{proc.stderr}\n"
                         )
                         if proc.returncode != 0:
+                            dst.unlink(missing_ok=True)
                             failing_test = dst.name
                             raise RuntimeError(f"generator failed on generator={gen_index} case={i + 1}")
-                        dst.write_text(proc.stdout, encoding="utf-8")
                         test_files.append(dst)
                         counter += 1
             if not test_files:

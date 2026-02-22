@@ -108,6 +108,49 @@ def main() -> None:
 
     ctx = workspace_service.workspace_context("sample", "alice")
     ws = Path(ctx["workspace"]["path"])
+    head_commit = str(ctx["workspace"].get("head_commit") or "").strip()
+    if not head_commit:
+        head_commit = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+
+    cached_preview_id = f"p-{uuid.uuid4().hex[:12]}"
+    cached_preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / cached_preview_id
+    (cached_preview_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+    (cached_preview_root / "logs").mkdir(parents=True, exist_ok=True)
+    cached_pdf = cached_preview_root / "statement_preview" / "statement.pdf"
+    cached_log = cached_preview_root / "logs" / "latex.log"
+    cached_pdf.write_bytes(b"%PDF-1.4\n% cached preview\n")
+    cached_log.write_text("cached latex log\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            cached_preview_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            str(cached_preview_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    reused_preview_id = preview_service.compile_preview("sample", "alice", commit=head_commit)
+    reused_preview = db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [reused_preview_id])
+    if reused_preview is None or reused_preview["status"] != "ok":
+        raise RuntimeError(f"commit preview reuse failed: {reused_preview}")
+    reused_summary = json.loads(reused_preview["summary_json"]) if reused_preview["summary_json"] else {}
+    reused_from = reused_summary.get("reused_from")
+    if not reused_from:
+        raise RuntimeError(f"commit preview did not reuse cached artifact: {reused_summary}")
+    source_row = db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [reused_from])
+    if source_row is None:
+        raise RuntimeError(f"commit preview reuse source missing: {reused_from}")
+    source_root = Path(source_row["artifact_path"])
+    reused_preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / reused_preview_id
+    if (reused_preview_root / "statement_preview" / "statement.pdf").read_bytes() != (source_root / "statement_preview" / "statement.pdf").read_bytes():
+        raise RuntimeError("reused preview pdf mismatch")
+    if (reused_preview_root / "logs" / "latex.log").read_text(encoding="utf-8") != (source_root / "logs" / "latex.log").read_text(encoding="utf-8"):
+        raise RuntimeError("reused preview log mismatch")
 
     for d in ["solutions", "validators", "checkers", "generators", "tests/manual", "config", "statement"]:
         (ws / d).mkdir(parents=True, exist_ok=True)
