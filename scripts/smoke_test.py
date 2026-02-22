@@ -921,6 +921,11 @@ def main() -> None:
         if "latex.log" not in preview_page_with_bad_log.text:
             raise RuntimeError("preview page did not render latex.log section for non-utf8 log")
     manifest = json.loads((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "manifest.json").read_text(encoding="utf-8"))
+    manifest_paths = [str(item.get("path")) for item in manifest.get("files", []) if isinstance(item, dict)]
+    if manifest_paths != sorted(manifest_paths):
+        raise RuntimeError("manifest file listing should be sorted for deterministic output")
+    if "manifest.json" in manifest_paths:
+        raise RuntimeError("manifest file listing must not include manifest.json itself")
     generation_params = manifest.get("generation_params", {})
     if int(generation_params.get("max_passes", 0)) != 8:
         raise RuntimeError(f"manifest generation_params missing max_passes: {generation_params}")
