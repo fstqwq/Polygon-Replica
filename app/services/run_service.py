@@ -31,6 +31,7 @@ class RunService:
         self._run_config_cache: dict[str, dict[str, object]] = {}
         self._test_input_cache: dict[str, list[str]] = {}
         self._answer_file_cache: dict[str, list[str]] = {}
+        self._test_input_meta_cache: dict[str, list[tuple[str, str]]] = {}
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
@@ -81,7 +82,7 @@ class RunService:
         return "FAIL"
 
     def _load_run_config(self, artifact_root: Path) -> dict[str, object]:
-        cache_key = str(artifact_root.resolve())
+        cache_key = self._artifact_cache_key(artifact_root)
         cached = self._run_config_cache.get(cache_key)
         if cached is not None:
             return dict(cached)
@@ -131,7 +132,7 @@ class RunService:
         return dict(resolved_cfg)
 
     def _load_test_inputs(self, artifact_root: Path) -> list[str]:
-        cache_key = str(artifact_root.resolve())
+        cache_key = self._artifact_cache_key(artifact_root)
         cached = self._test_input_cache.get(cache_key)
         if cached is not None:
             return list(cached)
@@ -141,7 +142,7 @@ class RunService:
         return list(names)
 
     def _load_answer_files(self, artifact_root: Path) -> list[str]:
-        cache_key = str(artifact_root.resolve())
+        cache_key = self._artifact_cache_key(artifact_root)
         cached = self._answer_file_cache.get(cache_key)
         if cached is not None:
             return list(cached)
@@ -149,6 +150,21 @@ class RunService:
         names = [p.name for p in self._safe_matching_files(ans_dir, "*.ans")]
         self._answer_file_cache[cache_key] = list(names)
         return list(names)
+
+    def _load_test_input_meta(self, artifact_root: Path) -> list[tuple[str, str]]:
+        cache_key = self._artifact_cache_key(artifact_root)
+        cached = self._test_input_meta_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+        meta = [(name, Path(name).stem) for name in self._load_test_inputs(artifact_root)]
+        self._test_input_meta_cache[cache_key] = list(meta)
+        return list(meta)
+
+    def _artifact_cache_key(self, artifact_root: Path) -> str:
+        try:
+            return str(artifact_root.resolve())
+        except OSError:
+            return str(artifact_root)
 
     def _effective_run_jobs(self, configured: object, test_count: int) -> int:
         auto_jobs = max(1, min(4, os.cpu_count() or 1))
@@ -669,11 +685,11 @@ class RunService:
                 )
                 return run_id
 
-            test_names = self._load_test_inputs(artifact_root)
-            if not test_names:
+            test_meta = self._load_test_input_meta(artifact_root)
+            if not test_meta:
                 raise RuntimeError("selected build has no tests")
             answer_names = set(self._load_answer_files(artifact_root))
-            effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(test_names))
+            effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(test_meta))
             run_cfg["run_jobs_effective"] = effective_run_jobs
 
             if checker.exists() and not self._is_safe_regular_file(checker.parent, checker):
@@ -682,9 +698,8 @@ class RunService:
                 raise RuntimeError("interactor binary path is invalid")
 
             if mode == "interactive":
-                for test_name in test_names:
+                for test_name, test_stem in test_meta:
                     test = tests_dir / test_name
-                    test_stem = Path(test_name).stem
                     ans_name = f"{test_stem}.ans"
                     if ans_name not in answer_names:
                         raise RuntimeError(f"answer file missing or invalid for {test_name}")
@@ -719,8 +734,8 @@ class RunService:
                     test_result["transcript"] = str(transcript.relative_to(run_root))
                     verdicts.append(test_result)
             elif mode != "interactive" and effective_run_jobs > 1:
-                for test_name in test_names:
-                    ans_name = f"{Path(test_name).stem}.ans"
+                for test_name, test_stem in test_meta:
+                    ans_name = f"{test_stem}.ans"
                     if ans_name not in answer_names:
                         raise RuntimeError(f"answer file missing or invalid for {test_name}")
                 with ThreadPoolExecutor(max_workers=effective_run_jobs) as pool:
@@ -735,21 +750,20 @@ class RunService:
                             max_passes,
                             run_timeout_sec,
                             tests_dir / test_name,
-                            ans_dir / f"{Path(test_name).stem}.ans",
-                            feedback_dir / Path(test_name).stem,
+                            ans_dir / f"{test_stem}.ans",
+                            feedback_dir / test_stem,
                             run_root,
                         ): idx
-                        for idx, test_name in enumerate(test_names)
+                        for idx, (test_name, test_stem) in enumerate(test_meta)
                     }
-                    parallel_verdicts: list[dict] = [{} for _ in test_names]
+                    parallel_verdicts: list[dict] = [{} for _ in test_meta]
                     for future in as_completed(future_map):
                         idx = future_map[future]
                         parallel_verdicts[idx] = future.result()
                     verdicts.extend(parallel_verdicts)
             else:
-                for test_name in test_names:
+                for test_name, test_stem in test_meta:
                     test = tests_dir / test_name
-                    test_stem = Path(test_name).stem
                     ans_name = f"{test_stem}.ans"
                     if ans_name not in answer_names:
                         raise RuntimeError(f"answer file missing or invalid for {test_name}")

@@ -1075,6 +1075,13 @@ def main() -> None:
     test_inputs_first.append(test_inputs_marker)
     if test_inputs_marker in test_inputs_second:
         raise RuntimeError("run test-input cache should return independent copies")
+    test_meta_first = run_service._load_test_input_meta(run_cfg_root)
+    test_meta_second = run_service._load_test_input_meta(run_cfg_root)
+    if not test_meta_second:
+        raise RuntimeError("run test-input metadata cache should expose available tests")
+    test_meta_first.append((f"mutated-{uuid.uuid4().hex[:8]}.in", "mutated"))
+    if any(name.startswith("mutated-") for name, _ in test_meta_second):
+        raise RuntimeError("run test-input metadata cache should return independent copies")
     answer_files_first = run_service._load_answer_files(run_cfg_root)
     answer_files_second = run_service._load_answer_files(run_cfg_root)
     if not answer_files_second:
