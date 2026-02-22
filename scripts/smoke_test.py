@@ -136,6 +136,13 @@ def main() -> None:
                 "run execute route should reject invalid problem identifiers"
                 f", status={invalid_problem_run_execute.status_code}"
             )
+        lazy_user = f"lazyctx-{uuid.uuid4().hex[:8]}"
+        lazy_user_files = client.get(f"/problems/sample/{lazy_user}/files")
+        if lazy_user_files.status_code != 200:
+            raise RuntimeError(
+                "files page should lazily provision unknown-but-valid users"
+                f", status={lazy_user_files.status_code}"
+            )
         race_user = f"wsrace-{uuid.uuid4().hex[:8]}"
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = [

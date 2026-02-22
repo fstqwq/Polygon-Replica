@@ -56,8 +56,17 @@ def page_ctx(
     include_recent: bool = True,
 ) -> dict:
     try:
-        workspace_service.ensure_workspace(problem, user, refresh_status=refresh_status)
-        ctx = workspace_service.workspace_context(problem, user, include_recent=include_recent)
+        if refresh_status:
+            workspace_service.ensure_workspace(problem, user, refresh_status=True)
+        try:
+            ctx = workspace_service.workspace_context(problem, user, include_recent=include_recent)
+        except ValueError as exc:
+            # Keep direct URL access for unknown-but-valid users by lazily provisioning a workspace.
+            if not refresh_status and str(exc).startswith("Unknown user:"):
+                workspace_service.ensure_workspace(problem, user, refresh_status=False)
+                ctx = workspace_service.workspace_context(problem, user, include_recent=include_recent)
+            else:
+                raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
