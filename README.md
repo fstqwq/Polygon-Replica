@@ -70,6 +70,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Runner preflight now rejects cross-workspace `build_id` selections with deterministic failed-run metadata.
 - Manifest API access is now workspace-scoped (`/api/problems/{problem}/workspaces/{user}/builds/{build_id}/manifest`), and the legacy unscoped route requires explicit workspace context.
 - Request-context refresh optimization: `page_ctx` no longer performs redundant workspace status refreshes, and non-UI API/file routes skip branch-list resolution.
+- Workspace context loading now supports optional recent-build/recent-preview skipping, and non-render mutation/API/service paths use this lightweight mode to reduce hot-path DB queries.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
 - Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.

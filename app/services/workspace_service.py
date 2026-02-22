@@ -164,7 +164,7 @@ class WorkspaceService:
         )
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
-    def workspace_context(self, problem: str, username: str) -> dict:
+    def workspace_context(self, problem: str, username: str, include_recent: bool = True) -> dict:
         p = self._problem_row(problem)
         u = self._user_row(username)
         ws = self.db.fetch_one("SELECT * FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
@@ -182,14 +182,17 @@ class WorkspaceService:
         git_dir = ws_path / ".git"
         if not git_dir.exists() or not git_dir.is_dir():
             raise RuntimeError(f"workspace git metadata missing for {problem}/{username}")
-        latest_build = self.db.fetch_one(
-            "SELECT id,status,created_at FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
-            [ws["id"]],
-        )
-        latest_preview = self.db.fetch_one(
-            "SELECT id,status,created_at FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
-            [ws["id"]],
-        )
+        latest_build = None
+        latest_preview = None
+        if include_recent:
+            latest_build = self.db.fetch_one(
+                "SELECT id,status,created_at FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+                [ws["id"]],
+            )
+            latest_preview = self.db.fetch_one(
+                "SELECT id,status,created_at FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+                [ws["id"]],
+            )
         return {
             "problem": dict(p),
             "user": dict(u),

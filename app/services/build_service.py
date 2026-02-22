@@ -176,7 +176,7 @@ class BuildService:
 
     def run_build(self, problem: str, username: str, commit: str | None = None, ref: str | None = None) -> str:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
-        ctx = self.workspace_service.workspace_context(problem, username)
+        ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
         source_commit = "" if commit else str(ctx["workspace"].get("head_commit") or "").strip()
         source_ref = ref or commit or ctx["workspace"].get("branch") or "main"

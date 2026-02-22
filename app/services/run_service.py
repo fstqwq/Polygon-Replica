@@ -474,7 +474,7 @@ class RunService:
         supported_modes = {"pass-fail", "interactive", "multi-pass"}
 
         run_id = f"r-{uuid.uuid4().hex[:12]}"
-        ctx = self.workspace_service.workspace_context(problem, username)
+        ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         artifact_root: Path | None = None
         build_row = self.db.fetch_one("SELECT problem_id,workspace_id,status FROM builds WHERE id=?", [build_id])
         preflight_reasons: list[str] = []

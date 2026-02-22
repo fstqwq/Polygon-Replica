@@ -48,10 +48,16 @@ def startup() -> None:
     workspace_service.ensure_workspace("sample", "alice")
 
 
-def page_ctx(problem: str, user: str, include_branches: bool = True, refresh_status: bool = True) -> dict:
+def page_ctx(
+    problem: str,
+    user: str,
+    include_branches: bool = True,
+    refresh_status: bool = True,
+    include_recent: bool = True,
+) -> dict:
     try:
         workspace_service.ensure_workspace(problem, user, refresh_status=refresh_status)
-        ctx = workspace_service.workspace_context(problem, user)
+        ctx = workspace_service.workspace_context(problem, user, include_recent=include_recent)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
@@ -300,7 +306,7 @@ def switch_workspace(problem: str = Form(...), user: str = Form(...), page: str 
 @app.post("/switch-branch")
 def switch_branch(problem: str = Form(...), user: str = Form(...), branch: str = Form(...), page: str = Form("files")):
     target_page = _normalize_page_target(page)
-    ctx = page_ctx(problem, user)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     try:
         with workspace_service.workspace_lock(workspace):
@@ -340,7 +346,7 @@ def files_page(request: Request, problem: str, user: str):
 
 @app.post("/problems/{problem}/{user}/files/save")
 def files_save(problem: str, user: str, path: str = Form(...), content: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     msg = "saved"
     try:
@@ -354,7 +360,7 @@ def files_save(problem: str, user: str, path: str = Form(...), content: str = Fo
 
 @app.post("/problems/{problem}/{user}/files/new")
 def files_new(problem: str, user: str, path: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     msg = "created"
     try:
@@ -368,7 +374,7 @@ def files_new(problem: str, user: str, path: str = Form(...)):
 
 @app.post("/problems/{problem}/{user}/files/upload")
 async def files_upload(problem: str, user: str, path: str = Form(...), upload: UploadFile = File(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     total_bytes = 0
     with workspace_service.workspace_lock(workspace):
@@ -392,7 +398,7 @@ async def files_upload(problem: str, user: str, path: str = Form(...), upload: U
 
 @app.post("/problems/{problem}/{user}/files/rename")
 def files_rename(problem: str, user: str, old_path: str = Form(...), new_path: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     selected = new_path
     msg = "renamed"
@@ -411,7 +417,7 @@ def files_rename(problem: str, user: str, old_path: str = Form(...), new_path: s
 
 @app.post("/problems/{problem}/{user}/files/delete")
 def files_delete(problem: str, user: str, path: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     msg = "deleted"
     try:
@@ -425,7 +431,7 @@ def files_delete(problem: str, user: str, path: str = Form(...)):
 
 @app.get("/problems/{problem}/{user}/files/download")
 def files_download(problem: str, user: str, path: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     file_path = _safe_workspace_path(workspace, path)
     if not file_path.is_file():
@@ -448,7 +454,7 @@ def git_page(request: Request, problem: str, user: str):
 
 @app.post("/problems/{problem}/{user}/git/commit")
 def git_commit(problem: str, user: str, message: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     try:
         with workspace_service.workspace_lock(workspace):
@@ -462,7 +468,7 @@ def git_commit(problem: str, user: str, message: str = Form(...)):
 
 @app.post("/problems/{problem}/{user}/git/push")
 def git_push(problem: str, user: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     branch = ctx["workspace"]["branch"] or "main"
     try:
@@ -477,7 +483,7 @@ def git_push(problem: str, user: str):
 
 @app.post("/problems/{problem}/{user}/git/pull")
 def git_pull(problem: str, user: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     branch = ctx["workspace"]["branch"] or "main"
     try:
@@ -492,7 +498,7 @@ def git_pull(problem: str, user: str):
 
 @app.post("/problems/{problem}/{user}/git/switch")
 def git_switch(problem: str, user: str, branch: str = Form(...), create: str = Form("0")):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     try:
         with workspace_service.workspace_lock(workspace):
@@ -506,7 +512,7 @@ def git_switch(problem: str, user: str, branch: str = Form(...), create: str = F
 
 @app.post("/problems/{problem}/{user}/git/merge")
 def git_merge(problem: str, user: str, source_branch: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     try:
         with workspace_service.workspace_lock(workspace):
@@ -569,7 +575,7 @@ def build_run(problem: str, user: str, commit: str = Form("")):
         build_id = build_service.run_build(problem, user, commit=commit or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     _audit(ctx["user"]["id"], ctx["problem"]["id"], "build.run", {"build_id": build_id, "commit": commit or "HEAD"})
     return RedirectResponse(f"/problems/{problem}/{user}/build?build_id={build_id}", status_code=303)
 
@@ -629,7 +635,7 @@ def preview_run(problem: str, user: str, commit: str = Form("")):
         preview_id = preview_service.compile_preview(problem, user, commit=commit or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     _audit(ctx["user"]["id"], ctx["problem"]["id"], "preview.run", {"preview_id": preview_id, "commit": commit or "HEAD"})
     return RedirectResponse(f"/problems/{problem}/{user}/preview?preview_id={preview_id}", status_code=303)
 
@@ -690,7 +696,7 @@ def run_execute(
     finally:
         if submission_upload is not None:
             submission_upload.file.close()
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     _audit(
         ctx["user"]["id"],
         ctx["problem"]["id"],
@@ -731,7 +737,7 @@ def export_page(request: Request, problem: str, user: str):
 
 @app.post("/problems/{problem}/{user}/export/create")
 def export_create(problem: str, user: str, build_id: str = Form(...), export_type: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     try:
         _assert_workspace_build_access(ctx, build_id)
         out = export_service.create_export(problem, build_id, export_type)
@@ -751,7 +757,7 @@ def export_create(problem: str, user: str, build_id: str = Form(...), export_typ
 
 @app.get("/problems/{problem}/{user}/artifacts/{build_id}/download-dir")
 def artifact_download_dir(problem: str, user: str, build_id: str, rel: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     _assert_workspace_artifact_access(ctx, build_id)
     root, target = _safe_artifact_dir(problem, build_id, rel)
     fd, tmp_zip = tempfile.mkstemp(prefix=f"{build_id}-", suffix=".zip")
@@ -783,7 +789,7 @@ def artifact_browse(request: Request, problem: str, user: str, build_id: str, re
 
 @app.get("/problems/{problem}/{user}/artifacts/{build_id}/{rel_path:path}")
 def artifact_file(problem: str, user: str, build_id: str, rel_path: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     _assert_workspace_artifact_access(ctx, build_id)
     file_path = _safe_artifact_path(problem, build_id, rel_path)
     return FileResponse(file_path, filename=file_path.name)
@@ -791,7 +797,7 @@ def artifact_file(problem: str, user: str, build_id: str, rel_path: str):
 
 @app.get("/problems/{problem}/{user}/runs/{run_id}/download-dir")
 def run_artifact_download_dir(problem: str, user: str, run_id: str, rel: str = "feedback_dir"):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     root, target = _safe_run_artifact_dir(ctx, run_id, rel)
     fd, tmp_zip = tempfile.mkstemp(prefix=f"{run_id}-", suffix=".zip")
     os.close(fd)
@@ -821,7 +827,7 @@ def run_artifact_browse(request: Request, problem: str, user: str, run_id: str, 
 
 @app.get("/problems/{problem}/{user}/runs/{run_id}/artifacts/{rel_path:path}")
 def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     file_path = _safe_run_artifact_path(ctx, run_id, rel_path)
     return FileResponse(file_path, filename=file_path.name)
 
@@ -847,7 +853,7 @@ def api_workspace_status(problem: str, user: str):
 
 @app.get("/api/problems/{problem}/workspaces/{user}/branches")
 def api_workspace_branches(problem: str, user: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=True)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     try:
         branches = git_service.list_branches(workspace)
@@ -858,7 +864,7 @@ def api_workspace_branches(problem: str, user: str):
 
 @app.get("/api/problems/{problem}/workspaces/{user}/recent-builds")
 def api_recent_builds(problem: str, user: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     rows = db.fetch_all(
         "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 20",
         [ctx["problem"]["id"], ctx["workspace"]["id"]],
@@ -868,7 +874,7 @@ def api_recent_builds(problem: str, user: str):
 
 @app.get("/api/problems/{problem}/workspaces/{user}/recent-previews")
 def api_recent_previews(problem: str, user: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     rows = db.fetch_all(
         "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM previews WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 20",
         [ctx["problem"]["id"], ctx["workspace"]["id"]],
@@ -878,7 +884,7 @@ def api_recent_previews(problem: str, user: str):
 
 @app.get("/api/problems/{problem}/workspaces/{user}/recent-runs")
 def api_recent_runs(problem: str, user: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     rows = db.fetch_all(
         "SELECT id,build_id,mode,status,created_at,finished_at FROM runs WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 20",
         [ctx["problem"]["id"], ctx["workspace"]["id"]],
@@ -888,7 +894,7 @@ def api_recent_runs(problem: str, user: str):
 
 @app.get("/api/problems/{problem}/workspaces/{user}/recent-exports")
 def api_recent_exports(problem: str, user: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     rows = db.fetch_all(
         """
         SELECT e.id,e.build_id,e.export_type,e.filename,e.size_bytes,e.sha256,e.source_commit,e.created_at
@@ -905,7 +911,7 @@ def api_recent_exports(problem: str, user: str):
 
 @app.get("/api/problems/{problem}/workspaces/{user}/builds/{build_id}/manifest")
 def api_workspace_manifest(problem: str, user: str, build_id: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     row = db.fetch_one(
         "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
         [build_id, ctx["problem"]["id"], ctx["workspace"]["id"]],

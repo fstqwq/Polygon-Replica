@@ -74,7 +74,7 @@ class PreviewService:
 
     def compile_preview(self, problem: str, username: str, commit: str | None = None) -> str:
         build_id = f"p-{uuid.uuid4().hex[:12]}"
-        ctx = self.workspace_service.workspace_context(problem, username)
+        ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
         source_commit = "" if commit else (ctx["workspace"].get("head_commit") or "").strip()
         source_ref = commit or (ctx["workspace"].get("branch") or "main")

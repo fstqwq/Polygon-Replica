@@ -133,6 +133,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Export creation via UI now rejects build ids not owned by the active workspace.
 - Build manifest API access is now workspace-scoped, and the legacy unscoped endpoint requires explicit workspace context.
 - `page_ctx` now avoids redundant workspace-status refresh calls and supports branch-list skipping for endpoints that do not render branch controls.
+- Workspace-context loading now supports optional recent-build/recent-preview suppression for non-render paths, reducing per-request metadata query load on mutation/recent-* routes and service entrypoints.
 - Workspace provisioning now supports optional status refresh while still forcing refresh on newly created workspace clones/rows.
 - Added DB indexes for workspace-scoped history filters (`problem_id,workspace_id,created_at`) and preview-reuse lookup (`problem_id,source_commit,status,created_at`).
 - Added direct `workspace_id` latest-row indexes for builds/previews to speed workspace-context `latest_*` lookups.
