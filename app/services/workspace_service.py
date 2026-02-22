@@ -180,24 +180,10 @@ class WorkspaceService:
             run_cmd(["git", "-C", str(workspace), "push", "origin", "main"])
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
-        status_v2 = run_cmd(["git", "-C", str(workspace), "status", "--porcelain=2", "--branch"])
-        if status_v2.returncode == 0:
-            branch, head, dirty = self._parse_status_v2(status_v2.stdout)
-        else:
-            status_out = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"]).stdout
-            branch = "main"
-            for raw in status_out.splitlines():
-                line = raw.strip()
-                if not line.startswith("## "):
-                    continue
-                branch_line = line[3:]
-                if branch_line.startswith("HEAD"):
-                    branch = "main"
-                    break
-                branch = branch_line.split("...", 1)[0].strip() or "main"
-                break
-            head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-            dirty = 1 if self._is_status_dirty(status_out) else 0
+        status = self.read_workspace_status(workspace)
+        branch = str(status.get("branch") or "main")
+        head = str(status.get("head_commit") or "")
+        dirty = 1 if bool(status.get("dirty")) else 0
         self.db.execute(
             """
             UPDATE workspaces
@@ -207,6 +193,28 @@ class WorkspaceService:
             """,
             [branch, head, dirty, now_iso(), problem_id, user_id, branch, head, dirty],
         )
+        return {"branch": branch, "head_commit": head, "dirty": dirty}
+
+    def read_workspace_status(self, workspace: Path) -> dict[str, str | int | None]:
+        status_v2 = run_cmd(["git", "-C", str(workspace), "status", "--porcelain=2", "--branch"])
+        if status_v2.returncode == 0:
+            branch, head, dirty = self._parse_status_v2(status_v2.stdout)
+            return {"branch": branch, "head_commit": head, "dirty": dirty}
+
+        status_out = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"]).stdout
+        branch = "main"
+        for raw in status_out.splitlines():
+            line = raw.strip()
+            if not line.startswith("## "):
+                continue
+            branch_line = line[3:]
+            if branch_line.startswith("HEAD"):
+                branch = "main"
+                break
+            branch = branch_line.split("...", 1)[0].strip() or "main"
+            break
+        head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+        dirty = 1 if self._is_status_dirty(status_out) else 0
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
     def _parse_status_v2(self, status_output: str) -> tuple[str, str, int]:

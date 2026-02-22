@@ -79,6 +79,12 @@ def main() -> None:
             raise RuntimeError("workspace status API should expose a non-empty HEAD commit")
         if not str(status_payload.get("branch") or "").strip():
             raise RuntimeError("workspace status API should expose a non-empty branch")
+        alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
+        alice_ws_status = workspace_service.read_workspace_status(Path(alice_ctx["workspace"]["path"]))
+        if not str(alice_ws_status.get("head_commit") or "").strip():
+            raise RuntimeError("read_workspace_status should expose a non-empty HEAD commit")
+        if not str(alice_ws_status.get("branch") or "").strip():
+            raise RuntimeError("read_workspace_status should expose a non-empty branch")
         status_problem = f"statuscache-{uuid.uuid4().hex[:8]}"
         status_user = f"u-{uuid.uuid4().hex[:6]}"
         workspace_service.ensure_problem(status_problem, "Status Refresh Optimization Problem")
@@ -107,7 +113,6 @@ def main() -> None:
             raise RuntimeError("status optimization check failed: missing row after second refresh")
         if status_row_after_first["updated_at"] != status_row_after_second["updated_at"]:
             raise RuntimeError("workspace status refresh should not rewrite unchanged workspace rows")
-        alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
         alice_ws = Path(alice_ctx["workspace"]["path"])
         tracked_file = alice_ws / "README.problem.md"
         tracked_original = tracked_file.read_text(encoding="utf-8")

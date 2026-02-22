@@ -209,7 +209,7 @@ class BuildService:
                 snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
             else:
                 with self.workspace_service.workspace_lock(workspace):
-                    status = self.workspace_service.refresh_workspace_status(problem, username)
+                    status = self.workspace_service.read_workspace_status(workspace)
                     source_commit = str(status.get("head_commit") or "").strip()
                     branch = str(status.get("branch") or "").strip()
                     dirty = bool(status.get("dirty"))
