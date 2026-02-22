@@ -1907,6 +1907,25 @@ def main() -> None:
     if invalid_runs_root.resolve() not in Path(rrow_missing_tests_dir["artifact_path"]).resolve().parents:
         raise RuntimeError("missing-tests-dir run was not isolated under run_root/invalid-runs")
 
+    export_mode_probe = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"export-mode-probe-{uuid.uuid4().hex[:8]}"
+    export_mode_checkers = export_mode_probe / "checkers"
+    export_mode_checkers.mkdir(parents=True, exist_ok=True)
+    export_mode_outside = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / f"export-mode-outside-{uuid.uuid4().hex[:8]}.cpp"
+    export_mode_outside.write_text("// nextpass.in from outside\n", encoding="utf-8")
+    export_mode_symlink_supported = True
+    try:
+        (export_mode_checkers / "checker.cpp").symlink_to(export_mode_outside)
+    except (OSError, NotImplementedError):
+        export_mode_symlink_supported = False
+    if export_mode_symlink_supported:
+        export_mode_from_unsafe_checker = export_service._problem_mode(export_mode_probe)
+        if export_mode_from_unsafe_checker != "pass-fail":
+            raise RuntimeError("export mode detection should ignore unsafe symlinked checker sources")
+    (export_mode_checkers / "checker_real.cpp").write_text("// nextpass.in safe checker marker\n", encoding="utf-8")
+    export_mode_from_safe_checker = export_service._problem_mode(export_mode_probe)
+    if export_mode_from_safe_checker != "multi-pass":
+        raise RuntimeError("export mode detection should detect multi-pass from safe checker sources")
+
     (ws / "config/build.json").write_text(
         json.dumps(
             {

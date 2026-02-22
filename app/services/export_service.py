@@ -19,6 +19,7 @@ class ExportService:
         "polygon-full": "polygon-full.zip",
     }
     STEP_LOGS = ["compile.log", "generate.log", "validate.log", "solve.log", "failure.log", "latex.log", "diagnostics.json"]
+    SOURCE_SUFFIX_ORDER = (".cpp", ".cc", ".cxx", ".c", ".py", ".java")
 
     def __init__(self, db: DB, artifacts_root: Path):
         self.db = db
@@ -114,6 +115,18 @@ class ExportService:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, target)
 
+    def _iter_safe_top_level_files(self, folder: Path, folder_resolved: Path | None = None):
+        if not folder.exists() or not folder.is_dir():
+            return
+        try:
+            resolved_root = folder_resolved if folder_resolved is not None else folder.resolve()
+            entries = sorted(folder.iterdir(), key=lambda p: p.name)
+        except OSError:
+            return
+        for p in entries:
+            if self._is_safe_regular_file(folder, p, root_resolved=resolved_root):
+                yield p
+
     def _find_first_source(self, folder: Path, preferred: list[str] | None = None) -> Path | None:
         if not folder.exists() or not folder.is_dir():
             return None
@@ -125,10 +138,16 @@ class ExportService:
             p = folder / name
             if self._is_safe_regular_file(folder, p, root_resolved=folder_resolved):
                 return p
-        for pat in ["*.cpp", "*.cc", "*.cxx", "*.c", "*.py", "*.java"]:
-            for p in sorted(folder.glob(pat)):
-                if self._is_safe_regular_file(folder, p, root_resolved=folder_resolved):
-                    return p
+
+        first_by_suffix: dict[str, Path] = {}
+        for p in self._iter_safe_top_level_files(folder, folder_resolved=folder_resolved):
+            suffix = p.suffix
+            if suffix in self.SOURCE_SUFFIX_ORDER and suffix not in first_by_suffix:
+                first_by_suffix[suffix] = p
+        for suffix in self.SOURCE_SUFFIX_ORDER:
+            selected = first_by_suffix.get(suffix)
+            if selected is not None:
+                return selected
         return None
 
     def _problem_mode(self, snapshot: Path | None) -> str:
@@ -154,8 +173,13 @@ class ExportService:
         if interactor_src is not None:
             return "interactive"
 
-        for checker_src in sorted((snapshot / "checkers").glob("*")):
-            if checker_src.is_file():
+        checkers_dir = snapshot / "checkers"
+        try:
+            checkers_dir_resolved = checkers_dir.resolve()
+        except OSError:
+            checkers_dir_resolved = None
+        if checkers_dir_resolved is not None:
+            for checker_src in self._iter_safe_top_level_files(checkers_dir, folder_resolved=checkers_dir_resolved):
                 try:
                     if "nextpass.in" in checker_src.read_text(encoding="utf-8", errors="ignore"):
                         return "multi-pass"
