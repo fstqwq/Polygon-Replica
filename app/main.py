@@ -124,7 +124,7 @@ def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
 
 def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
     row = db.fetch_one(
-        "SELECT artifact_path,build_id FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
+        "SELECT artifact_path FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
         [run_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
     )
     if row is None:
@@ -132,9 +132,25 @@ def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
     root = Path(str(row["artifact_path"] or "")).resolve()
     if not root.exists() or not root.is_dir():
         raise HTTPException(status_code=404, detail="run artifact directory not found")
-    expected_run_root = (settings.artifacts_root / ctx["problem"]["slug"] / str(row["build_id"]) / "logs" / f"run-{run_id}").resolve()
-    expected_invalid_root = (settings.run_root / "invalid-runs" / run_id).resolve()
-    if root != expected_run_root and root != expected_invalid_root:
+
+    valid = False
+    artifacts_problem_root = (settings.artifacts_root / ctx["problem"]["slug"]).resolve()
+    invalid_runs_root = (settings.run_root / "invalid-runs").resolve()
+    try:
+        rel = root.relative_to(artifacts_problem_root)
+        if (
+            len(rel.parts) == 3
+            and rel.parts[1] == "logs"
+            and rel.parts[2] == f"run-{run_id}"
+            and re.fullmatch(r"[A-Za-z0-9._-]+", rel.parts[0])
+        ):
+            valid = True
+    except ValueError:
+        pass
+    if root == (invalid_runs_root / run_id).resolve():
+        valid = True
+
+    if not valid:
         raise HTTPException(status_code=404, detail="run artifact directory not found")
     return root
 

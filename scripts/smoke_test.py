@@ -698,6 +698,25 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    bad_buildid_run_id = f"r-badbuildid-{uuid.uuid4().hex[:8]}"
+    bad_buildid_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / "logs" / f"run-{bad_buildid_run_id}").resolve()
+    bad_buildid_root.mkdir(parents=True, exist_ok=True)
+    (bad_buildid_root / "compile.log").write_text("poisoned build-id path\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            bad_buildid_run_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            "../poison",
+            "pass-fail",
+            "failed",
+            json.dumps({"error": "injected traversal-style build id"}),
+            str(bad_buildid_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
     with TestClient(app) as client:
         valid_summary_file = client.get(f"/problems/sample/alice/runs/{run_id_multi}/artifacts/summary.json")
         if valid_summary_file.status_code != 200:
@@ -730,6 +749,9 @@ def main() -> None:
         poisoned_nested_artifact = client.get(f"/problems/sample/alice/runs/{bad_nested_run_id}/artifacts/compile.log")
         if poisoned_nested_artifact.status_code != 404:
             raise RuntimeError("run artifact endpoint should reject DB-poisoned nested artifact roots")
+        poisoned_buildid_artifact = client.get(f"/problems/sample/alice/runs/{bad_buildid_run_id}/artifacts/compile.log")
+        if poisoned_buildid_artifact.status_code != 404:
+            raise RuntimeError("run artifact endpoint should reject DB-poisoned traversal-style build_id roots")
     run_leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-zip-leak-{uuid.uuid4().hex[:8]}.txt"
     run_leak_src.write_text("run-leak\n", encoding="utf-8")
     run_escape_name = "999.run-escape.txt"
