@@ -565,7 +565,10 @@ def build_page(request: Request, problem: str, user: str):
 
 @app.post("/problems/{problem}/{user}/build/run")
 def build_run(problem: str, user: str, commit: str = Form("")):
-    build_id = build_service.run_build(problem, user, commit=commit or None)
+    try:
+        build_id = build_service.run_build(problem, user, commit=commit or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     _audit(ctx["user"]["id"], ctx["problem"]["id"], "build.run", {"build_id": build_id, "commit": commit or "HEAD"})
     return RedirectResponse(f"/problems/{problem}/{user}/build?build_id={build_id}", status_code=303)
@@ -622,7 +625,10 @@ def preview_page(request: Request, problem: str, user: str):
 
 @app.post("/problems/{problem}/{user}/preview/run")
 def preview_run(problem: str, user: str, commit: str = Form("")):
-    preview_id = preview_service.compile_preview(problem, user, commit=commit or None)
+    try:
+        preview_id = preview_service.compile_preview(problem, user, commit=commit or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     _audit(ctx["user"]["id"], ctx["problem"]["id"], "preview.run", {"preview_id": preview_id, "commit": commit or "HEAD"})
     return RedirectResponse(f"/problems/{problem}/{user}/preview?preview_id={preview_id}", status_code=303)
@@ -669,15 +675,18 @@ def run_execute(
             upload_filename = normalized_name
             uploaded = True
     try:
-        run_id = run_service.run_submission(
-            problem,
-            user,
-            build_id,
-            submission_path=submission_path or None,
-            mode=mode,
-            upload_stream=upload_stream,
-            upload_filename=upload_filename,
-        )
+        try:
+            run_id = run_service.run_submission(
+                problem,
+                user,
+                build_id,
+                submission_path=submission_path or None,
+                mode=mode,
+                upload_stream=upload_stream,
+                upload_filename=upload_filename,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     finally:
         if submission_upload is not None:
             submission_upload.file.close()

@@ -106,6 +106,36 @@ def main() -> None:
                 "workspace status API should reject invalid user identifiers"
                 f", status={invalid_user_status.status_code}"
             )
+        invalid_problem_build_run = client.post(
+            "/problems/%2E%2E/alice/build/run",
+            data={"commit": ""},
+            follow_redirects=False,
+        )
+        if invalid_problem_build_run.status_code != 400:
+            raise RuntimeError(
+                "build run route should reject invalid problem identifiers"
+                f", status={invalid_problem_build_run.status_code}"
+            )
+        invalid_problem_preview_run = client.post(
+            "/problems/%2E%2E/alice/preview/run",
+            data={"commit": ""},
+            follow_redirects=False,
+        )
+        if invalid_problem_preview_run.status_code != 400:
+            raise RuntimeError(
+                "preview run route should reject invalid problem identifiers"
+                f", status={invalid_problem_preview_run.status_code}"
+            )
+        invalid_problem_run_execute = client.post(
+            "/problems/%2E%2E/alice/run/execute",
+            data={"build_id": "b-missing", "mode": "pass-fail", "submission_path": "solutions/main.cpp"},
+            follow_redirects=False,
+        )
+        if invalid_problem_run_execute.status_code != 400:
+            raise RuntimeError(
+                "run execute route should reject invalid problem identifiers"
+                f", status={invalid_problem_run_execute.status_code}"
+            )
         race_user = f"wsrace-{uuid.uuid4().hex[:8]}"
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = [
