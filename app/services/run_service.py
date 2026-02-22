@@ -471,14 +471,15 @@ class RunService:
         upload_filename: str | None = None,
         upload_stream: IO[bytes] | None = None,
     ) -> str:
-        if mode not in {"pass-fail", "interactive", "multi-pass"}:
-            raise ValueError(f"unsupported run mode: {mode}")
+        supported_modes = {"pass-fail", "interactive", "multi-pass"}
 
         run_id = f"r-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         artifact_root: Path | None = None
         build_row = self.db.fetch_one("SELECT problem_id,workspace_id,status FROM builds WHERE id=?", [build_id])
         preflight_reasons: list[str] = []
+        if mode not in supported_modes:
+            preflight_reasons.append(f"unsupported run mode: {mode}")
         try:
             artifact_root = self._canonical_build_artifact_root(problem, build_id)
         except RuntimeError as exc:

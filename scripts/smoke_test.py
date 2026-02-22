@@ -992,6 +992,17 @@ def main() -> None:
         if "run_id=" not in location_empty:
             raise RuntimeError(f"run execute empty-upload route missing run_id redirect parameter: {location_empty}")
         run_id_upload_empty_route = location_empty.split("run_id=", 1)[1].split("&", 1)[0]
+        invalid_mode_resp = client.post(
+            "/problems/sample/alice/run/execute",
+            data={"build_id": build_id, "mode": "bogus-mode", "submission_path": "solutions/main.cpp"},
+            follow_redirects=False,
+        )
+        if invalid_mode_resp.status_code != 303:
+            raise RuntimeError(f"run execute invalid-mode route should redirect, status={invalid_mode_resp.status_code}")
+        location_invalid_mode = invalid_mode_resp.headers.get("location", "")
+        if "run_id=" not in location_invalid_mode:
+            raise RuntimeError(f"run execute invalid-mode route missing run_id redirect parameter: {location_invalid_mode}")
+        run_id_invalid_mode_route = location_invalid_mode.split("run_id=", 1)[1].split("&", 1)[0]
     rrow_upload_route = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_upload_route])
     if rrow_upload_route is None or rrow_upload_route["status"] != "ok":
         raise RuntimeError(f"upload run via route failed: {rrow_upload_route}")
@@ -1018,6 +1029,26 @@ def main() -> None:
         raise RuntimeError(f"empty upload run via route should report compile_error: {upload_empty_route_summary}")
     if upload_empty_route_summary.get("source") != "empty-route.cpp":
         raise RuntimeError("empty upload run via route did not preserve uploaded filename in summary source")
+    rrow_invalid_mode_route = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_invalid_mode_route])
+    if rrow_invalid_mode_route is None or rrow_invalid_mode_route["status"] != "failed":
+        raise RuntimeError(f"invalid run mode via route should produce failed run metadata: {rrow_invalid_mode_route}")
+    invalid_mode_route_summary = json.loads(rrow_invalid_mode_route["summary_json"])
+    if "unsupported run mode" not in str(invalid_mode_route_summary.get("error", "")):
+        raise RuntimeError(f"invalid run mode route failure reason missing detail: {invalid_mode_route_summary}")
+
+    run_id_invalid_mode_service = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        submission_path="solutions/main.cpp",
+        mode="bogus-mode",
+    )
+    rrow_invalid_mode_service = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_invalid_mode_service])
+    if rrow_invalid_mode_service is None or rrow_invalid_mode_service["status"] != "failed":
+        raise RuntimeError(f"invalid run mode via service should produce failed run metadata: {rrow_invalid_mode_service}")
+    invalid_mode_service_summary = json.loads(rrow_invalid_mode_service["summary_json"])
+    if "unsupported run mode" not in str(invalid_mode_service_summary.get("error", "")):
+        raise RuntimeError(f"invalid run mode service failure reason missing detail: {invalid_mode_service_summary}")
 
     run_id_multi = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="multi-pass")
     rrow_multi = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_multi])
