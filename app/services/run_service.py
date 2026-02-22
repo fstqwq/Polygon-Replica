@@ -29,6 +29,7 @@ class RunService:
         self.workspace_service = workspace_service
         self.toolchain = toolchain
         self._run_config_cache: dict[str, dict[str, object]] = {}
+        self._test_input_cache: dict[str, list[str]] = {}
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
@@ -127,6 +128,16 @@ class RunService:
         }
         self._run_config_cache[cache_key] = dict(resolved_cfg)
         return dict(resolved_cfg)
+
+    def _load_test_inputs(self, artifact_root: Path) -> list[str]:
+        cache_key = str(artifact_root.resolve())
+        cached = self._test_input_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+        tests_dir = artifact_root / "tests"
+        names = [p.name for p in self._safe_matching_files(tests_dir, "*.in")]
+        self._test_input_cache[cache_key] = list(names)
+        return list(names)
 
     def _effective_run_jobs(self, configured: object, test_count: int) -> int:
         auto_jobs = max(1, min(4, os.cpu_count() or 1))
@@ -643,10 +654,10 @@ class RunService:
                 )
                 return run_id
 
-            tests = self._safe_matching_files(tests_dir, "*.in")
-            if not tests:
+            test_names = self._load_test_inputs(artifact_root)
+            if not test_names:
                 raise RuntimeError("selected build has no tests")
-            effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(tests))
+            effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(test_names))
             run_cfg["run_jobs_effective"] = effective_run_jobs
 
             if checker.exists() and not self._is_safe_regular_file(checker.parent, checker):
@@ -655,14 +666,16 @@ class RunService:
                 raise RuntimeError("interactor binary path is invalid")
 
             if mode == "interactive":
-                for test in tests:
-                    ans = ans_dir / f"{test.stem}.ans"
+                for test_name in test_names:
+                    test = tests_dir / test_name
+                    test_stem = Path(test_name).stem
+                    ans = ans_dir / f"{test_stem}.ans"
                     if not self._is_safe_regular_file(ans_dir, ans):
-                        raise RuntimeError(f"answer file missing or invalid for {test.name}")
-                    test_feedback_dir = feedback_dir / test.stem
+                        raise RuntimeError(f"answer file missing or invalid for {test_name}")
+                    test_feedback_dir = feedback_dir / test_stem
                     test_feedback_dir.mkdir(parents=True, exist_ok=True)
                     test_result = {
-                        "test": test.name,
+                        "test": test_name,
                         "passes": [],
                         "verdict": "OK",
                         "time_ms": 0,
@@ -671,7 +684,7 @@ class RunService:
                     }
                     if not interactor.exists():
                         raise RuntimeError("interactive mode requested but interactor is missing in build artifacts")
-                    transcript = run_root / f"{test.stem}.transcript.txt"
+                    transcript = run_root / f"{test_stem}.transcript.txt"
                     verdict, elapsed, mem_kb = self._run_interactive_case(
                         interactor,
                         sub_bin,
@@ -689,10 +702,10 @@ class RunService:
                     test_result["transcript"] = str(transcript.relative_to(run_root))
                     verdicts.append(test_result)
             elif mode != "interactive" and effective_run_jobs > 1:
-                for test in tests:
-                    ans = ans_dir / f"{test.stem}.ans"
+                for test_name in test_names:
+                    ans = ans_dir / f"{Path(test_name).stem}.ans"
                     if not self._is_safe_regular_file(ans_dir, ans):
-                        raise RuntimeError(f"answer file missing or invalid for {test.name}")
+                        raise RuntimeError(f"answer file missing or invalid for {test_name}")
                 with ThreadPoolExecutor(max_workers=effective_run_jobs) as pool:
                     future_map = {
                         pool.submit(
@@ -704,23 +717,25 @@ class RunService:
                             checker_args,
                             max_passes,
                             run_timeout_sec,
-                            test,
-                            ans_dir / f"{test.stem}.ans",
-                            feedback_dir / test.stem,
+                            tests_dir / test_name,
+                            ans_dir / f"{Path(test_name).stem}.ans",
+                            feedback_dir / Path(test_name).stem,
                             run_root,
                         ): idx
-                        for idx, test in enumerate(tests)
+                        for idx, test_name in enumerate(test_names)
                     }
-                    parallel_verdicts: list[dict] = [{} for _ in tests]
+                    parallel_verdicts: list[dict] = [{} for _ in test_names]
                     for future in as_completed(future_map):
                         idx = future_map[future]
                         parallel_verdicts[idx] = future.result()
                     verdicts.extend(parallel_verdicts)
             else:
-                for test in tests:
-                    ans = ans_dir / f"{test.stem}.ans"
+                for test_name in test_names:
+                    test = tests_dir / test_name
+                    test_stem = Path(test_name).stem
+                    ans = ans_dir / f"{test_stem}.ans"
                     if not self._is_safe_regular_file(ans_dir, ans):
-                        raise RuntimeError(f"answer file missing or invalid for {test.name}")
+                        raise RuntimeError(f"answer file missing or invalid for {test_name}")
                     verdicts.append(
                         self._run_noninteractive_test(
                             mode,
@@ -732,7 +747,7 @@ class RunService:
                             run_timeout_sec,
                             test,
                             ans,
-                            feedback_dir / test.stem,
+                            feedback_dir / test_stem,
                             run_root,
                         )
                     )

@@ -1065,6 +1065,14 @@ def main() -> None:
     run_cfg_first["run_jobs"] = 777
     if int(run_cfg_second.get("run_jobs", -1)) == 777:
         raise RuntimeError("run config cache should return independent copies")
+    test_inputs_first = run_service._load_test_inputs(run_cfg_root)
+    test_inputs_second = run_service._load_test_inputs(run_cfg_root)
+    if not test_inputs_second:
+        raise RuntimeError("run test-input cache should expose available tests")
+    test_inputs_marker = f"mutated-{uuid.uuid4().hex[:8]}.in"
+    test_inputs_first.append(test_inputs_marker)
+    if test_inputs_marker in test_inputs_second:
+        raise RuntimeError("run test-input cache should return independent copies")
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()
