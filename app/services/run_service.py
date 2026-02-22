@@ -232,6 +232,8 @@ class RunService:
         run_id = f"r-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         artifact_root = Path(self.workspace_service.settings.artifacts_root) / problem / build_id
+        build_artifact_exists = artifact_root.exists()
+        build_row = self.db.fetch_one("SELECT problem_id,status FROM builds WHERE id=?", [build_id])
         run_root = artifact_root / "logs" / f"run-{run_id}"
         run_root.mkdir(parents=True, exist_ok=True)
         compile_log_file = run_root / "compile.log"
@@ -250,12 +252,11 @@ class RunService:
             ],
         )
 
-        build_row = self.db.fetch_one("SELECT problem_id,status FROM builds WHERE id=?", [build_id])
         if (
             build_row is None
             or build_row["problem_id"] != ctx["problem"]["id"]
             or build_row["status"] != "ok"
-            or not artifact_root.exists()
+            or not build_artifact_exists
         ):
             error = f"build not runnable: {build_id}"
             compile_log_file.write_text(error + "\n", encoding="utf-8")
@@ -329,6 +330,7 @@ class RunService:
                     "compile_diagnostics": compile_diagnostics,
                     "toolchain_digest": toolchain_digest,
                     "source": source_label,
+                    "run_config": run_cfg,
                 }
                 (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
                 self.db.execute(

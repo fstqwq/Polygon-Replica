@@ -86,12 +86,13 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run submission source paths are now constrained to workspace boundaries to prevent path traversal.
 - Build config now carries runner controls in `generation_params` (`checker_mode`, `checker_args`, `max_passes`, `validator_args`) for build-consistent run behavior.
 - Runner now preflights selected `build_id` (existence/ownership/status) and records deterministic failed run metadata on invalid build selections.
+- Runner preflight artifact existence check now evaluates pre-existing build artifact state before run directory creation (prevents false-positive runnable states).
 - Runner checker execution now supports two invocation protocols:
   - `testlib`: `<checker> <input> <team_output> <answer>`
   - `kattis`: `<checker> <input> <answer> <feedback_dir>` with team output on stdin
 - Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Added reusable local validation script: `scripts/smoke_test.py`.
-- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, testlib checker mode, kattis checker mode, and export zip structure assertions.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, testlib checker mode, kattis checker mode, and export zip structure assertions.
 
 ## Upstream Dependency Integration
 

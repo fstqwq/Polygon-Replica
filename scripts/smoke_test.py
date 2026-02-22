@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -201,6 +202,26 @@ def main() -> None:
     bad_build_summary = json.loads(rrow_bad_build["summary_json"])
     if "not runnable" not in str(bad_build_summary.get("error", "")):
         raise RuntimeError("invalid build run did not report preflight failure")
+
+    build_id_missing_artifacts = build_service.run_build("sample", "alice")
+    brow_missing_artifacts = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_missing_artifacts])
+    if brow_missing_artifacts is None or brow_missing_artifacts["status"] != "ok":
+        raise RuntimeError(f"missing-artifacts build failed unexpectedly: {brow_missing_artifacts}")
+    missing_artifacts_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id_missing_artifacts
+    shutil.rmtree(missing_artifacts_root, ignore_errors=True)
+    run_id_missing_artifacts = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id_missing_artifacts,
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    rrow_missing_artifacts = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_missing_artifacts])
+    if rrow_missing_artifacts is None or rrow_missing_artifacts["status"] != "failed":
+        raise RuntimeError(f"missing-artifacts run should fail: {rrow_missing_artifacts}")
+    missing_artifacts_summary = json.loads(rrow_missing_artifacts["summary_json"])
+    if "not runnable" not in str(missing_artifacts_summary.get("error", "")):
+        raise RuntimeError("missing-artifacts run did not report preflight failure")
 
     (ws / "config/build.json").write_text(
         json.dumps(

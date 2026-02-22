@@ -25,6 +25,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Validator/checker/interactor compatibility: accepts both testlib-style (`0`) and Kattis-style (`42/43`) verdict exit codes
 - Run source safety: workspace submission paths are validated to stay within workspace root
 - Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
+- Run preflight now also rejects builds whose artifact directories are missing/corrupted before execution starts
 
 ## Quick Start
 
