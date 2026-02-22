@@ -173,26 +173,14 @@ class BuildService:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         workspace = Path(ctx["workspace"]["path"])
-
+        source_commit = str(ctx["workspace"].get("head_commit") or "").strip()
         source_ref = ref or ctx["workspace"].get("branch") or "main"
-        if commit:
-            source_commit = self.workspace_service.resolve_commit(workspace, commit)
-            source_ref = ref or commit
-            snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
-        else:
-            with self.workspace_service.workspace_lock(workspace):
-                source_commit = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-                branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip()
-                if branch:
-                    source_ref = ref or branch
-                snapshot = self.workspace_service.create_snapshot(workspace, commit)
 
+        ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [ctx["problem"]["id"], ctx["user"]["id"]])
         artifact_paths = self.artifacts.prepare(problem, build_id)
         logs_dir = artifact_paths.logs
         bin_dir = artifact_paths.root / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-
-        ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [ctx["problem"]["id"], ctx["user"]["id"]])
         self.db.execute(
             "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?)",
             [build_id, ctx["problem"]["id"], ws_row["id"], source_commit, source_ref, "running", str(artifact_paths.root), now_iso()],
@@ -203,11 +191,27 @@ class BuildService:
         seed = random.randint(1, 10**9)
         random.seed(seed)
         diagnostics: list[dict] = []
-        build_cfg = self._load_build_config(snapshot)
+        build_cfg: dict = {}
         current_step = "compile"
         failing_test: str | None = None
+        snapshot: Path | None = None
 
         try:
+            if commit:
+                source_commit = self.workspace_service.resolve_commit(workspace, commit)
+                source_ref = ref or commit
+                self.db.execute("UPDATE builds SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
+                snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
+            else:
+                with self.workspace_service.workspace_lock(workspace):
+                    source_commit = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+                    branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip()
+                    if branch:
+                        source_ref = ref or branch
+                    self.db.execute("UPDATE builds SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
+                    snapshot = self.workspace_service.create_snapshot(workspace, commit)
+
+            build_cfg = self._load_build_config(snapshot)
             include_dirs = [snapshot / "third_party/testlib"]
             generator_targets: list[tuple[str, Path | None, Path]] = []
             configured_generators = [str(x) for x in build_cfg.get("generator_sources", []) if str(x).strip()]
@@ -441,6 +445,7 @@ class BuildService:
                 "UPDATE workspaces SET recent_build_status=? WHERE id=?",
                 [self.db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])["status"], ws_row["id"]],
             )
-            shutil.rmtree(snapshot.parent, ignore_errors=True)
+            if snapshot is not None:
+                shutil.rmtree(snapshot.parent, ignore_errors=True)
 
         return build_id

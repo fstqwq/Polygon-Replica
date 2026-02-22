@@ -50,9 +50,6 @@ class PreviewService:
         workspace = Path(ctx["workspace"]["path"])
         source_commit = (ctx["workspace"].get("head_commit") or "").strip()
         source_ref = ctx["workspace"].get("branch") or "main"
-        if commit:
-            source_commit = self.workspace_service.resolve_commit(workspace, commit)
-            source_ref = commit
         ws_row = self.db.fetch_one(
             "SELECT id FROM workspaces WHERE problem_id=? AND user_id=?",
             [ctx["problem"]["id"], ctx["user"]["id"]],
@@ -64,44 +61,42 @@ class PreviewService:
         artifacts = self.artifacts.prepare(problem, build_id)
         self.db.execute("UPDATE previews SET artifact_path=? WHERE id=?", [str(artifacts.root), build_id])
 
-        reuse_commit: str | None = None
-        # Commit-based previews are immutable; reuse existing compiled artifacts when available.
-        if commit:
-            reuse_commit = source_commit
-        else:
-            # Clean workspace HEAD preview is also immutable until the next mutation.
-            with self.workspace_service.workspace_lock(workspace):
-                head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-                branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip() or source_ref
-                dirty = self.workspace_service.workspace_is_dirty(workspace)
-                if head:
-                    source_commit = head
-                    source_ref = branch
-                    self.db.execute("UPDATE previews SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
-                if head and not dirty:
-                    reuse_commit = head
-
-        if reuse_commit:
-            reused_from = self._try_reuse_preview(problem, ctx["problem"]["id"], reuse_commit, build_id, artifacts)
-            if reused_from is not None:
-                summary = {"pdf": "statement_preview/statement.pdf", "reused_from": reused_from}
-                self.db.execute(
-                    "UPDATE previews SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                    ["ok", json.dumps(summary), now_iso(), build_id],
-                )
-                return build_id
-
-        if commit:
-            snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
-        else:
-            with self.workspace_service.workspace_lock(workspace):
-                snapshot = self.workspace_service.create_snapshot(workspace, commit)
-
-        tex = snapshot / "statement/main.tex"
         log = artifacts.logs / "latex.log"
         status = "ok"
         summary: dict[str, object] = {}
+        snapshot: Path | None = None
         try:
+            if commit:
+                source_commit = self.workspace_service.resolve_commit(workspace, commit)
+                source_ref = commit
+                self.db.execute("UPDATE previews SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
+
+                reused_from = self._try_reuse_preview(problem, ctx["problem"]["id"], source_commit, build_id, artifacts)
+                if reused_from is not None:
+                    summary = {"pdf": "statement_preview/statement.pdf", "reused_from": reused_from}
+                    return build_id
+                snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
+            else:
+                # Clean workspace HEAD preview is immutable until the next workspace mutation.
+                with self.workspace_service.workspace_lock(workspace):
+                    head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+                    branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip() or source_ref
+                    dirty = self.workspace_service.workspace_is_dirty(workspace)
+                    if head:
+                        source_commit = head
+                        source_ref = branch
+                        self.db.execute(
+                            "UPDATE previews SET source_commit=?, source_ref=? WHERE id=?",
+                            [source_commit, source_ref, build_id],
+                        )
+                    if head and not dirty:
+                        reused_from = self._try_reuse_preview(problem, ctx["problem"]["id"], head, build_id, artifacts)
+                        if reused_from is not None:
+                            summary = {"pdf": "statement_preview/statement.pdf", "reused_from": reused_from}
+                            return build_id
+                    snapshot = self.workspace_service.create_snapshot(workspace, None)
+
+            tex = snapshot / "statement/main.tex"
             if not tex.exists():
                 status = "failed"
                 summary = {"error": "statement/main.tex not found"}
@@ -131,10 +126,16 @@ class PreviewService:
                 status = "failed"
                 summary = {"error": str(exc)}
                 log.write_text(str(exc) + "\n", encoding="utf-8")
+        except Exception as exc:
+            status = "failed"
+            summary = {"error": str(exc)}
+            if not log.exists():
+                log.write_text(str(exc) + "\n", encoding="utf-8")
         finally:
             self.db.execute(
                 "UPDATE previews SET status=?, summary_json=?, finished_at=? WHERE id=?",
                 [status, json.dumps(summary), now_iso(), build_id],
             )
-            shutil.rmtree(snapshot.parent, ignore_errors=True)
+            if snapshot is not None:
+                shutil.rmtree(snapshot.parent, ignore_errors=True)
         return build_id
