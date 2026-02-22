@@ -403,13 +403,15 @@ class RunService:
         run_id = f"r-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         artifact_root = Path(self.workspace_service.settings.artifacts_root) / problem / build_id
-        build_row = self.db.fetch_one("SELECT problem_id,status FROM builds WHERE id=?", [build_id])
+        build_row = self.db.fetch_one("SELECT problem_id,workspace_id,status FROM builds WHERE id=?", [build_id])
         preflight_reasons: list[str] = []
         if build_row is None:
             preflight_reasons.append("build metadata missing")
         else:
             if build_row["problem_id"] != ctx["problem"]["id"]:
                 preflight_reasons.append("build does not belong to selected problem")
+            if build_row["workspace_id"] != ctx["workspace"]["id"]:
+                preflight_reasons.append("build does not belong to selected workspace")
             if build_row["status"] != "ok":
                 preflight_reasons.append(f"build status is {build_row['status']}")
 

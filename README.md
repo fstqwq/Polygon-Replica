@@ -51,6 +51,10 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Export generation now writes unique per-generation zip filenames (type + build + export id) so repeated exports do not overwrite historical packages.
 - Polygon exports now operate from build artifacts only (no source snapshot dependency), while Kattis/DOMjudge keep strict commit-snapshot enforcement.
 - Workspace pages and recent-* APIs are now strictly workspace-scoped (build/preview/run/export history no longer leaks entries from other users on the same problem).
+- Artifact download/browse/file endpoints now enforce workspace ownership for both build and preview artifact ids.
+- Preview page now ignores foreign-workspace `preview_id` query values to prevent cross-workspace log/PDF detail leaks.
+- Export UI now rejects cross-workspace `build_id` selections before export generation.
+- Runner preflight now rejects cross-workspace `build_id` selections with deterministic failed-run metadata.
 - Build generator execution now streams output directly into test files to avoid buffering full generated tests in memory
 
 ## Quick Start
@@ -76,4 +80,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows (including interactive RE stderr transcript capture), snapshot clean/dirty path behavior, commit-ref canonicalization, invalid-commit build/preview failure persistence, commit/workspace-head preview artifact reuse, `compile_jobs`/`validate_jobs`/`solve_jobs`/`run_jobs` propagation, validate/solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts/missing-tests-dir preflight handling, failed-build export rejection, repeated-export filename uniqueness, polygon-export snapshot independence, workspace-history isolation across pages/APIs, workspace path-boundary rejection, and export zip structure checks.
+  - Covers pass-fail, multi-pass, and interactive run flows (including interactive RE stderr transcript capture), snapshot clean/dirty path behavior, commit-ref canonicalization, invalid-commit build/preview failure persistence, commit/workspace-head preview artifact reuse, `compile_jobs`/`validate_jobs`/`solve_jobs`/`run_jobs` propagation, validate/solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts/missing-tests-dir preflight handling, failed-build export rejection, repeated-export filename uniqueness, polygon-export snapshot independence, workspace-history isolation across pages/APIs, workspace path-boundary rejection, cross-workspace artifact/preview/run/export rejection, and export zip structure checks.

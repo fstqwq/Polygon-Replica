@@ -87,6 +87,32 @@ def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Pat
     return root, path
 
 
+def _assert_workspace_build_access(ctx: dict, build_id: str) -> None:
+    row = db.fetch_one(
+        "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
+        [build_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="build not found in workspace")
+
+
+def _assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
+    params = [artifact_id, ctx["problem"]["id"], ctx["workspace"]["id"]]
+    build_row = db.fetch_one(
+        "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
+        params,
+    )
+    if build_row is not None:
+        return
+    preview_row = db.fetch_one(
+        "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
+        params,
+    )
+    if preview_row is not None:
+        return
+    raise HTTPException(status_code=404, detail="artifact not found in workspace")
+
+
 def _audit(actor_user_id: int, problem_id: int, action: str, details: dict) -> None:
     db.execute(
         "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -347,6 +373,13 @@ def preview_page(request: Request, problem: str, user: str):
     pdf_exists = False
     log_refs = []
     if preview_id:
+        preview_row = db.fetch_one(
+            "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
+            [preview_id, ctx["problem"]["id"], workspace_id],
+        )
+        if preview_row is None:
+            preview_id = ""
+    if preview_id:
         root = settings.artifacts_root / problem / preview_id
         lp = root / "logs" / "latex.log"
         pdf = root / "statement_preview" / "statement.pdf"
@@ -471,6 +504,7 @@ def export_page(request: Request, problem: str, user: str):
 def export_create(problem: str, user: str, build_id: str = Form(...), export_type: str = Form(...)):
     ctx = page_ctx(problem, user)
     try:
+        _assert_workspace_build_access(ctx, build_id)
         out = export_service.create_export(problem, build_id, export_type)
         _audit(
             ctx["user"]["id"],
@@ -479,6 +513,8 @@ def export_create(problem: str, user: str, build_id: str = Form(...), export_typ
             {"build_id": build_id, "export_type": export_type, "filename": out.name},
         )
         msg = f"created {out.name}"
+    except HTTPException as exc:
+        msg = str(exc.detail)
     except Exception as exc:
         msg = str(exc)
     return RedirectResponse(f"/problems/{problem}/{user}/export?message={quote_plus(msg)}", status_code=303)
@@ -486,7 +522,8 @@ def export_create(problem: str, user: str, build_id: str = Form(...), export_typ
 
 @app.get("/problems/{problem}/{user}/artifacts/{build_id}/download-dir")
 def artifact_download_dir(problem: str, user: str, build_id: str, rel: str):
-    _ = page_ctx(problem, user)
+    ctx = page_ctx(problem, user)
+    _assert_workspace_artifact_access(ctx, build_id)
     root, target = _safe_artifact_dir(problem, build_id, rel)
     fd, tmp_zip = tempfile.mkstemp(prefix=f"{build_id}-", suffix=".zip")
     os.close(fd)
@@ -506,6 +543,7 @@ def artifact_download_dir(problem: str, user: str, build_id: str, rel: str):
 @app.get("/problems/{problem}/{user}/artifacts/{build_id}/browse", response_class=HTMLResponse)
 def artifact_browse(request: Request, problem: str, user: str, build_id: str, rel: str = "tests"):
     ctx = page_ctx(problem, user)
+    _assert_workspace_artifact_access(ctx, build_id)
     root, target = _safe_artifact_dir(problem, build_id, rel)
     files = sorted([str(p.relative_to(root)) for p in target.rglob("*") if p.is_file()])
     return templates.TemplateResponse(
@@ -517,7 +555,8 @@ def artifact_browse(request: Request, problem: str, user: str, build_id: str, re
 
 @app.get("/problems/{problem}/{user}/artifacts/{build_id}/{rel_path:path}")
 def artifact_file(problem: str, user: str, build_id: str, rel_path: str):
-    _ = page_ctx(problem, user)
+    ctx = page_ctx(problem, user)
+    _assert_workspace_artifact_access(ctx, build_id)
     file_path = _safe_artifact_path(problem, build_id, rel_path)
     return FileResponse(file_path, filename=file_path.name)
 

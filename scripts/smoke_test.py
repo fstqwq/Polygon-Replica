@@ -677,6 +677,19 @@ def main() -> None:
         submission_path="solutions/main.cpp",
         mode="pass-fail",
     )
+    alice_cross_run_id = run_service.run_submission(
+        "sample",
+        "alice",
+        bob_build_id,
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    alice_cross_run = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [alice_cross_run_id])
+    if alice_cross_run is None or alice_cross_run["status"] != "failed":
+        raise RuntimeError(f"cross-workspace run should fail: {alice_cross_run}")
+    alice_cross_summary = json.loads(alice_cross_run["summary_json"]) if alice_cross_run["summary_json"] else {}
+    if "selected workspace" not in str(alice_cross_summary.get("error", "")):
+        raise RuntimeError("cross-workspace run did not report workspace ownership preflight failure")
     bob_export_id = f"e-{uuid.uuid4().hex[:10]}"
     db.execute(
         "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -716,6 +729,30 @@ def main() -> None:
                 raise RuntimeError(f"{label} request failed status={resp.status_code}")
             if leaked_id in resp.text:
                 raise RuntimeError(f"{label} leaked bob workspace entry")
+        preview_detail_leak = client.get("/problems/sample/alice/preview", params={"preview_id": bob_preview_id})
+        if preview_detail_leak.status_code != 200:
+            raise RuntimeError(f"preview detail leak check failed status={preview_detail_leak.status_code}")
+        if bob_preview_id in preview_detail_leak.text:
+            raise RuntimeError("preview page leaked bob preview detail via preview_id query")
+        for path, params, label in [
+            (f"/problems/sample/alice/artifacts/{bob_build_id}/browse", {"rel": "tests"}, "build artifact browse"),
+            (f"/problems/sample/alice/artifacts/{bob_build_id}/download-dir", {"rel": "tests"}, "build artifact zip"),
+            (f"/problems/sample/alice/artifacts/{bob_build_id}/tests/001.in", None, "build artifact file"),
+            (f"/problems/sample/alice/artifacts/{bob_preview_id}/browse", {"rel": "logs"}, "preview artifact browse"),
+        ]:
+            resp = client.get(path, params=params)
+            if resp.status_code != 404:
+                raise RuntimeError(f"{label} should be workspace-forbidden, got status={resp.status_code}")
+        export_block = client.post(
+            "/problems/sample/alice/export/create",
+            data={"build_id": bob_build_id, "export_type": "kattis"},
+            follow_redirects=False,
+        )
+        if export_block.status_code != 303:
+            raise RuntimeError(f"cross-workspace export should redirect with error, status={export_block.status_code}")
+        location = export_block.headers.get("location", "")
+        if "build+not+found+in+workspace" not in location:
+            raise RuntimeError(f"cross-workspace export error mismatch location={location}")
 
     print("smoke_ok", preview_id, build_id, build_id_repeat, build_id_kattis, run_id_ws, run_id_upload, run_id_multi, run_id_interactive, run_id_kattis)
 
