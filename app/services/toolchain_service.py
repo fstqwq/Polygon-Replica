@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from app.services.util import run_cmd, sha256_file
 
 
 class ToolchainService:
+    INCLUDE_RE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
+
     def __init__(self, cache_root: Path):
         self.cache_root = cache_root / "compile"
         self.cache_root.mkdir(parents=True, exist_ok=True)
@@ -15,6 +18,36 @@ class ToolchainService:
     def digest(self, cxx: str, cxxflags: list[str]) -> str:
         payload = "\n".join([cxx, *cxxflags]).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()[:16]
+
+    def _dependency_files(self, source: Path, include_dirs: list[Path]) -> list[Path]:
+        include_roots = [d.resolve() for d in include_dirs]
+        seen: set[Path] = set()
+        stack: list[Path] = [source.resolve()]
+
+        while stack:
+            current = stack.pop()
+            if current in seen or not current.exists() or not current.is_file():
+                continue
+            seen.add(current)
+
+            try:
+                text = current.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+
+            for match in self.INCLUDE_RE.finditer(text):
+                inc = match.group(1)
+                candidate = (current.parent / inc).resolve()
+                if candidate.exists() and candidate.is_file():
+                    stack.append(candidate)
+                    continue
+                for root in include_roots:
+                    p = (root / inc).resolve()
+                    if p.exists() and p.is_file():
+                        stack.append(p)
+                        break
+
+        return sorted(seen, key=lambda p: str(p))
 
     def compile_cpp(
         self,
@@ -26,11 +59,8 @@ class ToolchainService:
     ) -> tuple[bool, str, str, str]:
         cxxflags = cxxflags or ["-O2", "-std=c++20", "-pipe", "-static"]
         toolchain_digest = self.digest(cxx, cxxflags)
-        key_parts = [sha256_file(source)]
-        for include_dir in include_dirs:
-            header = include_dir / "testlib.h"
-            if header.exists():
-                key_parts.append(sha256_file(header))
+        dep_files = self._dependency_files(source, include_dirs)
+        key_parts = [f"{p}:{sha256_file(p)}" for p in dep_files]
         source_hash = hashlib.sha256("\n".join(key_parts).encode("utf-8")).hexdigest()
         cache_bin = self.cache_root / toolchain_digest / f"{source_hash}.bin"
         cache_bin.parent.mkdir(parents=True, exist_ok=True)

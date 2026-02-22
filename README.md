@@ -26,6 +26,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run source safety: workspace submission paths are validated to stay within workspace root
 - Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
 - Run preflight now also rejects builds whose artifact directories are missing/corrupted before execution starts
+- Compile cache correctness: cache keys now include recursively discovered local `#include "..."` dependencies (source dir + include dirs), so header-only changes invalidate stale binaries
 
 ## Quick Start
 
