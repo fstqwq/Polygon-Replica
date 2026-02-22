@@ -22,8 +22,24 @@ class GitService:
 
     def status(self, workspace: Path) -> dict:
         proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"])
-        diff = run_cmd(["git", "-C", str(workspace), "diff", "--", "."])
-        return {"status": proc.stdout, "diff": diff.stdout}
+        status_text = proc.stdout
+        need_diff = False
+        for raw in status_text.splitlines():
+            line = raw.rstrip("\n")
+            if not line or line.startswith("## "):
+                continue
+            # "??" entries are untracked-only and do not appear in `git diff`.
+            if line.startswith("??"):
+                continue
+            # Porcelain format: XY<space>PATH. Y != ' ' means unstaged worktree change.
+            if len(line) >= 2 and line[1] != " ":
+                need_diff = True
+                break
+        if need_diff:
+            diff_text = run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout
+        else:
+            diff_text = ""
+        return {"status": status_text, "diff": diff_text}
 
     def commit(self, workspace: Path, message: str, name: str, email: str) -> str:
         run_cmd(["git", "-C", str(workspace), "config", "user.name", name])

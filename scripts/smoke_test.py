@@ -74,6 +74,29 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+        alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
+        alice_ws = Path(alice_ctx["workspace"]["path"])
+        tracked_file = alice_ws / "README.problem.md"
+        tracked_original = tracked_file.read_text(encoding="utf-8")
+        tracked_marker = f"git-dirty-marker-{uuid.uuid4().hex[:8]}"
+        tracked_file.write_text(tracked_original + f"\n{tracked_marker}\n", encoding="utf-8")
+        git_dirty_page = client.get("/problems/sample/alice/git")
+        if git_dirty_page.status_code != 200:
+            raise RuntimeError(f"git page failed for tracked-diff coverage: {git_dirty_page.status_code}")
+        if tracked_marker not in git_dirty_page.text:
+            raise RuntimeError("git page should render unstaged tracked-file diff content")
+        tracked_file.write_text(tracked_original, encoding="utf-8")
+        untracked_file = alice_ws / f"untracked-diff-smoke-{uuid.uuid4().hex[:8]}.txt"
+        untracked_marker = f"git-untracked-marker-{uuid.uuid4().hex[:8]}"
+        untracked_file.write_text(untracked_marker + "\n", encoding="utf-8")
+        git_untracked_page = client.get("/problems/sample/alice/git")
+        if git_untracked_page.status_code != 200:
+            raise RuntimeError(f"git page failed for untracked-diff coverage: {git_untracked_page.status_code}")
+        if untracked_file.name not in git_untracked_page.text:
+            raise RuntimeError("git status should include untracked file entry")
+        if untracked_marker in git_untracked_page.text:
+            raise RuntimeError("git diff section should not include untracked file content")
+        untracked_file.unlink(missing_ok=True)
         selector_problem = f"buildcap-{uuid.uuid4().hex[:8]}"
         selector_user = f"u-{uuid.uuid4().hex[:6]}"
         workspace_service.ensure_problem(selector_problem, "Build Selector Cap Problem")
