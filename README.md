@@ -59,6 +59,8 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Request-context refresh optimization: `page_ctx` no longer performs redundant workspace status refreshes, and non-UI API/file routes skip branch-list resolution.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
+- Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.
+- Branch-list API now degrades safely to current branch on git enumeration errors instead of returning 500.
 - Build generator execution now streams output directly into test files to avoid buffering full generated tests in memory
 
 ## Quick Start

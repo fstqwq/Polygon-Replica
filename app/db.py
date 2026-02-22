@@ -124,8 +124,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_workspaces_problem_user ON workspaces(problem_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_builds_problem_created ON builds(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_builds_problem_workspace_created ON builds(problem_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builds_workspace_created ON builds(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_workspace_created ON previews(problem_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_previews_workspace_created ON previews(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_source_status_created ON previews(problem_id, source_commit, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_problem_created ON runs(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_problem_workspace_created ON runs(problem_id, workspace_id, created_at DESC);

@@ -586,7 +586,11 @@ def api_workspace_status(problem: str, user: str):
 def api_workspace_branches(problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True)
     workspace = Path(ctx["workspace"]["path"])
-    return {"branches": git_service.list_branches(workspace), "current": ctx["workspace"]["branch"]}
+    try:
+        branches = git_service.list_branches(workspace)
+    except Exception:
+        branches = [ctx["workspace"].get("branch") or "main"]
+    return {"branches": branches, "current": ctx["workspace"]["branch"]}
 
 
 @app.get("/api/problems/{problem}/workspaces/{user}/recent-builds")
