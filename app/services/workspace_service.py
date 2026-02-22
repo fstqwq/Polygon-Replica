@@ -49,14 +49,18 @@ class WorkspaceService:
                 [slug, name, repo_name, now_iso()],
             )
 
-    def ensure_user(self, username: str) -> None:
+    def ensure_user(self, username: str):
         username = self._validate_identifier(username, "user")
-        row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
+        row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
         if row is None:
             self.db.execute(
                 "INSERT OR IGNORE INTO users(username, created_at) VALUES(?,?)",
                 [username, now_iso()],
             )
+            row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
+        if row is None:
+            raise RuntimeError(f"unable to ensure user row for {username}")
+        return row
 
     def _problem_row(self, slug: str):
         slug = self._validate_identifier(slug, "problem")
@@ -84,9 +88,8 @@ class WorkspaceService:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def ensure_workspace(self, problem: str, username: str, refresh_status: bool = True) -> Path:
-        self.ensure_user(username)
+        u = self.ensure_user(username)
         p = self._problem_row(problem)
-        u = self._user_row(username)
 
         workspace = self.settings.workspace_root / str(u["id"]) / problem
         bare = self.settings.bare_root / p["repo_name"]
@@ -95,7 +98,7 @@ class WorkspaceService:
         # Steady-state fast path: avoid provisioning lock when workspace and DB row already exist.
         if ws_row is not None and workspace.exists() and (workspace / ".git").is_dir():
             if refresh_status:
-                self.refresh_workspace_status(problem, username)
+                self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
             return workspace
 
         with self._workspace_provision_lock(workspace.parent, problem):
@@ -121,7 +124,7 @@ class WorkspaceService:
                     ws_row_created = False
 
             if refresh_status or workspace_created or ws_row_created:
-                self.refresh_workspace_status(problem, username)
+                self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
         return workspace
 
     def _seed_problem_repo(self, workspace: Path) -> None:
@@ -156,19 +159,22 @@ class WorkspaceService:
             run_cmd(["git", "-C", str(workspace), "branch", "-M", "main"])
             run_cmd(["git", "-C", str(workspace), "push", "origin", "main"])
 
-    def refresh_workspace_status(self, problem: str, username: str) -> dict[str, str | int | None]:
-        p = self._problem_row(problem)
-        u = self._user_row(username)
-        workspace = Path(self.settings.workspace_root / str(u["id"]) / problem)
+    def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
         branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip() or "main"
         head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
         dirty_status = run_cmd(["git", "-C", str(workspace), "status", "--porcelain"]).stdout
         dirty = 1 if self._is_status_dirty(dirty_status) else 0
         self.db.execute(
             "UPDATE workspaces SET branch=?, head_commit=?, dirty=?, updated_at=? WHERE problem_id=? AND user_id=?",
-            [branch, head, dirty, now_iso(), p["id"], u["id"]],
+            [branch, head, dirty, now_iso(), problem_id, user_id],
         )
         return {"branch": branch, "head_commit": head, "dirty": dirty}
+
+    def refresh_workspace_status(self, problem: str, username: str) -> dict[str, str | int | None]:
+        p = self._problem_row(problem)
+        u = self._user_row(username)
+        workspace = Path(self.settings.workspace_root / str(u["id"]) / problem)
+        return self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
 
     def workspace_context(self, problem: str, username: str, include_recent: bool = True) -> dict:
         p = self._problem_row(problem)

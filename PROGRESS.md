@@ -139,6 +139,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run/Export page build-selector queries are now capped to recent workspace builds (200 rows) to prevent unbounded dropdown payload growth on long-lived workspaces.
 - Workspace provisioning now supports optional status refresh while still forcing refresh on newly created workspace clones/rows.
 - Workspace provisioning now has a steady-state fast path that bypasses provisioning-lock acquisition when workspace clone + DB row already exist, reducing lock contention on normal request paths.
+- Workspace ensure/status-refresh flow now reuses previously resolved problem/user ids (and ensured user rows) instead of re-querying them during hot-path refresh updates.
 - Added DB indexes for workspace-scoped history filters (`problem_id,workspace_id,created_at`) and preview-reuse lookup (`problem_id,source_commit,status,created_at`).
 - Added direct `workspace_id` latest-row indexes for builds/previews to speed workspace-context `latest_*` lookups.
 - Workspace branches API now falls back to the current branch on git branch-list failures (no 500 on transient git errors).

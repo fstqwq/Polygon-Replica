@@ -76,6 +76,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run/Export build-selector queries are now bounded to recent workspace builds (200 rows), preventing unbounded dropdown payload growth on long-lived workspaces.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
+- Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
 - Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.
 - Branch-list API now degrades safely to current branch on git enumeration errors instead of returning 500.
