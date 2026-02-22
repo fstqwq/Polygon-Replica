@@ -7,6 +7,7 @@ import shutil
 import sys
 import uuid
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 
@@ -687,6 +688,38 @@ def main() -> None:
         )
         if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
+    leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"zip-leak-{uuid.uuid4().hex[:8]}.txt"
+    leak_src.write_text("leak-check\n", encoding="utf-8")
+    escape_name = "999.escape.in"
+    escape_link = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "tests" / escape_name
+    symlink_supported = True
+    try:
+        escape_link.symlink_to(leak_src)
+    except (OSError, NotImplementedError):
+        symlink_supported = False
+    if symlink_supported:
+        try:
+            with TestClient(app) as client:
+                browse_resp = client.get(
+                    f"/problems/sample/alice/artifacts/{build_id}/browse",
+                    params={"rel": "tests"},
+                )
+                if browse_resp.status_code != 200:
+                    raise RuntimeError(f"artifact browse failed during symlink hardening check: {browse_resp.status_code}")
+                if escape_name in browse_resp.text:
+                    raise RuntimeError("artifact browse leaked symlink escape entry")
+                zip_resp = client.get(
+                    f"/problems/sample/alice/artifacts/{build_id}/download-dir",
+                    params={"rel": "tests"},
+                )
+                if zip_resp.status_code != 200:
+                    raise RuntimeError(f"artifact zip failed during symlink hardening check: {zip_resp.status_code}")
+                with zipfile.ZipFile(BytesIO(zip_resp.content)) as zf:
+                    if any(Path(name).name == escape_name for name in zf.namelist()):
+                        raise RuntimeError("artifact zip included symlink escape entry")
+        finally:
+            escape_link.unlink(missing_ok=True)
+    leak_src.unlink(missing_ok=True)
 
     workspace_service.ensure_workspace("sample", "bob")
     bob_preview_id = preview_service.compile_preview("sample", "bob")

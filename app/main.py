@@ -89,6 +89,21 @@ def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Pat
     return root, path
 
 
+def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
+    root_resolved = root.resolve()
+    safe_files: list[Path] = []
+    for p in sorted(target.rglob("*")):
+        if not p.is_file():
+            continue
+        if p.is_symlink():
+            continue
+        resolved = p.resolve()
+        if root_resolved not in resolved.parents and root_resolved != resolved:
+            continue
+        safe_files.append(p)
+    return safe_files
+
+
 def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
     row = db.fetch_one(
         "SELECT artifact_path FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
@@ -577,9 +592,8 @@ def artifact_download_dir(problem: str, user: str, build_id: str, rel: str):
     os.close(fd)
     tmp_path = Path(tmp_zip)
     with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in sorted(target.rglob("*")):
-            if p.is_file():
-                zf.write(p, arcname=str(p.relative_to(root)))
+        for p in _safe_descendant_files(root, target):
+            zf.write(p, arcname=str(p.relative_to(root)))
     name = f"{Path(rel).name or 'artifacts'}-{build_id}.zip"
     return FileResponse(
         tmp_path,
@@ -593,7 +607,7 @@ def artifact_browse(request: Request, problem: str, user: str, build_id: str, re
     ctx = page_ctx(problem, user)
     _assert_workspace_artifact_access(ctx, build_id)
     root, target = _safe_artifact_dir(problem, build_id, rel)
-    files = sorted([str(p.relative_to(root)) for p in target.rglob("*") if p.is_file()])
+    files = [str(p.relative_to(root)) for p in _safe_descendant_files(root, target)]
     return templates.TemplateResponse(
         request,
         "artifact_browser.html",
@@ -617,9 +631,8 @@ def run_artifact_download_dir(problem: str, user: str, run_id: str, rel: str = "
     os.close(fd)
     tmp_path = Path(tmp_zip)
     with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in sorted(target.rglob("*")):
-            if p.is_file():
-                zf.write(p, arcname=str(p.relative_to(root)))
+        for p in _safe_descendant_files(root, target):
+            zf.write(p, arcname=str(p.relative_to(root)))
     name = f"{Path(rel).name or 'run-artifacts'}-{run_id}.zip"
     return FileResponse(
         tmp_path,
@@ -632,7 +645,7 @@ def run_artifact_download_dir(problem: str, user: str, run_id: str, rel: str = "
 def run_artifact_browse(request: Request, problem: str, user: str, run_id: str, rel: str = "feedback_dir"):
     ctx = page_ctx(problem, user)
     root, target = _safe_run_artifact_dir(ctx, run_id, rel)
-    files = sorted([str(p.relative_to(root)) for p in target.rglob("*") if p.is_file()])
+    files = [str(p.relative_to(root)) for p in _safe_descendant_files(root, target)]
     return templates.TemplateResponse(
         request,
         "run_artifact_browser.html",
