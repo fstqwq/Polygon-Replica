@@ -77,6 +77,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
 - Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
+- Workspace service now caches resolved problem/user metadata rows in-process to cut repeated DB lookups across `ensure_workspace`, context, and status-refresh hot paths.
 - Git page status now runs `git diff` only when unstaged tracked changes are present; clean, staged-only, and untracked-only states skip the extra diff subprocess.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
 - Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.

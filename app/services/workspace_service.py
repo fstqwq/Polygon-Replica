@@ -18,6 +18,8 @@ class WorkspaceService:
     def __init__(self, db: DB, settings: Settings):
         self.db = db
         self.settings = settings
+        self._problem_cache: dict[str, dict] = {}
+        self._user_cache: dict[str, dict] = {}
 
     def _validate_identifier(self, value: str, label: str) -> str:
         ident = str(value or "").strip()
@@ -42,15 +44,21 @@ class WorkspaceService:
         bare = self.settings.bare_root / repo_name
         if not bare.exists():
             run_cmd(["git", "init", "--bare", str(bare)])
-        row = self.db.fetch_one("SELECT id FROM problems WHERE slug=?", [slug])
+        row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
         if row is None:
             self.db.execute(
                 "INSERT OR IGNORE INTO problems(slug, name, repo_name, created_at) VALUES(?,?,?,?)",
                 [slug, name, repo_name, now_iso()],
             )
+            row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
+        if row is not None:
+            self._problem_cache[slug] = dict(row)
 
     def ensure_user(self, username: str):
         username = self._validate_identifier(username, "user")
+        cached = self._user_cache.get(username)
+        if cached is not None:
+            return cached
         row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
         if row is None:
             self.db.execute(
@@ -60,21 +68,33 @@ class WorkspaceService:
             row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
         if row is None:
             raise RuntimeError(f"unable to ensure user row for {username}")
-        return row
+        row_dict = dict(row)
+        self._user_cache[username] = row_dict
+        return row_dict
 
     def _problem_row(self, slug: str):
         slug = self._validate_identifier(slug, "problem")
+        cached = self._problem_cache.get(slug)
+        if cached is not None:
+            return cached
         row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
         if row is None:
             raise ValueError(f"Unknown problem: {slug}")
-        return row
+        row_dict = dict(row)
+        self._problem_cache[slug] = row_dict
+        return row_dict
 
     def _user_row(self, username: str):
         username = self._validate_identifier(username, "user")
+        cached = self._user_cache.get(username)
+        if cached is not None:
+            return cached
         row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
         if row is None:
             raise ValueError(f"Unknown user: {username}")
-        return row
+        row_dict = dict(row)
+        self._user_cache[username] = row_dict
+        return row_dict
 
     @contextmanager
     def _workspace_provision_lock(self, workspace_parent: Path, problem: str):
