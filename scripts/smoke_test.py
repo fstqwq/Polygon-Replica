@@ -165,6 +165,35 @@ def main() -> None:
     head_commit = str(ctx["workspace"].get("head_commit") or "").strip()
     if not head_commit:
         head_commit = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+    list_leak_dir = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"files-list-leak-dir-{uuid.uuid4().hex[:8]}"
+    list_leak_dir.mkdir(parents=True, exist_ok=True)
+    list_leak_name = f"workspace-list-leak-{uuid.uuid4().hex[:8]}.txt"
+    (list_leak_dir / list_leak_name).write_text("leak\n", encoding="utf-8")
+    list_leak_file = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"files-list-leak-file-{uuid.uuid4().hex[:8]}.txt"
+    list_leak_file.write_text("leak\n", encoding="utf-8")
+    link_dir = ws / f"link-outside-dir-{uuid.uuid4().hex[:8]}"
+    link_file = ws / f"link-outside-file-{uuid.uuid4().hex[:8]}.txt"
+    list_symlink_supported = True
+    try:
+        link_dir.symlink_to(list_leak_dir, target_is_directory=True)
+        link_file.symlink_to(list_leak_file)
+    except (OSError, NotImplementedError):
+        list_symlink_supported = False
+    if list_symlink_supported:
+        try:
+            with TestClient(app) as client:
+                files_page = client.get("/problems/sample/alice/files")
+                if files_page.status_code != 200:
+                    raise RuntimeError(f"files page failed during symlink listing hardening check: {files_page.status_code}")
+                if list_leak_name in files_page.text:
+                    raise RuntimeError("files page leaked symlinked directory contents outside workspace")
+                if link_file.name in files_page.text:
+                    raise RuntimeError("files page should not list symlinked outside files")
+        finally:
+            link_dir.unlink(missing_ok=True)
+            link_file.unlink(missing_ok=True)
+    shutil.rmtree(list_leak_dir, ignore_errors=True)
+    list_leak_file.unlink(missing_ok=True)
 
     cached_preview_id = f"p-{uuid.uuid4().hex[:12]}"
     cached_preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / cached_preview_id

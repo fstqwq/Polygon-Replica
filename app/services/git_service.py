@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -61,14 +62,40 @@ class GitService:
         return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
+        workspace_root = workspace.resolve()
         base = (workspace / rel).resolve()
-        if workspace.resolve() not in base.parents and base != workspace.resolve():
+        if workspace_root not in base.parents and base != workspace_root:
             raise ValueError("invalid path")
         paths: list[str] = []
-        for p in sorted(base.rglob("*")):
-            if ".git" in p.parts:
-                continue
-            paths.append(str(p.relative_to(workspace)))
+        for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
+            dir_root = Path(dirpath)
+            next_dirs: list[str] = []
+            for name in sorted(dirnames):
+                d = dir_root / name
+                if ".git" in d.parts or d.is_symlink():
+                    continue
+                try:
+                    resolved = d.resolve()
+                except OSError:
+                    continue
+                if workspace_root not in resolved.parents and workspace_root != resolved:
+                    continue
+                next_dirs.append(name)
+                paths.append(str(d.relative_to(workspace)))
+            dirnames[:] = next_dirs
+
+            for name in sorted(filenames):
+                p = dir_root / name
+                if ".git" in p.parts or p.is_symlink():
+                    continue
+                try:
+                    resolved = p.resolve()
+                except OSError:
+                    continue
+                if workspace_root not in resolved.parents and workspace_root != resolved:
+                    continue
+                paths.append(str(p.relative_to(workspace)))
+        paths.sort()
         return paths
 
     def read_file(self, workspace: Path, rel_path: str) -> str:
