@@ -151,24 +151,36 @@ class WorkspaceService:
             "latest_preview": dict(latest_preview) if latest_preview else None,
         }
 
+    def _extract_commit_snapshot(self, workspace: Path, commit: str, snap: Path) -> None:
+        ensure_dir(snap)
+        cmd = (
+            "set -euo pipefail; "
+            f"git -C {shlex.quote(str(workspace))} archive {shlex.quote(commit)} "
+            f"| tar -x -C {shlex.quote(str(snap))}"
+        )
+        proc = run_cmd(["bash", "-lc", cmd], timeout=120)
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+
+    def _workspace_dirty(self, workspace: Path) -> bool:
+        proc = run_cmd(["git", "-C", str(workspace), "status", "--porcelain"])
+        return bool(proc.stdout.strip())
+
     def create_snapshot(self, workspace: Path, commit: str | None) -> Path:
         run_id = f"snapshot-{uuid.uuid4().hex[:12]}"
         snap = self.settings.run_root / run_id / "src"
         ensure_dir(snap.parent)
         if commit:
-            ensure_dir(snap)
-            cmd = (
-                "set -euo pipefail; "
-                f"git -C {shlex.quote(str(workspace))} archive {shlex.quote(commit)} "
-                f"| tar -x -C {shlex.quote(str(snap))}"
-            )
-            proc = run_cmd(["bash", "-lc", cmd], timeout=120)
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stderr or proc.stdout)
+            self._extract_commit_snapshot(workspace, commit, snap)
         else:
-            from app.services.util import copytree
+            # Fast path for clean workspaces: archive current HEAD instead of copying entire tree.
+            if not self._workspace_dirty(workspace):
+                head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+                self._extract_commit_snapshot(workspace, head, snap)
+            else:
+                from app.services.util import copytree
 
-            copytree(workspace, snap)
+                copytree(workspace, snap)
         git_dir = snap / ".git"
         if git_dir.exists():
             import shutil

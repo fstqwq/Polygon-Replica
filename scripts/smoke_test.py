@@ -52,6 +52,7 @@ def main() -> None:
 
     from fastapi.testclient import TestClient
     from app.main import app, build_service, db, export_service, preview_service, run_service, workspace_service
+    from app.services.util import run_cmd
 
     with TestClient(app) as client:
         for path in [
@@ -71,6 +72,39 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+
+    snapshot_repo = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-check-{uuid.uuid4().hex[:8]}"
+    snapshot_repo.mkdir(parents=True, exist_ok=True)
+    for cmd in [
+        ["git", "init", str(snapshot_repo)],
+        ["git", "-C", str(snapshot_repo), "config", "user.email", "smoke@polygonlike.local"],
+        ["git", "-C", str(snapshot_repo), "config", "user.name", "Smoke Test"],
+    ]:
+        proc = run_cmd(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"snapshot setup command failed: {' '.join(cmd)}")
+    (snapshot_repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    for cmd in [
+        ["git", "-C", str(snapshot_repo), "add", "."],
+        ["git", "-C", str(snapshot_repo), "commit", "-m", "init"],
+    ]:
+        proc = run_cmd(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"snapshot setup command failed: {' '.join(cmd)}")
+
+    clean_snapshot = workspace_service.create_snapshot(snapshot_repo, None)
+    if not (clean_snapshot / "tracked.txt").exists():
+        raise RuntimeError("clean snapshot path did not preserve tracked files")
+    if (clean_snapshot / "untracked.txt").exists():
+        raise RuntimeError("clean snapshot unexpectedly contained untracked files")
+    shutil.rmtree(clean_snapshot.parent, ignore_errors=True)
+
+    (snapshot_repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+    dirty_snapshot = workspace_service.create_snapshot(snapshot_repo, None)
+    if not (dirty_snapshot / "untracked.txt").exists():
+        raise RuntimeError("dirty snapshot path did not preserve untracked files")
+    shutil.rmtree(dirty_snapshot.parent, ignore_errors=True)
+    shutil.rmtree(snapshot_repo, ignore_errors=True)
 
     ctx = workspace_service.workspace_context("sample", "alice")
     ws = Path(ctx["workspace"]["path"])

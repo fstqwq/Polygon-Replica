@@ -39,6 +39,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run summaries now include both configured and effective run worker counts (`run_jobs`, `run_jobs_effective`)
 - Run fallback judging (when no checker binary is available) now performs chunked file comparison to avoid loading full outputs into memory
 - Export zip hashing now streams file contents (no full-archive memory read during digest computation)
+- Workspace snapshot creation now fast-paths clean workspaces via `git archive` and falls back to full copy for dirty workspaces to preserve uncommitted/untracked files
 
 ## Quick Start
 
@@ -63,4 +64,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows, `compile_jobs`/`validate_jobs`/`solve_jobs`/`run_jobs` propagation, validate/solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts preflight handling, workspace path-boundary rejection, and export zip structure checks.
+  - Covers pass-fail, multi-pass, and interactive run flows, snapshot clean/dirty path behavior, `compile_jobs`/`validate_jobs`/`solve_jobs`/`run_jobs` propagation, validate/solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts preflight handling, workspace path-boundary rejection, and export zip structure checks.
