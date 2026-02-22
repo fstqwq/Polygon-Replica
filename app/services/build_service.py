@@ -209,9 +209,12 @@ class BuildService:
                 snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
             else:
                 with self.workspace_service.workspace_lock(workspace):
-                    source_commit = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-                    branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip()
-                    dirty = self.workspace_service.workspace_is_dirty(workspace)
+                    status = self.workspace_service.refresh_workspace_status(problem, username)
+                    source_commit = str(status.get("head_commit") or "").strip()
+                    branch = str(status.get("branch") or "").strip()
+                    dirty = bool(status.get("dirty"))
+                    if not source_commit:
+                        source_commit = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                     if branch:
                         source_ref = ref or branch
                     self.db.execute("UPDATE builds SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])

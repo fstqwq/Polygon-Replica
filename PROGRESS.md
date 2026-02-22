@@ -146,6 +146,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Workspace status refresh now conditionally updates workspace rows only when branch/head/dirty changed, reducing steady-state SQLite write churn during status polling.
 - Workspace context now resolves latest build/preview metadata with one combined query, reducing DB round-trips on header/status render paths.
 - Workspace artifact ownership checks now validate build/preview artifact ids with one combined query, reducing DB round-trips on artifact browse/download/file requests.
+- Build/Preview workspace-HEAD paths now derive head/branch/dirty from one workspace-status refresh call, reducing git subprocess count while holding workspace locks.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses in hot mutation paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, removing a redundant post-build status lookup query.
 - Git page status flow now conditionally skips `git diff` unless porcelain status indicates unstaged tracked changes, reducing unnecessary subprocess work in clean/untracked/staged-only states.

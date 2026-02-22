@@ -83,6 +83,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Workspace status refresh now conditionally updates workspace metadata only when branch/head/dirty changed, reducing steady-state SQLite write churn on read-heavy UI/API polling.
 - Workspace context now fetches latest build/preview metadata in one combined query, reducing DB round-trips for header/status rendering paths.
 - Workspace artifact ownership checks now validate build/preview artifact ids via a single combined query, reducing DB round-trips on artifact browse/download/file endpoints.
+- Build/Preview workspace-HEAD flows now derive head/branch/dirty from one workspace-status refresh call, reducing git subprocess count under workspace locks.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses on hot build/preview paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, avoiding a redundant post-build `SELECT status FROM builds` query.
 - Git page status now runs `git diff` only when unstaged tracked changes are present; clean, staged-only, and untracked-only states skip the extra diff subprocess.

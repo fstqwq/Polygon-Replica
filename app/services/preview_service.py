@@ -124,9 +124,12 @@ class PreviewService:
             else:
                 # Clean workspace HEAD preview is immutable until the next workspace mutation.
                 with self.workspace_service.workspace_lock(workspace):
-                    head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-                    branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip() or source_ref
-                    dirty = self.workspace_service.workspace_is_dirty(workspace)
+                    ws_status = self.workspace_service.refresh_workspace_status(problem, username)
+                    head = str(ws_status.get("head_commit") or "").strip()
+                    branch = str(ws_status.get("branch") or "").strip() or source_ref
+                    dirty = bool(ws_status.get("dirty"))
+                    if not head:
+                        head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                     if head:
                         source_commit = head
                         source_ref = branch
