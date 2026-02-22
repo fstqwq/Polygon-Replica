@@ -1059,6 +1059,12 @@ def main() -> None:
         raise RuntimeError("solve log missing configured solve_jobs marker")
     if "001.in" not in solve_log:
         raise RuntimeError("solve log should include per-test entries")
+    run_cfg_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id
+    run_cfg_first = run_service._load_run_config(run_cfg_root)
+    run_cfg_second = run_service._load_run_config(run_cfg_root)
+    run_cfg_first["run_jobs"] = 777
+    if int(run_cfg_second.get("run_jobs", -1)) == 777:
+        raise RuntimeError("run config cache should return independent copies")
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()

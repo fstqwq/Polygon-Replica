@@ -28,6 +28,7 @@ class RunService:
         self.db = db
         self.workspace_service = workspace_service
         self.toolchain = toolchain
+        self._run_config_cache: dict[str, dict[str, object]] = {}
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
@@ -78,6 +79,11 @@ class RunService:
         return "FAIL"
 
     def _load_run_config(self, artifact_root: Path) -> dict[str, object]:
+        cache_key = str(artifact_root.resolve())
+        cached = self._run_config_cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+
         cfg: dict[str, object] = {
             "checker_mode": "testlib",
             "checker_args": [],
@@ -112,13 +118,15 @@ class RunService:
             run_timeout_sec = max(1, min(300, int(cfg.get("run_timeout_sec", 30))))
         except Exception:
             run_timeout_sec = 30
-        return {
+        resolved_cfg = {
             "checker_mode": checker_mode,
             "checker_args": [str(x) for x in checker_args],
             "max_passes": max_passes,
             "run_jobs": run_jobs,
             "run_timeout_sec": run_timeout_sec,
         }
+        self._run_config_cache[cache_key] = dict(resolved_cfg)
+        return dict(resolved_cfg)
 
     def _effective_run_jobs(self, configured: object, test_count: int) -> int:
         auto_jobs = max(1, min(4, os.cpu_count() or 1))
