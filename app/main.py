@@ -39,6 +39,7 @@ export_service = ExportService(db, settings.artifacts_root)
 app = FastAPI(title="Polygonlike")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
+WORKSPACE_BUILD_SELECTOR_LIMIT = 200
 
 
 @app.on_event("startup")
@@ -658,8 +659,8 @@ def run_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace_id = ctx["workspace"]["id"]
     builds = db.fetch_all(
-        "SELECT id,status,created_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC",
-        [ctx["problem"]["id"], workspace_id],
+        "SELECT id,status,created_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT ?",
+        [ctx["problem"]["id"], workspace_id, WORKSPACE_BUILD_SELECTOR_LIMIT],
     )
     runs = db.fetch_all(
         "SELECT id,build_id,mode,status,created_at FROM runs WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
@@ -734,8 +735,8 @@ def export_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace_id = ctx["workspace"]["id"]
     builds = db.fetch_all(
-        "SELECT id,status,created_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC",
-        [ctx["problem"]["id"], workspace_id],
+        "SELECT id,status,created_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT ?",
+        [ctx["problem"]["id"], workspace_id, WORKSPACE_BUILD_SELECTOR_LIMIT],
     )
     exports = db.fetch_all(
         """

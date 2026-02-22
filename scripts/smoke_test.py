@@ -74,6 +74,53 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+        selector_problem = f"buildcap-{uuid.uuid4().hex[:8]}"
+        selector_user = f"u-{uuid.uuid4().hex[:6]}"
+        workspace_service.ensure_problem(selector_problem, "Build Selector Cap Problem")
+        workspace_service.ensure_workspace(selector_problem, selector_user)
+        selector_ctx = workspace_service.workspace_context(selector_problem, selector_user)
+        selector_prefix = f"b-listcap-{uuid.uuid4().hex[:6]}"
+        selector_count = 260
+        selector_limit = 200
+        for i in range(selector_count):
+            build_id = f"{selector_prefix}-{i:03d}"
+            created = f"2100-01-01T00:{i // 60:02d}:{i % 60:02d}Z"
+            artifact_path = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / selector_problem / build_id
+            db.execute(
+                "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                [
+                    build_id,
+                    selector_ctx["problem"]["id"],
+                    selector_ctx["workspace"]["id"],
+                    "feedfacefeedfacefeedfacefeedfacefeedface",
+                    "main",
+                    "ok",
+                    "{}",
+                    str(artifact_path),
+                    created,
+                    created,
+                ],
+            )
+        run_list_page = client.get(f"/problems/{selector_problem}/{selector_user}/run")
+        if run_list_page.status_code != 200:
+            raise RuntimeError(f"run page failed during build selector limit check: {run_list_page.status_code}")
+        run_html = run_list_page.text
+        if run_html.count(f'value="{selector_prefix}-') != selector_limit:
+            raise RuntimeError("run page build selector did not enforce expected build-row limit")
+        if f'value="{selector_prefix}-259"' not in run_html:
+            raise RuntimeError("run page build selector omitted newest capped build id")
+        if f'value="{selector_prefix}-000"' in run_html:
+            raise RuntimeError("run page build selector included oldest build id beyond cap")
+        export_list_page = client.get(f"/problems/{selector_problem}/{selector_user}/export")
+        if export_list_page.status_code != 200:
+            raise RuntimeError(f"export page failed during build selector limit check: {export_list_page.status_code}")
+        export_html = export_list_page.text
+        if export_html.count(f'value="{selector_prefix}-') != selector_limit:
+            raise RuntimeError("export page build selector did not enforce expected build-row limit")
+        if f'value="{selector_prefix}-259"' not in export_html:
+            raise RuntimeError("export page build selector omitted newest capped build id")
+        if f'value="{selector_prefix}-000"' in export_html:
+            raise RuntimeError("export page build selector included oldest build id beyond cap")
         invalid_problem_switch = client.post(
             "/switch-workspace",
             data={"problem": "..", "user": "alice", "page": "files"},
@@ -465,7 +512,7 @@ def main() -> None:
     # Insert a same-timestamp candidate set larger than one batch to ensure keyset pagination
     # can continue scanning within equal created_at values.
     tie_prefix = f"p-tie-{uuid.uuid4().hex[:6]}"
-    tie_created_at = "9999-01-01T00:30:00Z"
+    tie_created_at = f"9999-12-31T23:59:59.{uuid.uuid4().hex}Z"
     tie_valid_preview_id = f"{tie_prefix}-000"
     tie_valid_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / tie_valid_preview_id
     (tie_valid_root / "statement_preview").mkdir(parents=True, exist_ok=True)
