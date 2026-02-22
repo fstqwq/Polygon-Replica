@@ -619,6 +619,20 @@ def main() -> None:
     if str(recent_kattis[0]["filename"]) == str(recent_kattis[1]["filename"]):
         raise RuntimeError("kattis export records should preserve distinct filenames per generation")
 
+    build_id_polygon_snapshotless = build_service.run_build("sample", "alice")
+    brow_polygon_snapshotless = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_polygon_snapshotless])
+    if brow_polygon_snapshotless is None or brow_polygon_snapshotless["status"] != "ok":
+        raise RuntimeError(f"polygon snapshotless build failed unexpectedly: {brow_polygon_snapshotless}")
+    db.execute("UPDATE builds SET source_commit=? WHERE id=?", ["deadbeefdeadbeef", build_id_polygon_snapshotless])
+    poly_snapshotless = export_service.create_export("sample", build_id_polygon_snapshotless, "polygon-standard")
+    if not poly_snapshotless.exists():
+        raise RuntimeError("polygon-standard export should not depend on source snapshot reconstruction")
+    try:
+        export_service.create_export("sample", build_id_polygon_snapshotless, "kattis")
+        raise RuntimeError("kattis export should fail when source snapshot reconstruction fails")
+    except ValueError:
+        pass
+
     kattis_entries = _zip_entries(export_outputs["kattis"])
     _expect_suffix(kattis_entries, "problem.yaml", "kattis")
     _expect_suffix(kattis_entries, "statement/problem.en.tex", "kattis")

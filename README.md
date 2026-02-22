@@ -49,6 +49,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Runner preflight now validates required build artifact directories (`tests/`, `ans/`) and returns explicit not-runnable reasons with deterministic invalid-run isolation.
 - Export generation now enforces successful build status and required artifact presence, and fails explicitly when commit snapshot reconstruction is not possible.
 - Export generation now writes unique per-generation zip filenames (type + build + export id) so repeated exports do not overwrite historical packages.
+- Polygon exports now operate from build artifacts only (no source snapshot dependency), while Kattis/DOMjudge keep strict commit-snapshot enforcement.
 - Build generator execution now streams output directly into test files to avoid buffering full generated tests in memory
 
 ## Quick Start
@@ -74,4 +75,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows (including interactive RE stderr transcript capture), snapshot clean/dirty path behavior, commit-ref canonicalization, invalid-commit build/preview failure persistence, commit/workspace-head preview artifact reuse, `compile_jobs`/`validate_jobs`/`solve_jobs`/`run_jobs` propagation, validate/solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts/missing-tests-dir preflight handling, failed-build export rejection, repeated-export filename uniqueness, workspace path-boundary rejection, and export zip structure checks.
+  - Covers pass-fail, multi-pass, and interactive run flows (including interactive RE stderr transcript capture), snapshot clean/dirty path behavior, commit-ref canonicalization, invalid-commit build/preview failure persistence, commit/workspace-head preview artifact reuse, `compile_jobs`/`validate_jobs`/`solve_jobs`/`run_jobs` propagation, validate/solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts/missing-tests-dir preflight handling, failed-build export rejection, repeated-export filename uniqueness, polygon-export snapshot independence, workspace path-boundary rejection, and export zip structure checks.

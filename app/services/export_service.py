@@ -369,8 +369,10 @@ class ExportService:
         source_commit = build_row["source_commit"]
         snapshot: Path | None = None
         try:
-            snapshot = self._snapshot_source(build_row["workspace_id"], source_commit, tmp_root)
-            mode = self._problem_mode(snapshot)
+            mode = "pass-fail"
+            if export_type in {"kattis", "domjudge"}:
+                snapshot = self._snapshot_source(build_row["workspace_id"], source_commit, tmp_root)
+                mode = self._problem_mode(snapshot)
 
             if export_type == "kattis":
                 self._build_kattis(
