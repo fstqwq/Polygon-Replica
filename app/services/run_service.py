@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
@@ -510,7 +510,7 @@ class RunService:
                     test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, artifact_root)
                     test_result["transcript"] = str(transcript.relative_to(artifact_root))
                     verdicts.append(test_result)
-            elif mode == "pass-fail" and effective_run_jobs > 1:
+            elif mode != "interactive" and effective_run_jobs > 1:
                 with ThreadPoolExecutor(max_workers=effective_run_jobs) as pool:
                     future_map = {
                         pool.submit(
@@ -530,7 +530,8 @@ class RunService:
                         for idx, test in enumerate(tests)
                     }
                     parallel_verdicts: list[dict] = [{} for _ in tests]
-                    for future, idx in future_map.items():
+                    for future in as_completed(future_map):
+                        idx = future_map[future]
                         parallel_verdicts[idx] = future.result()
                     verdicts.extend(parallel_verdicts)
             else:

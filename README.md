@@ -22,7 +22,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build source discovery now supports C++ variants (`.cpp`, `.cc`, `.cxx`, `.c++`) with preferred-name resolution (`accepted.*`, etc.)
 - Manual test ingestion now prefers `tests/manual/**/*.in` when present, so sidecar files like `.ans` are not treated as input tests
 - Build compile step now supports bounded parallel target compilation via `config/build.json` `compile_jobs` (`0` = auto)
-- Runner pass-fail execution now supports bounded parallel test execution via `config/build.json` `run_jobs` (`0` = auto)
+- Runner non-interactive execution (`pass-fail`, `multi-pass`) now supports bounded parallel per-test execution via `config/build.json` `run_jobs` (`0` = auto)
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
 - Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`

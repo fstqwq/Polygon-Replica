@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import random
@@ -226,7 +226,8 @@ class BuildService:
                         pool.submit(self.toolchain.compile_cpp, source, output, include_dirs, [snapshot]): name
                         for name, source, output in compile_plan
                     }
-                    for future, name in future_map.items():
+                    for future in as_completed(future_map):
+                        name = future_map[future]
                         compile_results[name] = future.result()
 
             compiled_bins: dict[str, Path] = {}

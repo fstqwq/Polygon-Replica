@@ -96,14 +96,14 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build source discovery now resolves preferred C++ file stems across `.cpp/.cc/.cxx/.c++` variants.
 - Build manual test ingestion now prefers `tests/manual/**/*.in` when present, avoiding accidental inclusion of sidecar `.ans` files as input tests.
 - Build compile stage now supports bounded parallel target compilation (`compile_jobs`, with auto mode) and persists the effective value in manifest generation parameters.
-- Runner pass-fail mode now supports bounded parallel per-test execution (`run_jobs`, with auto mode) sourced from build generation parameters.
+- Runner non-interactive modes (`pass-fail`, `multi-pass`) now support bounded parallel per-test execution (`run_jobs`, with auto mode) sourced from build generation parameters.
 - Run summaries now persist both configured and effective run-worker values (`run_jobs`, `run_jobs_effective`) for observability.
 - Toolchain compile cache population now uses per-key file locking with atomic replace to avoid duplicate/corrupted cache writes under concurrent compiles.
 - Runner fallback output checking now uses streaming file comparison (memory-safe for large outputs).
 - Export archive SHA-256 computation now streams file contents instead of reading full zip bytes into memory.
 - Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Added reusable local validation script: `scripts/smoke_test.py`.
-- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, invalid-run path isolation, testlib checker mode, kattis checker mode, unchanged-build compile-cache reuse checks, compile-cache header-dependency invalidation, compile-jobs/run-jobs propagation, effective run-worker reporting, manual-sidecar answer filtering, C++ `.cc` accepted-source builds, and export zip structure assertions.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, invalid-run path isolation, testlib checker mode, kattis checker mode, unchanged-build compile-cache reuse checks, compile-cache header-dependency invalidation, compile-jobs/run-jobs propagation, effective run-worker reporting (including multi-pass), manual-sidecar answer filtering, C++ `.cc` accepted-source builds, and export zip structure assertions.
 
 ## Upstream Dependency Integration
 

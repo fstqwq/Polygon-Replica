@@ -162,8 +162,8 @@ def main() -> None:
     ws_summary = json.loads(rrow_ws["summary_json"])
     if int(ws_summary.get("run_config", {}).get("run_jobs", 0)) != 2:
         raise RuntimeError("run config did not preserve run_jobs=2")
-    if int(ws_summary.get("run_config", {}).get("run_jobs_effective", 0)) < 1:
-        raise RuntimeError("run config did not expose effective run_jobs")
+    if int(ws_summary.get("run_config", {}).get("run_jobs_effective", 0)) != 2:
+        raise RuntimeError("run config did not expose expected effective run_jobs")
 
     upload_src = (
         b'#include <bits/stdc++.h>\nusing namespace std; int main(){ long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n"; }\n'
@@ -187,6 +187,10 @@ def main() -> None:
     multi_summary = json.loads(rrow_multi["summary_json"])
     if multi_summary.get("run_config", {}).get("checker_mode") != "testlib":
         raise RuntimeError("run config did not preserve checker_mode=testlib")
+    if int(multi_summary.get("run_config", {}).get("run_jobs", 0)) != 2:
+        raise RuntimeError("multi-pass run config did not preserve run_jobs=2")
+    if int(multi_summary.get("run_config", {}).get("run_jobs_effective", 0)) != 2:
+        raise RuntimeError("multi-pass run did not expose expected effective run_jobs")
     if not multi_summary.get("tests") or len(multi_summary["tests"][0].get("passes", [])) < 2:
         raise RuntimeError("multi-pass run did not execute multiple passes")
 
