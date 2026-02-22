@@ -799,6 +799,22 @@ def main() -> None:
     rrow_upload = db.fetch_one("SELECT status FROM runs WHERE id=?", [run_id_upload])
     if rrow_upload is None or rrow_upload["status"] != "ok":
         raise RuntimeError(f"upload run failed: {rrow_upload}")
+    run_id_upload_empty = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        mode="pass-fail",
+        upload_content=b"",
+        upload_filename="empty-upload.cpp",
+    )
+    rrow_upload_empty = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_upload_empty])
+    if rrow_upload_empty is None or rrow_upload_empty["status"] != "failed":
+        raise RuntimeError(f"empty upload run should fail compilation (not missing submission_path): {rrow_upload_empty}")
+    upload_empty_summary = json.loads(rrow_upload_empty["summary_json"])
+    if upload_empty_summary.get("error") != "compile_error":
+        raise RuntimeError(f"empty upload run should report compile_error: {upload_empty_summary}")
+    if upload_empty_summary.get("source") != "empty-upload.cpp":
+        raise RuntimeError("empty upload run did not preserve uploaded filename in summary source")
     with TestClient(app) as client:
         route_upload_resp = client.post(
             "/problems/sample/alice/run/execute",
@@ -812,12 +828,34 @@ def main() -> None:
         if "run_id=" not in location:
             raise RuntimeError(f"run execute upload route missing run_id redirect parameter: {location}")
         run_id_upload_route = location.split("run_id=", 1)[1].split("&", 1)[0]
+        route_upload_empty_resp = client.post(
+            "/problems/sample/alice/run/execute",
+            data={"build_id": build_id, "mode": "pass-fail", "submission_path": ""},
+            files={"submission_upload": ("empty-route.cpp", b"", "text/x-c++src")},
+            follow_redirects=False,
+        )
+        if route_upload_empty_resp.status_code != 303:
+            raise RuntimeError(
+                f"run execute empty-upload route should redirect, status={route_upload_empty_resp.status_code}"
+            )
+        location_empty = route_upload_empty_resp.headers.get("location", "")
+        if "run_id=" not in location_empty:
+            raise RuntimeError(f"run execute empty-upload route missing run_id redirect parameter: {location_empty}")
+        run_id_upload_empty_route = location_empty.split("run_id=", 1)[1].split("&", 1)[0]
     rrow_upload_route = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_upload_route])
     if rrow_upload_route is None or rrow_upload_route["status"] != "ok":
         raise RuntimeError(f"upload run via route failed: {rrow_upload_route}")
     upload_route_summary = json.loads(rrow_upload_route["summary_json"])
     if upload_route_summary.get("source") != "upload-route.cpp":
         raise RuntimeError("upload run via route did not preserve uploaded filename in summary source")
+    rrow_upload_empty_route = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_upload_empty_route])
+    if rrow_upload_empty_route is None or rrow_upload_empty_route["status"] != "failed":
+        raise RuntimeError(f"empty upload run via route should fail compilation: {rrow_upload_empty_route}")
+    upload_empty_route_summary = json.loads(rrow_upload_empty_route["summary_json"])
+    if upload_empty_route_summary.get("error") != "compile_error":
+        raise RuntimeError(f"empty upload run via route should report compile_error: {upload_empty_route_summary}")
+    if upload_empty_route_summary.get("source") != "empty-route.cpp":
+        raise RuntimeError("empty upload run via route did not preserve uploaded filename in summary source")
 
     run_id_multi = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="multi-pass")
     rrow_multi = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_multi])

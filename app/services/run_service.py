@@ -523,13 +523,10 @@ class RunService:
                 sub_src.parent.mkdir(parents=True, exist_ok=True)
                 with sub_src.open("wb") as out:
                     shutil.copyfileobj(upload_stream, out, length=1024 * 1024)
-                if sub_src.exists() and sub_src.stat().st_size > 0:
-                    source_label = upload_filename or sub_src.name
-                    compile_workspace = None
-                    has_uploaded_source = True
-                else:
-                    sub_src.unlink(missing_ok=True)
-            if not has_uploaded_source and upload_content:
+                source_label = upload_filename or sub_src.name
+                compile_workspace = None
+                has_uploaded_source = True
+            if not has_uploaded_source and upload_content is not None:
                 suffix = Path(upload_filename or "submission.cpp").suffix or ".cpp"
                 sub_src = run_root / f"uploaded_submission{suffix}"
                 sub_src.write_bytes(upload_content)
