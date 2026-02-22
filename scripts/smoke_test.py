@@ -79,6 +79,34 @@ def main() -> None:
             raise RuntimeError("workspace status API should expose a non-empty HEAD commit")
         if not str(status_payload.get("branch") or "").strip():
             raise RuntimeError("workspace status API should expose a non-empty branch")
+        status_problem = f"statuscache-{uuid.uuid4().hex[:8]}"
+        status_user = f"u-{uuid.uuid4().hex[:6]}"
+        workspace_service.ensure_problem(status_problem, "Status Refresh Optimization Problem")
+        workspace_service.ensure_workspace(status_problem, status_user, refresh_status=True)
+        status_ctx = workspace_service.workspace_context(status_problem, status_user, include_recent=False)
+        status_row_first = db.fetch_one("SELECT updated_at FROM workspaces WHERE id=?", [status_ctx["workspace"]["id"]])
+        if status_row_first is None:
+            raise RuntimeError("status optimization check setup failed: workspace row missing")
+        first_status = client.get(f"/api/problems/{status_problem}/workspaces/{status_user}/status")
+        if first_status.status_code != 200:
+            raise RuntimeError(
+                "workspace status endpoint failed during unchanged-refresh check"
+                f", status={first_status.status_code}"
+            )
+        status_row_after_first = db.fetch_one("SELECT updated_at FROM workspaces WHERE id=?", [status_ctx["workspace"]["id"]])
+        if status_row_after_first is None:
+            raise RuntimeError("status optimization check failed: missing row after first refresh")
+        second_status = client.get(f"/api/problems/{status_problem}/workspaces/{status_user}/status")
+        if second_status.status_code != 200:
+            raise RuntimeError(
+                "workspace status endpoint failed during second unchanged-refresh check"
+                f", status={second_status.status_code}"
+            )
+        status_row_after_second = db.fetch_one("SELECT updated_at FROM workspaces WHERE id=?", [status_ctx["workspace"]["id"]])
+        if status_row_after_second is None:
+            raise RuntimeError("status optimization check failed: missing row after second refresh")
+        if status_row_after_first["updated_at"] != status_row_after_second["updated_at"]:
+            raise RuntimeError("workspace status refresh should not rewrite unchanged workspace rows")
         alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
         alice_ws = Path(alice_ctx["workspace"]["path"])
         tracked_file = alice_ws / "README.problem.md"

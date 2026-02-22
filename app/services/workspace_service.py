@@ -199,8 +199,13 @@ class WorkspaceService:
             head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
             dirty = 1 if self._is_status_dirty(status_out) else 0
         self.db.execute(
-            "UPDATE workspaces SET branch=?, head_commit=?, dirty=?, updated_at=? WHERE problem_id=? AND user_id=?",
-            [branch, head, dirty, now_iso(), problem_id, user_id],
+            """
+            UPDATE workspaces
+            SET branch=?, head_commit=?, dirty=?, updated_at=?
+            WHERE problem_id=? AND user_id=?
+              AND (branch IS NOT ? OR head_commit IS NOT ? OR dirty IS NOT ?)
+            """,
+            [branch, head, dirty, now_iso(), problem_id, user_id, branch, head, dirty],
         )
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
