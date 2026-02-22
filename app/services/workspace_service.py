@@ -180,9 +180,20 @@ class WorkspaceService:
             run_cmd(["git", "-C", str(workspace), "push", "origin", "main"])
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
-        branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip() or "main"
+        status_out = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"]).stdout
+        branch = "main"
+        for raw in status_out.splitlines():
+            line = raw.strip()
+            if not line.startswith("## "):
+                continue
+            branch_line = line[3:]
+            if branch_line.startswith("HEAD"):
+                branch = "main"
+                break
+            branch = branch_line.split("...", 1)[0].strip() or "main"
+            break
         head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-        dirty_status = run_cmd(["git", "-C", str(workspace), "status", "--porcelain"]).stdout
+        dirty_status = status_out
         dirty = 1 if self._is_status_dirty(dirty_status) else 0
         self.db.execute(
             "UPDATE workspaces SET branch=?, head_commit=?, dirty=?, updated_at=? WHERE problem_id=? AND user_id=?",
@@ -256,6 +267,8 @@ class WorkspaceService:
         for raw in status_output.splitlines():
             line = raw.strip()
             if not line:
+                continue
+            if line.startswith("## "):
                 continue
             path = line[3:].strip() if len(line) >= 4 else line
             if path == ".polygonlike.lock":

@@ -141,6 +141,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Workspace provisioning now has a steady-state fast path that bypasses provisioning-lock acquisition when workspace clone + DB row already exist, reducing lock contention on normal request paths.
 - Workspace ensure/status-refresh flow now reuses previously resolved problem/user ids (and ensured user rows) instead of re-querying them during hot-path refresh updates.
 - Workspace service now caches resolved `problems`/`users` rows in-process, reducing repeated metadata lookups during workspace ensure/context/status flows.
+- Workspace status refresh now parses branch/dirty from one `git status --short --branch` invocation and only runs `rev-parse` for commit SHA, lowering git subprocess overhead.
 - Git page status flow now conditionally skips `git diff` unless porcelain status indicates unstaged tracked changes, reducing unnecessary subprocess work in clean/untracked/staged-only states.
 - Added DB indexes for workspace-scoped history filters (`problem_id,workspace_id,created_at`) and preview-reuse lookup (`problem_id,source_commit,status,created_at`).
 - Added direct `workspace_id` latest-row indexes for builds/previews to speed workspace-context `latest_*` lookups.
