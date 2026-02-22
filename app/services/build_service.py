@@ -75,6 +75,7 @@ class BuildService:
             "validate_jobs": 0,
             "solve_jobs": 0,
             "run_jobs": 0,
+            "run_timeout_sec": 30,
             "generator_args": [],
             "generator_sources": [],
             "validator_args": [],
@@ -112,6 +113,10 @@ class BuildService:
             cfg["run_jobs"] = max(0, min(16, int(cfg.get("run_jobs", 0))))
         except Exception:
             cfg["run_jobs"] = 0
+        try:
+            cfg["run_timeout_sec"] = max(1, min(300, int(cfg.get("run_timeout_sec", 30))))
+        except Exception:
+            cfg["run_timeout_sec"] = 30
         cfg["checker_mode"] = str(cfg.get("checker_mode", "testlib")).lower()
         if cfg["checker_mode"] not in {"testlib", "kattis"}:
             cfg["checker_mode"] = "testlib"
@@ -406,6 +411,7 @@ class BuildService:
                     "solve_jobs": int(build_cfg.get("solve_jobs", 0)),
                     "solve_jobs_effective": solve_jobs,
                     "run_jobs": int(build_cfg.get("run_jobs", 0)),
+                    "run_timeout_sec": int(build_cfg.get("run_timeout_sec", 30)),
                     "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
                     "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
                     "validator_args": [str(x) for x in build_cfg.get("validator_args", [])],

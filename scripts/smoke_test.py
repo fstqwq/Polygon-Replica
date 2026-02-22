@@ -526,6 +526,7 @@ def main() -> None:
                 "validate_jobs": 2,
                 "solve_jobs": 2,
                 "run_jobs": 2,
+                "run_timeout_sec": 1,
                 "validator_args": ["--self-check"],
                 "checker_mode": "testlib",
                 "checker_args": [],
@@ -543,6 +544,10 @@ def main() -> None:
     )
     (ws / "solutions/main.cpp").write_text(
         '#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n";}',
+        encoding="utf-8",
+    )
+    (ws / "solutions/slow.cpp").write_text(
+        "#include <bits/stdc++.h>\nusing namespace std; int main(){ for(;;){} }\n",
         encoding="utf-8",
     )
     (ws / "solutions/accepted.cc").write_text(
@@ -612,6 +617,8 @@ def main() -> None:
         raise RuntimeError(f"manifest generation_params missing solve_jobs_effective: {generation_params}")
     if int(generation_params.get("run_jobs", 0)) != 2:
         raise RuntimeError(f"manifest generation_params missing run_jobs: {generation_params}")
+    if int(generation_params.get("run_timeout_sec", 0)) != 1:
+        raise RuntimeError(f"manifest generation_params missing run_timeout_sec: {generation_params}")
     if int(manifest.get("summary", {}).get("tests_count", -1)) != 2:
         raise RuntimeError("manual sidecar files should not be treated as test inputs")
     compile_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "compile.log").read_text(encoding="utf-8")
@@ -643,8 +650,17 @@ def main() -> None:
         raise RuntimeError("run config did not preserve run_jobs=2")
     if int(ws_summary.get("run_config", {}).get("run_jobs_effective", 0)) != 2:
         raise RuntimeError("run config did not expose expected effective run_jobs")
+    if int(ws_summary.get("run_config", {}).get("run_timeout_sec", 0)) != 1:
+        raise RuntimeError("run config did not preserve run_timeout_sec=1")
     if ws_summary.get("feedback_dir") != "feedback_dir":
         raise RuntimeError("run summary should expose feedback_dir as repository-relative path")
+    run_id_tle = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/slow.cpp", mode="pass-fail")
+    rrow_tle = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_tle])
+    if rrow_tle is None or rrow_tle["status"] != "ok":
+        raise RuntimeError(f"timeout run should complete with per-test verdicts: {rrow_tle}")
+    tle_summary = json.loads(rrow_tle["summary_json"])
+    if not tle_summary.get("tests") or tle_summary["tests"][0].get("verdict") != "TLE":
+        raise RuntimeError(f"timeout run did not produce TLE verdicts: {tle_summary}")
     build_id_symlink_inputs = build_service.run_build("sample", "alice")
     brow_symlink_inputs = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_symlink_inputs])
     if brow_symlink_inputs is None or brow_symlink_inputs["status"] != "ok":

@@ -22,6 +22,8 @@ DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<leve
 
 
 class RunService:
+    RUN_TIMEOUT_SENTINEL = -1_000_000_000
+
     def __init__(self, db: DB, workspace_service: WorkspaceService, toolchain: ToolchainService):
         self.db = db
         self.workspace_service = workspace_service
@@ -81,6 +83,7 @@ class RunService:
             "checker_args": [],
             "max_passes": 16,
             "run_jobs": 0,
+            "run_timeout_sec": 30,
         }
         manifest = artifact_root / "manifest.json"
         if manifest.exists():
@@ -105,11 +108,16 @@ class RunService:
             run_jobs = max(0, min(16, int(cfg.get("run_jobs", 0))))
         except Exception:
             run_jobs = 0
+        try:
+            run_timeout_sec = max(1, min(300, int(cfg.get("run_timeout_sec", 30))))
+        except Exception:
+            run_timeout_sec = 30
         return {
             "checker_mode": checker_mode,
             "checker_args": [str(x) for x in checker_args],
             "max_passes": max_passes,
             "run_jobs": run_jobs,
+            "run_timeout_sec": run_timeout_sec,
         }
 
     def _effective_run_jobs(self, configured: object, test_count: int) -> int:
@@ -309,13 +317,20 @@ class RunService:
         else:
             cmd = [str(submission_bin)]
 
-        proc = run_cmd(cmd, stdin_path=input_file, stdout_path=output_file, timeout=timeout_sec)
+        elapsed_ms = timeout_sec * 1000
+        returncode = self.RUN_TIMEOUT_SENTINEL
+        try:
+            proc = run_cmd(cmd, stdin_path=input_file, stdout_path=output_file, timeout=timeout_sec)
+            elapsed_ms = proc.elapsed_ms
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            pass
         mem_kb = 0
         if time_file.exists():
             raw = time_file.read_text(encoding="utf-8").strip()
             if raw.isdigit():
                 mem_kb = int(raw)
-        return proc.returncode, proc.elapsed_ms, mem_kb
+        return returncode, elapsed_ms, mem_kb
 
     def _feedback_key_files(self, test_feedback_dir: Path, base_root: Path) -> list[str]:
         keys = []
@@ -347,6 +362,7 @@ class RunService:
         checker_mode: str,
         checker_args: list[str],
         max_passes: int,
+        run_timeout_sec: int,
         test: Path,
         ans: Path,
         test_feedback_dir: Path,
@@ -370,9 +386,14 @@ class RunService:
             pass_feedback_dir.mkdir(parents=True, exist_ok=True)
             out = run_root / f"{test.stem}.pass{pass_idx}.out"
             time_file = pass_feedback_dir / "time.txt"
-            exec_rc, exec_ms, exec_mem = self._run_pass(sub_bin, current_input, out, 30, time_file)
+            exec_rc, exec_ms, exec_mem = self._run_pass(sub_bin, current_input, out, run_timeout_sec, time_file)
             total_time += exec_ms
             peak_mem = max(peak_mem, exec_mem)
+            if exec_rc == self.RUN_TIMEOUT_SENTINEL:
+                p = {"pass": pass_idx, "verdict": "TLE", "time_ms": exec_ms, "memory_kb": exec_mem}
+                test_result["passes"].append(p)
+                test_result["verdict"] = "TLE"
+                break
             if exec_rc != 0:
                 p = {"pass": pass_idx, "verdict": "RE", "time_ms": exec_ms, "memory_kb": exec_mem}
                 test_result["passes"].append(p)
@@ -383,27 +404,39 @@ class RunService:
             if checker.exists():
                 env = dict(os.environ)
                 env["FEEDBACK_DIR"] = str(pass_feedback_dir)
+                checker_log = ""
+                checker_timed_out = False
                 if checker_mode == "kattis":
                     feedback_arg = str(pass_feedback_dir) + os.sep
-                    check_proc = run_cmd(
-                        [str(checker), str(test), str(ans), feedback_arg, *checker_args],
-                        stdin_path=out,
-                        timeout=30,
-                        cwd=pass_feedback_dir,
-                        env=env,
-                    )
+                    try:
+                        check_proc = run_cmd(
+                            [str(checker), str(test), str(ans), feedback_arg, *checker_args],
+                            stdin_path=out,
+                            timeout=run_timeout_sec,
+                            cwd=pass_feedback_dir,
+                            env=env,
+                        )
+                        checker_log = check_proc.stdout + check_proc.stderr
+                    except subprocess.TimeoutExpired as exc:
+                        checker_timed_out = True
+                        checker_log = f"checker timed out after {run_timeout_sec}s: {exc}\n"
                 else:
-                    check_proc = run_cmd(
-                        [str(checker), str(test), str(out), str(ans), *checker_args],
-                        timeout=30,
-                        cwd=pass_feedback_dir,
-                        env=env,
-                    )
-                (pass_feedback_dir / "checker.log").write_text(
-                    check_proc.stdout + check_proc.stderr,
-                    encoding="utf-8",
-                )
-                checker_verdict = self._validator_style_verdict(check_proc.returncode)
+                    try:
+                        check_proc = run_cmd(
+                            [str(checker), str(test), str(out), str(ans), *checker_args],
+                            timeout=run_timeout_sec,
+                            cwd=pass_feedback_dir,
+                            env=env,
+                        )
+                        checker_log = check_proc.stdout + check_proc.stderr
+                    except subprocess.TimeoutExpired as exc:
+                        checker_timed_out = True
+                        checker_log = f"checker timed out after {run_timeout_sec}s: {exc}\n"
+                (pass_feedback_dir / "checker.log").write_text(checker_log, encoding="utf-8")
+                if checker_timed_out:
+                    checker_verdict = "FAIL"
+                else:
+                    checker_verdict = self._validator_style_verdict(check_proc.returncode)
             else:
                 checker_verdict = "OK" if self._files_equal(ans, out) else "WA"
 
@@ -520,6 +553,7 @@ class RunService:
         checker_mode = str(run_cfg["checker_mode"])
         checker_args = [str(x) for x in run_cfg["checker_args"]]
         max_passes = int(run_cfg["max_passes"])
+        run_timeout_sec = int(run_cfg["run_timeout_sec"])
 
         tests_dir = artifact_root / "tests"
         ans_dir = artifact_root / "ans"
@@ -636,6 +670,7 @@ class RunService:
                         ans,
                         transcript,
                         test_feedback_dir,
+                        timeout_sec=run_timeout_sec,
                     )
                     test_result["passes"].append({"pass": 1, "verdict": verdict, "time_ms": elapsed, "memory_kb": mem_kb})
                     test_result["verdict"] = verdict
@@ -659,6 +694,7 @@ class RunService:
                             checker_mode,
                             checker_args,
                             max_passes,
+                            run_timeout_sec,
                             test,
                             ans_dir / f"{test.stem}.ans",
                             feedback_dir / test.stem,
@@ -684,6 +720,7 @@ class RunService:
                             checker_mode,
                             checker_args,
                             max_passes,
+                            run_timeout_sec,
                             test,
                             ans,
                             feedback_dir / test.stem,
