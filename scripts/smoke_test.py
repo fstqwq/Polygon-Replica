@@ -1051,6 +1051,15 @@ def main() -> None:
     compile_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "compile.log").read_text(encoding="utf-8")
     if "compile_jobs=3" not in compile_log:
         raise RuntimeError("compile log missing configured compile_jobs marker")
+    generate_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "generate.log").read_text(encoding="utf-8")
+    if "manual_tests=1" not in generate_log:
+        raise RuntimeError("generate log missing manual_tests summary")
+    if "generated_tests=1" not in generate_log:
+        raise RuntimeError("generate log missing generated_tests summary")
+    if "total_tests=2" not in generate_log:
+        raise RuntimeError("generate log missing total_tests summary")
+    if "generator=1 case=1 rc=0" not in generate_log:
+        raise RuntimeError("generate log missing per-generator case entry")
     validate_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "validate.log").read_text(encoding="utf-8")
     if "validate_jobs=2" not in validate_log:
         raise RuntimeError("validate log missing configured validate_jobs marker")

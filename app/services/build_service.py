@@ -309,36 +309,31 @@ class BuildService:
                 counter += 1
 
             generator_bins = [compiled_bins[name] for name, _, _ in generator_targets if name in compiled_bins]
-            gen_logs: list[str] = []
             generated_count = 0
-            if generator_bins:
-                runs = int(build_cfg.get("generator_runs", 3))
-                generator_args = [str(x) for x in build_cfg.get("generator_args", [])]
-                for gen_index, gen in enumerate(generator_bins, start=1):
-                    for i in range(runs):
-                        dst = artifact_paths.tests / f"{counter:03d}.in"
-                        proc = run_cmd([str(gen), *generator_args], stdout_path=dst, timeout=30)
-                        gen_logs.append(
-                            f"generator={gen_index} case={i + 1} rc={proc.returncode}\n{proc.stderr}\n"
-                        )
-                        if proc.returncode != 0:
-                            dst.unlink(missing_ok=True)
-                            failing_test = dst.name
-                            raise RuntimeError(f"generator failed on generator={gen_index} case={i + 1}")
-                        test_files.append(dst)
-                        generated_count += 1
-                        counter += 1
+            generate_log_path = logs_dir / "generate.log"
+            with generate_log_path.open("w", encoding="utf-8") as glog:
+                glog.write(f"manual_tests={len(tests)}\n")
+                if generator_bins:
+                    runs = int(build_cfg.get("generator_runs", 3))
+                    generator_args = [str(x) for x in build_cfg.get("generator_args", [])]
+                    for gen_index, gen in enumerate(generator_bins, start=1):
+                        for i in range(runs):
+                            dst = artifact_paths.tests / f"{counter:03d}.in"
+                            proc = run_cmd([str(gen), *generator_args], stdout_path=dst, timeout=30)
+                            glog.write(
+                                f"generator={gen_index} case={i + 1} rc={proc.returncode}\n{proc.stderr}\n"
+                            )
+                            if proc.returncode != 0:
+                                dst.unlink(missing_ok=True)
+                                failing_test = dst.name
+                                raise RuntimeError(f"generator failed on generator={gen_index} case={i + 1}")
+                            test_files.append(dst)
+                            generated_count += 1
+                            counter += 1
+                glog.write(f"generated_tests={generated_count}\n")
+                glog.write(f"total_tests={len(test_files)}\n")
             if not test_files:
                 raise RuntimeError("no tests were generated (manual + generator)")
-            (logs_dir / "generate.log").write_text(
-                (
-                    f"manual_tests={len(tests)}\n"
-                    f"generated_tests={generated_count}\n"
-                    f"total_tests={len(test_files)}\n"
-                    + "\n".join(gen_logs)
-                ),
-                encoding="utf-8",
-            )
             steps.append({"step": "generate", "status": "ok", "log": "logs/generate.log"})
 
             current_step = "validate"
