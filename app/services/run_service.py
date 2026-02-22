@@ -61,6 +61,7 @@ class RunService:
         test: Path,
         ans: Path,
         transcript: Path,
+        feedback_dir: Path,
         timeout_sec: int = 30,
     ) -> tuple[str, int, int]:
         sub = subprocess.Popen(
@@ -71,6 +72,8 @@ class RunService:
             text=False,
             bufsize=0,
         )
+        itr_env = dict(os.environ)
+        itr_env["FEEDBACK_DIR"] = str(feedback_dir)
         itr = subprocess.Popen(
             [str(interactor_bin), str(test), str(ans)],
             stdin=subprocess.PIPE,
@@ -78,6 +81,7 @@ class RunService:
             stderr=subprocess.PIPE,
             text=False,
             bufsize=0,
+            env=itr_env,
         )
         start = time.monotonic()
         sel = selectors.DefaultSelector()
@@ -275,7 +279,14 @@ class RunService:
                     if not interactor.exists():
                         raise RuntimeError("interactive mode requested but interactor is missing in build artifacts")
                     transcript = run_root / f"{test.stem}.transcript.txt"
-                    verdict, elapsed, mem_kb = self._run_interactive_case(interactor, sub_bin, test, ans, transcript)
+                    verdict, elapsed, mem_kb = self._run_interactive_case(
+                        interactor,
+                        sub_bin,
+                        test,
+                        ans,
+                        transcript,
+                        test_feedback_dir,
+                    )
                     test_result["passes"].append({"pass": 1, "verdict": verdict, "time_ms": elapsed, "memory_kb": mem_kb})
                     test_result["verdict"] = verdict
                     test_result["time_ms"] = elapsed

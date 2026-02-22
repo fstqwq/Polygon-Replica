@@ -541,6 +541,26 @@ def api_recent_previews(problem: str, user: str):
     return [dict(r) for r in rows]
 
 
+@app.get("/api/problems/{problem}/workspaces/{user}/recent-runs")
+def api_recent_runs(problem: str, user: str):
+    ctx = page_ctx(problem, user)
+    rows = db.fetch_all(
+        "SELECT id,build_id,mode,status,created_at,finished_at FROM runs WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
+        [ctx["problem"]["id"]],
+    )
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/problems/{problem}/workspaces/{user}/recent-exports")
+def api_recent_exports(problem: str, user: str):
+    ctx = page_ctx(problem, user)
+    rows = db.fetch_all(
+        "SELECT id,build_id,export_type,filename,size_bytes,sha256,source_commit,created_at FROM exports WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
+        [ctx["problem"]["id"]],
+    )
+    return [dict(r) for r in rows]
+
+
 @app.get("/api/problems/{problem}/builds/{build_id}/manifest")
 def api_manifest(problem: str, build_id: str):
     p = settings.artifacts_root / problem / build_id / "manifest.json"

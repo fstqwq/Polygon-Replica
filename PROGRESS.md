@@ -60,6 +60,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 
 - Added DB `previews` table and indexes for `workspaces/builds/previews/runs/exports/audit_log` hot paths.
 - Added preview history API: `/api/problems/{problem}/workspaces/{user}/recent-previews`.
+- Added recent runs/exports APIs: `/api/problems/{problem}/workspaces/{user}/recent-runs` and `/api/problems/{problem}/workspaces/{user}/recent-exports`.
 - Added `recent_preview` field to workspace status API.
 - Added global branch switching control in the shared header across all UI pages.
 - Added artifact directory zip download endpoint and UI links (`tests.zip`, `ans.zip`, `feedback_dir.zip`).
@@ -69,6 +70,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Added per-pass memory usage capture using `/usr/bin/time` when available (`0` fallback).
 - Multi-pass feedback is isolated per test/pass to prevent cross-test contamination.
 - Run detail now exposes concrete artifact links for interactive transcripts and key feedback files.
+- Interactive runs now pass `FEEDBACK_DIR` to interactors for feedback file generation parity.
 - Commit-based snapshot creation now uses `git archive` extraction (faster and avoids clone overhead).
 - Build/solve/validate execution paths now use direct stdin/stdout process wiring (fewer shell invocations).
 - Ephemeral snapshot directories are cleaned after build/preview jobs.

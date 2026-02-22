@@ -152,19 +152,25 @@ class BuildService:
                     counter += 1
 
             gen = compiled_bins.get("generator")
+            gen_logs: list[str] = []
             if gen:
                 runs = int(build_cfg.get("generator_runs", 3))
                 for i in range(runs):
                     dst = artifact_paths.tests / f"{counter:03d}.in"
                     proc = run_cmd([str(gen)], timeout=30)
+                    gen_logs.append(f"case={i + 1} rc={proc.returncode}\n{proc.stderr}\n")
                     if proc.returncode != 0:
+                        failing_test = dst.name
                         raise RuntimeError(f"generator failed on case {i + 1}")
                     dst.write_text(proc.stdout, encoding="utf-8")
                     test_files.append(dst)
                     counter += 1
             if not test_files:
                 raise RuntimeError("no tests were generated (manual + generator)")
-            (logs_dir / "generate.log").write_text(f"generated_tests={len(test_files)}\n", encoding="utf-8")
+            (logs_dir / "generate.log").write_text(
+                f"generated_tests={len(test_files)}\n" + "\n".join(gen_logs),
+                encoding="utf-8",
+            )
             steps.append({"step": "generate", "status": "ok", "log": "logs/generate.log"})
 
             current_step = "validate"

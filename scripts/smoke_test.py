@@ -37,6 +37,8 @@ def main() -> None:
             "/api/problems/sample/workspaces/alice/branches",
             "/api/problems/sample/workspaces/alice/recent-builds",
             "/api/problems/sample/workspaces/alice/recent-previews",
+            "/api/problems/sample/workspaces/alice/recent-runs",
+            "/api/problems/sample/workspaces/alice/recent-exports",
         ]:
             r = client.get(path)
             if r.status_code != 200:
