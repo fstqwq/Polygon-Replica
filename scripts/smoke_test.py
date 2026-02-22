@@ -83,6 +83,7 @@ def main() -> None:
             {
                 "generator_runs": 1,
                 "compile_jobs": 3,
+                "run_jobs": 2,
                 "validator_args": ["--self-check"],
                 "checker_mode": "testlib",
                 "checker_args": [],
@@ -136,6 +137,8 @@ def main() -> None:
         raise RuntimeError(f"manifest generation_params missing max_passes: {generation_params}")
     if int(generation_params.get("compile_jobs", 0)) != 3:
         raise RuntimeError(f"manifest generation_params missing compile_jobs: {generation_params}")
+    if int(generation_params.get("run_jobs", 0)) != 2:
+        raise RuntimeError(f"manifest generation_params missing run_jobs: {generation_params}")
     if int(manifest.get("summary", {}).get("tests_count", -1)) != 2:
         raise RuntimeError("manual sidecar files should not be treated as test inputs")
     compile_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "compile.log").read_text(encoding="utf-8")
@@ -153,9 +156,14 @@ def main() -> None:
         raise RuntimeError("compile cache did not reuse unchanged build targets")
 
     run_id_ws = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="pass-fail")
-    rrow_ws = db.fetch_one("SELECT status FROM runs WHERE id=?", [run_id_ws])
+    rrow_ws = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_ws])
     if rrow_ws is None or rrow_ws["status"] != "ok":
         raise RuntimeError(f"workspace run failed: {rrow_ws}")
+    ws_summary = json.loads(rrow_ws["summary_json"])
+    if int(ws_summary.get("run_config", {}).get("run_jobs", 0)) != 2:
+        raise RuntimeError("run config did not preserve run_jobs=2")
+    if int(ws_summary.get("run_config", {}).get("run_jobs_effective", 0)) < 1:
+        raise RuntimeError("run config did not expose effective run_jobs")
 
     upload_src = (
         b'#include <bits/stdc++.h>\nusing namespace std; int main(){ long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n"; }\n'

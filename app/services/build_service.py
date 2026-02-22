@@ -72,6 +72,7 @@ class BuildService:
             "require_validator": True,
             "require_checker": True,
             "compile_jobs": 0,
+            "run_jobs": 0,
             "generator_args": [],
             "generator_sources": [],
             "validator_args": [],
@@ -97,6 +98,10 @@ class BuildService:
             cfg["compile_jobs"] = max(0, min(16, int(cfg.get("compile_jobs", 0))))
         except Exception:
             cfg["compile_jobs"] = 0
+        try:
+            cfg["run_jobs"] = max(0, min(16, int(cfg.get("run_jobs", 0))))
+        except Exception:
+            cfg["run_jobs"] = 0
         cfg["checker_mode"] = str(cfg.get("checker_mode", "testlib")).lower()
         if cfg["checker_mode"] not in {"testlib", "kattis"}:
             cfg["checker_mode"] = "testlib"
@@ -327,6 +332,7 @@ class BuildService:
                 generation_params={
                     "generator_runs": int(build_cfg.get("generator_runs", 3)),
                     "compile_jobs": compile_jobs,
+                    "run_jobs": int(build_cfg.get("run_jobs", 0)),
                     "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
                     "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
                     "validator_args": [str(x) for x in build_cfg.get("validator_args", [])],

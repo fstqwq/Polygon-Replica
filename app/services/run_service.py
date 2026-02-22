@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
@@ -77,6 +78,7 @@ class RunService:
             "checker_mode": "testlib",
             "checker_args": [],
             "max_passes": 16,
+            "run_jobs": 0,
         }
         manifest = artifact_root / "manifest.json"
         if manifest.exists():
@@ -97,11 +99,25 @@ class RunService:
             max_passes = max(1, int(cfg.get("max_passes", 16)))
         except Exception:
             max_passes = 16
+        try:
+            run_jobs = max(0, min(16, int(cfg.get("run_jobs", 0))))
+        except Exception:
+            run_jobs = 0
         return {
             "checker_mode": checker_mode,
             "checker_args": [str(x) for x in checker_args],
             "max_passes": max_passes,
+            "run_jobs": run_jobs,
         }
+
+    def _effective_run_jobs(self, configured: object, test_count: int) -> int:
+        auto_jobs = max(1, min(4, os.cpu_count() or 1))
+        try:
+            requested = int(configured)
+        except Exception:
+            requested = 0
+        bounded = auto_jobs if requested <= 0 else max(1, min(16, requested))
+        return max(1, min(bounded, max(1, test_count)))
 
     def _run_interactive_case(
         self,
@@ -230,6 +246,95 @@ class RunService:
                     return False
                 if not a:
                     return True
+
+    def _run_noninteractive_test(
+        self,
+        mode: str,
+        sub_bin: Path,
+        checker: Path,
+        checker_mode: str,
+        checker_args: list[str],
+        max_passes: int,
+        test: Path,
+        ans: Path,
+        test_feedback_dir: Path,
+        run_root: Path,
+        artifact_root: Path,
+    ) -> dict:
+        test_feedback_dir.mkdir(parents=True, exist_ok=True)
+        test_result = {
+            "test": test.name,
+            "passes": [],
+            "verdict": "OK",
+            "time_ms": 0,
+            "memory_kb": 0,
+            "feedback_files": [],
+        }
+        current_input = test
+        pass_idx = 1
+        total_time = 0
+        peak_mem = 0
+        while True:
+            pass_feedback_dir = test_feedback_dir / f"pass{pass_idx}"
+            pass_feedback_dir.mkdir(parents=True, exist_ok=True)
+            out = run_root / f"{test.stem}.pass{pass_idx}.out"
+            time_file = pass_feedback_dir / "time.txt"
+            exec_rc, exec_ms, exec_mem = self._run_pass(sub_bin, current_input, out, 30, time_file)
+            total_time += exec_ms
+            peak_mem = max(peak_mem, exec_mem)
+            if exec_rc != 0:
+                p = {"pass": pass_idx, "verdict": "RE", "time_ms": exec_ms, "memory_kb": exec_mem}
+                test_result["passes"].append(p)
+                test_result["verdict"] = "RE"
+                break
+
+            checker_verdict = "OK"
+            if checker.exists():
+                env = dict(os.environ)
+                env["FEEDBACK_DIR"] = str(pass_feedback_dir)
+                if checker_mode == "kattis":
+                    feedback_arg = str(pass_feedback_dir) + os.sep
+                    check_proc = run_cmd(
+                        [str(checker), str(test), str(ans), feedback_arg, *checker_args],
+                        stdin_path=out,
+                        timeout=30,
+                        cwd=pass_feedback_dir,
+                        env=env,
+                    )
+                else:
+                    check_proc = run_cmd(
+                        [str(checker), str(test), str(out), str(ans), *checker_args],
+                        timeout=30,
+                        cwd=pass_feedback_dir,
+                        env=env,
+                    )
+                (pass_feedback_dir / "checker.log").write_text(
+                    check_proc.stdout + check_proc.stderr,
+                    encoding="utf-8",
+                )
+                checker_verdict = self._validator_style_verdict(check_proc.returncode)
+            else:
+                checker_verdict = "OK" if self._files_equal(ans, out) else "WA"
+
+            p = {"pass": pass_idx, "verdict": checker_verdict, "time_ms": exec_ms, "memory_kb": exec_mem}
+            test_result["passes"].append(p)
+
+            if mode != "multi-pass":
+                test_result["verdict"] = checker_verdict
+                break
+
+            next_pass = pass_feedback_dir / "nextpass.in"
+            if checker_verdict != "OK" or not next_pass.exists() or pass_idx >= max_passes:
+                test_result["verdict"] = checker_verdict
+                break
+
+            current_input = next_pass
+            pass_idx += 1
+
+        test_result["time_ms"] = total_time
+        test_result["memory_kb"] = peak_mem
+        test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, artifact_root)
+        return test_result
 
     def run_submission(
         self,
@@ -371,21 +476,22 @@ class RunService:
             tests = sorted(tests_dir.glob("*.in"))
             if not tests:
                 raise RuntimeError("selected build has no tests")
+            effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(tests))
+            run_cfg["run_jobs_effective"] = effective_run_jobs
 
-            for test in tests:
-                ans = ans_dir / f"{test.stem}.ans"
-                test_feedback_dir = feedback_dir / test.stem
-                test_feedback_dir.mkdir(parents=True, exist_ok=True)
-                test_result = {
-                    "test": test.name,
-                    "passes": [],
-                    "verdict": "OK",
-                    "time_ms": 0,
-                    "memory_kb": 0,
-                    "feedback_files": [],
-                }
-
-                if mode == "interactive":
+            if mode == "interactive":
+                for test in tests:
+                    ans = ans_dir / f"{test.stem}.ans"
+                    test_feedback_dir = feedback_dir / test.stem
+                    test_feedback_dir.mkdir(parents=True, exist_ok=True)
+                    test_result = {
+                        "test": test.name,
+                        "passes": [],
+                        "verdict": "OK",
+                        "time_ms": 0,
+                        "memory_kb": 0,
+                        "feedback_files": [],
+                    }
                     if not interactor.exists():
                         raise RuntimeError("interactive mode requested but interactor is missing in build artifacts")
                     transcript = run_root / f"{test.stem}.transcript.txt"
@@ -404,73 +510,46 @@ class RunService:
                     test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, artifact_root)
                     test_result["transcript"] = str(transcript.relative_to(artifact_root))
                     verdicts.append(test_result)
-                    continue
-
-                current_input = test
-                pass_idx = 1
-                total_time = 0
-                peak_mem = 0
-                while True:
-                    pass_feedback_dir = test_feedback_dir / f"pass{pass_idx}"
-                    pass_feedback_dir.mkdir(parents=True, exist_ok=True)
-                    out = run_root / f"{test.stem}.pass{pass_idx}.out"
-                    time_file = pass_feedback_dir / "time.txt"
-                    exec_rc, exec_ms, exec_mem = self._run_pass(sub_bin, current_input, out, 30, time_file)
-                    total_time += exec_ms
-                    peak_mem = max(peak_mem, exec_mem)
-                    if exec_rc != 0:
-                        p = {"pass": pass_idx, "verdict": "RE", "time_ms": exec_ms, "memory_kb": exec_mem}
-                        test_result["passes"].append(p)
-                        test_result["verdict"] = "RE"
-                        break
-
-                    checker_verdict = "OK"
-                    if checker.exists():
-                        env = dict(os.environ)
-                        env["FEEDBACK_DIR"] = str(pass_feedback_dir)
-                        if checker_mode == "kattis":
-                            feedback_arg = str(pass_feedback_dir) + os.sep
-                            check_proc = run_cmd(
-                                [str(checker), str(test), str(ans), feedback_arg, *checker_args],
-                                stdin_path=out,
-                                timeout=30,
-                                cwd=pass_feedback_dir,
-                                env=env,
-                            )
-                        else:
-                            check_proc = run_cmd(
-                                [str(checker), str(test), str(out), str(ans), *checker_args],
-                                timeout=30,
-                                cwd=pass_feedback_dir,
-                                env=env,
+            elif mode == "pass-fail" and effective_run_jobs > 1:
+                with ThreadPoolExecutor(max_workers=effective_run_jobs) as pool:
+                    future_map = {
+                        pool.submit(
+                            self._run_noninteractive_test,
+                            mode,
+                            sub_bin,
+                            checker,
+                            checker_mode,
+                            checker_args,
+                            max_passes,
+                            test,
+                            ans_dir / f"{test.stem}.ans",
+                            feedback_dir / test.stem,
+                            run_root,
+                            artifact_root,
+                        ): idx
+                        for idx, test in enumerate(tests)
+                    }
+                    parallel_verdicts: list[dict] = [{} for _ in tests]
+                    for future, idx in future_map.items():
+                        parallel_verdicts[idx] = future.result()
+                    verdicts.extend(parallel_verdicts)
+            else:
+                for test in tests:
+                    verdicts.append(
+                        self._run_noninteractive_test(
+                            mode,
+                            sub_bin,
+                            checker,
+                            checker_mode,
+                            checker_args,
+                            max_passes,
+                            test,
+                            ans_dir / f"{test.stem}.ans",
+                            feedback_dir / test.stem,
+                            run_root,
+                            artifact_root,
                         )
-                        (pass_feedback_dir / "checker.log").write_text(
-                            check_proc.stdout + check_proc.stderr,
-                            encoding="utf-8",
-                        )
-                        checker_verdict = self._validator_style_verdict(check_proc.returncode)
-                    else:
-                        checker_verdict = "OK" if self._files_equal(ans, out) else "WA"
-
-                    p = {"pass": pass_idx, "verdict": checker_verdict, "time_ms": exec_ms, "memory_kb": exec_mem}
-                    test_result["passes"].append(p)
-
-                    if mode != "multi-pass":
-                        test_result["verdict"] = checker_verdict
-                        break
-
-                    next_pass = pass_feedback_dir / "nextpass.in"
-                    if checker_verdict != "OK" or not next_pass.exists() or pass_idx >= max_passes:
-                        test_result["verdict"] = checker_verdict
-                        break
-
-                    current_input = next_pass
-                    pass_idx += 1
-
-                test_result["time_ms"] = total_time
-                test_result["memory_kb"] = peak_mem
-                test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, artifact_root)
-                verdicts.append(test_result)
+                    )
 
             summary = {
                 "mode": mode,
