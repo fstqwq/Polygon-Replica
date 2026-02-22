@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import shutil
@@ -73,6 +74,28 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+        race_user = f"wsrace-{uuid.uuid4().hex[:8]}"
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [
+                pool.submit(workspace_service.ensure_workspace, "sample", race_user, False)
+                for _ in range(4)
+            ]
+            resolved_paths = {str(Path(future.result()).resolve()) for future in as_completed(futures)}
+        problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", ["sample"])
+        user_row = db.fetch_one("SELECT id FROM users WHERE username=?", [race_user])
+        if problem_row is None or user_row is None:
+            raise RuntimeError("workspace provision race check setup failed")
+        race_rows = db.fetch_all(
+            "SELECT path FROM workspaces WHERE problem_id=? AND user_id=?",
+            [problem_row["id"], user_row["id"]],
+        )
+        if len(race_rows) != 1:
+            raise RuntimeError(f"workspace provision race should create exactly one row, got={len(race_rows)}")
+        race_workspace = Path(str(race_rows[0]["path"])).resolve()
+        if str(race_workspace) not in resolved_paths:
+            raise RuntimeError("workspace provision race returned inconsistent workspace paths")
+        if not (race_workspace / ".git").is_dir():
+            raise RuntimeError("workspace provision race produced workspace without git metadata")
         bad_line = client.get(
             "/problems/sample/alice/files",
             params={"path": "README.problem.md", "line": "not-a-number"},

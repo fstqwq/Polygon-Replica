@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import sqlite3
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -34,7 +35,7 @@ class WorkspaceService:
         row = self.db.fetch_one("SELECT id FROM problems WHERE slug=?", [slug])
         if row is None:
             self.db.execute(
-                "INSERT INTO problems(slug, name, repo_name, created_at) VALUES(?,?,?,?)",
+                "INSERT OR IGNORE INTO problems(slug, name, repo_name, created_at) VALUES(?,?,?,?)",
                 [slug, name, repo_name, now_iso()],
             )
 
@@ -42,7 +43,7 @@ class WorkspaceService:
         row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
         if row is None:
             self.db.execute(
-                "INSERT INTO users(username, created_at) VALUES(?,?)",
+                "INSERT OR IGNORE INTO users(username, created_at) VALUES(?,?)",
                 [username, now_iso()],
             )
 
@@ -58,6 +59,17 @@ class WorkspaceService:
             raise ValueError(f"Unknown user: {username}")
         return row
 
+    @contextmanager
+    def _workspace_provision_lock(self, workspace_parent: Path, problem: str):
+        ensure_dir(workspace_parent)
+        lock_path = workspace_parent / f".{problem}.provision.lock"
+        with lock_path.open("w", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def ensure_workspace(self, problem: str, username: str, refresh_status: bool = True) -> Path:
         self.ensure_user(username)
         p = self._problem_row(problem)
@@ -65,28 +77,32 @@ class WorkspaceService:
 
         workspace = self.settings.workspace_root / str(u["id"]) / problem
         bare = self.settings.bare_root / p["repo_name"]
-        workspace_created = False
-        if not workspace.exists():
-            ensure_dir(workspace.parent)
-            run_cmd(["git", "clone", str(bare), str(workspace)])
-            if not (workspace / ".git").exists():
-                raise RuntimeError("workspace clone failed")
-            self._seed_problem_repo(workspace)
-            workspace_created = True
+        with self._workspace_provision_lock(workspace.parent, problem):
+            workspace_created = False
+            if not workspace.exists():
+                ensure_dir(workspace.parent)
+                run_cmd(["git", "clone", str(bare), str(workspace)])
+                if not (workspace / ".git").exists():
+                    raise RuntimeError("workspace clone failed")
+                self._seed_problem_repo(workspace)
+                workspace_created = True
 
-        ws_row = self.db.fetch_one(
-            "SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]]
-        )
-        ws_row_created = False
-        if ws_row is None:
-            self.db.execute(
-                "INSERT INTO workspaces(problem_id,user_id,path,updated_at) VALUES(?,?,?,?)",
-                [p["id"], u["id"], str(workspace), now_iso()],
+            ws_row = self.db.fetch_one(
+                "SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]]
             )
-            ws_row_created = True
+            ws_row_created = False
+            if ws_row is None:
+                try:
+                    self.db.execute(
+                        "INSERT INTO workspaces(problem_id,user_id,path,updated_at) VALUES(?,?,?,?)",
+                        [p["id"], u["id"], str(workspace), now_iso()],
+                    )
+                    ws_row_created = True
+                except sqlite3.IntegrityError:
+                    ws_row_created = False
 
-        if refresh_status or workspace_created or ws_row_created:
-            self.refresh_workspace_status(problem, username)
+            if refresh_status or workspace_created or ws_row_created:
+                self.refresh_workspace_status(problem, username)
         return workspace
 
     def _seed_problem_repo(self, workspace: Path) -> None:
