@@ -14,7 +14,7 @@ from typing import IO
 
 from app.db import DB, now_iso
 from app.services.toolchain_service import ToolchainService
-from app.services.util import run_cmd
+from app.services.util import is_canonical_artifact_id, run_cmd
 from app.services.workspace_service import WorkspaceService
 
 
@@ -177,7 +177,7 @@ class RunService:
 
     def _canonical_build_artifact_root(self, problem: str, build_id: str) -> Path:
         aid = str(build_id or "")
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", aid):
+        if not is_canonical_artifact_id(aid):
             raise RuntimeError("invalid build artifact id")
         base = (Path(self.workspace_service.settings.artifacts_root) / problem).resolve()
         root = (base / aid).resolve()

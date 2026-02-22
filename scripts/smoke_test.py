@@ -682,6 +682,27 @@ def main() -> None:
             "9999-01-01T00:00:01Z",
         ],
     )
+    dotted_preview_id = f"p.dot-{uuid.uuid4().hex[:8]}"
+    dotted_preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / dotted_preview_id
+    (dotted_preview_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+    (dotted_preview_root / "logs").mkdir(parents=True, exist_ok=True)
+    (dotted_preview_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n% dotted preview source\n")
+    (dotted_preview_root / "logs" / "latex.log").write_text("dotted preview log\n", encoding="utf-8")
+    db.execute("DELETE FROM previews WHERE id=?", [dotted_preview_id])
+    db.execute(
+        "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            dotted_preview_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            str(dotted_preview_root),
+            "9999-12-31T23:59:59~dotZ",
+            "9999-12-31T23:59:59~dotZ",
+        ],
+    )
     commit_ref = str(ctx["workspace"].get("branch") or "main")
     reused_preview_id = preview_service.compile_preview("sample", "alice", commit=commit_ref)
     reused_preview = db.fetch_one("SELECT status,summary_json,source_commit,source_ref FROM previews WHERE id=?", [reused_preview_id])
@@ -703,6 +724,8 @@ def main() -> None:
         raise RuntimeError("commit preview reuse trusted DB-provided poisoned preview artifact_path")
     if reused_from == traversal_preview_id:
         raise RuntimeError("commit preview reuse accepted traversal-style preview id root")
+    if reused_from == dotted_preview_id:
+        raise RuntimeError("commit preview reuse accepted dotted preview id root")
     source_row = db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [reused_from])
     if source_row is None:
         raise RuntimeError(f"commit preview reuse source missing: {reused_from}")
@@ -1849,6 +1872,52 @@ def main() -> None:
         if "invalid build artifact id" not in str(exc):
             raise RuntimeError(f"traversal-style build id export rejection reason mismatch: {exc}")
     shutil.rmtree(poisoned_root, ignore_errors=True)
+    dotted_build_id = f"b.dot-{uuid.uuid4().hex[:8]}"
+    dotted_build_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / dotted_build_id).resolve()
+    (dotted_build_root / "tests").mkdir(parents=True, exist_ok=True)
+    (dotted_build_root / "ans").mkdir(parents=True, exist_ok=True)
+    (dotted_build_root / "logs").mkdir(parents=True, exist_ok=True)
+    (dotted_build_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (dotted_build_root / "tests/001.in").write_text("1\n", encoding="utf-8")
+    (dotted_build_root / "ans/001.ans").write_text("1\n", encoding="utf-8")
+    db.execute("DELETE FROM builds WHERE id=?", [dotted_build_id])
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            dotted_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            json.dumps({"error": "injected dotted build id"}),
+            str(dotted_build_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    run_id_dotted_build = run_service.run_submission(
+        "sample",
+        "alice",
+        dotted_build_id,
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    rrow_dotted_build = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_dotted_build])
+    if rrow_dotted_build is None or rrow_dotted_build["status"] != "failed":
+        raise RuntimeError(f"dotted build id run should fail preflight: {rrow_dotted_build}")
+    dotted_build_summary = json.loads(rrow_dotted_build["summary_json"])
+    if "invalid build artifact id" not in str(dotted_build_summary.get("error", "")):
+        raise RuntimeError("dotted build id run did not report invalid build artifact id")
+    if invalid_runs_root.resolve() not in Path(rrow_dotted_build["artifact_path"]).resolve().parents:
+        raise RuntimeError("dotted build id run was not isolated under run_root/invalid-runs")
+    try:
+        export_service.create_export("sample", dotted_build_id, "polygon-standard")
+        raise RuntimeError("export should reject dotted build ids before artifact resolution")
+    except ValueError as exc:
+        if "invalid build artifact id" not in str(exc):
+            raise RuntimeError(f"dotted build id export rejection reason mismatch: {exc}")
+    shutil.rmtree(dotted_build_root, ignore_errors=True)
     bad_root_run_id = f"r-badroot-{uuid.uuid4().hex[:8]}"
     db.execute(
         "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -1900,6 +1969,28 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    bad_dot_buildid_run_id = f"r-baddotbuildid-{uuid.uuid4().hex[:8]}"
+    bad_dot_buildid = f"b.dot-{uuid.uuid4().hex[:8]}"
+    bad_dot_buildid_root = (
+        Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / bad_dot_buildid / "logs" / f"run-{bad_dot_buildid_run_id}"
+    ).resolve()
+    bad_dot_buildid_root.mkdir(parents=True, exist_ok=True)
+    (bad_dot_buildid_root / "compile.log").write_text("poisoned dotted build-id path\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            bad_dot_buildid_run_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            bad_dot_buildid,
+            "pass-fail",
+            "failed",
+            json.dumps({"error": "injected dotted build id"}),
+            str(bad_dot_buildid_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
     with TestClient(app) as client:
         valid_summary_file = client.get(f"/problems/sample/alice/runs/{run_id_multi}/artifacts/summary.json")
         if valid_summary_file.status_code != 200:
@@ -1935,6 +2026,9 @@ def main() -> None:
         poisoned_buildid_artifact = client.get(f"/problems/sample/alice/runs/{bad_buildid_run_id}/artifacts/compile.log")
         if poisoned_buildid_artifact.status_code != 404:
             raise RuntimeError("run artifact endpoint should reject DB-poisoned traversal-style build_id roots")
+        poisoned_dot_buildid_artifact = client.get(f"/problems/sample/alice/runs/{bad_dot_buildid_run_id}/artifacts/compile.log")
+        if poisoned_dot_buildid_artifact.status_code != 404:
+            raise RuntimeError("run artifact endpoint should reject DB-poisoned dotted build_id roots")
     run_leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-zip-leak-{uuid.uuid4().hex[:8]}.txt"
     run_leak_src.write_text("run-leak\n", encoding="utf-8")
     run_escape_name = "999.run-escape.txt"

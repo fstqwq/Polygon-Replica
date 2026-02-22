@@ -22,6 +22,7 @@ from app.services.git_service import GitService
 from app.services.preview_service import PreviewService
 from app.services.run_service import RunService
 from app.services.toolchain_service import ToolchainService
+from app.services.util import is_canonical_artifact_id
 from app.services.workspace_service import WorkspaceService
 from app.settings import load_settings
 
@@ -100,7 +101,7 @@ def _safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool =
 
 def _artifact_root(problem: str, artifact_id: str) -> Path:
     aid = str(artifact_id or "")
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", aid):
+    if not is_canonical_artifact_id(aid):
         raise HTTPException(status_code=404, detail="artifact not found")
     base = (settings.artifacts_root / problem).resolve()
     root = (base / aid).resolve()
@@ -187,7 +188,7 @@ def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
             len(rel.parts) == 3
             and rel.parts[1] == "logs"
             and rel.parts[2] == f"run-{run_id}"
-            and re.fullmatch(r"[A-Za-z0-9._-]+", rel.parts[0])
+            and is_canonical_artifact_id(rel.parts[0])
         ):
             valid = True
     except ValueError:

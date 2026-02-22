@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import uuid
 from pathlib import Path
 
 from app.db import DB, now_iso
-from app.services.util import copytree, extract_git_archive, remove_symlinks, run_cmd, sha256_file
+from app.services.util import copytree, extract_git_archive, is_canonical_artifact_id, remove_symlinks, run_cmd, sha256_file
 
 
 class ExportService:
@@ -27,7 +26,7 @@ class ExportService:
 
     def _canonical_build_root(self, problem: str, build_id: str) -> Path:
         aid = str(build_id or "")
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", aid):
+        if not is_canonical_artifact_id(aid):
             raise ValueError("invalid build artifact id")
         base = (self.artifacts_root / problem).resolve()
         root = (base / aid).resolve()

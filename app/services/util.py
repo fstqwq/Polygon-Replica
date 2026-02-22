@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -11,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Any
+
+ARTIFACT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 @dataclass
@@ -99,6 +102,10 @@ def run_cmd(
         stderr=stderr_text,
         elapsed_ms=int((monotonic() - start) * 1000),
     )
+
+
+def is_canonical_artifact_id(value: str) -> bool:
+    return bool(ARTIFACT_ID_RE.fullmatch(str(value or "")))
 
 
 def sha256_file(path: Path) -> str:

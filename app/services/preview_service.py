@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import uuid
 from pathlib import Path
 
 from app.db import DB, now_iso
 from app.services.artifact_service import ArtifactService
-from app.services.util import run_cmd
+from app.services.util import is_canonical_artifact_id, run_cmd
 from app.services.workspace_service import WorkspaceService
 
 
@@ -96,7 +95,7 @@ class PreviewService:
         return None
 
     def _preview_artifact_root(self, problem: str, preview_id: str) -> Path | None:
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", preview_id):
+        if not is_canonical_artifact_id(preview_id):
             return None
         base = (self.workspace_service.settings.artifacts_root / problem).resolve()
         root = (base / preview_id).resolve()
