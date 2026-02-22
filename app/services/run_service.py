@@ -121,6 +121,20 @@ class RunService:
         bounded = auto_jobs if requested <= 0 else max(1, min(16, requested))
         return max(1, min(bounded, max(1, test_count)))
 
+    def _canonical_build_artifact_root(self, problem: str, build_id: str) -> Path:
+        aid = str(build_id or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", aid):
+            raise RuntimeError("invalid build artifact id")
+        base = (Path(self.workspace_service.settings.artifacts_root) / problem).resolve()
+        root = (base / aid).resolve()
+        try:
+            rel = root.relative_to(base)
+        except ValueError as exc:
+            raise RuntimeError("invalid build artifact id") from exc
+        if len(rel.parts) != 1 or rel.parts[0] != aid:
+            raise RuntimeError("invalid build artifact id")
+        return root
+
     def _is_safe_path_within(self, root: Path, path: Path) -> bool:
         try:
             root_resolved = root.resolve()
@@ -429,9 +443,13 @@ class RunService:
 
         run_id = f"r-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
-        artifact_root = Path(self.workspace_service.settings.artifacts_root) / problem / build_id
+        artifact_root: Path | None = None
         build_row = self.db.fetch_one("SELECT problem_id,workspace_id,status FROM builds WHERE id=?", [build_id])
         preflight_reasons: list[str] = []
+        try:
+            artifact_root = self._canonical_build_artifact_root(problem, build_id)
+        except RuntimeError as exc:
+            preflight_reasons.append(str(exc))
         if build_row is None:
             preflight_reasons.append("build metadata missing")
         else:
@@ -442,15 +460,16 @@ class RunService:
             if build_row["status"] != "ok":
                 preflight_reasons.append(f"build status is {build_row['status']}")
 
-        if not artifact_root.exists():
-            preflight_reasons.append("artifact root missing")
-        else:
-            for required_dir in ["tests", "ans"]:
-                dir_path = artifact_root / required_dir
-                if not dir_path.exists() or not dir_path.is_dir():
-                    preflight_reasons.append(f"artifact directory missing: {required_dir}/")
-                elif not self._is_safe_dir(artifact_root, dir_path):
-                    preflight_reasons.append(f"artifact directory invalid: {required_dir}/")
+        if artifact_root is not None:
+            if not artifact_root.exists():
+                preflight_reasons.append("artifact root missing")
+            else:
+                for required_dir in ["tests", "ans"]:
+                    dir_path = artifact_root / required_dir
+                    if not dir_path.exists() or not dir_path.is_dir():
+                        preflight_reasons.append(f"artifact directory missing: {required_dir}/")
+                    elif not self._is_safe_dir(artifact_root, dir_path):
+                        preflight_reasons.append(f"artifact directory invalid: {required_dir}/")
 
         preflight_ok = not preflight_reasons
         preflight_error = f"build not runnable: {build_id}"
@@ -496,6 +515,7 @@ class RunService:
             )
             return run_id
 
+        assert artifact_root is not None
         run_cfg = self._load_run_config(artifact_root)
         checker_mode = str(run_cfg["checker_mode"])
         checker_args = [str(x) for x in run_cfg["checker_args"]]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -22,6 +23,20 @@ class ExportService:
     def __init__(self, db: DB, artifacts_root: Path):
         self.db = db
         self.artifacts_root = artifacts_root
+
+    def _canonical_build_root(self, problem: str, build_id: str) -> Path:
+        aid = str(build_id or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", aid):
+            raise ValueError("invalid build artifact id")
+        base = (self.artifacts_root / problem).resolve()
+        root = (base / aid).resolve()
+        try:
+            rel = root.relative_to(base)
+        except ValueError as exc:
+            raise ValueError("invalid build artifact id") from exc
+        if len(rel.parts) != 1 or rel.parts[0] != aid:
+            raise ValueError("invalid build artifact id")
+        return root
 
     def _yaml_quote(self, value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
@@ -408,7 +423,7 @@ class ExportService:
         if build_row["status"] != "ok":
             raise ValueError(f"build not exportable: {build_id} (status={build_row['status']})")
 
-        build_root = self.artifacts_root / problem / build_id
+        build_root = self._canonical_build_root(problem, build_id)
         if not build_root.exists():
             raise ValueError(f"unknown build artifacts: {build_id}")
         required_paths = [build_root / "manifest.json", build_root / "logs"]

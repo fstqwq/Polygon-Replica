@@ -1014,6 +1014,53 @@ def main() -> None:
     invalid_runs_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / "invalid-runs"
     if invalid_runs_root.resolve() not in Path(rrow_bad_build["artifact_path"]).resolve().parents:
         raise RuntimeError("invalid build run was not isolated under run_root/invalid-runs")
+    poisoned_build_id = f"../poisoned-build-{uuid.uuid4().hex[:8]}"
+    poisoned_leaf = poisoned_build_id.split("/")[-1]
+    poisoned_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / poisoned_leaf).resolve()
+    (poisoned_root / "tests").mkdir(parents=True, exist_ok=True)
+    (poisoned_root / "ans").mkdir(parents=True, exist_ok=True)
+    (poisoned_root / "logs").mkdir(parents=True, exist_ok=True)
+    (poisoned_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (poisoned_root / "tests/001.in").write_text("1\n", encoding="utf-8")
+    (poisoned_root / "ans/001.ans").write_text("1\n", encoding="utf-8")
+    db.execute("DELETE FROM builds WHERE id=?", [poisoned_build_id])
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            poisoned_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            json.dumps({"error": "injected traversal-style build id"}),
+            str(poisoned_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    run_id_poisoned_build = run_service.run_submission(
+        "sample",
+        "alice",
+        poisoned_build_id,
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    rrow_poisoned_build = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_poisoned_build])
+    if rrow_poisoned_build is None or rrow_poisoned_build["status"] != "failed":
+        raise RuntimeError(f"traversal-style build id run should fail preflight: {rrow_poisoned_build}")
+    poisoned_build_summary = json.loads(rrow_poisoned_build["summary_json"])
+    if "invalid build artifact id" not in str(poisoned_build_summary.get("error", "")):
+        raise RuntimeError("traversal-style build id run did not report invalid build artifact id")
+    if invalid_runs_root.resolve() not in Path(rrow_poisoned_build["artifact_path"]).resolve().parents:
+        raise RuntimeError("traversal-style build id run was not isolated under run_root/invalid-runs")
+    try:
+        export_service.create_export("sample", poisoned_build_id, "polygon-standard")
+        raise RuntimeError("export should reject traversal-style build ids before artifact resolution")
+    except ValueError as exc:
+        if "invalid build artifact id" not in str(exc):
+            raise RuntimeError(f"traversal-style build id export rejection reason mismatch: {exc}")
+    shutil.rmtree(poisoned_root, ignore_errors=True)
     bad_root_run_id = f"r-badroot-{uuid.uuid4().hex[:8]}"
     db.execute(
         "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
