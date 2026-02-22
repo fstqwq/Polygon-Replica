@@ -493,17 +493,45 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    bad_root_build_id = f"b-badroot-{uuid.uuid4().hex[:8]}"
+    poison_marker = f"poison-build-log-{uuid.uuid4().hex[:8]}"
+    poison_log = ws / "logs" / f"{poison_marker}.log"
+    poison_log.parent.mkdir(parents=True, exist_ok=True)
+    poison_log.write_text(poison_marker + "\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            bad_root_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "failed",
+            json.dumps({"error": "injected poisoned build artifact path"}),
+            str(ws),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
     with TestClient(app) as client:
         bad_build_page = client.get("/problems/sample/alice/build", params={"build_id": bad_json_build_id})
         if bad_build_page.status_code != 200:
             raise RuntimeError(f"build page should handle malformed summary_json, status={bad_build_page.status_code}")
         if "invalid summary_json for build" not in bad_build_page.text:
             raise RuntimeError("build page did not surface malformed summary_json fallback")
+        poisoned_build_page = client.get("/problems/sample/alice/build", params={"build_id": bad_root_build_id})
+        if poisoned_build_page.status_code != 200:
+            raise RuntimeError(
+                f"build page should tolerate poisoned artifact path metadata, status={poisoned_build_page.status_code}"
+            )
+        if poison_marker in poisoned_build_page.text:
+            raise RuntimeError("build page should not read logs from DB-provided artifact_path")
         bad_run_page = client.get("/problems/sample/alice/run", params={"run_id": bad_json_run_id})
         if bad_run_page.status_code != 200:
             raise RuntimeError(f"run page should handle malformed summary_json, status={bad_run_page.status_code}")
         if "invalid summary_json for run" not in bad_run_page.text:
             raise RuntimeError("run page did not surface malformed summary_json fallback")
+    poison_log.unlink(missing_ok=True)
 
     upload_src = (
         b'#include <bits/stdc++.h>\nusing namespace std; int main(){ long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n"; }\n'

@@ -479,9 +479,18 @@ def build_page(request: Request, problem: str, user: str):
     summary = None
     diagnostics = []
     if detail:
-        root = Path(detail["artifact_path"]) / "logs"
-        if root.exists():
-            for p in sorted(root.glob("*.log")):
+        artifact_root = (settings.artifacts_root / problem / str(detail["id"])).resolve()
+        logs_root = artifact_root / "logs"
+        if logs_root.exists() and logs_root.is_dir():
+            for p in sorted(logs_root.glob("*.log")):
+                if p.is_symlink() or not p.is_file():
+                    continue
+                try:
+                    resolved = p.resolve()
+                except OSError:
+                    continue
+                if artifact_root not in resolved.parents and artifact_root != resolved:
+                    continue
                 logs.append({"name": p.name, "content": _read_text_safe(p)})
         summary = _parse_summary_json(detail["summary_json"], "build")
         if summary:
