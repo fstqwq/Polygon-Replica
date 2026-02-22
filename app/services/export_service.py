@@ -45,15 +45,18 @@ class ExportService:
         out = "".join(ch.lower() for ch in slug if ch.isalnum())
         return out or "problem"
 
-    def _is_safe_regular_file(self, root: Path, p: Path) -> bool:
+    def _is_safe_regular_file(self, root: Path, p: Path, root_resolved: Path | None = None) -> bool:
         if p.is_symlink() or not p.exists() or not p.is_file():
             return False
-        root_resolved = root.resolve()
+        try:
+            resolved_root = root_resolved if root_resolved is not None else root.resolve()
+        except OSError:
+            return False
         try:
             resolved = p.resolve()
         except OSError:
             return False
-        return root_resolved in resolved.parents or root_resolved == resolved
+        return resolved_root in resolved.parents or resolved_root == resolved
 
     def _iter_safe_descendant_files(self, root: Path):
         if not root.exists() or not root.is_dir():
@@ -114,16 +117,18 @@ class ExportService:
     def _find_first_source(self, folder: Path, preferred: list[str] | None = None) -> Path | None:
         if not folder.exists() or not folder.is_dir():
             return None
+        try:
+            folder_resolved = folder.resolve()
+        except OSError:
+            return None
         for name in preferred or []:
             p = folder / name
-            if self._is_safe_regular_file(folder, p):
+            if self._is_safe_regular_file(folder, p, root_resolved=folder_resolved):
                 return p
-        matches: list[Path] = []
         for pat in ["*.cpp", "*.cc", "*.cxx", "*.c", "*.py", "*.java"]:
-            matches.extend(sorted(folder.glob(pat)))
-        for p in matches:
-            if self._is_safe_regular_file(folder, p):
-                return p
+            for p in sorted(folder.glob(pat)):
+                if self._is_safe_regular_file(folder, p, root_resolved=folder_resolved):
+                    return p
         return None
 
     def _problem_mode(self, snapshot: Path | None) -> str:
@@ -235,9 +240,24 @@ class ExportService:
     def _copy_test_data(self, build_root: Path, data_root: Path) -> None:
         tests_dir = build_root / "tests"
         ans_dir = build_root / "ans"
-        tests = [p for p in sorted(tests_dir.glob("*.in")) if self._is_safe_regular_file(tests_dir, p)]
+        try:
+            tests_dir_resolved = tests_dir.resolve()
+        except OSError:
+            tests_dir_resolved = None
+        tests = (
+            [
+                p
+                for p in sorted(tests_dir.glob("*.in"))
+                if tests_dir_resolved is not None
+                and self._is_safe_regular_file(tests_dir, p, root_resolved=tests_dir_resolved)
+            ]
+        )
         if not tests:
             raise ValueError("build has no tests to export")
+        try:
+            ans_dir_resolved = ans_dir.resolve()
+        except OSError:
+            ans_dir_resolved = None
 
         secret = data_root / "secret"
         sample = data_root / "sample"
@@ -249,7 +269,9 @@ class ExportService:
             out_ans = secret / f"{t.stem}.ans"
             shutil.copy2(t, out_in)
             src_ans = ans_dir / f"{t.stem}.ans"
-            if self._is_safe_regular_file(ans_dir, src_ans):
+            if ans_dir_resolved is not None and self._is_safe_regular_file(
+                ans_dir, src_ans, root_resolved=ans_dir_resolved
+            ):
                 shutil.copy2(src_ans, out_ans)
             else:
                 out_ans.write_text("", encoding="utf-8")
@@ -257,7 +279,9 @@ class ExportService:
         first = tests[0]
         shutil.copy2(first, sample / "1.in")
         first_ans = ans_dir / f"{first.stem}.ans"
-        if self._is_safe_regular_file(ans_dir, first_ans):
+        if ans_dir_resolved is not None and self._is_safe_regular_file(
+            ans_dir, first_ans, root_resolved=ans_dir_resolved
+        ):
             shutil.copy2(first_ans, sample / "1.ans")
         else:
             (sample / "1.ans").write_text("", encoding="utf-8")
@@ -295,8 +319,17 @@ class ExportService:
             else:
                 self._copy_dir_contents(snapshot / "validators", validators_dir)
 
-        if not any(p.is_file() for p in validators_dir.rglob("*")):
-            (validators_dir / "validator.cpp").write_text(
+        has_validator = next(self._iter_safe_descendant_files(validators_dir), None) is not None
+        if not has_validator:
+            fallback = validators_dir / "validator.cpp"
+            if fallback.is_symlink():
+                fallback.unlink(missing_ok=True)
+            elif fallback.exists() and not fallback.is_file():
+                if fallback.is_dir():
+                    shutil.rmtree(fallback, ignore_errors=True)
+                else:
+                    fallback.unlink(missing_ok=True)
+            fallback.write_text(
                 "#include <bits/stdc++.h>\n"
                 "int main(){return 42;}\n",
                 encoding="utf-8",

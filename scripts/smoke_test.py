@@ -1853,6 +1853,27 @@ def main() -> None:
     if not kattis_summary.get("tests") or len(kattis_summary["tests"][0].get("passes", [])) < 2:
         raise RuntimeError("kattis checker multi-pass run did not execute multiple passes")
 
+    validator_fallback_probe = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"validator-fallback-{uuid.uuid4().hex[:8]}"
+    validator_fallback_dir = validator_fallback_probe / "input_validators"
+    validator_fallback_dir.mkdir(parents=True, exist_ok=True)
+    validator_fallback_target = validator_fallback_probe / "outside-validator.cpp"
+    validator_fallback_target.write_text("outside-validator-target\n", encoding="utf-8")
+    validator_fallback_symlink_supported = True
+    try:
+        (validator_fallback_dir / "validator.cpp").symlink_to(validator_fallback_target)
+    except (OSError, NotImplementedError):
+        validator_fallback_symlink_supported = False
+    export_service._populate_input_validators(None, validator_fallback_dir)
+    fallback_validator = validator_fallback_dir / "validator.cpp"
+    if not fallback_validator.exists() or not fallback_validator.is_file() or fallback_validator.is_symlink():
+        raise RuntimeError("export validator fallback should materialize a regular validator.cpp file")
+    fallback_text = fallback_validator.read_text(encoding="utf-8")
+    if "return 42" not in fallback_text:
+        raise RuntimeError("export validator fallback should create a permissive default validator")
+    if validator_fallback_symlink_supported:
+        if validator_fallback_target.read_text(encoding="utf-8") != "outside-validator-target\n":
+            raise RuntimeError("export validator fallback should not overwrite symlink targets")
+
     export_symlink_problem = f"exportsymlink-{uuid.uuid4().hex[:8]}"
     export_symlink_user = f"u-{uuid.uuid4().hex[:6]}"
     workspace_service.ensure_problem(export_symlink_problem, "Export Symlink Hardening Problem")
