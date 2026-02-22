@@ -73,6 +73,12 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+        bad_line = client.get(
+            "/problems/sample/alice/files",
+            params={"path": "README.problem.md", "line": "not-a-number"},
+        )
+        if bad_line.status_code != 200:
+            raise RuntimeError(f"files page should tolerate invalid line query, status={bad_line.status_code}")
         legacy_manifest = client.get("/api/problems/sample/builds/b-nonexistent/manifest")
         if legacy_manifest.status_code != 400:
             raise RuntimeError(f"legacy manifest endpoint should require workspace context, status={legacy_manifest.status_code}")

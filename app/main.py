@@ -235,6 +235,14 @@ def _read_text_safe(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _parse_line_param(raw: str | None, default: int = 1) -> int:
+    try:
+        line = int(str(raw or "").strip())
+    except Exception:
+        return default
+    return line if line > 0 else default
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> RedirectResponse:
     return RedirectResponse("/problems/sample/alice/files")
@@ -267,7 +275,7 @@ def files_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx["workspace"]["path"])
     selected = request.query_params.get("path", "README.problem.md")
-    selected_line = int(request.query_params.get("line", "1"))
+    selected_line = _parse_line_param(request.query_params.get("line", "1"))
     content = ""
     try:
         content = git_service.read_file(workspace, selected)
