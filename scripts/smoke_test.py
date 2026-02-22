@@ -82,6 +82,7 @@ def main() -> None:
         json.dumps(
             {
                 "generator_runs": 1,
+                "compile_jobs": 3,
                 "validator_args": ["--self-check"],
                 "checker_mode": "testlib",
                 "checker_args": [],
@@ -133,8 +134,13 @@ def main() -> None:
     generation_params = manifest.get("generation_params", {})
     if int(generation_params.get("max_passes", 0)) != 8:
         raise RuntimeError(f"manifest generation_params missing max_passes: {generation_params}")
+    if int(generation_params.get("compile_jobs", 0)) != 3:
+        raise RuntimeError(f"manifest generation_params missing compile_jobs: {generation_params}")
     if int(manifest.get("summary", {}).get("tests_count", -1)) != 2:
         raise RuntimeError("manual sidecar files should not be treated as test inputs")
+    compile_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "compile.log").read_text(encoding="utf-8")
+    if "compile_jobs=3" not in compile_log:
+        raise RuntimeError("compile log missing configured compile_jobs marker")
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()

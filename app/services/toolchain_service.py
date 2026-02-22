@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
+import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from app.services.util import run_cmd, sha256_file
@@ -90,18 +93,27 @@ class ToolchainService:
         source_hash = hashlib.sha256("\n".join(key_parts).encode("utf-8")).hexdigest()
         cache_bin = self.cache_root / toolchain_digest / f"{source_hash}.bin"
         cache_bin.parent.mkdir(parents=True, exist_ok=True)
-        if cache_bin.exists():
-            output.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(cache_bin, output)
-            output.chmod(0o755)
-            return True, "", "", toolchain_digest
+        cache_lock = cache_bin.with_suffix(".lock")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with cache_lock.open("w", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            if cache_bin.exists():
+                shutil.copy2(cache_bin, output)
+                output.chmod(0o755)
+                return True, "", "", toolchain_digest
 
-        cmd = [cxx, *cxxflags]
-        for inc in include_dirs:
-            cmd += ["-I", str(inc)]
-        cmd += [str(source), "-o", str(output)]
-        proc = run_cmd(cmd)
-        if proc.returncode == 0 and output.exists():
-            shutil.copy2(output, cache_bin)
-            cache_bin.chmod(0o755)
-        return proc.returncode == 0, proc.stdout, proc.stderr, toolchain_digest
+            cmd = [cxx, *cxxflags]
+            for inc in include_dirs:
+                cmd += ["-I", str(inc)]
+            cmd += [str(source), "-o", str(output)]
+            proc = run_cmd(cmd)
+            if proc.returncode == 0 and output.exists():
+                tmp_cache = cache_bin.parent / f".{cache_bin.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+                try:
+                    shutil.copy2(output, tmp_cache)
+                    tmp_cache.chmod(0o755)
+                    os.replace(tmp_cache, cache_bin)
+                finally:
+                    if tmp_cache.exists():
+                        tmp_cache.unlink(missing_ok=True)
+            return proc.returncode == 0, proc.stdout, proc.stderr, toolchain_digest

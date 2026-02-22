@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import random
 import re
 import shutil
@@ -69,6 +71,7 @@ class BuildService:
             "require_generator": False,
             "require_validator": True,
             "require_checker": True,
+            "compile_jobs": 0,
             "generator_args": [],
             "generator_sources": [],
             "validator_args": [],
@@ -90,6 +93,10 @@ class BuildService:
             cfg["validator_args"] = []
         if not isinstance(cfg.get("checker_args"), list):
             cfg["checker_args"] = []
+        try:
+            cfg["compile_jobs"] = max(0, min(16, int(cfg.get("compile_jobs", 0))))
+        except Exception:
+            cfg["compile_jobs"] = 0
         cfg["checker_mode"] = str(cfg.get("checker_mode", "testlib")).lower()
         if cfg["checker_mode"] not in {"testlib", "kattis"}:
             cfg["checker_mode"] = "testlib"
@@ -137,6 +144,15 @@ class BuildService:
         )
         in_files = [p for p in files if p.suffix.lower() == ".in"]
         return in_files if in_files else files
+
+    def _effective_compile_jobs(self, configured: object, target_count: int) -> int:
+        auto_jobs = max(1, min(4, os.cpu_count() or 1))
+        try:
+            requested = int(configured)
+        except Exception:
+            requested = 0
+        bounded = auto_jobs if requested <= 0 else max(1, min(16, requested))
+        return max(1, min(bounded, max(1, target_count)))
 
     def run_build(self, problem: str, username: str, commit: str | None = None, ref: str | None = None) -> str:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
@@ -196,18 +212,25 @@ class BuildService:
                 ("accepted_solution", accepted_src, bin_dir / "accepted_solution"),
             ]
 
+            compile_plan = [(name, source, output) for name, source, output in compile_targets if source is not None]
+            compile_jobs = self._effective_compile_jobs(build_cfg.get("compile_jobs", 0), len(compile_plan))
+            compile_results: dict[str, tuple[bool, str, str, str]] = {}
+            if compile_plan:
+                with ThreadPoolExecutor(max_workers=compile_jobs) as pool:
+                    future_map = {
+                        pool.submit(self.toolchain.compile_cpp, source, output, include_dirs, [snapshot]): name
+                        for name, source, output in compile_plan
+                    }
+                    for future, name in future_map.items():
+                        compile_results[name] = future.result()
+
             compiled_bins: dict[str, Path] = {}
-            compile_log = []
+            compile_log = [f"compile_jobs={compile_jobs}"]
             for name, source, output in compile_targets:
                 if source is None:
                     compile_log.append(f"[{name}] missing source\n")
                     continue
-                ok, out, err, toolchain_digest = self.toolchain.compile_cpp(
-                    source,
-                    output,
-                    include_dirs,
-                    path_roots=[snapshot],
-                )
+                ok, out, err, toolchain_digest = compile_results[name]
                 merged = f"{out}\n{err}".strip()
                 diagnostics.extend(self._collect_diagnostics(snapshot, merged))
                 compile_log.append(f"[{name}] source={source}\n{merged}\n")
@@ -303,6 +326,7 @@ class BuildService:
                 seed=seed,
                 generation_params={
                     "generator_runs": int(build_cfg.get("generator_runs", 3)),
+                    "compile_jobs": compile_jobs,
                     "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
                     "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
                     "validator_args": [str(x) for x in build_cfg.get("validator_args", [])],
