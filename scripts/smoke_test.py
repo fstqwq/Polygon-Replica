@@ -645,6 +645,37 @@ def main() -> None:
         raise RuntimeError("run config did not expose expected effective run_jobs")
     if ws_summary.get("feedback_dir") != "feedback_dir":
         raise RuntimeError("run summary should expose feedback_dir as repository-relative path")
+    build_id_symlink_inputs = build_service.run_build("sample", "alice")
+    brow_symlink_inputs = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_symlink_inputs])
+    if brow_symlink_inputs is None or brow_symlink_inputs["status"] != "ok":
+        raise RuntimeError(f"symlink-input build failed unexpectedly: {brow_symlink_inputs}")
+    symlink_input_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id_symlink_inputs / "tests"
+    symlink_input_source = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-input-leak-{uuid.uuid4().hex[:8]}.txt"
+    symlink_input_source.write_text("9\n", encoding="utf-8")
+    symlink_input_name = f"999.run-symlink-{uuid.uuid4().hex[:6]}.in"
+    symlink_input_link = symlink_input_root / symlink_input_name
+    symlink_input_supported = True
+    try:
+        symlink_input_link.symlink_to(symlink_input_source)
+    except (OSError, NotImplementedError):
+        symlink_input_supported = False
+    if symlink_input_supported:
+        run_id_symlink_input = run_service.run_submission(
+            "sample",
+            "alice",
+            build_id_symlink_inputs,
+            submission_path="solutions/main.cpp",
+            mode="pass-fail",
+        )
+        rrow_symlink_input = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_symlink_input])
+        if rrow_symlink_input is None or rrow_symlink_input["status"] != "ok":
+            raise RuntimeError(f"run with symlinked test input should still pass using safe tests only: {rrow_symlink_input}")
+        symlink_input_summary = json.loads(rrow_symlink_input["summary_json"])
+        tests_seen = [str(t.get("test", "")) for t in symlink_input_summary.get("tests", []) if isinstance(t, dict)]
+        if symlink_input_name in tests_seen:
+            raise RuntimeError("run execution should ignore symlinked test inputs in build artifacts")
+    symlink_input_link.unlink(missing_ok=True)
+    symlink_input_source.unlink(missing_ok=True)
     bad_json_build_id = f"b-badjson-{uuid.uuid4().hex[:8]}"
     bad_json_run_id = f"r-badjson-{uuid.uuid4().hex[:8]}"
     build_artifact_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id

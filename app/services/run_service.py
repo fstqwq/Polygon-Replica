@@ -121,6 +121,31 @@ class RunService:
         bounded = auto_jobs if requested <= 0 else max(1, min(16, requested))
         return max(1, min(bounded, max(1, test_count)))
 
+    def _is_safe_path_within(self, root: Path, path: Path) -> bool:
+        try:
+            root_resolved = root.resolve()
+            resolved = path.resolve()
+        except OSError:
+            return False
+        return root_resolved in resolved.parents or root_resolved == resolved
+
+    def _is_safe_dir(self, root: Path, path: Path) -> bool:
+        if path.is_symlink() or not path.exists() or not path.is_dir():
+            return False
+        return self._is_safe_path_within(root, path)
+
+    def _is_safe_regular_file(self, root: Path, path: Path) -> bool:
+        if path.is_symlink() or not path.exists() or not path.is_file():
+            return False
+        return self._is_safe_path_within(root, path)
+
+    def _safe_matching_files(self, root: Path, pattern: str) -> list[Path]:
+        files: list[Path] = []
+        for p in sorted(root.glob(pattern)):
+            if self._is_safe_regular_file(root, p):
+                files.append(p)
+        return files
+
     def _run_interactive_case(
         self,
         interactor_bin: Path,
@@ -421,8 +446,11 @@ class RunService:
             preflight_reasons.append("artifact root missing")
         else:
             for required_dir in ["tests", "ans"]:
-                if not (artifact_root / required_dir).is_dir():
+                dir_path = artifact_root / required_dir
+                if not dir_path.exists() or not dir_path.is_dir():
                     preflight_reasons.append(f"artifact directory missing: {required_dir}/")
+                elif not self._is_safe_dir(artifact_root, dir_path):
+                    preflight_reasons.append(f"artifact directory invalid: {required_dir}/")
 
         preflight_ok = not preflight_reasons
         preflight_error = f"build not runnable: {build_id}"
@@ -555,15 +583,22 @@ class RunService:
                 )
                 return run_id
 
-            tests = sorted(tests_dir.glob("*.in"))
+            tests = self._safe_matching_files(tests_dir, "*.in")
             if not tests:
                 raise RuntimeError("selected build has no tests")
             effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(tests))
             run_cfg["run_jobs_effective"] = effective_run_jobs
 
+            if checker.exists() and not self._is_safe_regular_file(checker.parent, checker):
+                raise RuntimeError("checker binary path is invalid")
+            if interactor.exists() and not self._is_safe_regular_file(interactor.parent, interactor):
+                raise RuntimeError("interactor binary path is invalid")
+
             if mode == "interactive":
                 for test in tests:
                     ans = ans_dir / f"{test.stem}.ans"
+                    if not self._is_safe_regular_file(ans_dir, ans):
+                        raise RuntimeError(f"answer file missing or invalid for {test.name}")
                     test_feedback_dir = feedback_dir / test.stem
                     test_feedback_dir.mkdir(parents=True, exist_ok=True)
                     test_result = {
@@ -593,6 +628,10 @@ class RunService:
                     test_result["transcript"] = str(transcript.relative_to(run_root))
                     verdicts.append(test_result)
             elif mode != "interactive" and effective_run_jobs > 1:
+                for test in tests:
+                    ans = ans_dir / f"{test.stem}.ans"
+                    if not self._is_safe_regular_file(ans_dir, ans):
+                        raise RuntimeError(f"answer file missing or invalid for {test.name}")
                 with ThreadPoolExecutor(max_workers=effective_run_jobs) as pool:
                     future_map = {
                         pool.submit(
@@ -617,6 +656,9 @@ class RunService:
                     verdicts.extend(parallel_verdicts)
             else:
                 for test in tests:
+                    ans = ans_dir / f"{test.stem}.ans"
+                    if not self._is_safe_regular_file(ans_dir, ans):
+                        raise RuntimeError(f"answer file missing or invalid for {test.name}")
                     verdicts.append(
                         self._run_noninteractive_test(
                             mode,
@@ -626,7 +668,7 @@ class RunService:
                             checker_args,
                             max_passes,
                             test,
-                            ans_dir / f"{test.stem}.ans",
+                            ans,
                             feedback_dir / test.stem,
                             run_root,
                         )
