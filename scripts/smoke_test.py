@@ -72,6 +72,9 @@ def main() -> None:
             r = client.get(path)
             if r.status_code != 200:
                 raise RuntimeError(f"endpoint failed: {path} status={r.status_code}")
+        legacy_manifest = client.get("/api/problems/sample/builds/b-nonexistent/manifest")
+        if legacy_manifest.status_code != 400:
+            raise RuntimeError(f"legacy manifest endpoint should require workspace context, status={legacy_manifest.status_code}")
 
     snapshot_repo = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-check-{uuid.uuid4().hex[:8]}"
     snapshot_repo.mkdir(parents=True, exist_ok=True)
@@ -743,6 +746,12 @@ def main() -> None:
             resp = client.get(path, params=params)
             if resp.status_code != 404:
                 raise RuntimeError(f"{label} should be workspace-forbidden, got status={resp.status_code}")
+        own_manifest = client.get(f"/api/problems/sample/workspaces/alice/builds/{build_id}/manifest")
+        if own_manifest.status_code != 200:
+            raise RuntimeError(f"workspace manifest endpoint failed status={own_manifest.status_code}")
+        leaked_manifest = client.get(f"/api/problems/sample/workspaces/alice/builds/{bob_build_id}/manifest")
+        if leaked_manifest.status_code != 404:
+            raise RuntimeError(f"workspace manifest should not expose bob build, status={leaked_manifest.status_code}")
         export_block = client.post(
             "/problems/sample/alice/export/create",
             data={"build_id": bob_build_id, "export_type": "kattis"},

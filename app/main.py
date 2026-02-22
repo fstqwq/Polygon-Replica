@@ -634,9 +634,23 @@ def api_recent_exports(problem: str, user: str):
     return [dict(r) for r in rows]
 
 
-@app.get("/api/problems/{problem}/builds/{build_id}/manifest")
-def api_manifest(problem: str, build_id: str):
+@app.get("/api/problems/{problem}/workspaces/{user}/builds/{build_id}/manifest")
+def api_workspace_manifest(problem: str, user: str, build_id: str):
+    ctx = page_ctx(problem, user)
+    row = db.fetch_one(
+        "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
+        [build_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="manifest not found in workspace")
     p = settings.artifacts_root / problem / build_id / "manifest.json"
     if not p.exists():
         raise HTTPException(status_code=404, detail="manifest not found")
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+@app.get("/api/problems/{problem}/builds/{build_id}/manifest")
+def api_manifest(problem: str, build_id: str, user: str | None = None):
+    if not user:
+        raise HTTPException(status_code=400, detail="use workspace manifest endpoint")
+    return api_workspace_manifest(problem, user, build_id)

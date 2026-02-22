@@ -23,7 +23,7 @@
     <p><strong>Error:</strong> {{ summary.error }}</p>
     <p><strong>Failed Step:</strong> {{ summary.failed_step or "-" }} <strong>Failed Test:</strong> {{ summary.failed_test or "-" }}</p>
     {% endif %}
-    <p><a href="/api/problems/{{ ctx.problem.slug }}/builds/{{ detail.id }}/manifest">manifest.json</a></p>
+    <p><a href="/api/problems/{{ ctx.problem.slug }}/workspaces/{{ ctx.user.username }}/builds/{{ detail.id }}/manifest">manifest.json</a></p>
     <p>
       <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=tests">tests/</a> |
       <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=ans">ans/</a> |
