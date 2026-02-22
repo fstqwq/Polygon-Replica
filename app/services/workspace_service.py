@@ -123,7 +123,8 @@ class WorkspaceService:
         workspace = Path(self.settings.workspace_root / str(u["id"]) / problem)
         branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip() or "main"
         head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-        dirty = 1 if run_cmd(["git", "-C", str(workspace), "status", "--porcelain"]).stdout.strip() else 0
+        dirty_status = run_cmd(["git", "-C", str(workspace), "status", "--porcelain"]).stdout
+        dirty = 1 if self._is_status_dirty(dirty_status) else 0
         self.db.execute(
             "UPDATE workspaces SET branch=?, head_commit=?, dirty=?, updated_at=? WHERE problem_id=? AND user_id=?",
             [branch, head, dirty, now_iso(), p["id"], u["id"]],
@@ -162,9 +163,33 @@ class WorkspaceService:
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
 
+    def resolve_commit(self, workspace: Path, commit_ref: str) -> str:
+        proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{commit_ref}^{{commit}}"])
+        commit = proc.stdout.strip()
+        if proc.returncode != 0 or not commit:
+            detail = (proc.stderr or proc.stdout).strip()
+            raise RuntimeError(detail or f"unable to resolve commit reference: {commit_ref}")
+        return commit
+
     def _workspace_dirty(self, workspace: Path) -> bool:
         proc = run_cmd(["git", "-C", str(workspace), "status", "--porcelain"])
-        return bool(proc.stdout.strip())
+        return self._is_status_dirty(proc.stdout)
+
+    def workspace_is_dirty(self, workspace: Path) -> bool:
+        return self._workspace_dirty(workspace)
+
+    def _is_status_dirty(self, status_output: str) -> bool:
+        for raw in status_output.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            path = line[3:].strip() if len(line) >= 4 else line
+            if path == ".polygonlike.lock":
+                continue
+            if path.endswith("/.polygonlike.lock"):
+                continue
+            return True
+        return False
 
     def create_snapshot(self, workspace: Path, commit: str | None) -> Path:
         run_id = f"snapshot-{uuid.uuid4().hex[:12]}"

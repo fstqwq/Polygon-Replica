@@ -134,10 +134,15 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
-    reused_preview_id = preview_service.compile_preview("sample", "alice", commit=head_commit)
-    reused_preview = db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [reused_preview_id])
+    commit_ref = str(ctx["workspace"].get("branch") or "main")
+    reused_preview_id = preview_service.compile_preview("sample", "alice", commit=commit_ref)
+    reused_preview = db.fetch_one("SELECT status,summary_json,source_commit,source_ref FROM previews WHERE id=?", [reused_preview_id])
     if reused_preview is None or reused_preview["status"] != "ok":
         raise RuntimeError(f"commit preview reuse failed: {reused_preview}")
+    if reused_preview["source_commit"] != head_commit:
+        raise RuntimeError("commit preview did not canonicalize source_commit to SHA")
+    if str(reused_preview["source_ref"] or "") != commit_ref:
+        raise RuntimeError("commit preview did not preserve source_ref")
     reused_summary = json.loads(reused_preview["summary_json"]) if reused_preview["summary_json"] else {}
     reused_from = reused_summary.get("reused_from")
     if not reused_from:
@@ -151,6 +156,95 @@ def main() -> None:
         raise RuntimeError("reused preview pdf mismatch")
     if (reused_preview_root / "logs" / "latex.log").read_text(encoding="utf-8") != (source_root / "logs" / "latex.log").read_text(encoding="utf-8"):
         raise RuntimeError("reused preview log mismatch")
+
+    reuse_problem = f"reuse-{uuid.uuid4().hex[:8]}"
+    reuse_user = f"u-{uuid.uuid4().hex[:6]}"
+    workspace_service.ensure_problem(reuse_problem, "Preview Reuse Problem")
+    workspace_service.ensure_workspace(reuse_problem, reuse_user)
+    reuse_ctx = workspace_service.workspace_context(reuse_problem, reuse_user)
+    reuse_ws = Path(reuse_ctx["workspace"]["path"])
+    reuse_head = run_cmd(["git", "-C", str(reuse_ws), "rev-parse", "HEAD"]).stdout.strip()
+    reuse_cached_id = f"p-{uuid.uuid4().hex[:12]}"
+    reuse_cached_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / reuse_problem / reuse_cached_id
+    (reuse_cached_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+    (reuse_cached_root / "logs").mkdir(parents=True, exist_ok=True)
+    (reuse_cached_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n% clean head cached preview\n")
+    (reuse_cached_root / "logs" / "latex.log").write_text("clean head cached log\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            reuse_cached_id,
+            reuse_ctx["problem"]["id"],
+            reuse_ctx["workspace"]["id"],
+            reuse_head,
+            reuse_ctx["workspace"].get("branch") or "main",
+            "ok",
+            str(reuse_cached_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    reused_head_preview_id = preview_service.compile_preview(reuse_problem, reuse_user)
+    reused_head_preview = db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [reused_head_preview_id])
+    if reused_head_preview is None or reused_head_preview["status"] != "ok":
+        raise RuntimeError(f"workspace-head preview reuse failed: {reused_head_preview}")
+    reused_head_summary = json.loads(reused_head_preview["summary_json"]) if reused_head_preview["summary_json"] else {}
+    reused_head_from = reused_head_summary.get("reused_from")
+    if not reused_head_from:
+        raise RuntimeError(f"workspace-head preview did not reuse cached artifact: {reused_head_summary}")
+    head_source_row = db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [reused_head_from])
+    if head_source_row is None:
+        raise RuntimeError(f"workspace-head preview reuse source missing: {reused_head_from}")
+    head_source_root = Path(head_source_row["artifact_path"])
+    reused_head_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / reuse_problem / reused_head_preview_id
+    if (reused_head_root / "statement_preview" / "statement.pdf").read_bytes() != (
+        head_source_root / "statement_preview" / "statement.pdf"
+    ).read_bytes():
+        raise RuntimeError("workspace-head reused preview pdf mismatch")
+    if (reused_head_root / "logs" / "latex.log").read_text(encoding="utf-8") != (
+        head_source_root / "logs" / "latex.log"
+    ).read_text(encoding="utf-8"):
+        raise RuntimeError("workspace-head reused preview log mismatch")
+
+    build_ref_problem = f"buildref-{uuid.uuid4().hex[:8]}"
+    build_ref_user = f"u-{uuid.uuid4().hex[:6]}"
+    workspace_service.ensure_problem(build_ref_problem, "Build Ref Canonicalization Problem")
+    workspace_service.ensure_workspace(build_ref_problem, build_ref_user)
+    build_ref_ctx = workspace_service.workspace_context(build_ref_problem, build_ref_user)
+    build_ref_ws = Path(build_ref_ctx["workspace"]["path"])
+    for d in ["solutions", "validators", "checkers", "tests/manual", "config"]:
+        (build_ref_ws / d).mkdir(parents=True, exist_ok=True)
+    (build_ref_ws / "tests/manual/001.in").write_text("7\n", encoding="utf-8")
+    (build_ref_ws / "solutions/accepted.cpp").write_text(
+        "#include <bits/stdc++.h>\nusing namespace std; int main(){ cout<<cin.rdbuf(); }",
+        encoding="utf-8",
+    )
+    (build_ref_ws / "validators/validator.cpp").write_text(
+        "#include <bits/stdc++.h>\nint main(){return 42;}",
+        encoding="utf-8",
+    )
+    (build_ref_ws / "checkers/checker.cpp").write_text(
+        "#include <bits/stdc++.h>\nint main(){return 42;}",
+        encoding="utf-8",
+    )
+    (build_ref_ws / "config/build.json").write_text(json.dumps({"generator_runs": 0}), encoding="utf-8")
+    for cmd in [
+        ["git", "-C", str(build_ref_ws), "add", "."],
+        ["git", "-C", str(build_ref_ws), "commit", "-m", "seed build-ref smoke files"],
+    ]:
+        proc = run_cmd(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"build-ref setup command failed: {' '.join(cmd)}")
+    build_ref_branch = run_cmd(["git", "-C", str(build_ref_ws), "branch", "--show-current"]).stdout.strip() or "main"
+    build_ref_head = run_cmd(["git", "-C", str(build_ref_ws), "rev-parse", "HEAD"]).stdout.strip()
+    build_ref_build_id = build_service.run_build(build_ref_problem, build_ref_user, commit=build_ref_branch)
+    build_ref_row = db.fetch_one("SELECT status,source_commit,source_ref FROM builds WHERE id=?", [build_ref_build_id])
+    if build_ref_row is None or build_ref_row["status"] != "ok":
+        raise RuntimeError(f"build-ref commit build failed: {build_ref_row}")
+    if str(build_ref_row["source_commit"] or "") != build_ref_head:
+        raise RuntimeError("build commit ref was not canonicalized to SHA")
+    if str(build_ref_row["source_ref"] or "") != build_ref_branch:
+        raise RuntimeError("build source_ref did not preserve requested ref")
 
     for d in ["solutions", "validators", "checkers", "generators", "tests/manual", "config", "statement"]:
         (ws / d).mkdir(parents=True, exist_ok=True)

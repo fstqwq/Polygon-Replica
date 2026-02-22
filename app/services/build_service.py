@@ -174,16 +174,23 @@ class BuildService:
         ctx = self.workspace_service.workspace_context(problem, username)
         workspace = Path(ctx["workspace"]["path"])
 
-        with self.workspace_service.workspace_lock(workspace):
-            snapshot = self.workspace_service.create_snapshot(workspace, commit)
+        source_ref = ref or ctx["workspace"].get("branch") or "main"
+        if commit:
+            source_commit = self.workspace_service.resolve_commit(workspace, commit)
+            source_ref = ref or commit
+            snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
+        else:
+            with self.workspace_service.workspace_lock(workspace):
+                source_commit = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+                branch = run_cmd(["git", "-C", str(workspace), "branch", "--show-current"]).stdout.strip()
+                if branch:
+                    source_ref = ref or branch
+                snapshot = self.workspace_service.create_snapshot(workspace, commit)
 
         artifact_paths = self.artifacts.prepare(problem, build_id)
         logs_dir = artifact_paths.logs
         bin_dir = artifact_paths.root / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-
-        source_commit = commit or run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
-        source_ref = ref or ctx["workspace"].get("branch") or "main"
 
         ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [ctx["problem"]["id"], ctx["user"]["id"]])
         self.db.execute(
@@ -279,6 +286,7 @@ class BuildService:
 
             generator_bins = [compiled_bins[name] for name, _, _ in generator_targets if name in compiled_bins]
             gen_logs: list[str] = []
+            generated_count = 0
             if generator_bins:
                 runs = int(build_cfg.get("generator_runs", 3))
                 generator_args = [str(x) for x in build_cfg.get("generator_args", [])]
@@ -294,13 +302,15 @@ class BuildService:
                             failing_test = dst.name
                             raise RuntimeError(f"generator failed on generator={gen_index} case={i + 1}")
                         test_files.append(dst)
+                        generated_count += 1
                         counter += 1
             if not test_files:
                 raise RuntimeError("no tests were generated (manual + generator)")
             (logs_dir / "generate.log").write_text(
                 (
                     f"manual_tests={len(tests)}\n"
-                    f"generated_tests={len(test_files)}\n"
+                    f"generated_tests={generated_count}\n"
+                    f"total_tests={len(test_files)}\n"
                     + "\n".join(gen_logs)
                 ),
                 encoding="utf-8",
