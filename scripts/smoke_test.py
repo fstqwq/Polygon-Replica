@@ -159,9 +159,11 @@ def main() -> None:
 
     bad_preview_ref = f"does-not-exist-{uuid.uuid4().hex[:8]}"
     bad_preview_id = preview_service.compile_preview("sample", "alice", commit=bad_preview_ref)
-    bad_preview = db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [bad_preview_id])
+    bad_preview = db.fetch_one("SELECT status,summary_json,source_ref FROM previews WHERE id=?", [bad_preview_id])
     if bad_preview is None or bad_preview["status"] != "failed":
         raise RuntimeError(f"invalid commit preview should fail with persisted row: {bad_preview}")
+    if str(bad_preview["source_ref"] or "") != bad_preview_ref:
+        raise RuntimeError("invalid commit preview did not preserve requested source_ref")
     bad_preview_summary = json.loads(bad_preview["summary_json"]) if bad_preview["summary_json"] else {}
     if not str(bad_preview_summary.get("error", "")).strip():
         raise RuntimeError("invalid commit preview did not preserve resolve error in summary")
@@ -256,9 +258,11 @@ def main() -> None:
         raise RuntimeError("build source_ref did not preserve requested ref")
     bad_build_ref = f"does-not-exist-{uuid.uuid4().hex[:8]}"
     bad_build_id = build_service.run_build(build_ref_problem, build_ref_user, commit=bad_build_ref)
-    bad_build_row = db.fetch_one("SELECT status,summary_json FROM builds WHERE id=?", [bad_build_id])
+    bad_build_row = db.fetch_one("SELECT status,summary_json,source_ref FROM builds WHERE id=?", [bad_build_id])
     if bad_build_row is None or bad_build_row["status"] != "failed":
         raise RuntimeError(f"invalid commit build should fail with persisted row: {bad_build_row}")
+    if str(bad_build_row["source_ref"] or "") != bad_build_ref:
+        raise RuntimeError("invalid commit build did not preserve requested source_ref")
     bad_build_summary = json.loads(bad_build_row["summary_json"]) if bad_build_row["summary_json"] else {}
     if not str(bad_build_summary.get("error", "")).strip():
         raise RuntimeError("invalid commit build did not preserve resolve error in summary")

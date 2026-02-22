@@ -44,6 +44,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Preview compilation now also reuses cached artifacts for clean workspace-HEAD requests when immutable.
 - Build/Preview commit selectors now canonicalize refs (`main`, tags, short SHAs) to immutable commit SHAs before snapshot/cache decisions.
 - Build/Preview invalid commit refs are now persisted as failed records (with error summaries) instead of uncaught service exceptions.
+- Failed commit-ref jobs now preserve the originally requested ref in `source_ref` metadata for clearer audit/provenance.
 - Build generator execution now streams output directly into test files to avoid buffering full generated tests in memory
 
 ## Quick Start

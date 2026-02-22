@@ -109,6 +109,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Preview service now also reuses cached artifacts for clean workspace-HEAD requests where source state is immutable.
 - Build/Preview commit inputs are now canonicalized via `git rev-parse --verify <ref>^{commit}` so moving refs (e.g., `main`) map to immutable SHA metadata/cache keys.
 - Build/Preview invalid commit refs are now captured as normal failed records (`status=failed`) with persisted error summaries/logs instead of uncaught service exceptions.
+- Invalid commit-ref failures now retain the requested ref in `source_ref` metadata (instead of workspace branch fallback) for auditability.
 - Build generator execution now streams stdout directly into test files (memory-safe for large generated tests).
 - Build generation logs now report `manual_tests`, `generated_tests`, and `total_tests` counters explicitly.
 - Added reusable local validation script: `scripts/smoke_test.py`.

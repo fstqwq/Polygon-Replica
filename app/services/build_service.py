@@ -173,8 +173,8 @@ class BuildService:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         workspace = Path(ctx["workspace"]["path"])
-        source_commit = str(ctx["workspace"].get("head_commit") or "").strip()
-        source_ref = ref or ctx["workspace"].get("branch") or "main"
+        source_commit = "" if commit else str(ctx["workspace"].get("head_commit") or "").strip()
+        source_ref = ref or commit or ctx["workspace"].get("branch") or "main"
 
         ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [ctx["problem"]["id"], ctx["user"]["id"]])
         artifact_paths = self.artifacts.prepare(problem, build_id)
