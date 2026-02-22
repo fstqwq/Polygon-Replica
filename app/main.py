@@ -209,6 +209,18 @@ def _normalize_page_target(page: str) -> str:
     return normalized if normalized in allowed else "files"
 
 
+def _parse_summary_json(raw: str | None, label: str) -> dict | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return {"error": f"invalid summary_json for {label}"}
+    if isinstance(payload, dict):
+        return payload
+    return {"error": f"summary_json for {label} must be a JSON object"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> RedirectResponse:
     return RedirectResponse("/problems/sample/alice/files")
@@ -433,9 +445,10 @@ def build_page(request: Request, problem: str, user: str):
         if root.exists():
             for p in sorted(root.glob("*.log")):
                 logs.append({"name": p.name, "content": p.read_text(encoding="utf-8")})
-        if detail["summary_json"]:
-            summary = json.loads(detail["summary_json"])
-            diagnostics = summary.get("diagnostics", [])
+        summary = _parse_summary_json(detail["summary_json"], "build")
+        if summary:
+            maybe_diagnostics = summary.get("diagnostics", [])
+            diagnostics = maybe_diagnostics if isinstance(maybe_diagnostics, list) else []
     return templates.TemplateResponse(
         request,
         "build.html",
@@ -518,7 +531,7 @@ def run_page(request: Request, problem: str, user: str):
     )
     detail_id = request.query_params.get("run_id", "")
     detail = db.fetch_one("SELECT * FROM runs WHERE id=? AND workspace_id=?", [detail_id, workspace_id]) if detail_id else None
-    summary = json.loads(detail["summary_json"]) if detail and detail["summary_json"] else None
+    summary = _parse_summary_json(detail["summary_json"], "run") if detail else None
     return templates.TemplateResponse(
         request,
         "run.html",

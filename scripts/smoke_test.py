@@ -414,6 +414,53 @@ def main() -> None:
         raise RuntimeError("run config did not expose expected effective run_jobs")
     if ws_summary.get("feedback_dir") != "feedback_dir":
         raise RuntimeError("run summary should expose feedback_dir as repository-relative path")
+    bad_json_build_id = f"b-badjson-{uuid.uuid4().hex[:8]}"
+    bad_json_run_id = f"r-badjson-{uuid.uuid4().hex[:8]}"
+    build_artifact_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id
+    run_artifact_row = db.fetch_one("SELECT artifact_path FROM runs WHERE id=?", [run_id_ws])
+    if run_artifact_row is None:
+        raise RuntimeError("workspace run artifact row missing")
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            bad_json_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "failed",
+            "{bad",
+            str(build_artifact_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    db.execute(
+        "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            bad_json_run_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            build_id,
+            "pass-fail",
+            "failed",
+            "{bad",
+            str(run_artifact_row["artifact_path"]),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    with TestClient(app) as client:
+        bad_build_page = client.get("/problems/sample/alice/build", params={"build_id": bad_json_build_id})
+        if bad_build_page.status_code != 200:
+            raise RuntimeError(f"build page should handle malformed summary_json, status={bad_build_page.status_code}")
+        if "invalid summary_json for build" not in bad_build_page.text:
+            raise RuntimeError("build page did not surface malformed summary_json fallback")
+        bad_run_page = client.get("/problems/sample/alice/run", params={"run_id": bad_json_run_id})
+        if bad_run_page.status_code != 200:
+            raise RuntimeError(f"run page should handle malformed summary_json, status={bad_run_page.status_code}")
+        if "invalid summary_json for run" not in bad_run_page.text:
+            raise RuntimeError("run page did not surface malformed summary_json fallback")
 
     upload_src = (
         b'#include <bits/stdc++.h>\nusing namespace std; int main(){ long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n"; }\n'
