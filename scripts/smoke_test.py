@@ -188,6 +188,28 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    poisoned_preview_id = f"p-poison-{uuid.uuid4().hex[:8]}"
+    poison_preview_marker = f"poison-preview-log-{uuid.uuid4().hex[:8]}"
+    poison_preview_pdf = ws / "statement_preview" / "statement.pdf"
+    poison_preview_log = ws / "logs" / "latex.log"
+    poison_preview_pdf.parent.mkdir(parents=True, exist_ok=True)
+    poison_preview_log.parent.mkdir(parents=True, exist_ok=True)
+    poison_preview_pdf.write_bytes(b"%PDF-1.4\n% poisoned preview source\n")
+    poison_preview_log.write_text(poison_preview_marker + "\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            poisoned_preview_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            str(ws),
+            "9999-01-01T00:00:00Z",
+            "9999-01-01T00:00:00Z",
+        ],
+    )
     commit_ref = str(ctx["workspace"].get("branch") or "main")
     reused_preview_id = preview_service.compile_preview("sample", "alice", commit=commit_ref)
     reused_preview = db.fetch_one("SELECT status,summary_json,source_commit,source_ref FROM previews WHERE id=?", [reused_preview_id])
@@ -201,6 +223,8 @@ def main() -> None:
     reused_from = reused_summary.get("reused_from")
     if not reused_from:
         raise RuntimeError(f"commit preview did not reuse cached artifact: {reused_summary}")
+    if reused_from == poisoned_preview_id:
+        raise RuntimeError("commit preview reuse trusted DB-provided poisoned preview artifact_path")
     source_row = db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [reused_from])
     if source_row is None:
         raise RuntimeError(f"commit preview reuse source missing: {reused_from}")

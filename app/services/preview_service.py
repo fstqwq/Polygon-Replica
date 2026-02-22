@@ -26,12 +26,12 @@ class PreviewService:
         artifacts,
     ) -> str | None:
         rows = self.db.fetch_all(
-            "SELECT id,artifact_path FROM previews WHERE problem_id=? AND source_commit=? AND status='ok' AND id<>? ORDER BY created_at DESC LIMIT 20",
+            "SELECT id FROM previews WHERE problem_id=? AND source_commit=? AND status='ok' AND id<>? ORDER BY created_at DESC LIMIT 20",
             [problem_id, source_commit, current_preview_id],
         )
 
         for row in rows:
-            root = Path(row["artifact_path"]) if row["artifact_path"] else self.workspace_service.settings.artifacts_root / problem / row["id"]
+            root = self.workspace_service.settings.artifacts_root / problem / str(row["id"])
             src_pdf = root / "statement_preview" / "statement.pdf"
             src_log = root / "logs" / "latex.log"
             if not src_pdf.exists() or not src_log.exists():
