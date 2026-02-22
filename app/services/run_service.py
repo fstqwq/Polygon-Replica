@@ -383,11 +383,37 @@ class RunService:
         return returncode, elapsed_ms, mem_kb
 
     def _feedback_key_files(self, test_feedback_dir: Path, base_root: Path) -> list[str]:
-        keys = []
-        for name in ["judgemessage.txt", "teammessage.txt", "nextpass.in"]:
-            for p in sorted(test_feedback_dir.rglob(name)):
+        if not test_feedback_dir.exists() or not test_feedback_dir.is_dir():
+            return []
+        try:
+            base_root_resolved = base_root.resolve()
+        except OSError:
+            return []
+        wanted = {"judgemessage.txt", "teammessage.txt", "nextpass.in"}
+        keys: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(test_feedback_dir, topdown=True, followlinks=False):
+            dir_root = Path(dirpath)
+            keep_dirs: list[str] = []
+            for name in sorted(dirnames):
+                d = dir_root / name
+                if d.is_symlink():
+                    continue
+                try:
+                    resolved = d.resolve()
+                except OSError:
+                    continue
+                if base_root_resolved in resolved.parents or base_root_resolved == resolved:
+                    keep_dirs.append(name)
+            dirnames[:] = keep_dirs
+
+            for name in sorted(filenames):
+                if name not in wanted:
+                    continue
+                p = dir_root / name
+                if not self._is_safe_regular_file(base_root, p, root_resolved=base_root_resolved):
+                    continue
                 keys.append(str(p.relative_to(base_root)))
-        return keys
+        return sorted(keys)
 
     def _files_equal(self, lhs: Path, rhs: Path) -> bool:
         if not lhs.exists() or not rhs.exists():

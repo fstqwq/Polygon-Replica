@@ -1090,6 +1090,28 @@ def main() -> None:
     answer_files_first.append(answer_files_marker)
     if answer_files_marker in answer_files_second:
         raise RuntimeError("run answer-file cache should return independent copies")
+    feedback_probe = run_cfg_root / f"feedback-probe-{uuid.uuid4().hex[:8]}"
+    (feedback_probe / "pass1").mkdir(parents=True, exist_ok=True)
+    (feedback_probe / "pass2").mkdir(parents=True, exist_ok=True)
+    (feedback_probe / "pass1" / "judgemessage.txt").write_text("judge", encoding="utf-8")
+    (feedback_probe / "pass1" / "teammessage.txt").write_text("team", encoding="utf-8")
+    (feedback_probe / "pass2" / "nextpass.in").write_text("next", encoding="utf-8")
+    feedback_outside = run_cfg_root / f"feedback-outside-{uuid.uuid4().hex[:8]}.txt"
+    feedback_outside.write_text("outside", encoding="utf-8")
+    try:
+        (feedback_probe / "pass2" / "judgemessage.txt").symlink_to(feedback_outside)
+    except OSError:
+        pass
+    feedback_files = run_service._feedback_key_files(feedback_probe, run_cfg_root)
+    expected_feedback = [
+        str((feedback_probe / "pass1" / "judgemessage.txt").relative_to(run_cfg_root)),
+        str((feedback_probe / "pass1" / "teammessage.txt").relative_to(run_cfg_root)),
+        str((feedback_probe / "pass2" / "nextpass.in").relative_to(run_cfg_root)),
+    ]
+    if feedback_files != expected_feedback:
+        raise RuntimeError(
+            "run feedback key-file discovery should be deterministic and ignore unsafe symlinked files"
+        )
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()
