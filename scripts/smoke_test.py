@@ -524,6 +524,24 @@ def main() -> None:
     invalid_runs_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / "invalid-runs"
     if invalid_runs_root.resolve() not in Path(rrow_bad_build["artifact_path"]).resolve().parents:
         raise RuntimeError("invalid build run was not isolated under run_root/invalid-runs")
+    with TestClient(app) as client:
+        valid_summary_file = client.get(f"/problems/sample/alice/runs/{run_id_multi}/artifacts/summary.json")
+        if valid_summary_file.status_code != 200:
+            raise RuntimeError(f"run artifact summary fetch failed status={valid_summary_file.status_code}")
+        valid_feedback_zip = client.get(
+            f"/problems/sample/alice/runs/{run_id_multi}/download-dir",
+            params={"rel": "feedback_dir"},
+        )
+        if valid_feedback_zip.status_code != 200 or valid_feedback_zip.headers.get("content-type", "").find("zip") == -1:
+            raise RuntimeError(f"run artifact feedback zip failed status={valid_feedback_zip.status_code}")
+        invalid_compile_file = client.get(f"/problems/sample/alice/runs/{run_id_bad_build}/artifacts/compile.log")
+        if invalid_compile_file.status_code != 200:
+            raise RuntimeError(f"invalid run compile.log should be readable status={invalid_compile_file.status_code}")
+        if "build not runnable" not in invalid_compile_file.text:
+            raise RuntimeError("invalid run compile.log missing preflight failure reason")
+        invalid_summary_file = client.get(f"/problems/sample/alice/runs/{run_id_bad_build}/artifacts/summary.json")
+        if invalid_summary_file.status_code != 200:
+            raise RuntimeError(f"invalid run summary.json should be readable status={invalid_summary_file.status_code}")
 
     build_id_missing_artifacts = build_service.run_build("sample", "alice")
     brow_missing_artifacts = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_missing_artifacts])
@@ -742,6 +760,7 @@ def main() -> None:
             (f"/problems/sample/alice/artifacts/{bob_build_id}/download-dir", {"rel": "tests"}, "build artifact zip"),
             (f"/problems/sample/alice/artifacts/{bob_build_id}/tests/001.in", None, "build artifact file"),
             (f"/problems/sample/alice/artifacts/{bob_preview_id}/browse", {"rel": "logs"}, "preview artifact browse"),
+            (f"/problems/sample/alice/runs/{bob_run_id}/artifacts/compile.log", None, "run artifact file"),
         ]:
             resp = client.get(path, params=params)
             if resp.status_code != 404:

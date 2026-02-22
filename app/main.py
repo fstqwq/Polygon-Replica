@@ -89,6 +89,52 @@ def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Pat
     return root, path
 
 
+def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
+    row = db.fetch_one(
+        "SELECT artifact_path FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
+        [run_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="run not found in workspace")
+    root = Path(str(row["artifact_path"] or "")).resolve()
+    if not root.exists() or not root.is_dir():
+        raise HTTPException(status_code=404, detail="run artifact directory not found")
+    return root
+
+
+def _normalize_run_artifact_rel(root: Path, run_id: str, rel: str) -> str:
+    candidate = rel.lstrip("/")
+    legacy_prefix = f"logs/run-{run_id}/"
+    if candidate.startswith(legacy_prefix):
+        maybe = candidate[len(legacy_prefix) :]
+        probe = (root / maybe).resolve()
+        if root in probe.parents or root == probe:
+            return maybe
+    return candidate
+
+
+def _safe_run_artifact_path(ctx: dict, run_id: str, rel: str) -> Path:
+    root = _workspace_run_artifact_root(ctx, run_id)
+    norm_rel = _normalize_run_artifact_rel(root, run_id, rel)
+    path = (root / norm_rel).resolve()
+    if root not in path.parents and root != path:
+        raise HTTPException(status_code=400, detail="invalid run artifact path")
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="run artifact file not found")
+    return path
+
+
+def _safe_run_artifact_dir(ctx: dict, run_id: str, rel: str) -> tuple[Path, Path]:
+    root = _workspace_run_artifact_root(ctx, run_id)
+    norm_rel = _normalize_run_artifact_rel(root, run_id, rel)
+    path = (root / norm_rel).resolve()
+    if root not in path.parents and root != path:
+        raise HTTPException(status_code=400, detail="invalid run artifact path")
+    if not path.exists() or not path.is_dir():
+        raise HTTPException(status_code=404, detail="run artifact directory not found")
+    return root, path
+
+
 def _assert_workspace_build_access(ctx: dict, build_id: str) -> None:
     row = db.fetch_one(
         "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
@@ -560,6 +606,44 @@ def artifact_file(problem: str, user: str, build_id: str, rel_path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     _assert_workspace_artifact_access(ctx, build_id)
     file_path = _safe_artifact_path(problem, build_id, rel_path)
+    return FileResponse(file_path, filename=file_path.name)
+
+
+@app.get("/problems/{problem}/{user}/runs/{run_id}/download-dir")
+def run_artifact_download_dir(problem: str, user: str, run_id: str, rel: str = "feedback_dir"):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    root, target = _safe_run_artifact_dir(ctx, run_id, rel)
+    fd, tmp_zip = tempfile.mkstemp(prefix=f"{run_id}-", suffix=".zip")
+    os.close(fd)
+    tmp_path = Path(tmp_zip)
+    with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(target.rglob("*")):
+            if p.is_file():
+                zf.write(p, arcname=str(p.relative_to(root)))
+    name = f"{Path(rel).name or 'run-artifacts'}-{run_id}.zip"
+    return FileResponse(
+        tmp_path,
+        filename=name,
+        background=BackgroundTask(lambda: tmp_path.unlink(missing_ok=True)),
+    )
+
+
+@app.get("/problems/{problem}/{user}/runs/{run_id}/browse", response_class=HTMLResponse)
+def run_artifact_browse(request: Request, problem: str, user: str, run_id: str, rel: str = "feedback_dir"):
+    ctx = page_ctx(problem, user)
+    root, target = _safe_run_artifact_dir(ctx, run_id, rel)
+    files = sorted([str(p.relative_to(root)) for p in target.rglob("*") if p.is_file()])
+    return templates.TemplateResponse(
+        request,
+        "run_artifact_browser.html",
+        {"ctx": ctx, "run_id": run_id, "rel": rel, "files": files},
+    )
+
+
+@app.get("/problems/{problem}/{user}/runs/{run_id}/artifacts/{rel_path:path}")
+def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
+    file_path = _safe_run_artifact_path(ctx, run_id, rel_path)
     return FileResponse(file_path, filename=file_path.name)
 
 

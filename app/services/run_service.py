@@ -276,11 +276,11 @@ class RunService:
                 mem_kb = int(raw)
         return proc.returncode, proc.elapsed_ms, mem_kb
 
-    def _feedback_key_files(self, test_feedback_dir: Path, artifact_root: Path) -> list[str]:
+    def _feedback_key_files(self, test_feedback_dir: Path, base_root: Path) -> list[str]:
         keys = []
         for name in ["judgemessage.txt", "teammessage.txt", "nextpass.in"]:
             for p in sorted(test_feedback_dir.rglob(name)):
-                keys.append(str(p.relative_to(artifact_root)))
+                keys.append(str(p.relative_to(base_root)))
         return keys
 
     def _files_equal(self, lhs: Path, rhs: Path) -> bool:
@@ -384,7 +384,7 @@ class RunService:
 
         test_result["time_ms"] = total_time
         test_result["memory_kb"] = peak_mem
-        test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, artifact_root)
+        test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, run_root)
         return test_result
 
     def run_submission(
@@ -573,8 +573,8 @@ class RunService:
                     test_result["verdict"] = verdict
                     test_result["time_ms"] = elapsed
                     test_result["memory_kb"] = mem_kb
-                    test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, artifact_root)
-                    test_result["transcript"] = str(transcript.relative_to(artifact_root))
+                    test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, run_root)
+                    test_result["transcript"] = str(transcript.relative_to(run_root))
                     verdicts.append(test_result)
             elif mode != "interactive" and effective_run_jobs > 1:
                 with ThreadPoolExecutor(max_workers=effective_run_jobs) as pool:
