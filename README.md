@@ -22,6 +22,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build source discovery now supports C++ variants (`.cpp`, `.cc`, `.cxx`, `.c++`) with preferred-name resolution (`accepted.*`, etc.)
 - Manual test ingestion now prefers `tests/manual/**/*.in` when present, so sidecar files like `.ans` are not treated as input tests
 - Build compile step now supports bounded parallel target compilation via `config/build.json` `compile_jobs` (`0` = auto)
+- Build solve step now supports bounded parallel accepted-solution execution via `config/build.json` `solve_jobs` (`0` = auto)
 - Runner non-interactive execution (`pass-fail`, `multi-pass`) now supports bounded parallel per-test execution via `config/build.json` `run_jobs` (`0` = auto)
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
@@ -61,4 +62,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows, `compile_jobs`/`run_jobs` propagation, run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts preflight handling, workspace path-boundary rejection, and export zip structure checks.
+  - Covers pass-fail, multi-pass, and interactive run flows, `compile_jobs`/`solve_jobs`/`run_jobs` propagation, solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, missing-submission failure handling, invalid-build/missing-artifacts preflight handling, workspace path-boundary rejection, and export zip structure checks.

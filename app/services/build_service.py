@@ -72,6 +72,7 @@ class BuildService:
             "require_validator": True,
             "require_checker": True,
             "compile_jobs": 0,
+            "solve_jobs": 0,
             "run_jobs": 0,
             "generator_args": [],
             "generator_sources": [],
@@ -98,6 +99,10 @@ class BuildService:
             cfg["compile_jobs"] = max(0, min(16, int(cfg.get("compile_jobs", 0))))
         except Exception:
             cfg["compile_jobs"] = 0
+        try:
+            cfg["solve_jobs"] = max(0, min(16, int(cfg.get("solve_jobs", 0))))
+        except Exception:
+            cfg["solve_jobs"] = 0
         try:
             cfg["run_jobs"] = max(0, min(16, int(cfg.get("run_jobs", 0))))
         except Exception:
@@ -312,13 +317,29 @@ class BuildService:
 
             current_step = "solve"
             accepted = compiled_bins["accepted_solution"]
-            slog = []
+            solve_jobs = self._effective_compile_jobs(build_cfg.get("solve_jobs", 0), len(test_files))
+            solve_results: dict[str, tuple[int, str, str | None]] = {}
+            with ThreadPoolExecutor(max_workers=solve_jobs) as pool:
+                future_map = {}
+                for t in test_files:
+                    out = artifact_paths.ans / t.name.replace(".in", ".ans")
+                    future_map[pool.submit(run_cmd, [str(accepted)], stdin_path=t, stdout_path=out, timeout=30)] = t
+                for future in as_completed(future_map):
+                    t = future_map[future]
+                    try:
+                        proc = future.result()
+                        solve_results[t.name] = (proc.returncode, proc.stderr, None)
+                    except Exception as exc:
+                        solve_results[t.name] = (-1, "", str(exc))
+
+            slog = [f"solve_jobs={solve_jobs}"]
             for t in test_files:
                 failing_test = t.name
-                out = artifact_paths.ans / t.name.replace(".in", ".ans")
-                proc = run_cmd([str(accepted)], stdin_path=t, stdout_path=out, timeout=30)
-                slog.append(f"{t.name}: rc={proc.returncode}\n{proc.stderr}\n")
-                if proc.returncode != 0:
+                rc, stderr, err = solve_results[t.name]
+                if err is not None:
+                    raise RuntimeError(f"accepted solution failed on {t.name}: {err}")
+                slog.append(f"{t.name}: rc={rc}\n{stderr}\n")
+                if rc != 0:
                     raise RuntimeError(f"accepted solution failed on {t.name}")
             (logs_dir / "solve.log").write_text("\n".join(slog), encoding="utf-8")
             steps.append({"step": "solve", "status": "ok", "log": "logs/solve.log"})
@@ -333,6 +354,8 @@ class BuildService:
                 generation_params={
                     "generator_runs": int(build_cfg.get("generator_runs", 3)),
                     "compile_jobs": compile_jobs,
+                    "solve_jobs": int(build_cfg.get("solve_jobs", 0)),
+                    "solve_jobs_effective": solve_jobs,
                     "run_jobs": int(build_cfg.get("run_jobs", 0)),
                     "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
                     "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
