@@ -73,6 +73,8 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Interactive runs now pass `FEEDBACK_DIR` to interactors for feedback file generation parity.
 - Commit-based snapshot creation now uses `git archive` extraction (faster and avoids clone overhead).
 - Build/solve/validate execution paths now use direct stdin/stdout process wiring (fewer shell invocations).
+- Build config now supports explicit source overrides (`*_source`) and multi-generator lists (`generator_sources`, `generator_args`).
+- Run submission compilation now reuses the unified toolchain compile cache.
 - Ephemeral snapshot directories are cleaned after build/preview jobs.
 - Preview service now fails gracefully when `pdflatex` is unavailable.
 - Export generation hardened with metadata checks and guaranteed temp directory cleanup.

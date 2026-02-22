@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from app.db import DB, now_iso
+from app.services.toolchain_service import ToolchainService
 from app.services.util import run_cmd
 from app.services.workspace_service import WorkspaceService
 
@@ -18,9 +19,10 @@ DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<leve
 
 
 class RunService:
-    def __init__(self, db: DB, workspace_service: WorkspaceService):
+    def __init__(self, db: DB, workspace_service: WorkspaceService, toolchain: ToolchainService):
         self.db = db
         self.workspace_service = workspace_service
+        self.toolchain = toolchain
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
@@ -224,20 +226,21 @@ class RunService:
             source_label = submission_path
             compile_workspace = workspace
 
-        compile_cmd = ["g++", "-O2", "-std=c++20", str(sub_src), "-o", str(sub_bin)]
+        include_dirs: list[Path] = []
         include_dir = workspace / "third_party" / "testlib"
         if include_dir.exists():
-            compile_cmd.extend(["-I", str(include_dir)])
+            include_dirs.append(include_dir)
 
         if compile_workspace is not None:
             with self.workspace_service.workspace_lock(workspace):
-                cproc = run_cmd(compile_cmd)
+                ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
         else:
-            cproc = run_cmd(compile_cmd)
+            ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
 
-        compile_diagnostics = self._collect_diagnostics(compile_workspace, f"{cproc.stdout}\n{cproc.stderr}")
-        if cproc.returncode != 0:
-            (run_root / "compile.log").write_text(cproc.stdout + cproc.stderr, encoding="utf-8")
+        compile_log = f"{cout}\n{cerr}".strip()
+        compile_diagnostics = self._collect_diagnostics(compile_workspace, compile_log)
+        if not ok:
+            (run_root / "compile.log").write_text(compile_log + "\n", encoding="utf-8")
             self.db.execute(
                 "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
                 [
@@ -247,6 +250,7 @@ class RunService:
                             "error": "compile_error",
                             "compile_log": "compile.log",
                             "compile_diagnostics": compile_diagnostics,
+                            "toolchain_digest": toolchain_digest,
                             "source": source_label,
                         }
                     ),
@@ -358,6 +362,7 @@ class RunService:
                 "tests": verdicts,
                 "feedback_dir": str(feedback_dir),
                 "compile_diagnostics": compile_diagnostics,
+                "toolchain_digest": toolchain_digest,
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self.db.execute(

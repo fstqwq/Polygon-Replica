@@ -33,12 +33,35 @@ class BuildService:
         files = sorted(base.glob("*.cpp"))
         return files[0] if files else None
 
+    def _resolve_source(self, snapshot: Path, rel_path: str) -> Path:
+        p = (snapshot / rel_path).resolve()
+        if snapshot.resolve() not in p.parents:
+            raise RuntimeError(f"invalid configured source path: {rel_path}")
+        if not p.exists() or not p.is_file():
+            raise RuntimeError(f"configured source does not exist: {rel_path}")
+        return p
+
+    def _select_source(
+        self,
+        snapshot: Path,
+        build_cfg: dict,
+        config_key: str,
+        folder: str,
+        preferred: str | None = None,
+    ) -> Path | None:
+        configured = build_cfg.get(config_key)
+        if configured:
+            return self._resolve_source(snapshot, str(configured))
+        return self._find_cpp(snapshot, folder, preferred=preferred)
+
     def _load_build_config(self, snapshot: Path) -> dict:
         cfg = {
             "generator_runs": 3,
             "require_generator": False,
             "require_validator": True,
             "require_checker": True,
+            "generator_args": [],
+            "generator_sources": [],
         }
         path = snapshot / "config" / "build.json"
         if path.exists():
@@ -46,6 +69,10 @@ class BuildService:
                 cfg.update(json.loads(path.read_text(encoding="utf-8")))
             except json.JSONDecodeError:
                 pass
+        if not isinstance(cfg.get("generator_args"), list):
+            cfg["generator_args"] = []
+        if not isinstance(cfg.get("generator_sources"), list):
+            cfg["generator_sources"] = []
         return cfg
 
     def _collect_diagnostics(self, snapshot: Path, text: str) -> list[dict]:
@@ -106,12 +133,29 @@ class BuildService:
 
         try:
             include_dirs = [snapshot / "third_party/testlib"]
+            generator_targets: list[tuple[str, Path | None, Path]] = []
+            configured_generators = [str(x) for x in build_cfg.get("generator_sources", []) if str(x).strip()]
+            if configured_generators:
+                for idx, rel in enumerate(configured_generators, start=1):
+                    generator_targets.append((f"generator_{idx}", self._resolve_source(snapshot, rel), bin_dir / f"generator_{idx}"))
+            else:
+                gen_src = self._select_source(snapshot, build_cfg, "generator_source", "generators")
+                generator_targets.append(("generator", gen_src, bin_dir / "generator"))
+
+            accepted_src: Path | None
+            if build_cfg.get("accepted_solution_source"):
+                accepted_src = self._resolve_source(snapshot, str(build_cfg["accepted_solution_source"]))
+            elif build_cfg.get("accepted_source"):
+                accepted_src = self._resolve_source(snapshot, str(build_cfg["accepted_source"]))
+            else:
+                accepted_src = self._find_cpp(snapshot, "solutions", preferred="accepted.cpp") or self._find_cpp(snapshot, "solutions")
+
             compile_targets = [
-                ("generator", self._find_cpp(snapshot, "generators"), bin_dir / "generator"),
-                ("validator", self._find_cpp(snapshot, "validators"), bin_dir / "validator"),
-                ("checker", self._find_cpp(snapshot, "checkers"), bin_dir / "checker"),
-                ("interactor", self._find_cpp(snapshot, "interactors"), bin_dir / "interactor"),
-                ("accepted_solution", self._find_cpp(snapshot, "solutions", preferred="accepted.cpp") or self._find_cpp(snapshot, "solutions"), bin_dir / "accepted_solution"),
+                *generator_targets,
+                ("validator", self._select_source(snapshot, build_cfg, "validator_source", "validators"), bin_dir / "validator"),
+                ("checker", self._select_source(snapshot, build_cfg, "checker_source", "checkers"), bin_dir / "checker"),
+                ("interactor", self._select_source(snapshot, build_cfg, "interactor_source", "interactors"), bin_dir / "interactor"),
+                ("accepted_solution", accepted_src, bin_dir / "accepted_solution"),
             ]
 
             compiled_bins: dict[str, Path] = {}
@@ -128,7 +172,8 @@ class BuildService:
                     raise RuntimeError(f"compile failed: {name}")
                 compiled_bins[name] = output
 
-            if build_cfg.get("require_generator") and "generator" not in compiled_bins:
+            has_generator_compiled = any(name.startswith("generator") for name in compiled_bins)
+            if build_cfg.get("require_generator") and not has_generator_compiled:
                 raise RuntimeError("generator is required by config/build.json but missing")
             if build_cfg.get("require_validator", True) and "validator" not in compiled_bins:
                 raise RuntimeError("validator source is required")
@@ -151,20 +196,24 @@ class BuildService:
                     test_files.append(dst)
                     counter += 1
 
-            gen = compiled_bins.get("generator")
+            generator_bins = [compiled_bins[name] for name, _, _ in generator_targets if name in compiled_bins]
             gen_logs: list[str] = []
-            if gen:
+            if generator_bins:
                 runs = int(build_cfg.get("generator_runs", 3))
-                for i in range(runs):
-                    dst = artifact_paths.tests / f"{counter:03d}.in"
-                    proc = run_cmd([str(gen)], timeout=30)
-                    gen_logs.append(f"case={i + 1} rc={proc.returncode}\n{proc.stderr}\n")
-                    if proc.returncode != 0:
-                        failing_test = dst.name
-                        raise RuntimeError(f"generator failed on case {i + 1}")
-                    dst.write_text(proc.stdout, encoding="utf-8")
-                    test_files.append(dst)
-                    counter += 1
+                generator_args = [str(x) for x in build_cfg.get("generator_args", [])]
+                for gen_index, gen in enumerate(generator_bins, start=1):
+                    for i in range(runs):
+                        dst = artifact_paths.tests / f"{counter:03d}.in"
+                        proc = run_cmd([str(gen), *generator_args], timeout=30)
+                        gen_logs.append(
+                            f"generator={gen_index} case={i + 1} rc={proc.returncode}\n{proc.stderr}\n"
+                        )
+                        if proc.returncode != 0:
+                            failing_test = dst.name
+                            raise RuntimeError(f"generator failed on generator={gen_index} case={i + 1}")
+                        dst.write_text(proc.stdout, encoding="utf-8")
+                        test_files.append(dst)
+                        counter += 1
             if not test_files:
                 raise RuntimeError("no tests were generated (manual + generator)")
             (logs_dir / "generate.log").write_text(
@@ -205,7 +254,11 @@ class BuildService:
                 source_ref=source_ref,
                 toolchain_digest=toolchain_digest,
                 seed=seed,
-                generation_params={"generator_runs": int(build_cfg.get("generator_runs", 3))},
+                generation_params={
+                    "generator_runs": int(build_cfg.get("generator_runs", 3)),
+                    "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
+                    "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
+                },
                 steps=steps,
             )
 
