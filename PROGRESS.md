@@ -78,8 +78,12 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Ephemeral snapshot directories are cleaned after build/preview jobs.
 - Preview service now fails gracefully when `pdflatex` is unavailable.
 - Export generation hardened with metadata checks and guaranteed temp directory cleanup.
+- Export generation now produces format-structured Kattis (`2025-09`) and DOMjudge legacy-icpc package layouts with statement/data/submissions/validators paths.
+- Polygon exports are now slimmed to manifest + build step logs + statement preview (+ tests/ans only for full) and exclude heavy run replay payloads.
+- Run submission flow now records deterministic failed run metadata (`summary.json`, `compile.log`) even when setup/compile throws before test execution.
+- Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Added reusable local validation script: `scripts/smoke_test.py`.
-- Smoke coverage now includes `pass-fail`, `multi-pass`, and `interactive` run modes.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, and export zip structure assertions.
 
 ## Upstream Dependency Integration
 
@@ -91,7 +95,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 
 - `python3 -m compileall app`: pass.
 - Local smoke validation (venv, UI/API routing, build/preview/run/export path, upload run path): pass under local `./var` roots.
-- `./scripts/smoke_test.py` (with `.venv/bin/python`, includes directory zip endpoint checks): pass.
+- `./scripts/smoke_test.py` (with `.venv/bin/python`, includes directory zip endpoint checks and export layout checks): pass.
 
 ## Known Operational Notes
 

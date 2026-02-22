@@ -10,10 +10,13 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build pipeline (`compile -> generate -> validate -> solve -> persist`) with failed-step metadata
 - Runner page with pass-fail / interactive / multi-pass modes and workspace-or-upload submissions
 - Exporter page for Kattis / DOMjudge / Polygon zips
+  - Kattis and DOMjudge exports now emit format-structured package layouts (problem metadata, statement, test data, submissions, validators)
+  - Polygon exports are slimmed to build outputs and step logs (run replay payloads excluded)
 - Artifact browsing plus directory zip download endpoints for generated outputs
 - Build config supports explicit source overrides and multi-generator inputs (`config/build.json`)
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
+- Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`
 
 ## Quick Start
 
@@ -38,4 +41,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows.
+  - Covers pass-fail, multi-pass, and interactive run flows, missing-submission failure handling, and export zip structure checks.

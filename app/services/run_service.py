@@ -210,59 +210,55 @@ class RunService:
 
         workspace = Path(ctx["workspace"]["path"])
         sub_bin = run_root / "submission"
+        compile_log_file = run_root / "compile.log"
         compile_diagnostics: list[dict] = []
         source_label = submission_path or "upload"
-
-        if upload_content:
-            suffix = Path(upload_filename or "submission.cpp").suffix or ".cpp"
-            sub_src = run_root / f"uploaded_submission{suffix}"
-            sub_src.write_bytes(upload_content)
-            source_label = upload_filename or sub_src.name
-            compile_workspace = None
-        else:
-            if not submission_path:
-                raise RuntimeError("submission_path is required when upload is not provided")
-            sub_src = workspace / submission_path
-            source_label = submission_path
-            compile_workspace = workspace
-
-        include_dirs: list[Path] = []
-        include_dir = workspace / "third_party" / "testlib"
-        if include_dir.exists():
-            include_dirs.append(include_dir)
-
-        if compile_workspace is not None:
-            with self.workspace_service.workspace_lock(workspace):
-                ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
-        else:
-            ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
-
-        compile_log = f"{cout}\n{cerr}".strip()
-        compile_log_file = run_root / "compile.log"
-        compile_log_file.write_text((compile_log + "\n") if compile_log else "", encoding="utf-8")
-        compile_diagnostics = self._collect_diagnostics(compile_workspace, compile_log)
-        if not ok:
-            self.db.execute(
-                "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                [
-                    "failed",
-                    json.dumps(
-                        {
-                            "error": "compile_error",
-                            "compile_log": "compile.log",
-                            "compile_diagnostics": compile_diagnostics,
-                            "toolchain_digest": toolchain_digest,
-                            "source": source_label,
-                        }
-                    ),
-                    now_iso(),
-                    run_id,
-                ],
-            )
-            return run_id
-
         verdicts = []
+        toolchain_digest = "unknown"
+        compile_workspace: Path | None = None
         try:
+            if upload_content:
+                suffix = Path(upload_filename or "submission.cpp").suffix or ".cpp"
+                sub_src = run_root / f"uploaded_submission{suffix}"
+                sub_src.write_bytes(upload_content)
+                source_label = upload_filename or sub_src.name
+                compile_workspace = None
+            else:
+                if not submission_path:
+                    raise RuntimeError("submission_path is required when upload is not provided")
+                sub_src = workspace / submission_path
+                source_label = submission_path
+                compile_workspace = workspace
+
+            include_dirs: list[Path] = []
+            include_dir = workspace / "third_party" / "testlib"
+            if include_dir.exists():
+                include_dirs.append(include_dir)
+
+            if compile_workspace is not None:
+                with self.workspace_service.workspace_lock(workspace):
+                    ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
+            else:
+                ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
+
+            compile_log = f"{cout}\n{cerr}".strip()
+            compile_log_file.write_text((compile_log + "\n") if compile_log else "", encoding="utf-8")
+            compile_diagnostics = self._collect_diagnostics(compile_workspace, compile_log)
+            if not ok:
+                summary = {
+                    "error": "compile_error",
+                    "compile_log": "compile.log",
+                    "compile_diagnostics": compile_diagnostics,
+                    "toolchain_digest": toolchain_digest,
+                    "source": source_label,
+                }
+                (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+                self.db.execute(
+                    "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
+                    ["failed", json.dumps(summary), now_iso(), run_id],
+                )
+                return run_id
+
             tests = sorted(tests_dir.glob("*.in"))
             if not tests:
                 raise RuntimeError("selected build has no tests")
@@ -372,6 +368,8 @@ class RunService:
                 ["ok", json.dumps(summary), now_iso(), run_id],
             )
         except Exception as exc:
+            if not compile_log_file.exists():
+                compile_log_file.write_text(str(exc) + "\n", encoding="utf-8")
             summary = {
                 "error": str(exc),
                 "mode": mode,
@@ -379,6 +377,8 @@ class RunService:
                 "tests": verdicts,
                 "feedback_dir": str(feedback_dir),
                 "compile_diagnostics": compile_diagnostics,
+                "compile_log": "compile.log",
+                "toolchain_digest": toolchain_digest,
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self.db.execute(

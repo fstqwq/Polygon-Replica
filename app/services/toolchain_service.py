@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 
 from app.services.util import run_cmd, sha256_file
@@ -35,7 +36,7 @@ class ToolchainService:
         cache_bin.parent.mkdir(parents=True, exist_ok=True)
         if cache_bin.exists():
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(cache_bin.read_bytes())
+            shutil.copy2(cache_bin, output)
             output.chmod(0o755)
             return True, "", "", toolchain_digest
 
@@ -45,5 +46,6 @@ class ToolchainService:
         cmd += [str(source), "-o", str(output)]
         proc = run_cmd(cmd)
         if proc.returncode == 0 and output.exists():
-            cache_bin.write_bytes(output.read_bytes())
+            shutil.copy2(output, cache_bin)
+            cache_bin.chmod(0o755)
         return proc.returncode == 0, proc.stdout, proc.stderr, toolchain_digest

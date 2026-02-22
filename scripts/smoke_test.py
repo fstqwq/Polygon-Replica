@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import zipfile
 from pathlib import Path
 
 
@@ -14,6 +15,31 @@ def ensure_local_env() -> None:
     os.environ.setdefault("POLYGONLIKE_RUN_ROOT", "./var/srv/runs")
     os.environ.setdefault("POLYGONLIKE_ARTIFACTS_ROOT", "./var/lib/polygonlike/artifacts")
     os.environ.setdefault("POLYGONLIKE_CACHE_ROOT", "./var/cache/polygonlike")
+
+
+def _zip_entries(path: Path) -> list[str]:
+    with zipfile.ZipFile(path) as zf:
+        return zf.namelist()
+
+
+def _has_suffix(entries: list[str], suffix: str) -> bool:
+    target = suffix.strip("/")
+    for name in entries:
+        n = name.rstrip("/")
+        if n == target or n.endswith("/" + target):
+            return True
+    return False
+
+
+def _expect_suffix(entries: list[str], suffix: str, label: str) -> None:
+    if not _has_suffix(entries, suffix):
+        raise RuntimeError(f"{label} missing required path: {suffix}")
+
+
+def _expect_absent_fragment(entries: list[str], fragment: str, label: str) -> None:
+    for name in entries:
+        if fragment in name:
+            raise RuntimeError(f"{label} should not contain: {fragment}")
 
 
 def main() -> None:
@@ -121,10 +147,52 @@ def main() -> None:
     if not interactive_summary.get("tests") or interactive_summary["tests"][0].get("verdict") != "OK":
         raise RuntimeError("interactive run did not produce OK verdict")
 
+    run_id_missing = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        submission_path="solutions/missing.cpp",
+        mode="pass-fail",
+    )
+    rrow_missing = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_missing])
+    if rrow_missing is None or rrow_missing["status"] != "failed":
+        raise RuntimeError(f"missing-source run should fail: {rrow_missing}")
+    missing_summary = json.loads(rrow_missing["summary_json"])
+    if missing_summary.get("compile_log") != "compile.log":
+        raise RuntimeError("missing-source failure did not expose compile.log")
+
+    export_outputs: dict[str, Path] = {}
     for export_type in ["kattis", "domjudge", "polygon-standard", "polygon-full"]:
         out = export_service.create_export("sample", build_id, export_type)
         if not out.exists():
             raise RuntimeError(f"missing export {export_type}")
+        export_outputs[export_type] = out
+
+    kattis_entries = _zip_entries(export_outputs["kattis"])
+    _expect_suffix(kattis_entries, "problem.yaml", "kattis")
+    _expect_suffix(kattis_entries, "statement/problem.en.tex", "kattis")
+    _expect_suffix(kattis_entries, "data/secret/001.in", "kattis")
+    _expect_suffix(kattis_entries, "submissions/accepted/accepted.cpp", "kattis")
+    _expect_suffix(kattis_entries, "input_validators/validator.cpp", "kattis")
+
+    domjudge_entries = _zip_entries(export_outputs["domjudge"])
+    _expect_suffix(domjudge_entries, "problem.yaml", "domjudge")
+    _expect_suffix(domjudge_entries, "problem_statement/problem.en.tex", "domjudge")
+    _expect_suffix(domjudge_entries, "data/secret/001.in", "domjudge")
+    _expect_suffix(domjudge_entries, "submissions/accepted/accepted.cpp", "domjudge")
+    _expect_suffix(domjudge_entries, "input_validators/validator.cpp", "domjudge")
+
+    polygon_standard_entries = _zip_entries(export_outputs["polygon-standard"])
+    _expect_suffix(polygon_standard_entries, "manifest.json", "polygon-standard")
+    _expect_absent_fragment(polygon_standard_entries, "/logs/run-", "polygon-standard")
+    if _has_suffix(polygon_standard_entries, "tests/001.in"):
+        raise RuntimeError("polygon-standard should not contain tests/")
+
+    polygon_full_entries = _zip_entries(export_outputs["polygon-full"])
+    _expect_suffix(polygon_full_entries, "manifest.json", "polygon-full")
+    _expect_suffix(polygon_full_entries, "tests/001.in", "polygon-full")
+    _expect_suffix(polygon_full_entries, "ans/001.ans", "polygon-full")
+    _expect_absent_fragment(polygon_full_entries, "/logs/run-", "polygon-full")
 
     with TestClient(app) as client:
         r = client.get(
