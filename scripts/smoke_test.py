@@ -1606,6 +1606,50 @@ def main() -> None:
     if cache_after_second <= cache_after_repeat or cache_after_first < cache_before:
         raise RuntimeError("compile cache counters were inconsistent during dependency checks")
 
+    ext_dep_stem = f"cache_external_{uuid.uuid4().hex[:8]}"
+    ext_header = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"{ext_dep_stem}.h"
+    ext_header.write_text("#define ANSWER_VALUE 1\n", encoding="utf-8")
+    ext_source = ws / f"solutions/{ext_dep_stem}.cpp"
+    ext_source.write_text(
+        f'#include "{ext_header.resolve().as_posix()}"\n#include <bits/stdc++.h>\nusing namespace std; int main(){{ cout<<ANSWER_VALUE<<"\\n"; }}\n',
+        encoding="utf-8",
+    )
+    cache_external_before = cache_count()
+    run_id_external_first = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        submission_path=f"solutions/{ext_dep_stem}.cpp",
+        mode="pass-fail",
+    )
+    rrow_external_first = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_external_first])
+    if rrow_external_first is None or rrow_external_first["status"] != "ok":
+        raise RuntimeError(f"external dependency first run failed: {rrow_external_first}")
+    external_first_summary = json.loads(rrow_external_first["summary_json"])
+    if external_first_summary["tests"][0]["verdict"] != "OK":
+        raise RuntimeError("external dependency first run should be OK")
+    cache_external_after_first = cache_count()
+    if cache_external_after_first != cache_external_before:
+        raise RuntimeError("external dependency compile should bypass cache population")
+
+    ext_header.write_text("#define ANSWER_VALUE -1\n", encoding="utf-8")
+    run_id_external_second = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        submission_path=f"solutions/{ext_dep_stem}.cpp",
+        mode="pass-fail",
+    )
+    rrow_external_second = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_external_second])
+    if rrow_external_second is None or rrow_external_second["status"] != "ok":
+        raise RuntimeError(f"external dependency second run failed: {rrow_external_second}")
+    external_second_summary = json.loads(rrow_external_second["summary_json"])
+    if external_second_summary["tests"][0]["verdict"] == "OK":
+        raise RuntimeError("external dependency compile should re-evaluate header changes outside cache roots")
+    cache_external_after_second = cache_count()
+    if cache_external_after_second != cache_external_before:
+        raise RuntimeError("external dependency compile should bypass cache entries across reruns")
+
     run_id_missing = run_service.run_submission(
         "sample",
         "alice",

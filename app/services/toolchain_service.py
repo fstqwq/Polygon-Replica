@@ -22,14 +22,46 @@ class ToolchainService:
         payload = "\n".join([cxx, *cxxflags]).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()[:16]
 
-    def _dependency_files(self, source: Path, include_dirs: list[Path]) -> list[Path]:
-        include_roots = [d.resolve() for d in include_dirs]
+    def _is_within_roots(self, resolved_path: Path, roots: list[Path]) -> bool:
+        for root in roots:
+            if root == resolved_path or root in resolved_path.parents:
+                return True
+        return False
+
+    def _dependency_files(
+        self,
+        source: Path,
+        include_dirs: list[Path],
+        allowed_roots: list[Path] | None = None,
+    ) -> tuple[list[Path], bool]:
+        include_roots: list[Path] = []
+        for d in include_dirs:
+            try:
+                include_roots.append(d.resolve())
+            except OSError:
+                continue
+        normalized_allowed: list[Path] = []
+        for root in allowed_roots or []:
+            try:
+                resolved = root.resolve()
+            except OSError:
+                continue
+            if resolved not in normalized_allowed:
+                normalized_allowed.append(resolved)
         seen: set[Path] = set()
-        stack: list[Path] = [source.resolve()]
+        has_external_dependency = False
+        try:
+            source_resolved = source.resolve()
+        except OSError:
+            return [], False
+        stack: list[Path] = [source_resolved]
 
         while stack:
             current = stack.pop()
             if current in seen or not current.exists() or not current.is_file():
+                continue
+            if normalized_allowed and not self._is_within_roots(current, normalized_allowed):
+                has_external_dependency = True
                 continue
             seen.add(current)
 
@@ -42,15 +74,21 @@ class ToolchainService:
                 inc = match.group(1)
                 candidate = (current.parent / inc).resolve()
                 if candidate.exists() and candidate.is_file():
+                    if normalized_allowed and not self._is_within_roots(candidate, normalized_allowed):
+                        has_external_dependency = True
+                        continue
                     stack.append(candidate)
                     continue
                 for root in include_roots:
                     p = (root / inc).resolve()
                     if p.exists() and p.is_file():
+                        if normalized_allowed and not self._is_within_roots(p, normalized_allowed):
+                            has_external_dependency = True
+                            break
                         stack.append(p)
                         break
 
-        return sorted(seen, key=lambda p: str(p))
+        return sorted(seen, key=lambda p: str(p)), has_external_dependency
 
     def _canonical_dep_id(self, dep: Path, roots: list[Path]) -> str:
         dep_resolved = dep.resolve()
@@ -78,13 +116,17 @@ class ToolchainService:
         cxxflags: list[str] | None = None,
     ) -> tuple[bool, str, str, str]:
         cxxflags = cxxflags or ["-O2", "-std=c++20", "-pipe", "-static"]
-        toolchain_digest = self.digest(cxx, cxxflags)
-        dep_files = self._dependency_files(source, include_dirs)
         normalized_roots: list[Path] = []
         for root in [*(path_roots or []), source.parent, *include_dirs]:
             resolved = root.resolve()
             if resolved not in normalized_roots:
                 normalized_roots.append(resolved)
+        toolchain_digest = self.digest(cxx, cxxflags)
+        dep_files, has_external_dependency = self._dependency_files(
+            source,
+            include_dirs,
+            allowed_roots=normalized_roots,
+        )
         key_parts = []
         for p in dep_files:
             dep_id = self._canonical_dep_id(p, normalized_roots)
@@ -95,6 +137,14 @@ class ToolchainService:
         cache_bin.parent.mkdir(parents=True, exist_ok=True)
         cache_lock = cache_bin.with_suffix(".lock")
         output.parent.mkdir(parents=True, exist_ok=True)
+        if has_external_dependency:
+            cmd = [cxx, *cxxflags]
+            for inc in include_dirs:
+                cmd += ["-I", str(inc)]
+            cmd += [str(source), "-o", str(output)]
+            proc = run_cmd(cmd)
+            return proc.returncode == 0, proc.stdout, proc.stderr, toolchain_digest
+
         with cache_lock.open("w", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             if cache_bin.exists():
