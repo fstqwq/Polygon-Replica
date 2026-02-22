@@ -4,6 +4,19 @@
 
 This repository defines a Polygon-like problem authoring system with Git as the single source of truth, local filesystem storage for build outputs, support for `testlib.h`, and TeX statement compilation with preview. The system includes a web UI that exposes the core workflow end-to-end.
 
+## Upstream References
+
+The system uses these upstream references as canonical sources for required assets and format behavior:
+
+- `testlib`: https://github.com/MikeMirzayanov/testlib
+- `Kattis Problem Package Format`: https://github.com/Kattis/problem-package-format
+
+Operational policy:
+
+- `third_party/testlib/testlib.h` in seeded problem repositories must be sourced from upstream `testlib`.
+- Export/format behavior, schemas, and regression examples for Kattis packaging should be derived from upstream `problem-package-format` spec/examples.
+- When required files/tests are missing locally, obtain or refresh them from these upstream repositories.
+
 ## System Overview
 
 ### Core Concepts

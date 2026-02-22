@@ -29,3 +29,8 @@ Open: `http://127.0.0.1:8000`
 - Default host roots follow `AGENTS.md` (`/srv/git`, `/srv/workspaces`, `/srv/runs`, `/var/lib/polygonlike/artifacts`, `/var/cache/polygonlike`).
 - For local dev without root paths, `scripts/bootstrap_demo.sh` maps all roots under `./var/`.
 - Build diagnostics are parsed and linked to Files editor paths and lines.
+- Upstream assets are vendored under `third_party/upstream/`:
+  - `testlib.h` from `MikeMirzayanov/testlib`
+  - Kattis package spec/schemas/examples from `Kattis/problem-package-format`
+- Refresh vendored upstream files with:
+  - `./scripts/sync_upstream_assets.sh`

@@ -103,7 +103,11 @@ class WorkspaceService:
             readme.write_text("# Problem repository\n", encoding="utf-8")
         testlib = workspace / "third_party/testlib/testlib.h"
         if not testlib.exists():
-            testlib.write_text("// place fixed testlib.h copy here\n", encoding="utf-8")
+            source = (Path(__file__).resolve().parents[2] / "third_party/upstream/testlib/testlib.h")
+            if source.exists():
+                testlib.write_bytes(source.read_bytes())
+            else:
+                testlib.write_text("// place fixed testlib.h copy here\n", encoding="utf-8")
         if not run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0:
             run_cmd(["git", "-C", str(workspace), "config", "user.email", "system@polygonlike.local"])
             run_cmd(["git", "-C", str(workspace), "config", "user.name", "Polygonlike System"])

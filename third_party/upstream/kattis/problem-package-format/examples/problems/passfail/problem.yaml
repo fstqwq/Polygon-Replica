@@ -1,0 +1,10 @@
+problem_format_version: 2025-09
+type: pass-fail
+name: Sample problem
+uuid: 789c94bb-11e7-47f4-bfe6-4988f460f021
+credits:
+  authors: Author <author@judge.com>
+source: My Contest 2024
+source_url: https://my.contest.com/2024
+license: cc by-sa
+rights_owner: My Contest
