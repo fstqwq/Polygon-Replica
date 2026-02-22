@@ -386,6 +386,8 @@ def main() -> None:
         raise RuntimeError("run config did not preserve run_jobs=2")
     if int(ws_summary.get("run_config", {}).get("run_jobs_effective", 0)) != 2:
         raise RuntimeError("run config did not expose expected effective run_jobs")
+    if ws_summary.get("feedback_dir") != "feedback_dir":
+        raise RuntimeError("run summary should expose feedback_dir as repository-relative path")
 
     upload_src = (
         b'#include <bits/stdc++.h>\nusing namespace std; int main(){ long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n"; }\n'
@@ -423,6 +425,8 @@ def main() -> None:
     interactive_summary = json.loads(rrow_interactive["summary_json"])
     if not interactive_summary.get("tests") or interactive_summary["tests"][0].get("verdict") != "OK":
         raise RuntimeError("interactive run did not produce OK verdict")
+    if interactive_summary.get("feedback_dir") != "feedback_dir":
+        raise RuntimeError("interactive run summary should expose feedback_dir as repository-relative path")
 
     run_id_interactive_re = run_service.run_submission(
         "sample",
@@ -508,6 +512,8 @@ def main() -> None:
     traversal_summary = json.loads(rrow_traversal["summary_json"])
     if "workspace" not in str(traversal_summary.get("error", "")):
         raise RuntimeError("path traversal failure did not include workspace boundary error")
+    if traversal_summary.get("feedback_dir") != "feedback_dir":
+        raise RuntimeError("failed run summary should expose feedback_dir as repository-relative path")
 
     run_id_bad_build = run_service.run_submission(
         "sample",

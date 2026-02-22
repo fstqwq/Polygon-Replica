@@ -310,7 +310,6 @@ class RunService:
         ans: Path,
         test_feedback_dir: Path,
         run_root: Path,
-        artifact_root: Path,
     ) -> dict:
         test_feedback_dir.mkdir(parents=True, exist_ok=True)
         test_result = {
@@ -591,7 +590,6 @@ class RunService:
                             ans_dir / f"{test.stem}.ans",
                             feedback_dir / test.stem,
                             run_root,
-                            artifact_root,
                         ): idx
                         for idx, test in enumerate(tests)
                     }
@@ -614,7 +612,6 @@ class RunService:
                             ans_dir / f"{test.stem}.ans",
                             feedback_dir / test.stem,
                             run_root,
-                            artifact_root,
                         )
                     )
 
@@ -622,7 +619,7 @@ class RunService:
                 "mode": mode,
                 "source": source_label,
                 "tests": verdicts,
-                "feedback_dir": str(feedback_dir),
+                "feedback_dir": "feedback_dir",
                 "compile_diagnostics": compile_diagnostics,
                 "compile_log": "compile.log",
                 "toolchain_digest": toolchain_digest,
@@ -641,7 +638,7 @@ class RunService:
                 "mode": mode,
                 "source": source_label,
                 "tests": verdicts,
-                "feedback_dir": str(feedback_dir),
+                "feedback_dir": "feedback_dir",
                 "compile_diagnostics": compile_diagnostics,
                 "compile_log": "compile.log",
                 "toolchain_digest": toolchain_digest,
