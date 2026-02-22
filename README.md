@@ -41,6 +41,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Export zip hashing now streams file contents (no full-archive memory read during digest computation)
 - Workspace snapshot creation now fast-paths clean workspaces via `git archive` and falls back to full copy for dirty workspaces to preserve uncommitted/untracked files
 - Snapshot materialization now strips symlink entries (for both commit-archive and dirty-workspace paths) to prevent symlink-based host file dereference during build/preview execution.
+- Commit snapshot extraction now uses shell-free `git archive` materialization with safe tar-entry validation (no `bash -lc` pipeline).
 - Preview compilation now reuses cached successful artifacts for identical commit-based preview requests (copying cached PDF/log instead of re-running TeX)
 - Preview compilation now also reuses cached artifacts for clean workspace-HEAD requests when immutable.
 - Build/Preview commit selectors now canonicalize refs (`main`, tags, short SHAs) to immutable commit SHAs before snapshot/cache decisions.
@@ -52,6 +53,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Export generation now writes unique per-generation zip filenames (type + build + export id) so repeated exports do not overwrite historical packages.
 - Polygon exports now operate from build artifacts only (no source snapshot dependency), while Kattis/DOMjudge keep strict commit-snapshot enforcement.
 - Kattis/DOMjudge source snapshots are now symlink-sanitized before export assembly, preventing symlinked repository assets from being copied from host paths.
+- Kattis/DOMjudge export source snapshots now resolve commit refs with `rev-parse --verify` before extraction, and use the same shell-free safe archive extraction path.
 - Workspace pages and recent-* APIs are now strictly workspace-scoped (build/preview/run/export history no longer leaks entries from other users on the same problem).
 - Artifact download/browse/file endpoints now enforce workspace ownership for both build and preview artifact ids.
 - Preview page now ignores foreign-workspace `preview_id` query values to prevent cross-workspace log/PDF detail leaks.

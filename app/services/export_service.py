@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import shlex
 import shutil
 import uuid
 from pathlib import Path
 
 from app.db import DB, now_iso
-from app.services.util import copytree, remove_symlinks, run_cmd, sha256_file
+from app.services.util import copytree, extract_git_archive, remove_symlinks, run_cmd, sha256_file
 
 
 class ExportService:
@@ -108,21 +107,30 @@ class ExportService:
         snapshot = tmp_root / "_source"
         source_commit = str(source_commit or "").strip()
         if source_commit:
-            snapshot.mkdir(parents=True, exist_ok=True)
-            cmd = (
-                "set -euo pipefail; "
-                f"git -C {shlex.quote(str(workspace))} archive {shlex.quote(source_commit)} "
-                f"| tar -x -C {shlex.quote(str(snapshot))}"
+            resolved = run_cmd(
+                [
+                    "git",
+                    "-C",
+                    str(workspace),
+                    "rev-parse",
+                    "--verify",
+                    f"{source_commit}^{{commit}}",
+                ],
+                timeout=120,
             )
-            proc = run_cmd(["bash", "-lc", cmd], timeout=120)
-            if proc.returncode == 0:
+            commit_sha = resolved.stdout.strip()
+            if resolved.returncode != 0 or not commit_sha:
+                detail = (resolved.stderr or resolved.stdout).strip()
+                raise ValueError(
+                    detail or f"unable to snapshot export source commit {source_commit}"
+                )
+            try:
+                extract_git_archive(workspace, commit_sha, snapshot, timeout=120)
                 remove_symlinks(snapshot)
                 return snapshot
-            shutil.rmtree(snapshot, ignore_errors=True)
-            detail = (proc.stderr or proc.stdout).strip()
-            raise ValueError(
-                detail or f"unable to snapshot export source commit {source_commit}"
-            )
+            except Exception as exc:
+                shutil.rmtree(snapshot, ignore_errors=True)
+                raise ValueError(str(exc))
 
         copytree(workspace, snapshot)
         remove_symlinks(snapshot)

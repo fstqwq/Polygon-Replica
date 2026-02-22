@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import fcntl
-import shlex
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
 from app.db import DB, now_iso
 from app.settings import Settings
-from app.services.util import copytree, ensure_dir, remove_symlinks, run_cmd
+from app.services.util import copytree, ensure_dir, extract_git_archive, remove_symlinks, run_cmd
 
 
 class WorkspaceService:
@@ -172,14 +171,7 @@ class WorkspaceService:
 
     def _extract_commit_snapshot(self, workspace: Path, commit: str, snap: Path) -> None:
         ensure_dir(snap)
-        cmd = (
-            "set -euo pipefail; "
-            f"git -C {shlex.quote(str(workspace))} archive {shlex.quote(commit)} "
-            f"| tar -x -C {shlex.quote(str(snap))}"
-        )
-        proc = run_cmd(["bash", "-lc", cmd], timeout=120)
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stderr or proc.stdout)
+        extract_git_archive(workspace, commit, snap, timeout=120)
 
     def resolve_commit(self, workspace: Path, commit_ref: str) -> str:
         proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{commit_ref}^{{commit}}"])

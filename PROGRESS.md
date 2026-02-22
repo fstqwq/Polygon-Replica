@@ -106,6 +106,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Workspace snapshot creation now fast-paths clean workspaces with `git archive` and falls back to copy-tree for dirty workspaces to preserve uncommitted/untracked content.
 - Workspace snapshots are now symlink-sanitized across both commit-archive and dirty-workspace capture paths to prevent symlink-based host file dereference in build/preview jobs.
+- Commit snapshot extraction now uses a shell-free archive materialization path with safe tar-entry validation (eliminates `bash -lc` archive pipes).
 - Preview service now reuses cached successful artifacts for identical commit-based preview requests (copying existing PDF/log).
 - Preview service now also reuses cached artifacts for clean workspace-HEAD requests where source state is immutable.
 - Build/Preview commit inputs are now canonicalized via `git rev-parse --verify <ref>^{commit}` so moving refs (e.g., `main`) map to immutable SHA metadata/cache keys.
@@ -117,6 +118,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Export archives now use unique per-generation filenames (including `build_id` + `export_id`) to avoid overwriting prior exports and preserve DB row/file consistency.
 - Export flow now snapshots source only for Kattis/DOMjudge; Polygon exports are sourced strictly from build artifacts and no longer depend on workspace/commit snapshot reconstruction.
 - Kattis/DOMjudge export source snapshots are now symlink-sanitized before package assembly to prevent symlinked repository assets from leaking host files into exports.
+- Export source snapshot extraction now resolves commit refs via `rev-parse --verify` and uses the shell-free safe archive extraction path.
 - Build/Preview/Run/Export pages and recent-* APIs are now workspace-scoped (`workspace_id` filtered or build-joined), preventing cross-user history leakage within the same problem.
 - Artifact endpoints (`browse`, `download-dir`, file reads) now verify artifact id ownership against the active workspace (builds and previews).
 - Preview detail selection now validates `preview_id` ownership and suppresses foreign-workspace detail rendering.
