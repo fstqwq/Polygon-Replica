@@ -537,6 +537,26 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    dot_build_id = "."
+    dot_root_marker = f"dot-build-root-log-{uuid.uuid4().hex[:8]}"
+    dot_root_log = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / "logs" / f"{dot_root_marker}.log"
+    dot_root_log.parent.mkdir(parents=True, exist_ok=True)
+    dot_root_log.write_text(dot_root_marker + "\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            dot_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "failed",
+            json.dumps({"error": "injected dotted build id"}),
+            str(Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample"),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
     with TestClient(app) as client:
         bad_build_page = client.get("/problems/sample/alice/build", params={"build_id": bad_json_build_id})
         if bad_build_page.status_code != 200:
@@ -550,12 +570,24 @@ def main() -> None:
             )
         if poison_marker in poisoned_build_page.text:
             raise RuntimeError("build page should not read logs from DB-provided artifact_path")
+        dot_build_page = client.get("/problems/sample/alice/build", params={"build_id": dot_build_id})
+        if dot_build_page.status_code != 200:
+            raise RuntimeError(f"build page should tolerate dotted build ids, status={dot_build_page.status_code}")
+        if dot_root_marker in dot_build_page.text:
+            raise RuntimeError("build page should not resolve dotted build ids to problem artifact root")
+        dot_artifact_browse = client.get("/problems/sample/alice/artifacts/%2E/browse", params={"rel": "logs"})
+        if dot_artifact_browse.status_code != 404:
+            raise RuntimeError("artifact browse should reject dotted build ids")
+        dot_manifest = client.get("/api/problems/sample/workspaces/alice/builds/%2E/manifest")
+        if dot_manifest.status_code != 404:
+            raise RuntimeError("workspace manifest endpoint should reject dotted build ids")
         bad_run_page = client.get("/problems/sample/alice/run", params={"run_id": bad_json_run_id})
         if bad_run_page.status_code != 200:
             raise RuntimeError(f"run page should handle malformed summary_json, status={bad_run_page.status_code}")
         if "invalid summary_json for run" not in bad_run_page.text:
             raise RuntimeError("run page did not surface malformed summary_json fallback")
     poison_log.unlink(missing_ok=True)
+    dot_root_log.unlink(missing_ok=True)
 
     upload_src = (
         b'#include <bits/stdc++.h>\nusing namespace std; int main(){ long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n"; }\n'

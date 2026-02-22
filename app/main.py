@@ -69,8 +69,23 @@ def _safe_workspace_path(workspace: Path, rel: str) -> Path:
     return path
 
 
+def _artifact_root(problem: str, artifact_id: str) -> Path:
+    aid = str(artifact_id or "")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", aid):
+        raise HTTPException(status_code=404, detail="artifact not found")
+    base = (settings.artifacts_root / problem).resolve()
+    root = (base / aid).resolve()
+    try:
+        rel = root.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    if len(rel.parts) != 1 or rel.parts[0] != aid:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return root
+
+
 def _safe_artifact_path(problem: str, build_id: str, rel: str) -> Path:
-    root = (settings.artifacts_root / problem / build_id).resolve()
+    root = _artifact_root(problem, build_id)
     path = (root / rel).resolve()
     if root not in path.parents and root != path:
         raise HTTPException(status_code=400, detail="invalid artifact path")
@@ -80,7 +95,7 @@ def _safe_artifact_path(problem: str, build_id: str, rel: str) -> Path:
 
 
 def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Path]:
-    root = (settings.artifacts_root / problem / build_id).resolve()
+    root = _artifact_root(problem, build_id)
     path = (root / rel).resolve()
     if root not in path.parents and root != path:
         raise HTTPException(status_code=400, detail="invalid artifact path")
@@ -479,19 +494,22 @@ def build_page(request: Request, problem: str, user: str):
     summary = None
     diagnostics = []
     if detail:
-        artifact_root = (settings.artifacts_root / problem / str(detail["id"])).resolve()
-        logs_root = artifact_root / "logs"
-        if logs_root.exists() and logs_root.is_dir():
-            for p in sorted(logs_root.glob("*.log")):
-                if p.is_symlink() or not p.is_file():
-                    continue
-                try:
-                    resolved = p.resolve()
-                except OSError:
-                    continue
-                if artifact_root not in resolved.parents and artifact_root != resolved:
-                    continue
-                logs.append({"name": p.name, "content": _read_text_safe(p)})
+        try:
+            artifact_root = _artifact_root(problem, str(detail["id"]))
+            logs_root = artifact_root / "logs"
+            if logs_root.exists() and logs_root.is_dir():
+                for p in sorted(logs_root.glob("*.log")):
+                    if p.is_symlink() or not p.is_file():
+                        continue
+                    try:
+                        resolved = p.resolve()
+                    except OSError:
+                        continue
+                    if artifact_root not in resolved.parents and artifact_root != resolved:
+                        continue
+                    logs.append({"name": p.name, "content": _read_text_safe(p)})
+        except HTTPException:
+            logs = []
         summary = _parse_summary_json(detail["summary_json"], "build")
         if summary:
             maybe_diagnostics = summary.get("diagnostics", [])
@@ -531,17 +549,21 @@ def preview_page(request: Request, problem: str, user: str):
         if preview_row is None:
             preview_id = ""
     if preview_id:
-        root = settings.artifacts_root / problem / preview_id
-        lp = root / "logs" / "latex.log"
-        pdf = root / "statement_preview" / "statement.pdf"
-        pdf_exists = pdf.exists()
-        if lp.exists():
-            log = _read_text_safe(lp)
-            tex_ref = re.compile(r"(?P<file>[\\w./-]+\\.tex):(?P<line>\\d+)")
-            for line in log.splitlines():
-                m = tex_ref.search(line)
-                if m:
-                    log_refs.append({"file": m.group("file"), "line": int(m.group("line")), "context": line})
+        try:
+            root = _artifact_root(problem, preview_id)
+        except HTTPException:
+            preview_id = ""
+        else:
+            lp = root / "logs" / "latex.log"
+            pdf = root / "statement_preview" / "statement.pdf"
+            pdf_exists = pdf.exists()
+            if lp.exists():
+                log = _read_text_safe(lp)
+                tex_ref = re.compile(r"(?P<file>[\\w./-]+\\.tex):(?P<line>\\d+)")
+                for line in log.splitlines():
+                    m = tex_ref.search(line)
+                    if m:
+                        log_refs.append({"file": m.group("file"), "line": int(m.group("line")), "context": line})
     return templates.TemplateResponse(
         request,
         "preview.html",
@@ -837,7 +859,7 @@ def api_workspace_manifest(problem: str, user: str, build_id: str):
     )
     if row is None:
         raise HTTPException(status_code=404, detail="manifest not found in workspace")
-    p = settings.artifacts_root / problem / build_id / "manifest.json"
+    p = _artifact_root(problem, build_id) / "manifest.json"
     if not p.exists():
         raise HTTPException(status_code=404, detail="manifest not found")
     return json.loads(p.read_text(encoding="utf-8"))
