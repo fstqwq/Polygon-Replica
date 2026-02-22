@@ -454,6 +454,67 @@ def main() -> None:
         if "status=failed" not in str(exc):
             raise RuntimeError(f"failed-build export rejection reason mismatch: {exc}")
 
+    binary_problem = f"binaryio-{uuid.uuid4().hex[:8]}"
+    binary_user = f"u-{uuid.uuid4().hex[:6]}"
+    workspace_service.ensure_problem(binary_problem, "Binary IO Safety Problem")
+    workspace_service.ensure_workspace(binary_problem, binary_user)
+    binary_ctx = workspace_service.workspace_context(binary_problem, binary_user)
+    binary_ws = Path(binary_ctx["workspace"]["path"])
+    for d in ["solutions", "validators", "tests/manual", "config"]:
+        (binary_ws / d).mkdir(parents=True, exist_ok=True)
+    binary_input = b"\xff\xfe\x00\x10abc\n"
+    (binary_ws / "tests/manual/001.in").write_bytes(binary_input)
+    (binary_ws / "solutions/accepted.cpp").write_text(
+        (
+            "#include <iostream>\n"
+            "int main(){\n"
+            "  std::ios::sync_with_stdio(false);\n"
+            "  std::cin.tie(nullptr);\n"
+            "  char ch;\n"
+            "  while (std::cin.get(ch)) std::cout.put(ch);\n"
+            "  return 0;\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (binary_ws / "validators/validator.cpp").write_text(
+        "#include <bits/stdc++.h>\nint main(){return 42;}\n",
+        encoding="utf-8",
+    )
+    (binary_ws / "config/build.json").write_text(
+        json.dumps({"generator_runs": 0, "require_checker": False}),
+        encoding="utf-8",
+    )
+    for cmd in [
+        ["git", "-C", str(binary_ws), "add", "."],
+        ["git", "-C", str(binary_ws), "commit", "-m", "seed binary io smoke files"],
+    ]:
+        proc = run_cmd(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"binary-io setup command failed: {' '.join(cmd)}")
+    binary_build_id = build_service.run_build(binary_problem, binary_user)
+    binary_build_row = db.fetch_one("SELECT status FROM builds WHERE id=?", [binary_build_id])
+    if binary_build_row is None or binary_build_row["status"] != "ok":
+        raise RuntimeError(f"binary-io build failed: {binary_build_row}")
+    binary_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / binary_problem / binary_build_id
+    if (binary_root / "tests" / "001.in").read_bytes() != binary_input:
+        raise RuntimeError("binary-io manual test bytes changed during build ingestion")
+    if (binary_root / "ans" / "001.ans").read_bytes() != binary_input:
+        raise RuntimeError("binary-io answer bytes changed during solve step")
+    binary_run_id = run_service.run_submission(
+        binary_problem,
+        binary_user,
+        binary_build_id,
+        submission_path="solutions/accepted.cpp",
+        mode="pass-fail",
+    )
+    binary_run_row = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [binary_run_id])
+    if binary_run_row is None or binary_run_row["status"] != "ok":
+        raise RuntimeError(f"binary-io run failed: {binary_run_row}")
+    binary_summary = json.loads(binary_run_row["summary_json"])
+    if not binary_summary.get("tests") or binary_summary["tests"][0].get("verdict") != "OK":
+        raise RuntimeError("binary-io run verdict should be OK")
+
     for d in ["solutions", "validators", "checkers", "generators", "tests/manual", "config", "statement"]:
         (ws / d).mkdir(parents=True, exist_ok=True)
 
