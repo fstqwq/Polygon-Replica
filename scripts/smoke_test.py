@@ -210,6 +210,32 @@ def main() -> None:
             "9999-01-01T00:00:00Z",
         ],
     )
+    traversal_preview_id = ".."
+    traversal_preview_marker = f"traversal-preview-log-{uuid.uuid4().hex[:8]}"
+    traversal_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"])
+    traversal_pdf = traversal_root / "statement_preview" / "statement.pdf"
+    traversal_log = traversal_root / "logs" / "latex.log"
+    prior_traversal_pdf = traversal_pdf.read_bytes() if traversal_pdf.exists() else None
+    prior_traversal_log = traversal_log.read_bytes() if traversal_log.exists() else None
+    traversal_pdf.parent.mkdir(parents=True, exist_ok=True)
+    traversal_log.parent.mkdir(parents=True, exist_ok=True)
+    traversal_pdf.write_bytes(b"%PDF-1.4\n% traversal preview source\n")
+    traversal_log.write_text(traversal_preview_marker + "\n", encoding="utf-8")
+    db.execute("DELETE FROM previews WHERE id=?", [traversal_preview_id])
+    db.execute(
+        "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            traversal_preview_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            str(traversal_root),
+            "9999-01-01T00:00:01Z",
+            "9999-01-01T00:00:01Z",
+        ],
+    )
     commit_ref = str(ctx["workspace"].get("branch") or "main")
     reused_preview_id = preview_service.compile_preview("sample", "alice", commit=commit_ref)
     reused_preview = db.fetch_one("SELECT status,summary_json,source_commit,source_ref FROM previews WHERE id=?", [reused_preview_id])
@@ -225,6 +251,8 @@ def main() -> None:
         raise RuntimeError(f"commit preview did not reuse cached artifact: {reused_summary}")
     if reused_from == poisoned_preview_id:
         raise RuntimeError("commit preview reuse trusted DB-provided poisoned preview artifact_path")
+    if reused_from == traversal_preview_id:
+        raise RuntimeError("commit preview reuse accepted traversal-style preview id root")
     source_row = db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [reused_from])
     if source_row is None:
         raise RuntimeError(f"commit preview reuse source missing: {reused_from}")
@@ -234,6 +262,14 @@ def main() -> None:
         raise RuntimeError("reused preview pdf mismatch")
     if (reused_preview_root / "logs" / "latex.log").read_text(encoding="utf-8") != (source_root / "logs" / "latex.log").read_text(encoding="utf-8"):
         raise RuntimeError("reused preview log mismatch")
+    if prior_traversal_pdf is None:
+        traversal_pdf.unlink(missing_ok=True)
+    else:
+        traversal_pdf.write_bytes(prior_traversal_pdf)
+    if prior_traversal_log is None:
+        traversal_log.unlink(missing_ok=True)
+    else:
+        traversal_log.write_bytes(prior_traversal_log)
 
     bad_preview_ref = f"does-not-exist-{uuid.uuid4().hex[:8]}"
     bad_preview_id = preview_service.compile_preview("sample", "alice", commit=bad_preview_ref)
@@ -542,6 +578,7 @@ def main() -> None:
     dot_root_log = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / "logs" / f"{dot_root_marker}.log"
     dot_root_log.parent.mkdir(parents=True, exist_ok=True)
     dot_root_log.write_text(dot_root_marker + "\n", encoding="utf-8")
+    db.execute("DELETE FROM builds WHERE id=?", [dot_build_id])
     db.execute(
         "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
         [

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -31,7 +32,9 @@ class PreviewService:
         )
 
         for row in rows:
-            root = self.workspace_service.settings.artifacts_root / problem / str(row["id"])
+            root = self._preview_artifact_root(problem, str(row["id"]))
+            if root is None:
+                continue
             src_pdf = root / "statement_preview" / "statement.pdf"
             src_log = root / "logs" / "latex.log"
             if not src_pdf.exists() or not src_log.exists():
@@ -43,6 +46,19 @@ class PreviewService:
             shutil.copy2(src_log, artifacts.logs / "latex.log")
             return str(row["id"])
         return None
+
+    def _preview_artifact_root(self, problem: str, preview_id: str) -> Path | None:
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", preview_id):
+            return None
+        base = (self.workspace_service.settings.artifacts_root / problem).resolve()
+        root = (base / preview_id).resolve()
+        try:
+            rel = root.relative_to(base)
+        except ValueError:
+            return None
+        if len(rel.parts) != 1 or rel.parts[0] != preview_id:
+            return None
+        return root
 
     def compile_preview(self, problem: str, username: str, commit: str | None = None) -> str:
         build_id = f"p-{uuid.uuid4().hex[:12]}"
