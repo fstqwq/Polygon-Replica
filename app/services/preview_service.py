@@ -26,25 +26,37 @@ class PreviewService:
         current_preview_id: str,
         artifacts,
     ) -> str | None:
-        rows = self.db.fetch_all(
-            "SELECT id FROM previews WHERE problem_id=? AND source_commit=? AND status='ok' AND id<>? ORDER BY created_at DESC LIMIT 20",
-            [problem_id, source_commit, current_preview_id],
-        )
+        batch_size = 50
+        offset = 0
+        while True:
+            rows = self.db.fetch_all(
+                """
+                SELECT id
+                FROM previews
+                WHERE problem_id=? AND source_commit=? AND status='ok' AND id<>?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                [problem_id, source_commit, current_preview_id, batch_size, offset],
+            )
+            if not rows:
+                break
 
-        for row in rows:
-            root = self._preview_artifact_root(problem, str(row["id"]))
-            if root is None:
-                continue
-            src_pdf = root / "statement_preview" / "statement.pdf"
-            src_log = root / "logs" / "latex.log"
-            if not src_pdf.exists() or not src_log.exists():
-                continue
+            for row in rows:
+                root = self._preview_artifact_root(problem, str(row["id"]))
+                if root is None:
+                    continue
+                src_pdf = root / "statement_preview" / "statement.pdf"
+                src_log = root / "logs" / "latex.log"
+                if not src_pdf.exists() or not src_log.exists():
+                    continue
 
-            artifacts.statement_preview.mkdir(parents=True, exist_ok=True)
-            artifacts.logs.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_pdf, artifacts.statement_preview / "statement.pdf")
-            shutil.copy2(src_log, artifacts.logs / "latex.log")
-            return str(row["id"])
+                artifacts.statement_preview.mkdir(parents=True, exist_ok=True)
+                artifacts.logs.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_pdf, artifacts.statement_preview / "statement.pdf")
+                shutil.copy2(src_log, artifacts.logs / "latex.log")
+                return str(row["id"])
+            offset += len(rows)
         return None
 
     def _preview_artifact_root(self, problem: str, preview_id: str) -> Path | None:

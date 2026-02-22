@@ -132,6 +132,12 @@ def main() -> None:
         )
         if forbidden_download.status_code != 400:
             raise RuntimeError(f"reserved-path download should be rejected status={forbidden_download.status_code}")
+        root_download = client.get(
+            "/problems/sample/alice/files/download",
+            params={"path": "."},
+        )
+        if root_download.status_code != 400:
+            raise RuntimeError(f"workspace-root download should be rejected status={root_download.status_code}")
         forbidden_upload = client.post(
             "/problems/sample/alice/files/upload",
             data={"path": ".git/forbidden.bin"},
@@ -140,6 +146,14 @@ def main() -> None:
         )
         if forbidden_upload.status_code != 400:
             raise RuntimeError(f"reserved-path upload should be rejected status={forbidden_upload.status_code}")
+        dir_upload = client.post(
+            "/problems/sample/alice/files/upload",
+            data={"path": "tests"},
+            files={"upload": ("forbidden.bin", b"x", "application/octet-stream")},
+            follow_redirects=False,
+        )
+        if dir_upload.status_code != 400:
+            raise RuntimeError(f"directory-target upload should be rejected status={dir_upload.status_code}")
         forbidden_save = client.post(
             "/problems/sample/alice/files/save",
             data={"path": ".git/config", "content": "x"},
@@ -147,6 +161,13 @@ def main() -> None:
         )
         if forbidden_save.status_code != 303 or "reserved+path" not in forbidden_save.headers.get("location", ""):
             raise RuntimeError(f"reserved-path save should redirect with error message: {forbidden_save.headers}")
+        dir_save = client.post(
+            "/problems/sample/alice/files/save",
+            data={"path": "tests", "content": "x"},
+            follow_redirects=False,
+        )
+        if dir_save.status_code != 303 or "path+is+a+directory" not in dir_save.headers.get("location", ""):
+            raise RuntimeError(f"directory-target save should redirect with error message: {dir_save.headers}")
         forbidden_new = client.post(
             "/problems/sample/alice/files/new",
             data={"path": ".git/new.txt"},
@@ -154,6 +175,13 @@ def main() -> None:
         )
         if forbidden_new.status_code != 303 or "reserved+path" not in forbidden_new.headers.get("location", ""):
             raise RuntimeError(f"reserved-path new should redirect with error message: {forbidden_new.headers}")
+        dir_new = client.post(
+            "/problems/sample/alice/files/new",
+            data={"path": "tests"},
+            follow_redirects=False,
+        )
+        if dir_new.status_code != 303 or "path+is+a+directory" not in dir_new.headers.get("location", ""):
+            raise RuntimeError(f"directory-target new should redirect with error message: {dir_new.headers}")
         forbidden_rename = client.post(
             "/problems/sample/alice/files/rename",
             data={"old_path": "README.problem.md", "new_path": ".git/renamed.txt"},
@@ -161,6 +189,13 @@ def main() -> None:
         )
         if forbidden_rename.status_code != 303 or "reserved+path" not in forbidden_rename.headers.get("location", ""):
             raise RuntimeError(f"reserved-path rename should redirect with error message: {forbidden_rename.headers}")
+        missing_rename = client.post(
+            "/problems/sample/alice/files/rename",
+            data={"old_path": "no/such/file.txt", "new_path": "tmp/new.txt"},
+            follow_redirects=False,
+        )
+        if missing_rename.status_code != 303 or "path+not+found" not in missing_rename.headers.get("location", ""):
+            raise RuntimeError(f"missing-source rename should redirect with error message: {missing_rename.headers}")
         forbidden_delete = client.post(
             "/problems/sample/alice/files/delete",
             data={"path": ".git/config"},
@@ -319,6 +354,22 @@ def main() -> None:
             "9999-01-01T00:00:00Z",
         ],
     )
+    # Insert many poisoned preview candidates so reuse logic must scan beyond a small recent-window limit.
+    for i in range(1, 31):
+        db.execute(
+            "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                f"p-poison-batch-{uuid.uuid4().hex[:8]}",
+                ctx["problem"]["id"],
+                ctx["workspace"]["id"],
+                head_commit,
+                ctx["workspace"].get("branch") or "main",
+                "ok",
+                str(ws),
+                f"9999-01-01T00:00:{i:02d}Z",
+                f"9999-01-01T00:00:{i:02d}Z",
+            ],
+        )
     traversal_preview_id = ".."
     traversal_preview_marker = f"traversal-preview-log-{uuid.uuid4().hex[:8]}"
     traversal_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"])

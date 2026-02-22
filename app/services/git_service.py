@@ -114,6 +114,8 @@ class GitService:
 
     def write_file(self, workspace: Path, rel_path: str, content: str) -> None:
         p = self._resolve_user_path(workspace, rel_path)
+        if p.exists() and p.is_dir():
+            raise ValueError("path is a directory")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
 
@@ -127,5 +129,9 @@ class GitService:
     def rename_path(self, workspace: Path, old_rel: str, new_rel: str) -> None:
         src = self._resolve_user_path(workspace, old_rel)
         dst = self._resolve_user_path(workspace, new_rel)
+        if not src.exists():
+            raise ValueError("path not found")
+        if dst.exists() and dst.is_dir():
+            raise ValueError("destination is a directory")
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)

@@ -65,9 +65,11 @@ def page_ctx(problem: str, user: str, include_branches: bool = True, refresh_sta
     return ctx
 
 
-def _safe_workspace_path(workspace: Path, rel: str) -> Path:
+def _safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool = False) -> Path:
     path = (workspace / rel).resolve()
     if workspace.resolve() not in path.parents and workspace.resolve() != path:
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not allow_workspace_root and path == workspace.resolve():
         raise HTTPException(status_code=400, detail="invalid path")
     try:
         rel_parts = path.relative_to(workspace.resolve()).parts
@@ -366,14 +368,19 @@ async def files_upload(problem: str, user: str, path: str = Form(...), upload: U
     total_bytes = 0
     with workspace_service.workspace_lock(workspace):
         abs_path = _safe_workspace_path(workspace, path)
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-        with abs_path.open("wb") as out:
-            while True:
-                chunk = await upload.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
-                total_bytes += len(chunk)
+        if abs_path.exists() and abs_path.is_dir():
+            raise HTTPException(status_code=400, detail="upload target must be a file path")
+        try:
+            abs_path.parent.mkdir(parents=True, exist_ok=True)
+            with abs_path.open("wb") as out:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    total_bytes += len(chunk)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.upload", {"path": path, "bytes": total_bytes})
     return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(path)}&message=uploaded", status_code=303)
 
@@ -388,7 +395,7 @@ def files_rename(problem: str, user: str, old_path: str = Form(...), new_path: s
         with workspace_service.workspace_lock(workspace):
             git_service.rename_path(workspace, old_path, new_path)
         _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.rename", {"old": old_path, "new": new_path})
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         selected = old_path
         msg = str(exc)
     return RedirectResponse(
