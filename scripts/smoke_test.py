@@ -132,6 +132,16 @@ def main() -> None:
     generation_params = manifest.get("generation_params", {})
     if int(generation_params.get("max_passes", 0)) != 8:
         raise RuntimeError(f"manifest generation_params missing max_passes: {generation_params}")
+    cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
+    cache_count = lambda: len(list(cache_root.rglob("*.bin")))
+    cache_after_build_first = cache_count()
+    build_id_repeat = build_service.run_build("sample", "alice")
+    brow_repeat = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_repeat])
+    if brow_repeat is None or brow_repeat["status"] != "ok":
+        raise RuntimeError(f"repeat build failed: {brow_repeat}")
+    cache_after_build_repeat = cache_count()
+    if cache_after_build_repeat != cache_after_build_first:
+        raise RuntimeError("compile cache did not reuse unchanged build targets")
 
     run_id_ws = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="pass-fail")
     rrow_ws = db.fetch_one("SELECT status FROM runs WHERE id=?", [run_id_ws])
@@ -171,8 +181,6 @@ def main() -> None:
     if not interactive_summary.get("tests") or interactive_summary["tests"][0].get("verdict") != "OK":
         raise RuntimeError("interactive run did not produce OK verdict")
 
-    cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
-    cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     dep_stem = f"cache_dep_{uuid.uuid4().hex[:8]}"
     dep_header = ws / f"solutions/{dep_stem}.h"
     dep_source = ws / f"solutions/{dep_stem}.cpp"
@@ -246,12 +254,15 @@ def main() -> None:
         submission_path="solutions/main.cpp",
         mode="pass-fail",
     )
-    rrow_bad_build = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_bad_build])
+    rrow_bad_build = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_bad_build])
     if rrow_bad_build is None or rrow_bad_build["status"] != "failed":
         raise RuntimeError(f"invalid build run should fail: {rrow_bad_build}")
     bad_build_summary = json.loads(rrow_bad_build["summary_json"])
     if "not runnable" not in str(bad_build_summary.get("error", "")):
         raise RuntimeError("invalid build run did not report preflight failure")
+    invalid_runs_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / "invalid-runs"
+    if invalid_runs_root.resolve() not in Path(rrow_bad_build["artifact_path"]).resolve().parents:
+        raise RuntimeError("invalid build run was not isolated under run_root/invalid-runs")
 
     build_id_missing_artifacts = build_service.run_build("sample", "alice")
     brow_missing_artifacts = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_missing_artifacts])
@@ -266,12 +277,14 @@ def main() -> None:
         submission_path="solutions/main.cpp",
         mode="pass-fail",
     )
-    rrow_missing_artifacts = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_missing_artifacts])
+    rrow_missing_artifacts = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_missing_artifacts])
     if rrow_missing_artifacts is None or rrow_missing_artifacts["status"] != "failed":
         raise RuntimeError(f"missing-artifacts run should fail: {rrow_missing_artifacts}")
     missing_artifacts_summary = json.loads(rrow_missing_artifacts["summary_json"])
     if "not runnable" not in str(missing_artifacts_summary.get("error", "")):
         raise RuntimeError("missing-artifacts run did not report preflight failure")
+    if invalid_runs_root.resolve() not in Path(rrow_missing_artifacts["artifact_path"]).resolve().parents:
+        raise RuntimeError("missing-artifacts run was not isolated under run_root/invalid-runs")
 
     (ws / "config/build.json").write_text(
         json.dumps(
@@ -344,7 +357,7 @@ def main() -> None:
         if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
 
-    print("smoke_ok", preview_id, build_id, build_id_kattis, run_id_ws, run_id_upload, run_id_multi, run_id_interactive, run_id_kattis)
+    print("smoke_ok", preview_id, build_id, build_id_repeat, build_id_kattis, run_id_ws, run_id_upload, run_id_multi, run_id_interactive, run_id_kattis)
 
 
 if __name__ == "__main__":

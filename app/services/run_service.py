@@ -249,7 +249,16 @@ class RunService:
         artifact_root = Path(self.workspace_service.settings.artifacts_root) / problem / build_id
         build_artifact_exists = artifact_root.exists()
         build_row = self.db.fetch_one("SELECT problem_id,status FROM builds WHERE id=?", [build_id])
-        run_root = artifact_root / "logs" / f"run-{run_id}"
+        preflight_ok = bool(
+            build_row is not None
+            and build_row["problem_id"] == ctx["problem"]["id"]
+            and build_row["status"] == "ok"
+            and build_artifact_exists
+        )
+        if preflight_ok:
+            run_root = artifact_root / "logs" / f"run-{run_id}"
+        else:
+            run_root = Path(self.workspace_service.settings.run_root) / "invalid-runs" / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         compile_log_file = run_root / "compile.log"
 
@@ -267,12 +276,7 @@ class RunService:
             ],
         )
 
-        if (
-            build_row is None
-            or build_row["problem_id"] != ctx["problem"]["id"]
-            or build_row["status"] != "ok"
-            or not build_artifact_exists
-        ):
+        if not preflight_ok:
             error = f"build not runnable: {build_id}"
             compile_log_file.write_text(error + "\n", encoding="utf-8")
             summary = {

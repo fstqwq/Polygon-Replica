@@ -87,6 +87,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build config now carries runner controls in `generation_params` (`checker_mode`, `checker_args`, `max_passes`, `validator_args`) for build-consistent run behavior.
 - Runner now preflights selected `build_id` (existence/ownership/status) and records deterministic failed run metadata on invalid build selections.
 - Runner preflight artifact existence check now evaluates pre-existing build artifact state before run directory creation (prevents false-positive runnable states).
+- Invalid preflight runs are now persisted under `run_root/invalid-runs` rather than creating synthetic build artifact directories.
 - Runner checker execution now supports two invocation protocols:
   - `testlib`: `<checker> <input> <team_output> <answer>`
   - `kattis`: `<checker> <input> <answer> <feedback_dir>` with team output on stdin
@@ -96,7 +97,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Runner fallback output checking now uses streaming file comparison (memory-safe for large outputs).
 - Toolchain cache copy path now uses filesystem copy instead of in-memory byte duplication.
 - Added reusable local validation script: `scripts/smoke_test.py`.
-- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, testlib checker mode, kattis checker mode, compile-cache reuse checks, compile-cache header-dependency invalidation, C++ `.cc` accepted-source builds, and export zip structure assertions.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, `interactive`, missing-submission compile-failure handling, workspace path-traversal rejection, invalid-build preflight rejection, missing-artifacts preflight rejection, invalid-run path isolation, testlib checker mode, kattis checker mode, unchanged-build compile-cache reuse checks, compile-cache header-dependency invalidation, C++ `.cc` accepted-source builds, and export zip structure assertions.
 
 ## Upstream Dependency Integration
 

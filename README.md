@@ -27,6 +27,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run source safety: workspace submission paths are validated to stay within workspace root
 - Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
 - Run preflight now also rejects builds whose artifact directories are missing/corrupted before execution starts
+- Invalid preflight runs are isolated under `run_root/invalid-runs/` rather than creating synthetic build artifact trees
 - Compile cache correctness: cache keys now include recursively discovered local `#include "..."` dependencies (source dir + include dirs), so header-only changes invalidate stale binaries
 - Compile cache keys now use canonical dependency identities (relative to source/include roots) rather than absolute filesystem paths, preserving cache reuse across snapshot directories
 - Run fallback judging (when no checker binary is available) now performs chunked file comparison to avoid loading full outputs into memory
@@ -54,4 +55,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows, missing-submission failure handling, workspace path-boundary rejection, and export zip structure checks.
+  - Covers pass-fail, multi-pass, and interactive run flows, compile cache reuse/invalidation checks, missing-submission failure handling, invalid-build/missing-artifacts preflight handling, workspace path-boundary rejection, and export zip structure checks.
