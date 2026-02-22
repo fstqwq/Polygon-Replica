@@ -815,6 +815,52 @@ def main() -> None:
         raise RuntimeError("workspace-head reused preview log mismatch")
     reuse_symlink_outside_pdf.unlink(missing_ok=True)
 
+    dirty_preview_problem = f"dirtypreview-{uuid.uuid4().hex[:8]}"
+    dirty_preview_user = f"u-{uuid.uuid4().hex[:6]}"
+    workspace_service.ensure_problem(dirty_preview_problem, "Dirty Preview Metadata Problem")
+    workspace_service.ensure_workspace(dirty_preview_problem, dirty_preview_user)
+    dirty_preview_ctx = workspace_service.workspace_context(dirty_preview_problem, dirty_preview_user, include_recent=False)
+    dirty_preview_ws = Path(dirty_preview_ctx["workspace"]["path"])
+    (dirty_preview_ws / "statement").mkdir(parents=True, exist_ok=True)
+    dirty_statement = (
+        "\\documentclass{article}\n"
+        "\\begin{document}\n"
+        "Dirty preview metadata smoke\n"
+        "\\end{document}\n"
+    )
+    (dirty_preview_ws / "statement" / "main.tex").write_text(dirty_statement, encoding="utf-8")
+    for cmd in [
+        ["git", "-C", str(dirty_preview_ws), "add", "statement/main.tex"],
+        ["git", "-C", str(dirty_preview_ws), "commit", "-m", "seed statement for dirty preview metadata smoke"],
+    ]:
+        proc = run_cmd(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"dirty-preview setup command failed: {' '.join(cmd)}")
+    dirty_head = run_cmd(["git", "-C", str(dirty_preview_ws), "rev-parse", "HEAD"]).stdout.strip()
+    (dirty_preview_ws / "statement" / "main.tex").write_text(dirty_statement + "% dirty\n", encoding="utf-8")
+    dirty_preview_id = preview_service.compile_preview(dirty_preview_problem, dirty_preview_user)
+    dirty_preview_row = db.fetch_one(
+        "SELECT source_commit,source_ref,status,summary_json FROM previews WHERE id=?",
+        [dirty_preview_id],
+    )
+    if dirty_preview_row is None:
+        raise RuntimeError("dirty workspace preview metadata row missing")
+    if str(dirty_preview_row["source_commit"] or "").strip():
+        raise RuntimeError("dirty workspace preview should not persist source_commit for reuse/provenance keys")
+    if not str(dirty_preview_row["source_ref"] or "").strip():
+        raise RuntimeError("dirty workspace preview should persist branch source_ref")
+    dirty_preview_summary = json.loads(dirty_preview_row["summary_json"]) if dirty_preview_row["summary_json"] else {}
+    if dirty_preview_summary.get("reused_from"):
+        raise RuntimeError("dirty workspace preview should not reuse cached commit-based preview artifacts")
+    clean_preview_id = preview_service.compile_preview(dirty_preview_problem, dirty_preview_user, commit=dirty_head)
+    clean_preview_row = db.fetch_one("SELECT source_commit,source_ref,summary_json,status FROM previews WHERE id=?", [clean_preview_id])
+    if clean_preview_row is None or str(clean_preview_row["status"] or "") not in {"ok", "failed"}:
+        raise RuntimeError(f"clean commit preview for dirty-preview problem failed: {clean_preview_row}")
+    if str(clean_preview_row["source_commit"] or "").strip() != dirty_head:
+        raise RuntimeError("clean commit preview should persist canonical source_commit")
+    if str(clean_preview_row["source_ref"] or "").strip() != dirty_head:
+        raise RuntimeError("clean commit preview should persist canonical source_ref for explicit commit requests")
+
     build_ref_problem = f"buildref-{uuid.uuid4().hex[:8]}"
     build_ref_user = f"u-{uuid.uuid4().hex[:6]}"
     workspace_service.ensure_problem(build_ref_problem, "Build Ref Canonicalization Problem")

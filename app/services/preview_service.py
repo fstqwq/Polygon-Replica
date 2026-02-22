@@ -145,7 +145,8 @@ class PreviewService:
                     if not head:
                         head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                     if head:
-                        source_commit = head
+                        # Dirty workspace previews are snapshot-derived and must not advertise immutable commit provenance.
+                        source_commit = "" if dirty else head
                         source_ref = branch
                     if head and not dirty:
                         reused_from = self._try_reuse_preview(problem, ctx["problem"]["id"], head, build_id, artifacts)
