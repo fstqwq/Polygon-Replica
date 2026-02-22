@@ -49,8 +49,11 @@ def startup() -> None:
 
 
 def page_ctx(problem: str, user: str, include_branches: bool = True, refresh_status: bool = True) -> dict:
-    workspace_service.ensure_workspace(problem, user, refresh_status=refresh_status)
-    ctx = workspace_service.workspace_context(problem, user)
+    try:
+        workspace_service.ensure_workspace(problem, user, refresh_status=refresh_status)
+        ctx = workspace_service.workspace_context(problem, user)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     if include_branches:
         workspace = Path(ctx["workspace"]["path"])
         try:

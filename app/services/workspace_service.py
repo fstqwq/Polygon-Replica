@@ -145,6 +145,15 @@ class WorkspaceService:
             ws = self.db.fetch_one("SELECT * FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
         if ws is None:
             raise RuntimeError(f"workspace not available for {problem}/{username}")
+        ws_path = Path(str(ws["path"] or "")).resolve()
+        expected_root = (self.settings.workspace_root / str(u["id"]) / problem).resolve()
+        if ws_path != expected_root:
+            raise RuntimeError(f"workspace path mismatch for {problem}/{username}")
+        if not ws_path.exists() or not ws_path.is_dir():
+            raise RuntimeError(f"workspace path missing for {problem}/{username}")
+        git_dir = ws_path / ".git"
+        if not git_dir.exists() or not git_dir.is_dir():
+            raise RuntimeError(f"workspace git metadata missing for {problem}/{username}")
         latest_build = self.db.fetch_one(
             "SELECT id,status,created_at FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
             [ws["id"]],

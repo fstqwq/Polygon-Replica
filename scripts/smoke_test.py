@@ -165,6 +165,27 @@ def main() -> None:
     head_commit = str(ctx["workspace"].get("head_commit") or "").strip()
     if not head_commit:
         head_commit = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+    alice_user = db.fetch_one("SELECT id FROM users WHERE username='alice'")
+    if alice_user is None:
+        raise RuntimeError("alice user row missing")
+    expected_workspace_path = (Path(os.environ["POLYGONLIKE_WORKSPACE_ROOT"]) / str(alice_user["id"]) / "sample").resolve()
+    db.execute(
+        "UPDATE workspaces SET path=? WHERE problem_id=? AND user_id=?",
+        [str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]).resolve()), ctx["problem"]["id"], alice_user["id"]],
+    )
+    try:
+        with TestClient(app) as client:
+            tampered_ws = client.get("/problems/sample/alice/files")
+            if tampered_ws.status_code == 200:
+                raise RuntimeError("workspace path mismatch should not allow normal page rendering")
+            if "workspace path mismatch" not in tampered_ws.text:
+                raise RuntimeError("workspace path mismatch was not surfaced in response body")
+    finally:
+        db.execute(
+            "UPDATE workspaces SET path=? WHERE problem_id=? AND user_id=?",
+            [str(expected_workspace_path), ctx["problem"]["id"], alice_user["id"]],
+        )
+    ws = expected_workspace_path
     list_leak_dir = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"files-list-leak-dir-{uuid.uuid4().hex[:8]}"
     list_leak_dir.mkdir(parents=True, exist_ok=True)
     list_leak_name = f"workspace-list-leak-{uuid.uuid4().hex[:8]}.txt"
