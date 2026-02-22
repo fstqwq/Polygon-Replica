@@ -3,11 +3,23 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from time import monotonic
 
 from app.services.util import run_cmd
 
 
 class GitService:
+    BRANCH_CACHE_TTL_SEC = 5.0
+
+    def __init__(self) -> None:
+        self._branch_cache: dict[str, tuple[float, list[str]]] = {}
+
+    def _workspace_key(self, workspace: Path) -> str:
+        return str(workspace.resolve())
+
+    def _invalidate_branch_cache(self, workspace: Path) -> None:
+        self._branch_cache.pop(self._workspace_key(workspace), None)
+
     def _resolve_user_path(self, workspace: Path, rel_path: str, allow_workspace_root: bool = False) -> Path:
         ws_root = workspace.resolve()
         p = (workspace / rel_path).resolve()
@@ -72,6 +84,7 @@ class GitService:
         proc = run_cmd(cmd)
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
+        self._invalidate_branch_cache(workspace)
         return proc.stdout + proc.stderr
 
     def merge(self, workspace: Path, source_branch: str, target_branch: str = "main") -> str:
@@ -81,13 +94,22 @@ class GitService:
             out = proc.stdout + proc.stderr
             run_cmd(["git", "-C", str(workspace), "merge", "--abort"])
             raise RuntimeError(out)
+        self._invalidate_branch_cache(workspace)
         return proc.stdout + proc.stderr
 
-    def list_branches(self, workspace: Path) -> list[str]:
+    def list_branches(self, workspace: Path, force_refresh: bool = False) -> list[str]:
+        key = self._workspace_key(workspace)
+        now = monotonic()
+        cached = self._branch_cache.get(key)
+        if not force_refresh and cached is not None and now - cached[0] <= self.BRANCH_CACHE_TTL_SEC:
+            return list(cached[1])
+
         proc = run_cmd(["git", "-C", str(workspace), "branch", "--format", "%(refname:short)"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
-        return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        branches = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        self._branch_cache[key] = (now, branches)
+        return list(branches)
 
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
         workspace_root = workspace.resolve()

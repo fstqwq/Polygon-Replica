@@ -53,7 +53,7 @@ def main() -> None:
     ensure_local_env()
 
     from fastapi.testclient import TestClient
-    from app.main import app, build_service, db, export_service, preview_service, run_service, workspace_service
+    from app.main import app, build_service, db, export_service, git_service, preview_service, run_service, workspace_service
     from app.services.util import run_cmd
 
     with TestClient(app) as client:
@@ -114,6 +114,21 @@ def main() -> None:
         if status_row_after_first["updated_at"] != status_row_after_second["updated_at"]:
             raise RuntimeError("workspace status refresh should not rewrite unchanged workspace rows")
         alice_ws = Path(alice_ctx["workspace"]["path"])
+        branch_cache_name = f"branchcache-{uuid.uuid4().hex[:8]}"
+        branch_list_before = git_service.list_branches(alice_ws, force_refresh=True)
+        if branch_cache_name in branch_list_before:
+            raise RuntimeError("branch cache smoke setup failure: generated branch already exists")
+        with workspace_service.workspace_lock(alice_ws):
+            git_service.switch_branch(alice_ws, branch_cache_name, create=True)
+            git_service.switch_branch(alice_ws, "main", create=False)
+        branch_list_after_create = git_service.list_branches(alice_ws)
+        if branch_cache_name not in branch_list_after_create:
+            raise RuntimeError("branch list cache should invalidate after branch create/switch")
+        with workspace_service.workspace_lock(alice_ws):
+            run_cmd(["git", "-C", str(alice_ws), "branch", "-D", branch_cache_name])
+        branch_list_after_delete = git_service.list_branches(alice_ws, force_refresh=True)
+        if branch_cache_name in branch_list_after_delete:
+            raise RuntimeError("branch cleanup failed after branch-cache check")
         tracked_file = alice_ws / "README.problem.md"
         tracked_original = tracked_file.read_text(encoding="utf-8")
         tracked_marker = f"git-dirty-marker-{uuid.uuid4().hex[:8]}"
