@@ -122,6 +122,10 @@ def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
     return safe_files
 
 
+def _path_within(path: Path, root: Path) -> bool:
+    return root == path or root in path.parents
+
+
 def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
     row = db.fetch_one(
         "SELECT artifact_path FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
@@ -131,6 +135,12 @@ def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
         raise HTTPException(status_code=404, detail="run not found in workspace")
     root = Path(str(row["artifact_path"] or "")).resolve()
     if not root.exists() or not root.is_dir():
+        raise HTTPException(status_code=404, detail="run artifact directory not found")
+    allowed_roots = [
+        (settings.artifacts_root / ctx["problem"]["slug"]).resolve(),
+        (settings.run_root / "invalid-runs").resolve(),
+    ]
+    if not any(_path_within(root, allowed) for allowed in allowed_roots):
         raise HTTPException(status_code=404, detail="run artifact directory not found")
     return root
 
