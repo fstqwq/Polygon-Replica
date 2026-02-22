@@ -69,6 +69,12 @@ def _safe_workspace_path(workspace: Path, rel: str) -> Path:
     path = (workspace / rel).resolve()
     if workspace.resolve() not in path.parents and workspace.resolve() != path:
         raise HTTPException(status_code=400, detail="invalid path")
+    try:
+        rel_parts = path.relative_to(workspace.resolve()).parts
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid path")
+    if ".git" in rel_parts or ".polygonlike.lock" in rel_parts:
+        raise HTTPException(status_code=400, detail="reserved path")
     return path
 
 
@@ -329,20 +335,28 @@ def files_page(request: Request, problem: str, user: str):
 def files_save(problem: str, user: str, path: str = Form(...), content: str = Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     workspace = Path(ctx["workspace"]["path"])
-    with workspace_service.workspace_lock(workspace):
-        git_service.write_file(workspace, path, content)
-    _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.save", {"path": path})
-    return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(path)}&message=saved", status_code=303)
+    msg = "saved"
+    try:
+        with workspace_service.workspace_lock(workspace):
+            git_service.write_file(workspace, path, content)
+        _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.save", {"path": path})
+    except ValueError as exc:
+        msg = str(exc)
+    return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(path)}&message={quote_plus(msg)}", status_code=303)
 
 
 @app.post("/problems/{problem}/{user}/files/new")
 def files_new(problem: str, user: str, path: str = Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     workspace = Path(ctx["workspace"]["path"])
-    with workspace_service.workspace_lock(workspace):
-        git_service.write_file(workspace, path, "")
-    _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.new", {"path": path})
-    return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(path)}&message=created", status_code=303)
+    msg = "created"
+    try:
+        with workspace_service.workspace_lock(workspace):
+            git_service.write_file(workspace, path, "")
+        _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.new", {"path": path})
+    except ValueError as exc:
+        msg = str(exc)
+    return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(path)}&message={quote_plus(msg)}", status_code=303)
 
 
 @app.post("/problems/{problem}/{user}/files/upload")
@@ -368,20 +382,33 @@ async def files_upload(problem: str, user: str, path: str = Form(...), upload: U
 def files_rename(problem: str, user: str, old_path: str = Form(...), new_path: str = Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     workspace = Path(ctx["workspace"]["path"])
-    with workspace_service.workspace_lock(workspace):
-        git_service.rename_path(workspace, old_path, new_path)
-    _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.rename", {"old": old_path, "new": new_path})
-    return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(new_path)}&message=renamed", status_code=303)
+    selected = new_path
+    msg = "renamed"
+    try:
+        with workspace_service.workspace_lock(workspace):
+            git_service.rename_path(workspace, old_path, new_path)
+        _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.rename", {"old": old_path, "new": new_path})
+    except ValueError as exc:
+        selected = old_path
+        msg = str(exc)
+    return RedirectResponse(
+        f"/problems/{problem}/{user}/files?path={quote_plus(selected)}&message={quote_plus(msg)}",
+        status_code=303,
+    )
 
 
 @app.post("/problems/{problem}/{user}/files/delete")
 def files_delete(problem: str, user: str, path: str = Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     workspace = Path(ctx["workspace"]["path"])
-    with workspace_service.workspace_lock(workspace):
-        git_service.delete_path(workspace, path)
-    _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.delete", {"path": path})
-    return RedirectResponse(f"/problems/{problem}/{user}/files?message=deleted", status_code=303)
+    msg = "deleted"
+    try:
+        with workspace_service.workspace_lock(workspace):
+            git_service.delete_path(workspace, path)
+        _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.delete", {"path": path})
+    except ValueError as exc:
+        msg = str(exc)
+    return RedirectResponse(f"/problems/{problem}/{user}/files?message={quote_plus(msg)}", status_code=303)
 
 
 @app.get("/problems/{problem}/{user}/files/download")

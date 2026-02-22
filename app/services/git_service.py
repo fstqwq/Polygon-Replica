@@ -8,6 +8,18 @@ from app.services.util import run_cmd
 
 
 class GitService:
+    def _resolve_user_path(self, workspace: Path, rel_path: str, allow_workspace_root: bool = False) -> Path:
+        ws_root = workspace.resolve()
+        p = (workspace / rel_path).resolve()
+        if ws_root not in p.parents and p != ws_root:
+            raise ValueError("invalid path")
+        if not allow_workspace_root and p == ws_root:
+            raise ValueError("invalid path")
+        rel = p.relative_to(ws_root)
+        if ".git" in rel.parts or ".polygonlike.lock" in rel.parts:
+            raise ValueError("reserved path")
+        return p
+
     def status(self, workspace: Path) -> dict:
         proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"])
         diff = run_cmd(["git", "-C", str(workspace), "diff", "--", "."])
@@ -63,9 +75,7 @@ class GitService:
 
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
         workspace_root = workspace.resolve()
-        base = (workspace / rel).resolve()
-        if workspace_root not in base.parents and base != workspace_root:
-            raise ValueError("invalid path")
+        base = self._resolve_user_path(workspace, rel, allow_workspace_root=True)
         paths: list[str] = []
         for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
@@ -99,31 +109,23 @@ class GitService:
         return paths
 
     def read_file(self, workspace: Path, rel_path: str) -> str:
-        p = (workspace / rel_path).resolve()
-        if workspace.resolve() not in p.parents:
-            raise ValueError("invalid path")
+        p = self._resolve_user_path(workspace, rel_path)
         return p.read_text(encoding="utf-8")
 
     def write_file(self, workspace: Path, rel_path: str, content: str) -> None:
-        p = (workspace / rel_path).resolve()
-        if workspace.resolve() not in p.parents:
-            raise ValueError("invalid path")
+        p = self._resolve_user_path(workspace, rel_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
 
     def delete_path(self, workspace: Path, rel_path: str) -> None:
-        p = (workspace / rel_path).resolve()
-        if workspace.resolve() not in p.parents:
-            raise ValueError("invalid path")
+        p = self._resolve_user_path(workspace, rel_path)
         if p.is_dir():
             shutil.rmtree(p)
         elif p.exists():
             p.unlink()
 
     def rename_path(self, workspace: Path, old_rel: str, new_rel: str) -> None:
-        src = (workspace / old_rel).resolve()
-        dst = (workspace / new_rel).resolve()
-        if workspace.resolve() not in src.parents or workspace.resolve() not in dst.parents:
-            raise ValueError("invalid path")
+        src = self._resolve_user_path(workspace, old_rel)
+        dst = self._resolve_user_path(workspace, new_rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)

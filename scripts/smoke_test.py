@@ -126,6 +126,48 @@ def main() -> None:
             raise RuntimeError(f"uploaded file download failed status={download_resp.status_code}")
         if download_resp.content != upload_payload:
             raise RuntimeError("uploaded file payload mismatch after round-trip")
+        forbidden_download = client.get(
+            "/problems/sample/alice/files/download",
+            params={"path": ".git/config"},
+        )
+        if forbidden_download.status_code != 400:
+            raise RuntimeError(f"reserved-path download should be rejected status={forbidden_download.status_code}")
+        forbidden_upload = client.post(
+            "/problems/sample/alice/files/upload",
+            data={"path": ".git/forbidden.bin"},
+            files={"upload": ("forbidden.bin", b"x", "application/octet-stream")},
+            follow_redirects=False,
+        )
+        if forbidden_upload.status_code != 400:
+            raise RuntimeError(f"reserved-path upload should be rejected status={forbidden_upload.status_code}")
+        forbidden_save = client.post(
+            "/problems/sample/alice/files/save",
+            data={"path": ".git/config", "content": "x"},
+            follow_redirects=False,
+        )
+        if forbidden_save.status_code != 303 or "reserved+path" not in forbidden_save.headers.get("location", ""):
+            raise RuntimeError(f"reserved-path save should redirect with error message: {forbidden_save.headers}")
+        forbidden_new = client.post(
+            "/problems/sample/alice/files/new",
+            data={"path": ".git/new.txt"},
+            follow_redirects=False,
+        )
+        if forbidden_new.status_code != 303 or "reserved+path" not in forbidden_new.headers.get("location", ""):
+            raise RuntimeError(f"reserved-path new should redirect with error message: {forbidden_new.headers}")
+        forbidden_rename = client.post(
+            "/problems/sample/alice/files/rename",
+            data={"old_path": "README.problem.md", "new_path": ".git/renamed.txt"},
+            follow_redirects=False,
+        )
+        if forbidden_rename.status_code != 303 or "reserved+path" not in forbidden_rename.headers.get("location", ""):
+            raise RuntimeError(f"reserved-path rename should redirect with error message: {forbidden_rename.headers}")
+        forbidden_delete = client.post(
+            "/problems/sample/alice/files/delete",
+            data={"path": ".git/config"},
+            follow_redirects=False,
+        )
+        if forbidden_delete.status_code != 303 or "reserved+path" not in forbidden_delete.headers.get("location", ""):
+            raise RuntimeError(f"reserved-path delete should redirect with error message: {forbidden_delete.headers}")
 
     snapshot_repo = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-check-{uuid.uuid4().hex[:8]}"
     snapshot_repo.mkdir(parents=True, exist_ok=True)
