@@ -62,6 +62,10 @@ class BuildService:
             "require_checker": True,
             "generator_args": [],
             "generator_sources": [],
+            "validator_args": [],
+            "checker_args": [],
+            "checker_mode": "testlib",
+            "max_passes": 16,
         }
         path = snapshot / "config" / "build.json"
         if path.exists():
@@ -73,6 +77,17 @@ class BuildService:
             cfg["generator_args"] = []
         if not isinstance(cfg.get("generator_sources"), list):
             cfg["generator_sources"] = []
+        if not isinstance(cfg.get("validator_args"), list):
+            cfg["validator_args"] = []
+        if not isinstance(cfg.get("checker_args"), list):
+            cfg["checker_args"] = []
+        cfg["checker_mode"] = str(cfg.get("checker_mode", "testlib")).lower()
+        if cfg["checker_mode"] not in {"testlib", "kattis"}:
+            cfg["checker_mode"] = "testlib"
+        try:
+            cfg["max_passes"] = max(1, int(cfg.get("max_passes", 16)))
+        except Exception:
+            cfg["max_passes"] = 16
         return cfg
 
     def _collect_diagnostics(self, snapshot: Path, text: str) -> list[dict]:
@@ -227,11 +242,12 @@ class BuildService:
 
             current_step = "validate"
             validator = compiled_bins["validator"]
+            validator_args = [str(x) for x in build_cfg.get("validator_args", [])]
             vlogs = []
             for t in test_files:
                 failing_test = t.name
-                proc = run_cmd([str(validator)], stdin_path=t, timeout=30)
-                vlogs.append(f"{t.name}: rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
+                proc = run_cmd([str(validator), *validator_args], stdin_path=t, timeout=30)
+                vlogs.append(f"{t.name}: args={validator_args} rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
                 if not self._validator_ok(proc.returncode):
                     raise RuntimeError(f"validator failed on {t.name}")
             (logs_dir / "validate.log").write_text("\n".join(vlogs), encoding="utf-8")
@@ -261,6 +277,10 @@ class BuildService:
                     "generator_runs": int(build_cfg.get("generator_runs", 3)),
                     "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
                     "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
+                    "validator_args": [str(x) for x in build_cfg.get("validator_args", [])],
+                    "checker_args": [str(x) for x in build_cfg.get("checker_args", [])],
+                    "checker_mode": str(build_cfg.get("checker_mode", "testlib")),
+                    "max_passes": int(build_cfg.get("max_passes", 16)),
                 },
                 steps=steps,
             )

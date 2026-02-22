@@ -72,6 +72,37 @@ class RunService:
             return "WA"
         return "FAIL"
 
+    def _load_run_config(self, artifact_root: Path) -> dict[str, object]:
+        cfg: dict[str, object] = {
+            "checker_mode": "testlib",
+            "checker_args": [],
+            "max_passes": 16,
+        }
+        manifest = artifact_root / "manifest.json"
+        if manifest.exists():
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+                params = payload.get("generation_params")
+                if isinstance(params, dict):
+                    cfg.update(params)
+            except Exception:
+                pass
+        checker_mode = str(cfg.get("checker_mode", "testlib")).lower()
+        if checker_mode not in {"testlib", "kattis"}:
+            checker_mode = "testlib"
+        checker_args = cfg.get("checker_args", [])
+        if not isinstance(checker_args, list):
+            checker_args = []
+        try:
+            max_passes = max(1, int(cfg.get("max_passes", 16)))
+        except Exception:
+            max_passes = 16
+        return {
+            "checker_mode": checker_mode,
+            "checker_args": [str(x) for x in checker_args],
+            "max_passes": max_passes,
+        }
+
     def _run_interactive_case(
         self,
         interactor_bin: Path,
@@ -203,6 +234,7 @@ class RunService:
         artifact_root = Path(self.workspace_service.settings.artifacts_root) / problem / build_id
         run_root = artifact_root / "logs" / f"run-{run_id}"
         run_root.mkdir(parents=True, exist_ok=True)
+        compile_log_file = run_root / "compile.log"
 
         self.db.execute(
             "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -218,6 +250,36 @@ class RunService:
             ],
         )
 
+        build_row = self.db.fetch_one("SELECT problem_id,status FROM builds WHERE id=?", [build_id])
+        if (
+            build_row is None
+            or build_row["problem_id"] != ctx["problem"]["id"]
+            or build_row["status"] != "ok"
+            or not artifact_root.exists()
+        ):
+            error = f"build not runnable: {build_id}"
+            compile_log_file.write_text(error + "\n", encoding="utf-8")
+            summary = {
+                "error": error,
+                "mode": mode,
+                "source": submission_path or "upload",
+                "tests": [],
+                "compile_log": "compile.log",
+                "compile_diagnostics": [],
+                "toolchain_digest": "unknown",
+            }
+            (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            self.db.execute(
+                "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
+                ["failed", json.dumps(summary), now_iso(), run_id],
+            )
+            return run_id
+
+        run_cfg = self._load_run_config(artifact_root)
+        checker_mode = str(run_cfg["checker_mode"])
+        checker_args = [str(x) for x in run_cfg["checker_args"]]
+        max_passes = int(run_cfg["max_passes"])
+
         tests_dir = artifact_root / "tests"
         ans_dir = artifact_root / "ans"
         checker = artifact_root / "bin" / "checker"
@@ -227,7 +289,6 @@ class RunService:
 
         workspace = Path(ctx["workspace"]["path"])
         sub_bin = run_root / "submission"
-        compile_log_file = run_root / "compile.log"
         compile_diagnostics: list[dict] = []
         source_label = submission_path or "upload"
         verdicts = []
@@ -336,12 +397,22 @@ class RunService:
                     if checker.exists():
                         env = dict(os.environ)
                         env["FEEDBACK_DIR"] = str(pass_feedback_dir)
-                        check_proc = run_cmd(
-                            [str(checker), str(test), str(out), str(ans)],
-                            timeout=30,
-                            cwd=pass_feedback_dir,
-                            env=env,
-                        )
+                        if checker_mode == "kattis":
+                            feedback_arg = str(pass_feedback_dir) + os.sep
+                            check_proc = run_cmd(
+                                [str(checker), str(test), str(ans), feedback_arg, *checker_args],
+                                stdin_path=out,
+                                timeout=30,
+                                cwd=pass_feedback_dir,
+                                env=env,
+                            )
+                        else:
+                            check_proc = run_cmd(
+                                [str(checker), str(test), str(out), str(ans), *checker_args],
+                                timeout=30,
+                                cwd=pass_feedback_dir,
+                                env=env,
+                            )
                         (pass_feedback_dir / "checker.log").write_text(
                             check_proc.stdout + check_proc.stderr,
                             encoding="utf-8",
@@ -358,7 +429,7 @@ class RunService:
                         break
 
                     next_pass = pass_feedback_dir / "nextpass.in"
-                    if checker_verdict != "OK" or not next_pass.exists() or pass_idx >= 16:
+                    if checker_verdict != "OK" or not next_pass.exists() or pass_idx >= max_passes:
                         test_result["verdict"] = checker_verdict
                         break
 
@@ -378,6 +449,7 @@ class RunService:
                 "compile_diagnostics": compile_diagnostics,
                 "compile_log": "compile.log",
                 "toolchain_digest": toolchain_digest,
+                "run_config": run_cfg,
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self.db.execute(
@@ -396,6 +468,7 @@ class RunService:
                 "compile_diagnostics": compile_diagnostics,
                 "compile_log": "compile.log",
                 "toolchain_digest": toolchain_digest,
+                "run_config": run_cfg,
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self.db.execute(

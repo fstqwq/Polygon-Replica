@@ -14,11 +14,17 @@ This repository implements a local Polygon-like problem authoring system aligned
   - Polygon exports are slimmed to build outputs and step logs (run replay payloads excluded)
 - Artifact browsing plus directory zip download endpoints for generated outputs
 - Build config supports explicit source overrides and multi-generator inputs (`config/build.json`)
+- Build config also supports runner-facing controls:
+  - `validator_args`
+  - `checker_mode` (`testlib` or `kattis`)
+  - `checker_args`
+  - `max_passes`
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
 - Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`
 - Validator/checker/interactor compatibility: accepts both testlib-style (`0`) and Kattis-style (`42/43`) verdict exit codes
 - Run source safety: workspace submission paths are validated to stay within workspace root
+- Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
 
 ## Quick Start
 

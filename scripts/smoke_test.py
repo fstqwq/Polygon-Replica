@@ -76,7 +76,18 @@ def main() -> None:
     for d in ["solutions", "validators", "checkers", "generators", "tests/manual", "config", "statement"]:
         (ws / d).mkdir(parents=True, exist_ok=True)
 
-    (ws / "config/build.json").write_text(json.dumps({"generator_runs": 1}), encoding="utf-8")
+    (ws / "config/build.json").write_text(
+        json.dumps(
+            {
+                "generator_runs": 1,
+                "validator_args": ["--self-check"],
+                "checker_mode": "testlib",
+                "checker_args": [],
+                "max_passes": 8,
+            }
+        ),
+        encoding="utf-8",
+    )
     (ws / "tests/manual/001.in").write_text("1\n", encoding="utf-8")
     (ws / "solutions/accepted.cpp").write_text(
         '#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n";}',
@@ -136,6 +147,8 @@ def main() -> None:
     if rrow_multi is None or rrow_multi["status"] != "ok":
         raise RuntimeError(f"multi-pass run failed: {rrow_multi}")
     multi_summary = json.loads(rrow_multi["summary_json"])
+    if multi_summary.get("run_config", {}).get("checker_mode") != "testlib":
+        raise RuntimeError("run config did not preserve checker_mode=testlib")
     if not multi_summary.get("tests") or len(multi_summary["tests"][0].get("passes", [])) < 2:
         raise RuntimeError("multi-pass run did not execute multiple passes")
 
@@ -174,6 +187,50 @@ def main() -> None:
     traversal_summary = json.loads(rrow_traversal["summary_json"])
     if "workspace" not in str(traversal_summary.get("error", "")):
         raise RuntimeError("path traversal failure did not include workspace boundary error")
+
+    run_id_bad_build = run_service.run_submission(
+        "sample",
+        "alice",
+        "b-does-not-exist",
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    rrow_bad_build = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_bad_build])
+    if rrow_bad_build is None or rrow_bad_build["status"] != "failed":
+        raise RuntimeError(f"invalid build run should fail: {rrow_bad_build}")
+    bad_build_summary = json.loads(rrow_bad_build["summary_json"])
+    if "not runnable" not in str(bad_build_summary.get("error", "")):
+        raise RuntimeError("invalid build run did not report preflight failure")
+
+    (ws / "config/build.json").write_text(
+        json.dumps(
+            {
+                "generator_runs": 1,
+                "validator_args": [],
+                "checker_mode": "kattis",
+                "checker_args": [],
+                "max_passes": 6,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ws / "checkers/checker.cpp").write_text(
+        "#include <bits/stdc++.h>\n#include <filesystem>\nusing namespace std; int main(int argc,char** argv){ if(argc<4) return 1; ifstream ans(argv[2]); long long expected=0; if(!(ans>>expected)) return 1; long long got=0; if(!(cin>>got)) return 43; filesystem::path fb(argv[3]); filesystem::create_directories(fb); ofstream(fb/\"judgemessage.txt\")<<\"judge\"; ofstream(fb/\"teammessage.txt\")<<\"team\"; if(got>0){ ofstream(fb/\"nextpass.in\")<<(got-1)<<\"\\n\"; } return got==expected?42:43; }",
+        encoding="utf-8",
+    )
+    build_id_kattis = build_service.run_build("sample", "alice")
+    brow_kattis = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_kattis])
+    if brow_kattis is None or brow_kattis["status"] != "ok":
+        raise RuntimeError(f"kattis checker build failed: {brow_kattis}")
+    run_id_kattis = run_service.run_submission("sample", "alice", build_id_kattis, submission_path="solutions/main.cpp", mode="multi-pass")
+    rrow_kattis = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_kattis])
+    if rrow_kattis is None or rrow_kattis["status"] != "ok":
+        raise RuntimeError(f"kattis checker run failed: {rrow_kattis}")
+    kattis_summary = json.loads(rrow_kattis["summary_json"])
+    if kattis_summary.get("run_config", {}).get("checker_mode") != "kattis":
+        raise RuntimeError("run config did not preserve checker_mode=kattis")
+    if not kattis_summary.get("tests") or len(kattis_summary["tests"][0].get("passes", [])) < 2:
+        raise RuntimeError("kattis checker multi-pass run did not execute multiple passes")
 
     export_outputs: dict[str, Path] = {}
     for export_type in ["kattis", "domjudge", "polygon-standard", "polygon-full"]:
@@ -216,7 +273,7 @@ def main() -> None:
         if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
 
-    print("smoke_ok", preview_id, build_id, run_id_ws, run_id_upload, run_id_multi, run_id_interactive)
+    print("smoke_ok", preview_id, build_id, build_id_kattis, run_id_ws, run_id_upload, run_id_multi, run_id_interactive, run_id_kattis)
 
 
 if __name__ == "__main__":
