@@ -462,6 +462,45 @@ def main() -> None:
                 f"9999-01-01T00:00:{i:02d}Z",
             ],
         )
+    # Insert a same-timestamp candidate set larger than one batch to ensure keyset pagination
+    # can continue scanning within equal created_at values.
+    tie_prefix = f"p-tie-{uuid.uuid4().hex[:6]}"
+    tie_created_at = "9999-01-01T00:30:00Z"
+    tie_valid_preview_id = f"{tie_prefix}-000"
+    tie_valid_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / tie_valid_preview_id
+    (tie_valid_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+    (tie_valid_root / "logs").mkdir(parents=True, exist_ok=True)
+    (tie_valid_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n% tie-paged preview\n")
+    (tie_valid_root / "logs" / "latex.log").write_text("tie-paged latex log\n", encoding="utf-8")
+    db.execute(
+        "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            tie_valid_preview_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            str(tie_valid_root),
+            tie_created_at,
+            tie_created_at,
+        ],
+    )
+    for i in range(1, 71):
+        db.execute(
+            "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            [
+                f"{tie_prefix}-{i:03d}",
+                ctx["problem"]["id"],
+                ctx["workspace"]["id"],
+                head_commit,
+                ctx["workspace"].get("branch") or "main",
+                "ok",
+                str(ws),
+                tie_created_at,
+                tie_created_at,
+            ],
+        )
     traversal_preview_id = ".."
     traversal_preview_marker = f"traversal-preview-log-{uuid.uuid4().hex[:8]}"
     traversal_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"])
@@ -501,6 +540,10 @@ def main() -> None:
     reused_from = reused_summary.get("reused_from")
     if not reused_from:
         raise RuntimeError(f"commit preview did not reuse cached artifact: {reused_summary}")
+    if reused_from != tie_valid_preview_id:
+        raise RuntimeError(
+            "commit preview reuse did not scan across same-timestamp pages to reach a later valid candidate"
+        )
     if reused_from == poisoned_preview_id:
         raise RuntimeError("commit preview reuse trusted DB-provided poisoned preview artifact_path")
     if reused_from == traversal_preview_id:

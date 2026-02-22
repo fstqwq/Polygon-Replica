@@ -27,18 +27,32 @@ class PreviewService:
         artifacts,
     ) -> str | None:
         batch_size = 50
-        offset = 0
+        cursor_created_at: str | None = None
+        cursor_id: str | None = None
         while True:
-            rows = self.db.fetch_all(
-                """
-                SELECT id
-                FROM previews
-                WHERE problem_id=? AND source_commit=? AND status='ok' AND id<>?
-                ORDER BY created_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                [problem_id, source_commit, current_preview_id, batch_size, offset],
-            )
+            if cursor_created_at is None:
+                rows = self.db.fetch_all(
+                    """
+                    SELECT id,created_at
+                    FROM previews
+                    WHERE problem_id=? AND source_commit=? AND status='ok' AND id<>?
+                    ORDER BY created_at DESC,id DESC
+                    LIMIT ?
+                    """,
+                    [problem_id, source_commit, current_preview_id, batch_size],
+                )
+            else:
+                rows = self.db.fetch_all(
+                    """
+                    SELECT id,created_at
+                    FROM previews
+                    WHERE problem_id=? AND source_commit=? AND status='ok' AND id<>?
+                      AND (created_at < ? OR (created_at = ? AND id < ?))
+                    ORDER BY created_at DESC,id DESC
+                    LIMIT ?
+                    """,
+                    [problem_id, source_commit, current_preview_id, cursor_created_at, cursor_created_at, cursor_id, batch_size],
+                )
             if not rows:
                 break
 
@@ -56,7 +70,13 @@ class PreviewService:
                 shutil.copy2(src_pdf, artifacts.statement_preview / "statement.pdf")
                 shutil.copy2(src_log, artifacts.logs / "latex.log")
                 return str(row["id"])
-            offset += len(rows)
+            tail = rows[-1]
+            tail_created = str(tail["created_at"] or "").strip()
+            tail_id = str(tail["id"] or "").strip()
+            if not tail_created or not tail_id:
+                break
+            cursor_created_at = tail_created
+            cursor_id = tail_id
         return None
 
     def _preview_artifact_root(self, problem: str, preview_id: str) -> Path | None:
