@@ -28,10 +28,19 @@ class BuildService:
         base = root / folder
         if not base.exists():
             return None
-        if preferred and (base / preferred).exists():
-            return base / preferred
-        files = sorted(base.glob("*.cpp"))
-        return files[0] if files else None
+        if preferred:
+            exact = base / preferred
+            if exact.exists():
+                return exact
+            stem = Path(preferred).stem
+            for ext in [".cpp", ".cc", ".cxx", ".c++"]:
+                candidate = base / f"{stem}{ext}"
+                if candidate.exists():
+                    return candidate
+        files: list[Path] = []
+        for pat in ["*.cpp", "*.cc", "*.cxx", "*.c++"]:
+            files.extend(sorted(base.glob(pat)))
+        return sorted(files)[0] if files else None
 
     def _resolve_source(self, snapshot: Path, rel_path: str) -> Path:
         p = (snapshot / rel_path).resolve()

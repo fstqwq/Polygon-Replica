@@ -216,6 +216,21 @@ class RunService:
                 keys.append(str(p.relative_to(artifact_root)))
         return keys
 
+    def _files_equal(self, lhs: Path, rhs: Path) -> bool:
+        if not lhs.exists() or not rhs.exists():
+            return False
+        if lhs.stat().st_size != rhs.stat().st_size:
+            return False
+        chunk = 1024 * 1024
+        with lhs.open("rb") as fa, rhs.open("rb") as fb:
+            while True:
+                a = fa.read(chunk)
+                b = fb.read(chunk)
+                if a != b:
+                    return False
+                if not a:
+                    return True
+
     def run_submission(
         self,
         problem: str,
@@ -414,14 +429,14 @@ class RunService:
                                 timeout=30,
                                 cwd=pass_feedback_dir,
                                 env=env,
-                            )
+                        )
                         (pass_feedback_dir / "checker.log").write_text(
                             check_proc.stdout + check_proc.stderr,
                             encoding="utf-8",
                         )
                         checker_verdict = self._validator_style_verdict(check_proc.returncode)
                     else:
-                        checker_verdict = "OK" if ans.exists() and ans.read_text(encoding="utf-8") == out.read_text(encoding="utf-8") else "WA"
+                        checker_verdict = "OK" if self._files_equal(ans, out) else "WA"
 
                     p = {"pass": pass_idx, "verdict": checker_verdict, "time_ms": exec_ms, "memory_kb": exec_mem}
                     test_result["passes"].append(p)

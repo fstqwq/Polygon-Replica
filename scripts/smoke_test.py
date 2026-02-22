@@ -85,6 +85,7 @@ def main() -> None:
                 "checker_mode": "testlib",
                 "checker_args": [],
                 "max_passes": 8,
+                "accepted_source": "solutions/accepted.cc",
             }
         ),
         encoding="utf-8",
@@ -95,6 +96,10 @@ def main() -> None:
         encoding="utf-8",
     )
     (ws / "solutions/main.cpp").write_text(
+        '#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n";}',
+        encoding="utf-8",
+    )
+    (ws / "solutions/accepted.cc").write_text(
         '#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n";}',
         encoding="utf-8",
     )
@@ -122,6 +127,10 @@ def main() -> None:
     brow = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])
     if brow is None or brow["status"] != "ok":
         raise RuntimeError(f"build failed: {brow}")
+    manifest = json.loads((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "manifest.json").read_text(encoding="utf-8"))
+    generation_params = manifest.get("generation_params", {})
+    if int(generation_params.get("max_passes", 0)) != 8:
+        raise RuntimeError(f"manifest generation_params missing max_passes: {generation_params}")
 
     run_id_ws = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="pass-fail")
     rrow_ws = db.fetch_one("SELECT status FROM runs WHERE id=?", [run_id_ws])

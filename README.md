@@ -19,6 +19,7 @@ This repository implements a local Polygon-like problem authoring system aligned
   - `checker_mode` (`testlib` or `kattis`)
   - `checker_args`
   - `max_passes`
+- Build source discovery now supports C++ variants (`.cpp`, `.cc`, `.cxx`, `.c++`) with preferred-name resolution (`accepted.*`, etc.)
 - Web UI sections: Files, Git, Build, Preview, Run, Export
 - Workspace-level mutation locking and audit log entries
 - Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`
@@ -27,6 +28,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
 - Run preflight now also rejects builds whose artifact directories are missing/corrupted before execution starts
 - Compile cache correctness: cache keys now include recursively discovered local `#include "..."` dependencies (source dir + include dirs), so header-only changes invalidate stale binaries
+- Run fallback judging (when no checker binary is available) now performs chunked file comparison to avoid loading full outputs into memory
 
 ## Quick Start
 
