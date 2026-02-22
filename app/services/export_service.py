@@ -95,8 +95,7 @@ class ExportService:
                     continue
         return "pass-fail"
 
-    def _snapshot_source(self, build_row, tmp_root: Path) -> Path | None:
-        workspace_id = build_row["workspace_id"]
+    def _snapshot_source(self, workspace_id: int | None, source_commit: str | None, tmp_root: Path) -> Path | None:
         if workspace_id is None:
             return None
         ws_row = self.db.fetch_one("SELECT path FROM workspaces WHERE id=?", [workspace_id])
@@ -107,7 +106,7 @@ class ExportService:
             return None
 
         snapshot = tmp_root / "_source"
-        source_commit = str(build_row["source_commit"] or "").strip()
+        source_commit = str(source_commit or "").strip()
         if source_commit:
             snapshot.mkdir(parents=True, exist_ok=True)
             cmd = (
@@ -119,6 +118,10 @@ class ExportService:
             if proc.returncode == 0:
                 return snapshot
             shutil.rmtree(snapshot, ignore_errors=True)
+            detail = (proc.stderr or proc.stdout).strip()
+            raise ValueError(
+                detail or f"unable to snapshot export source commit {source_commit}"
+            )
 
         copytree(workspace, snapshot)
         return snapshot
@@ -333,17 +336,27 @@ class ExportService:
             raise ValueError(f"unknown problem: {problem}")
 
         build_row = self.db.fetch_one(
-            "SELECT problem_id,workspace_id,source_commit FROM builds WHERE id=?",
+            "SELECT problem_id,workspace_id,source_commit,status FROM builds WHERE id=?",
             [build_id],
         )
         if build_row is None:
             raise ValueError(f"build metadata not found: {build_id}")
         if build_row["problem_id"] != problem_row["id"]:
             raise ValueError(f"build {build_id} does not belong to problem {problem}")
+        if build_row["status"] != "ok":
+            raise ValueError(f"build not exportable: {build_id} (status={build_row['status']})")
 
         build_root = self.artifacts_root / problem / build_id
         if not build_root.exists():
             raise ValueError(f"unknown build artifacts: {build_id}")
+        required_paths = [build_root / "manifest.json", build_root / "logs"]
+        if export_type in {"kattis", "domjudge", "polygon-full"}:
+            required_paths.extend([build_root / "tests", build_root / "ans"])
+        missing_paths = [str(p.relative_to(build_root)) for p in required_paths if not p.exists()]
+        if missing_paths:
+            raise ValueError(
+                "incomplete build artifacts for export: " + ", ".join(sorted(missing_paths))
+            )
         export_dir = build_root / "export"
         export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -355,7 +368,7 @@ class ExportService:
         source_commit = build_row["source_commit"]
         snapshot: Path | None = None
         try:
-            snapshot = self._snapshot_source(build_row, tmp_root)
+            snapshot = self._snapshot_source(build_row["workspace_id"], source_commit, tmp_root)
             mode = self._problem_mode(snapshot)
 
             if export_type == "kattis":

@@ -266,6 +266,12 @@ def main() -> None:
     bad_build_summary = json.loads(bad_build_row["summary_json"]) if bad_build_row["summary_json"] else {}
     if not str(bad_build_summary.get("error", "")).strip():
         raise RuntimeError("invalid commit build did not preserve resolve error in summary")
+    try:
+        export_service.create_export(build_ref_problem, bad_build_id, "kattis")
+        raise RuntimeError("export should reject failed build status")
+    except ValueError as exc:
+        if "status=failed" not in str(exc):
+            raise RuntimeError(f"failed-build export rejection reason mismatch: {exc}")
 
     for d in ["solutions", "validators", "checkers", "generators", "tests/manual", "config", "statement"]:
         (ws / d).mkdir(parents=True, exist_ok=True)
