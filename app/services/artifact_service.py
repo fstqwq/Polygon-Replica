@@ -61,10 +61,16 @@ class ArtifactService:
         files: list[dict] = []
         file_count = 0
         total_size = 0
+        tests_count = 0
+        ans_count = 0
         for p in self._iter_manifest_files(paths.root):
             rel = p.relative_to(paths.root)
             if rel == Path("manifest.json"):
                 continue
+            if rel.parts and rel.parts[0] == "tests":
+                tests_count += 1
+            elif rel.parts and rel.parts[0] == "ans":
+                ans_count += 1
             size = p.stat().st_size
             files.append(
                 {
@@ -78,8 +84,8 @@ class ArtifactService:
         summary = {
             "file_count": file_count,
             "total_size": total_size,
-            "tests_count": sum(1 for _ in paths.tests.iterdir()) if paths.tests.exists() else 0,
-            "ans_count": sum(1 for _ in paths.ans.iterdir()) if paths.ans.exists() else 0,
+            "tests_count": tests_count,
+            "ans_count": ans_count,
         }
         write_json(
             paths.root / "manifest.json",

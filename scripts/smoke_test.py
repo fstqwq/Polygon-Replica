@@ -1046,6 +1046,8 @@ def main() -> None:
         raise RuntimeError(f"manifest generation_params missing run_timeout_sec: {generation_params}")
     if int(manifest.get("summary", {}).get("tests_count", -1)) != 2:
         raise RuntimeError("manual sidecar files should not be treated as test inputs")
+    if int(manifest.get("summary", {}).get("ans_count", -1)) != 2:
+        raise RuntimeError("manifest summary ans_count should match generated answer files")
     compile_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "compile.log").read_text(encoding="utf-8")
     if "compile_jobs=3" not in compile_log:
         raise RuntimeError("compile log missing configured compile_jobs marker")
