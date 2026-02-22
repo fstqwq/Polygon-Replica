@@ -135,6 +135,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - `page_ctx` now avoids redundant workspace-status refresh calls and supports branch-list skipping for endpoints that do not render branch controls.
 - Workspace-context loading now supports optional recent-build/recent-preview suppression for non-render paths, reducing per-request metadata query load on mutation/recent-* routes and service entrypoints.
 - `page_ctx` now skips unconditional `ensure_workspace` on non-refresh paths and lazily provisions only unknown-but-valid direct URL users, reducing steady-state provisioning/query overhead.
+- Build/Run/Export UI queries now use narrow column projections for list/detail rows instead of `SELECT *`, reducing row payload size and DB-transfer overhead in hot views.
 - Workspace provisioning now supports optional status refresh while still forcing refresh on newly created workspace clones/rows.
 - Added DB indexes for workspace-scoped history filters (`problem_id,workspace_id,created_at`) and preview-reuse lookup (`problem_id,source_commit,status,created_at`).
 - Added direct `workspace_id` latest-row indexes for builds/previews to speed workspace-context `latest_*` lookups.

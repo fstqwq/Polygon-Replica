@@ -539,12 +539,15 @@ def build_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace_id = ctx["workspace"]["id"]
     builds = db.fetch_all(
-        "SELECT * FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
+        "SELECT id,status,created_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
         [ctx["problem"]["id"], workspace_id],
     )
     selected = request.query_params.get("build_id")
     detail = (
-        db.fetch_one("SELECT * FROM builds WHERE id=? AND workspace_id=?", [selected, workspace_id])
+        db.fetch_one(
+            "SELECT id,status,source_commit,source_ref,summary_json FROM builds WHERE id=? AND workspace_id=?",
+            [selected, workspace_id],
+        )
         if selected
         else None
     )
@@ -659,11 +662,15 @@ def run_page(request: Request, problem: str, user: str):
         [ctx["problem"]["id"], workspace_id],
     )
     runs = db.fetch_all(
-        "SELECT * FROM runs WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
+        "SELECT id,build_id,mode,status,created_at FROM runs WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
         [ctx["problem"]["id"], workspace_id],
     )
     detail_id = request.query_params.get("run_id", "")
-    detail = db.fetch_one("SELECT * FROM runs WHERE id=? AND workspace_id=?", [detail_id, workspace_id]) if detail_id else None
+    detail = (
+        db.fetch_one("SELECT id,status,mode,summary_json FROM runs WHERE id=? AND workspace_id=?", [detail_id, workspace_id])
+        if detail_id
+        else None
+    )
     summary = _parse_summary_json(detail["summary_json"], "run") if detail else None
     return templates.TemplateResponse(
         request,
@@ -732,7 +739,7 @@ def export_page(request: Request, problem: str, user: str):
     )
     exports = db.fetch_all(
         """
-        SELECT e.*
+        SELECT e.id,e.build_id,e.export_type,e.filename,e.sha256,e.size_bytes,e.source_commit,e.created_at
         FROM exports e
         JOIN builds b ON b.id = e.build_id
         WHERE e.problem_id=? AND b.workspace_id=?

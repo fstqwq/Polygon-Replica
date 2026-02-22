@@ -72,6 +72,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Request-context refresh optimization: `page_ctx` no longer performs redundant workspace status refreshes, and non-UI API/file routes skip branch-list resolution.
 - Workspace context loading now supports optional recent-build/recent-preview skipping, and non-render mutation/API/service paths use this lightweight mode to reduce hot-path DB queries.
 - `page_ctx` now avoids unconditional workspace provisioning on non-refresh requests, with lazy fallback provisioning only for unknown-but-valid users opened directly via URL.
+- Build/Run/Export page queries now project only template-required columns for list/detail rows (instead of broad `SELECT *` payloads), reducing DB row transfer on hot UI views.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
 - Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.
