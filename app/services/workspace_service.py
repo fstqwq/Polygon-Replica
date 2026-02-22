@@ -138,11 +138,15 @@ class WorkspaceService:
         if ws is None:
             self.ensure_workspace(problem, username)
             ws = self.db.fetch_one("SELECT * FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
+        if ws is None:
+            raise RuntimeError(f"workspace not available for {problem}/{username}")
         latest_build = self.db.fetch_one(
-            "SELECT id,status,created_at FROM builds WHERE problem_id=? ORDER BY created_at DESC LIMIT 1", [p["id"]]
+            "SELECT id,status,created_at FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+            [ws["id"]],
         )
         latest_preview = self.db.fetch_one(
-            "SELECT id,status,created_at FROM previews WHERE problem_id=? ORDER BY created_at DESC LIMIT 1", [p["id"]]
+            "SELECT id,status,created_at FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+            [ws["id"]],
         )
         return {
             "problem": dict(p),

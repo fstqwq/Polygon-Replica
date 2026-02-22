@@ -667,6 +667,56 @@ def main() -> None:
         if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
 
+    workspace_service.ensure_workspace("sample", "bob")
+    bob_preview_id = preview_service.compile_preview("sample", "bob")
+    bob_build_id = build_service.run_build("sample", "bob")
+    bob_run_id = run_service.run_submission(
+        "sample",
+        "bob",
+        "b-does-not-exist",
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    bob_export_id = f"e-{uuid.uuid4().hex[:10]}"
+    db.execute(
+        "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            bob_export_id,
+            ctx["problem"]["id"],
+            bob_build_id,
+            "polygon-standard",
+            "bob-fake.zip",
+            "0" * 64,
+            0,
+            "",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    with TestClient(app) as client:
+        builds_json = client.get("/api/problems/sample/workspaces/alice/recent-builds").json()
+        previews_json = client.get("/api/problems/sample/workspaces/alice/recent-previews").json()
+        runs_json = client.get("/api/problems/sample/workspaces/alice/recent-runs").json()
+        exports_json = client.get("/api/problems/sample/workspaces/alice/recent-exports").json()
+        if any(str(x.get("id")) == bob_build_id for x in builds_json):
+            raise RuntimeError("alice recent-builds API leaked bob workspace build")
+        if any(str(x.get("id")) == bob_preview_id for x in previews_json):
+            raise RuntimeError("alice recent-previews API leaked bob workspace preview")
+        if any(str(x.get("id")) == bob_run_id for x in runs_json):
+            raise RuntimeError("alice recent-runs API leaked bob workspace run")
+        if any(str(x.get("id")) == bob_export_id for x in exports_json):
+            raise RuntimeError("alice recent-exports API leaked bob workspace export")
+        for page, leaked_id, label in [
+            ("/problems/sample/alice/build", bob_build_id, "build page"),
+            ("/problems/sample/alice/preview", bob_preview_id, "preview page"),
+            ("/problems/sample/alice/run", bob_run_id, "run page"),
+            ("/problems/sample/alice/export", bob_export_id, "export page"),
+        ]:
+            resp = client.get(page)
+            if resp.status_code != 200:
+                raise RuntimeError(f"{label} request failed status={resp.status_code}")
+            if leaked_id in resp.text:
+                raise RuntimeError(f"{label} leaked bob workspace entry")
+
     print("smoke_ok", preview_id, build_id, build_id_repeat, build_id_kattis, run_id_ws, run_id_upload, run_id_multi, run_id_interactive, run_id_kattis)
 
 

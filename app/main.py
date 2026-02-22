@@ -297,9 +297,17 @@ def git_merge(problem: str, user: str, source_branch: str = Form(...)):
 @app.get("/problems/{problem}/{user}/build", response_class=HTMLResponse)
 def build_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
-    builds = db.fetch_all("SELECT * FROM builds WHERE problem_id=? ORDER BY created_at DESC LIMIT 30", [ctx["problem"]["id"]])
+    workspace_id = ctx["workspace"]["id"]
+    builds = db.fetch_all(
+        "SELECT * FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
+        [ctx["problem"]["id"], workspace_id],
+    )
     selected = request.query_params.get("build_id")
-    detail = db.fetch_one("SELECT * FROM builds WHERE id=?", [selected]) if selected else None
+    detail = (
+        db.fetch_one("SELECT * FROM builds WHERE id=? AND workspace_id=?", [selected, workspace_id])
+        if selected
+        else None
+    )
     logs = []
     summary = None
     diagnostics = []
@@ -329,10 +337,11 @@ def build_run(problem: str, user: str, commit: str = Form("")):
 @app.get("/problems/{problem}/{user}/preview", response_class=HTMLResponse)
 def preview_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
+    workspace_id = ctx["workspace"]["id"]
     preview_id = request.query_params.get("preview_id", "")
     previews = db.fetch_all(
-        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM previews WHERE problem_id=? ORDER BY created_at DESC LIMIT 30",
-        [ctx["problem"]["id"]],
+        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM previews WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
+        [ctx["problem"]["id"], workspace_id],
     )
     log = ""
     pdf_exists = False
@@ -374,10 +383,17 @@ def preview_run(problem: str, user: str, commit: str = Form("")):
 @app.get("/problems/{problem}/{user}/run", response_class=HTMLResponse)
 def run_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
-    builds = db.fetch_all("SELECT id,status,created_at FROM builds WHERE problem_id=? ORDER BY created_at DESC", [ctx["problem"]["id"]])
-    runs = db.fetch_all("SELECT * FROM runs WHERE problem_id=? ORDER BY created_at DESC LIMIT 30", [ctx["problem"]["id"]])
+    workspace_id = ctx["workspace"]["id"]
+    builds = db.fetch_all(
+        "SELECT id,status,created_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC",
+        [ctx["problem"]["id"], workspace_id],
+    )
+    runs = db.fetch_all(
+        "SELECT * FROM runs WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30",
+        [ctx["problem"]["id"], workspace_id],
+    )
     detail_id = request.query_params.get("run_id", "")
-    detail = db.fetch_one("SELECT * FROM runs WHERE id=?", [detail_id]) if detail_id else None
+    detail = db.fetch_one("SELECT * FROM runs WHERE id=? AND workspace_id=?", [detail_id, workspace_id]) if detail_id else None
     summary = json.loads(detail["summary_json"]) if detail and detail["summary_json"] else None
     return templates.TemplateResponse(
         request,
@@ -431,10 +447,21 @@ def run_execute(
 @app.get("/problems/{problem}/{user}/export", response_class=HTMLResponse)
 def export_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
-    builds = db.fetch_all("SELECT id,status,created_at FROM builds WHERE problem_id=? ORDER BY created_at DESC", [ctx["problem"]["id"]])
+    workspace_id = ctx["workspace"]["id"]
+    builds = db.fetch_all(
+        "SELECT id,status,created_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC",
+        [ctx["problem"]["id"], workspace_id],
+    )
     exports = db.fetch_all(
-        "SELECT * FROM exports WHERE problem_id=? ORDER BY created_at DESC LIMIT 40",
-        [ctx["problem"]["id"]],
+        """
+        SELECT e.*
+        FROM exports e
+        JOIN builds b ON b.id = e.build_id
+        WHERE e.problem_id=? AND b.workspace_id=?
+        ORDER BY e.created_at DESC
+        LIMIT 40
+        """,
+        [ctx["problem"]["id"], workspace_id],
     )
     message = request.query_params.get("message", "")
     return templates.TemplateResponse(request, "export.html", {"ctx": ctx, "builds": builds, "exports": exports, "message": message})
@@ -525,8 +552,8 @@ def api_workspace_branches(problem: str, user: str):
 def api_recent_builds(problem: str, user: str):
     ctx = page_ctx(problem, user)
     rows = db.fetch_all(
-        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM builds WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
-        [ctx["problem"]["id"]],
+        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM builds WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 20",
+        [ctx["problem"]["id"], ctx["workspace"]["id"]],
     )
     return [dict(r) for r in rows]
 
@@ -535,8 +562,8 @@ def api_recent_builds(problem: str, user: str):
 def api_recent_previews(problem: str, user: str):
     ctx = page_ctx(problem, user)
     rows = db.fetch_all(
-        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM previews WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
-        [ctx["problem"]["id"]],
+        "SELECT id,status,source_commit,source_ref,created_at,finished_at FROM previews WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 20",
+        [ctx["problem"]["id"], ctx["workspace"]["id"]],
     )
     return [dict(r) for r in rows]
 
@@ -545,8 +572,8 @@ def api_recent_previews(problem: str, user: str):
 def api_recent_runs(problem: str, user: str):
     ctx = page_ctx(problem, user)
     rows = db.fetch_all(
-        "SELECT id,build_id,mode,status,created_at,finished_at FROM runs WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
-        [ctx["problem"]["id"]],
+        "SELECT id,build_id,mode,status,created_at,finished_at FROM runs WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 20",
+        [ctx["problem"]["id"], ctx["workspace"]["id"]],
     )
     return [dict(r) for r in rows]
 
@@ -555,8 +582,15 @@ def api_recent_runs(problem: str, user: str):
 def api_recent_exports(problem: str, user: str):
     ctx = page_ctx(problem, user)
     rows = db.fetch_all(
-        "SELECT id,build_id,export_type,filename,size_bytes,sha256,source_commit,created_at FROM exports WHERE problem_id=? ORDER BY created_at DESC LIMIT 20",
-        [ctx["problem"]["id"]],
+        """
+        SELECT e.id,e.build_id,e.export_type,e.filename,e.size_bytes,e.sha256,e.source_commit,e.created_at
+        FROM exports e
+        JOIN builds b ON b.id = e.build_id
+        WHERE e.problem_id=? AND b.workspace_id=?
+        ORDER BY e.created_at DESC
+        LIMIT 20
+        """,
+        [ctx["problem"]["id"], ctx["workspace"]["id"]],
     )
     return [dict(r) for r in rows]
 
