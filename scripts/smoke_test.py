@@ -937,6 +937,30 @@ def main() -> None:
     ws_recent = db.fetch_one("SELECT recent_build_status FROM workspaces WHERE id=?", [ctx["workspace"]["id"]])
     if ws_recent is None or ws_recent["recent_build_status"] != "ok":
         raise RuntimeError(f"workspace recent_build_status mismatch after successful build: {ws_recent}")
+    with TestClient(app) as client:
+        status_recent = client.get("/api/problems/sample/workspaces/alice/status")
+        if status_recent.status_code != 200:
+            raise RuntimeError(
+                "workspace status API failed during recent build/preview metadata check"
+                f", status={status_recent.status_code}"
+            )
+        recent_payload = status_recent.json()
+        recent_build = recent_payload.get("recent_build") or {}
+        recent_preview = recent_payload.get("recent_preview") or {}
+        expected_recent_build = db.fetch_one(
+            "SELECT id FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+            [ctx["workspace"]["id"]],
+        )
+        expected_recent_preview = db.fetch_one(
+            "SELECT id FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+            [ctx["workspace"]["id"]],
+        )
+        expected_build_id = str(expected_recent_build["id"]) if expected_recent_build is not None else ""
+        expected_preview_id = str(expected_recent_preview["id"]) if expected_recent_preview is not None else ""
+        if str(recent_build.get("id") or "") != expected_build_id:
+            raise RuntimeError(f"workspace status recent_build mismatch: {recent_build}")
+        if str(recent_preview.get("id") or "") != expected_preview_id:
+            raise RuntimeError(f"workspace status recent_preview mismatch: {recent_preview}")
     preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_id
     (preview_root / "logs" / "latex.log").write_bytes(b"preview\xfflog\n")
     build_logs_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs"

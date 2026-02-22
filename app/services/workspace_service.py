@@ -271,20 +271,40 @@ class WorkspaceService:
         latest_build = None
         latest_preview = None
         if include_recent:
-            latest_build = self.db.fetch_one(
-                "SELECT id,status,created_at FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
-                [ws["id"]],
+            recent_rows = self.db.fetch_all(
+                """
+                SELECT kind,id,status,created_at
+                FROM (
+                    SELECT 'build' AS kind,id,status,created_at
+                    FROM builds
+                    WHERE workspace_id=?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+                UNION ALL
+                SELECT kind,id,status,created_at
+                FROM (
+                    SELECT 'preview' AS kind,id,status,created_at
+                    FROM previews
+                    WHERE workspace_id=?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                )
+                """,
+                [ws["id"], ws["id"]],
             )
-            latest_preview = self.db.fetch_one(
-                "SELECT id,status,created_at FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
-                [ws["id"]],
-            )
+            for row in recent_rows:
+                entry = {"id": row["id"], "status": row["status"], "created_at": row["created_at"]}
+                if row["kind"] == "build":
+                    latest_build = entry
+                elif row["kind"] == "preview":
+                    latest_preview = entry
         return {
             "problem": dict(p),
             "user": dict(u),
             "workspace": dict(ws),
-            "latest_build": dict(latest_build) if latest_build else None,
-            "latest_preview": dict(latest_preview) if latest_preview else None,
+            "latest_build": latest_build,
+            "latest_preview": latest_preview,
         }
 
     def _extract_commit_snapshot(self, workspace: Path, commit: str, snap: Path) -> None:
