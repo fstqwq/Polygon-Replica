@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Polygonlike</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>Problem:</strong> {{ ctx.problem.slug }} | <strong>Workspace:</strong> {{ ctx.user.username }}</div>
+    <div><strong>Branch:</strong> {{ ctx.workspace.branch or "-" }} | <strong>HEAD:</strong> {{ ctx.workspace.head_commit or "-" }}</div>
+    <div><strong>Dirty:</strong> {{ "yes" if ctx.workspace.dirty else "no" }} | <strong>Recent build:</strong> {{ ctx.latest_build.id if ctx.latest_build else "none" }} {{ ctx.latest_build.status if ctx.latest_build else "" }}</div>
+  </header>
+  <nav class="nav">
+    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files">Files</a>
+    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git">Git</a>
+    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/build">Build</a>
+    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview">Preview</a>
+    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Run</a>
+    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export">Export</a>
+  </nav>
+  <main class="container">{% block content %}{% endblock %}</main>
+</body>
+</html>

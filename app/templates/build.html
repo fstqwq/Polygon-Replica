@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Build</h1>
+<form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/build/run">
+  <input name="commit" placeholder="optional commit SHA" />
+  <button type="submit">Run Build</button>
+</form>
+<div class="grid">
+  <section>
+    <h2>Recent Builds</h2>
+    <ul>
+      {% for b in builds %}
+      <li><a href="?build_id={{ b.id }}">{{ b.id }}</a> {{ b.status }} {{ b.created_at }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  <section>
+    <h2>Build Detail</h2>
+    {% if detail %}
+    <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }}</p>
+    <p><strong>Source:</strong> {{ detail.source_commit }} ({{ detail.source_ref }})</p>
+    {% for l in logs %}
+    <h3>{{ l.name }}</h3>
+    <pre>{{ l.content }}</pre>
+    {% endfor %}
+    {% else %}
+    <p>Select a build to inspect logs.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Run</h1>
+<form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
+  <label>Build</label>
+  <select name="build_id">
+    {% for b in builds %}
+    <option value="{{ b.id }}">{{ b.id }} ({{ b.status }})</option>
+    {% endfor %}
+  </select>
+  <input name="submission_path" placeholder="solutions/main.cpp" />
+  <select name="mode">
+    <option value="pass-fail">pass-fail</option>
+    <option value="interactive">interactive</option>
+    <option value="multi-pass">multi-pass</option>
+  </select>
+  <button type="submit">Execute</button>
+</form>
+<div class="grid">
+  <section>
+    <h2>Recent Runs</h2>
+    <ul>
+      {% for r in runs %}
+      <li><a href="?run_id={{ r.id }}">{{ r.id }}</a> {{ r.mode }} {{ r.status }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  <section>
+    <h2>Run Detail</h2>
+    {% if detail %}
+    <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }}</p>
+    <pre>{{ summary }}</pre>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

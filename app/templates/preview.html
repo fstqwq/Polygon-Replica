@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Preview</h1>
+<form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run">
+  <input name="commit" placeholder="optional commit SHA" />
+  <button type="submit">Compile TeX</button>
+</form>
+{% if preview_id %}
+<p>Preview build: {{ preview_id }}</p>
+<p>PDF present: {{ "yes" if pdf_exists else "no" }}</p>
+<h2>latex.log</h2>
+<pre>{{ log }}</pre>
+{% endif %}
+{% endblock %}

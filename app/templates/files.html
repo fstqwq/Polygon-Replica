@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Files</h1>
+<div class="grid">
+  <section>
+    <h2>Repository Files</h2>
+    <ul class="files">
+      {% for f in files %}
+      <li><a href="?path={{ f }}">{{ f }}</a></li>
+      {% endfor %}
+    </ul>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/new">
+      <input name="path" placeholder="new/path.txt" />
+      <button type="submit">Create</button>
+    </form>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/delete">
+      <input name="path" placeholder="path/to/delete" />
+      <button type="submit">Delete</button>
+    </form>
+  </section>
+  <section>
+    <h2>{{ selected }}</h2>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/save">
+      <input type="hidden" name="path" value="{{ selected }}" />
+      <textarea name="content">{{ content }}</textarea>
+      <button type="submit">Save</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
