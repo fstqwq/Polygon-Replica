@@ -25,6 +25,7 @@ button { background: #efe5d6; cursor: pointer; }
 .files { max-height: 450px; overflow: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { border: 1px solid var(--line); padding: 6px; text-align: left; }
+.pdf-preview { width: 100%; min-height: 560px; border: 1px solid var(--line); border-radius: 8px; background: white; }
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }
 }

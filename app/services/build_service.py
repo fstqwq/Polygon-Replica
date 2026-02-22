@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import shlex
 import shutil
 import uuid
@@ -12,6 +13,9 @@ from app.services.artifact_service import ArtifactService
 from app.services.toolchain_service import ToolchainService
 from app.services.util import run_cmd
 from app.services.workspace_service import WorkspaceService
+
+
+DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<level>warning|error|note):\s*(?P<msg>.*)$")
 
 
 class BuildService:
@@ -30,11 +34,53 @@ class BuildService:
         files = sorted(base.glob("*.cpp"))
         return files[0] if files else None
 
+    def _load_build_config(self, snapshot: Path) -> dict:
+        cfg = {
+            "generator_runs": 3,
+            "require_generator": False,
+            "require_validator": True,
+            "require_checker": True,
+        }
+        path = snapshot / "config" / "build.json"
+        if path.exists():
+            try:
+                cfg.update(json.loads(path.read_text(encoding="utf-8")))
+            except json.JSONDecodeError:
+                pass
+        return cfg
+
+    def _collect_diagnostics(self, snapshot: Path, text: str) -> list[dict]:
+        result: list[dict] = []
+        for line in text.splitlines():
+            m = DIAG_RE.match(line.strip())
+            if not m:
+                continue
+            file_path = Path(m.group("file"))
+            if file_path.is_absolute():
+                try:
+                    rel = str(file_path.resolve().relative_to(snapshot.resolve()))
+                except ValueError:
+                    rel = str(file_path)
+            else:
+                rel = str(file_path)
+            result.append(
+                {
+                    "file": rel,
+                    "line": int(m.group("line")),
+                    "column": int(m.group("col")),
+                    "level": m.group("level"),
+                    "message": m.group("msg"),
+                }
+            )
+        return result
+
     def run_build(self, problem: str, username: str, commit: str | None = None, ref: str | None = None) -> str:
         build_id = f"b-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         workspace = Path(ctx["workspace"]["path"])
-        snapshot = self.workspace_service.create_snapshot(workspace, commit)
+
+        with self.workspace_service.workspace_lock(workspace):
+            snapshot = self.workspace_service.create_snapshot(workspace, commit)
 
         artifact_paths = self.artifacts.prepare(problem, build_id)
         logs_dir = artifact_paths.logs
@@ -54,6 +100,8 @@ class BuildService:
         toolchain_digest = "unknown"
         seed = random.randint(1, 10**9)
         random.seed(seed)
+        diagnostics: list[dict] = []
+        build_cfg = self._load_build_config(snapshot)
 
         try:
             include_dirs = [snapshot / "third_party/testlib"]
@@ -69,13 +117,25 @@ class BuildService:
             compile_log = []
             for name, source, output in compile_targets:
                 if source is None:
-                    compile_log.append(f"skip {name}: no source\n")
+                    compile_log.append(f"[{name}] missing source\n")
                     continue
                 ok, out, err, toolchain_digest = self.toolchain.compile_cpp(source, output, include_dirs)
-                compile_log.append(f"[{name}] source={source}\n{out}\n{err}\n")
+                merged = f"{out}\n{err}".strip()
+                diagnostics.extend(self._collect_diagnostics(snapshot, merged))
+                compile_log.append(f"[{name}] source={source}\n{merged}\n")
                 if not ok:
                     raise RuntimeError(f"compile failed: {name}")
                 compiled_bins[name] = output
+
+            if build_cfg.get("require_generator") and "generator" not in compiled_bins:
+                raise RuntimeError("generator is required by config/build.json but missing")
+            if build_cfg.get("require_validator", True) and "validator" not in compiled_bins:
+                raise RuntimeError("validator source is required")
+            if build_cfg.get("require_checker", True) and "checker" not in compiled_bins:
+                raise RuntimeError("checker source is required")
+            if "accepted_solution" not in compiled_bins:
+                raise RuntimeError("accepted solution source is required")
+
             (logs_dir / "compile.log").write_text("\n".join(compile_log), encoding="utf-8")
             steps.append({"step": "compile", "status": "ok", "log": "logs/compile.log"})
 
@@ -91,7 +151,8 @@ class BuildService:
 
             gen = compiled_bins.get("generator")
             if gen:
-                for i in range(3):
+                runs = int(build_cfg.get("generator_runs", 3))
+                for i in range(runs):
                     dst = artifact_paths.tests / f"{counter:03d}.in"
                     proc = run_cmd([str(gen)], timeout=30)
                     if proc.returncode != 0:
@@ -99,27 +160,23 @@ class BuildService:
                     dst.write_text(proc.stdout, encoding="utf-8")
                     test_files.append(dst)
                     counter += 1
+            if not test_files:
+                raise RuntimeError("no tests were generated (manual + generator)")
             (logs_dir / "generate.log").write_text(f"generated_tests={len(test_files)}\n", encoding="utf-8")
             steps.append({"step": "generate", "status": "ok", "log": "logs/generate.log"})
 
-            validator = compiled_bins.get("validator")
-            if validator:
-                vlogs = []
-                for t in test_files:
-                    cmd = f"{shlex.quote(str(validator))} < {shlex.quote(str(t))}"
-                    proc = run_cmd(["bash", "-lc", cmd], timeout=30)
-                    vlogs.append(f"{t.name}: rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
-                    if proc.returncode != 0:
-                        raise RuntimeError(f"validator failed on {t.name}")
-                (logs_dir / "validate.log").write_text("\n".join(vlogs), encoding="utf-8")
-            else:
-                (logs_dir / "validate.log").write_text("validator not present\n", encoding="utf-8")
+            validator = compiled_bins["validator"]
+            vlogs = []
+            for t in test_files:
+                cmd = f"{shlex.quote(str(validator))} < {shlex.quote(str(t))}"
+                proc = run_cmd(["bash", "-lc", cmd], timeout=30)
+                vlogs.append(f"{t.name}: rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
+                if proc.returncode != 0:
+                    raise RuntimeError(f"validator failed on {t.name}")
+            (logs_dir / "validate.log").write_text("\n".join(vlogs), encoding="utf-8")
             steps.append({"step": "validate", "status": "ok", "log": "logs/validate.log"})
 
-            accepted = compiled_bins.get("accepted_solution")
-            if not accepted:
-                raise RuntimeError("missing accepted solution")
-
+            accepted = compiled_bins["accepted_solution"]
             slog = []
             for t in test_files:
                 out = artifact_paths.ans / t.name.replace(".in", ".ans")
@@ -133,26 +190,27 @@ class BuildService:
             (logs_dir / "solve.log").write_text("\n".join(slog), encoding="utf-8")
             steps.append({"step": "solve", "status": "ok", "log": "logs/solve.log"})
 
+            (logs_dir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
             self.artifacts.write_manifest(
                 artifact_paths,
                 source_commit=source_commit,
                 source_ref=source_ref,
                 toolchain_digest=toolchain_digest,
                 seed=seed,
-                generation_params={"generator_runs": 3},
+                generation_params={"generator_runs": int(build_cfg.get("generator_runs", 3))},
                 steps=steps,
             )
 
             self.db.execute(
                 "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["ok", json.dumps({"steps": steps}), now_iso(), build_id],
+                ["ok", json.dumps({"steps": steps, "diagnostics": diagnostics}), now_iso(), build_id],
             )
         except Exception as exc:
             (logs_dir / "failure.log").write_text(str(exc), encoding="utf-8")
             steps.append({"step": "failed", "status": "error", "log": "logs/failure.log"})
             self.db.execute(
                 "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["failed", json.dumps({"error": str(exc), "steps": steps}), now_iso(), build_id],
+                ["failed", json.dumps({"error": str(exc), "steps": steps, "diagnostics": diagnostics}), now_iso(), build_id],
             )
         finally:
             self.db.execute(

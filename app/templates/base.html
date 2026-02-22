@@ -11,6 +11,12 @@
     <div><strong>Problem:</strong> {{ ctx.problem.slug }} | <strong>Workspace:</strong> {{ ctx.user.username }}</div>
     <div><strong>Branch:</strong> {{ ctx.workspace.branch or "-" }} | <strong>HEAD:</strong> {{ ctx.workspace.head_commit or "-" }}</div>
     <div><strong>Dirty:</strong> {{ "yes" if ctx.workspace.dirty else "no" }} | <strong>Recent build:</strong> {{ ctx.latest_build.id if ctx.latest_build else "none" }} {{ ctx.latest_build.status if ctx.latest_build else "" }}</div>
+    <form method="post" action="/switch-workspace">
+      <input name="problem" value="{{ ctx.problem.slug }}" />
+      <input name="user" value="{{ ctx.user.username }}" />
+      <input name="page" value="files" />
+      <button type="submit">Switch Workspace</button>
+    </form>
   </header>
   <nav class="nav">
     <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files">Files</a>

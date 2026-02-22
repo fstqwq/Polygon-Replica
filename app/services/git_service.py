@@ -54,6 +54,12 @@ class GitService:
             raise RuntimeError(out)
         return proc.stdout + proc.stderr
 
+    def list_branches(self, workspace: Path) -> list[str]:
+        proc = run_cmd(["git", "-C", str(workspace), "branch", "--format", "%(refname:short)"])
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
         base = (workspace / rel).resolve()
         if workspace.resolve() not in base.parents and base != workspace.resolve():

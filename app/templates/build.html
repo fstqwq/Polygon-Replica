@@ -19,6 +19,27 @@
     {% if detail %}
     <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }}</p>
     <p><strong>Source:</strong> {{ detail.source_commit }} ({{ detail.source_ref }})</p>
+    <p><a href="/api/problems/{{ ctx.problem.slug }}/builds/{{ detail.id }}/manifest">manifest.json</a></p>
+    <p>
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=tests">tests/</a> |
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.id }}/browse?rel=ans">ans/</a>
+    </p>
+    {% if summary and summary.steps %}
+    <h3>Steps</h3>
+    <ul>
+      {% for s in summary.steps %}
+      <li>{{ s.step }}: {{ s.status }} ({{ s.log }})</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if diagnostics %}
+    <h3>Diagnostics</h3>
+    <ul>
+      {% for d in diagnostics %}
+      <li>[{{ d.level }}] <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ d.file }}&line={{ d.line }}">{{ d.file }}:{{ d.line }}:{{ d.column }}</a> {{ d.message }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
     {% for l in logs %}
     <h3>{{ l.name }}</h3>
     <pre>{{ l.content }}</pre>

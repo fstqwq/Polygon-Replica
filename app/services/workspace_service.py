@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.db import DB, now_iso
@@ -145,7 +147,9 @@ class WorkspaceService:
         snap = self.settings.run_root / run_id / "src"
         ensure_dir(snap.parent)
         if commit:
-            run_cmd(["git", "clone", str(workspace), str(snap)])
+            clone_proc = run_cmd(["git", "clone", str(workspace), str(snap)])
+            if clone_proc.returncode != 0:
+                raise RuntimeError(clone_proc.stderr or clone_proc.stdout)
             proc = run_cmd(["git", "-C", str(snap), "checkout", commit])
             if proc.returncode != 0:
                 raise RuntimeError(proc.stderr or proc.stdout)
@@ -159,3 +163,14 @@ class WorkspaceService:
 
             shutil.rmtree(git_dir)
         return snap
+
+    @contextmanager
+    def workspace_lock(self, workspace: Path):
+        lock_path = workspace / ".polygonlike.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("w", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

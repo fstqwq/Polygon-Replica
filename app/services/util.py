@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 
@@ -15,18 +16,34 @@ class CmdResult:
     returncode: int
     stdout: str
     stderr: str
+    elapsed_ms: int
 
 
-def run_cmd(cmd: list[str], cwd: Path | None = None, timeout: int = 120) -> CmdResult:
+def run_cmd(
+    cmd: list[str],
+    cwd: Path | None = None,
+    timeout: int = 120,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+) -> CmdResult:
+    start = monotonic()
     proc = subprocess.run(
         cmd,
         cwd=cwd,
         capture_output=True,
         text=True,
         timeout=timeout,
+        input=input_text,
+        env=env,
         check=False,
     )
-    return CmdResult(command=cmd, returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
+    return CmdResult(
+        command=cmd,
+        returncode=proc.returncode,
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+        elapsed_ms=int((monotonic() - start) * 1000),
+    )
 
 
 def sha256_file(path: Path) -> str:

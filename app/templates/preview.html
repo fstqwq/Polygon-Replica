@@ -8,6 +8,17 @@
 {% if preview_id %}
 <p>Preview build: {{ preview_id }}</p>
 <p>PDF present: {{ "yes" if pdf_exists else "no" }}</p>
+{% if pdf_exists %}
+<iframe class="pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf"></iframe>
+{% endif %}
+{% if log_refs %}
+<h2>Log References</h2>
+<ul>
+  {% for r in log_refs %}
+  <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
 <h2>latex.log</h2>
 <pre>{{ log }}</pre>
 {% endif %}

@@ -28,8 +28,25 @@
   <section>
     <h2>Run Detail</h2>
     {% if detail %}
-    <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }}</p>
+    <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }} <strong>Mode:</strong> {{ detail.mode }}</p>
+    {% if summary and summary.tests %}
+    <table>
+      <tr><th>Test</th><th>Verdict</th><th>Time (ms)</th><th>Passes</th><th>Artifacts</th></tr>
+      {% for t in summary.tests %}
+      <tr>
+        <td>{{ t.test }}</td>
+        <td>{{ t.verdict }}</td>
+        <td>{{ t.time_ms }}</td>
+        <td><pre>{{ t.passes }}</pre></td>
+        <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/logs/run-{{ detail.id }}/{{ t.test.replace('.in', '.transcript.txt') }}">transcript</a></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/browse?rel=logs/run-{{ detail.id }}/feedback_dir">feedback_dir/</a></p>
+    {% else %}
     <pre>{{ summary }}</pre>
+    {% endif %}
+    <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/logs/run-{{ detail.id }}/summary.json">summary.json</a></p>
     {% endif %}
   </section>
 </div>

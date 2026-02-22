@@ -8,8 +8,10 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Unified compiler layer with cache key `(toolchain_digest, source_hash)` and `testlib.h` include path support
 - TeX preview compilation and log capture
 - Build pipeline (`compile -> generate -> validate -> solve -> persist`)
-- Runner page and exporter page
+- Runner page with pass-fail / interactive / multi-pass modes
+- Exporter page for Kattis / DOMjudge / Polygon zips
 - Web UI sections: Files, Git, Build, Preview, Run, Export
+- Workspace-level mutation locking and audit log entries
 
 ## Quick Start
 
@@ -26,4 +28,4 @@ Open: `http://127.0.0.1:8000`
 
 - Default host roots follow `AGENTS.md` (`/srv/git`, `/srv/workspaces`, `/srv/runs`, `/var/lib/polygonlike/artifacts`, `/var/cache/polygonlike`).
 - For local dev without root paths, `scripts/bootstrap_demo.sh` maps all roots under `./var/`.
-- The current runner supports pass-fail execution and stores placeholders for interactive transcript and multi-pass feedback flow.
+- Build diagnostics are parsed and linked to Files editor paths and lines.

@@ -19,7 +19,7 @@
 </form>
 <h2>Generated Exports</h2>
 <table>
-  <tr><th>Type</th><th>File</th><th>Size</th><th>SHA256</th><th>Commit</th><th>Time</th></tr>
+  <tr><th>Type</th><th>File</th><th>Size</th><th>SHA256</th><th>Commit</th><th>Time</th><th>Download</th></tr>
   {% for e in exports %}
   <tr>
     <td>{{ e.export_type }}</td>
@@ -28,6 +28,7 @@
     <td><code>{{ e.sha256 }}</code></td>
     <td><code>{{ e.source_commit }}</code></td>
     <td>{{ e.created_at }}</td>
+    <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ e.build_id }}/export/{{ e.filename }}">zip</a></td>
   </tr>
   {% endfor %}
 </table>

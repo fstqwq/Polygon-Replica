@@ -19,7 +19,8 @@ class PreviewService:
         build_id = f"p-{uuid.uuid4().hex[:12]}"
         ctx = self.workspace_service.workspace_context(problem, username)
         workspace = Path(ctx["workspace"]["path"])
-        snapshot = self.workspace_service.create_snapshot(workspace, commit)
+        with self.workspace_service.workspace_lock(workspace):
+            snapshot = self.workspace_service.create_snapshot(workspace, commit)
         artifacts = self.artifacts.prepare(problem, build_id)
 
         tex = snapshot / "statement/main.tex"
@@ -37,4 +38,8 @@ class PreviewService:
         ]
         proc = run_cmd(cmd, cwd=snapshot, timeout=120)
         log.write_text(proc.stdout + "\n" + proc.stderr, encoding="utf-8")
+        generated = artifacts.statement_preview / f"{tex.stem}.pdf"
+        target = artifacts.statement_preview / "statement.pdf"
+        if generated.exists() and generated != target:
+            target.write_bytes(generated.read_bytes())
         return build_id

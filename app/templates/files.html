@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Files</h1>
+<p>{{ message }}</p>
 <div class="grid">
   <section>
     <h2>Repository Files</h2>
@@ -13,13 +14,24 @@
       <input name="path" placeholder="new/path.txt" />
       <button type="submit">Create</button>
     </form>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/rename">
+      <input name="old_path" placeholder="old/path" />
+      <input name="new_path" placeholder="new/path" />
+      <button type="submit">Rename</button>
+    </form>
     <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/delete">
       <input name="path" placeholder="path/to/delete" />
       <button type="submit">Delete</button>
     </form>
+    <form method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/upload">
+      <input name="path" placeholder="target/path.ext" />
+      <input type="file" name="upload" />
+      <button type="submit">Upload</button>
+    </form>
   </section>
   <section>
-    <h2>{{ selected }}</h2>
+    <h2>{{ selected }} {% if selected_line %}(line {{ selected_line }}){% endif %}</h2>
+    <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}">Download file</a></p>
     <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/save">
       <input type="hidden" name="path" value="{{ selected }}" />
       <textarea name="content">{{ content }}</textarea>
