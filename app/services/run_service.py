@@ -213,6 +213,26 @@ class RunService:
         except OSError:
             return []
         files: list[Path] = []
+        # Fast path for common suffix-only patterns used by run discovery (for example *.in / *.ans).
+        if (
+            pattern.startswith("*.")
+            and pattern.count("*") == 1
+            and "?" not in pattern
+            and "[" not in pattern
+            and "]" not in pattern
+        ):
+            suffix = pattern[1:]
+            try:
+                candidates = sorted(root.iterdir(), key=lambda p: p.name)
+            except OSError:
+                return []
+            for p in candidates:
+                if not p.name.endswith(suffix):
+                    continue
+                if self._is_safe_regular_file(root, p, root_resolved=root_resolved):
+                    files.append(p)
+            return files
+
         for p in sorted(root.glob(pattern)):
             if self._is_safe_regular_file(root, p, root_resolved=root_resolved):
                 files.append(p)

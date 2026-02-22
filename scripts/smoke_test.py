@@ -1159,6 +1159,23 @@ def main() -> None:
     answer_files_first.append(answer_files_marker)
     if answer_files_marker in answer_files_second:
         raise RuntimeError("run answer-file cache should return independent copies")
+    safe_match_probe = run_cfg_root / f"safe-match-{uuid.uuid4().hex[:8]}"
+    safe_match_probe.mkdir(parents=True, exist_ok=True)
+    (safe_match_probe / "b.in").write_text("2\n", encoding="utf-8")
+    (safe_match_probe / "a.in").write_text("1\n", encoding="utf-8")
+    (safe_match_probe / "a.ans").write_text("1\n", encoding="utf-8")
+    outside_safe_match = run_cfg_root / f"safe-match-outside-{uuid.uuid4().hex[:8]}.txt"
+    outside_safe_match.write_text("outside\n", encoding="utf-8")
+    try:
+        (safe_match_probe / "z.in").symlink_to(outside_safe_match)
+    except OSError:
+        pass
+    safe_in_names = [p.name for p in run_service._safe_matching_files(safe_match_probe, "*.in")]
+    if safe_in_names != ["a.in", "b.in"]:
+        raise RuntimeError("run safe matching should return sorted safe *.in files and skip symlinked entries")
+    fallback_glob_names = [p.name for p in run_service._safe_matching_files(safe_match_probe, "a.*")]
+    if fallback_glob_names != ["a.ans", "a.in"]:
+        raise RuntimeError("run safe matching fallback glob path should remain deterministic and safe")
     feedback_probe = run_cfg_root / f"feedback-probe-{uuid.uuid4().hex[:8]}"
     (feedback_probe / "pass1").mkdir(parents=True, exist_ok=True)
     (feedback_probe / "pass2").mkdir(parents=True, exist_ok=True)
