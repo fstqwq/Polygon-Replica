@@ -129,7 +129,6 @@ class PreviewService:
             if commit:
                 source_commit = self.workspace_service.resolve_commit(workspace, commit)
                 source_ref = commit
-                self.db.execute("UPDATE previews SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
 
                 reused_from = self._try_reuse_preview(problem, ctx["problem"]["id"], source_commit, build_id, artifacts)
                 if reused_from is not None:
@@ -148,10 +147,6 @@ class PreviewService:
                     if head:
                         source_commit = head
                         source_ref = branch
-                        self.db.execute(
-                            "UPDATE previews SET source_commit=?, source_ref=? WHERE id=?",
-                            [source_commit, source_ref, build_id],
-                        )
                     if head and not dirty:
                         reused_from = self._try_reuse_preview(problem, ctx["problem"]["id"], head, build_id, artifacts)
                         if reused_from is not None:
@@ -201,8 +196,8 @@ class PreviewService:
                 log.write_text(str(exc) + "\n", encoding="utf-8")
         finally:
             self.db.execute(
-                "UPDATE previews SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                [status, json.dumps(summary), now_iso(), build_id],
+                "UPDATE previews SET source_commit=?, source_ref=?, status=?, summary_json=?, finished_at=? WHERE id=?",
+                [source_commit, source_ref, status, json.dumps(summary), now_iso(), build_id],
             )
             if snapshot is not None:
                 shutil.rmtree(snapshot.parent, ignore_errors=True)

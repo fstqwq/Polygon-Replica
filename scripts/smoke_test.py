@@ -787,9 +787,13 @@ def main() -> None:
             ],
         )
     reused_head_preview_id = preview_service.compile_preview(reuse_problem, reuse_user)
-    reused_head_preview = db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [reused_head_preview_id])
+    reused_head_preview = db.fetch_one("SELECT status,summary_json,source_commit,source_ref FROM previews WHERE id=?", [reused_head_preview_id])
     if reused_head_preview is None or reused_head_preview["status"] != "ok":
         raise RuntimeError(f"workspace-head preview reuse failed: {reused_head_preview}")
+    if str(reused_head_preview["source_commit"] or "").strip() != reuse_head:
+        raise RuntimeError("workspace-head preview reuse did not persist canonical source_commit")
+    if not str(reused_head_preview["source_ref"] or "").strip():
+        raise RuntimeError("workspace-head preview reuse did not persist source_ref")
     reused_head_summary = json.loads(reused_head_preview["summary_json"]) if reused_head_preview["summary_json"] else {}
     reused_head_from = reused_head_summary.get("reused_from")
     if not reused_head_from:
