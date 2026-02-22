@@ -145,7 +145,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Workspace status refresh now prefers `git status --porcelain=2 --branch` to derive branch/head/dirty in one command, with fallback to legacy status parsing when needed.
 - Workspace status refresh now conditionally updates workspace rows only when branch/head/dirty changed, reducing steady-state SQLite write churn during status polling.
 - Workspace context now resolves latest build/preview metadata with one combined query, reducing DB round-trips on header/status render paths.
-- Workspace artifact ownership checks now validate build/preview artifact ids with one combined query, reducing DB round-trips on artifact browse/download/file requests.
+- Workspace artifact ownership checks now use id-prefix fast paths (`b-`/`p-`) with legacy fallback, reducing DB work on artifact browse/download/file requests.
 - Build/Preview workspace-HEAD paths now use a read-only workspace status probe (no DB writes), reducing git/DB work while holding workspace locks.
 - Preview creation now persists `artifact_path` at insert time, removing a redundant metadata update write per preview.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses in hot mutation paths.

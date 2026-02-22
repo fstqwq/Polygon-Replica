@@ -82,7 +82,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Workspace status refresh now prefers `git status --porcelain=2 --branch` to derive branch/head/dirty in one command (with fallback to legacy parsing), further reducing git subprocess overhead.
 - Workspace status refresh now conditionally updates workspace metadata only when branch/head/dirty changed, reducing steady-state SQLite write churn on read-heavy UI/API polling.
 - Workspace context now fetches latest build/preview metadata in one combined query, reducing DB round-trips for header/status rendering paths.
-- Workspace artifact ownership checks now validate build/preview artifact ids via a single combined query, reducing DB round-trips on artifact browse/download/file endpoints.
+- Workspace artifact ownership checks now use id-prefix fast paths (`b-`/`p-`) with legacy fallback, reducing DB work on artifact browse/download/file endpoints.
 - Build/Preview workspace-HEAD flows now use a read-only workspace status probe (no DB writes), reducing git/DB work under workspace locks.
 - Preview creation now writes `artifact_path` at row insert time, removing a redundant follow-up preview metadata update.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses on hot build/preview paths.
