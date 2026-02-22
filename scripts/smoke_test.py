@@ -887,6 +887,66 @@ def main() -> None:
     if not binary_summary.get("tests") or binary_summary["tests"][0].get("verdict") != "OK":
         raise RuntimeError("binary-io run verdict should be OK")
 
+    manual_symlink_problem = f"manualsymlink-{uuid.uuid4().hex[:8]}"
+    manual_symlink_user = f"u-{uuid.uuid4().hex[:6]}"
+    workspace_service.ensure_problem(manual_symlink_problem, "Manual Symlink Filtering Problem")
+    workspace_service.ensure_workspace(manual_symlink_problem, manual_symlink_user)
+    manual_symlink_ctx = workspace_service.workspace_context(manual_symlink_problem, manual_symlink_user)
+    manual_symlink_ws = Path(manual_symlink_ctx["workspace"]["path"])
+    for d in ["solutions", "validators", "tests/manual", "config"]:
+        (manual_symlink_ws / d).mkdir(parents=True, exist_ok=True)
+    (manual_symlink_ws / "tests/manual/001.in").write_text("11\n", encoding="utf-8")
+    outside_manual = manual_symlink_ws / "outside-manual.txt"
+    outside_manual.write_text("99\n", encoding="utf-8")
+    try:
+        (manual_symlink_ws / "tests/manual/002.in").symlink_to(outside_manual)
+    except OSError:
+        pass
+    (manual_symlink_ws / "solutions/accepted.cpp").write_text(
+        "#include <bits/stdc++.h>\nusing namespace std; int main(){ cout<<cin.rdbuf(); }\n",
+        encoding="utf-8",
+    )
+    (manual_symlink_ws / "validators/validator.cpp").write_text(
+        "#include <bits/stdc++.h>\nint main(){return 42;}\n",
+        encoding="utf-8",
+    )
+    (manual_symlink_ws / "config/build.json").write_text(
+        json.dumps({"generator_runs": 0, "require_checker": False}),
+        encoding="utf-8",
+    )
+    for cmd in [
+        ["git", "-C", str(manual_symlink_ws), "add", "."],
+        ["git", "-C", str(manual_symlink_ws), "commit", "-m", "seed manual symlink smoke files"],
+    ]:
+        proc = run_cmd(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"manual-symlink setup command failed: {' '.join(cmd)}")
+    manual_symlink_build_id = build_service.run_build(manual_symlink_problem, manual_symlink_user)
+    manual_symlink_build_row = db.fetch_one("SELECT status FROM builds WHERE id=?", [manual_symlink_build_id])
+    if manual_symlink_build_row is None or manual_symlink_build_row["status"] != "ok":
+        raise RuntimeError(f"manual-symlink build failed: {manual_symlink_build_row}")
+    manual_symlink_manifest = json.loads(
+        (
+            Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"])
+            / manual_symlink_problem
+            / manual_symlink_build_id
+            / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    if int(manual_symlink_manifest.get("summary", {}).get("tests_count", -1)) != 1:
+        raise RuntimeError(
+            "manual test discovery should ignore symlinked manual *.in entries"
+        )
+    manual_symlink_test = (
+        Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"])
+        / manual_symlink_problem
+        / manual_symlink_build_id
+        / "tests"
+        / "001.in"
+    )
+    if manual_symlink_test.read_text(encoding="utf-8") != "11\n":
+        raise RuntimeError("manual symlink filtering should keep only real manual test files")
+
     for d in ["solutions", "validators", "checkers", "generators", "tests/manual", "config", "statement"]:
         (ws / d).mkdir(parents=True, exist_ok=True)
 

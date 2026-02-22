@@ -158,18 +158,48 @@ class BuildService:
         manual_root = snapshot / "tests" / "manual"
         if not manual_root.exists():
             return []
-        in_files: list[Path] = []
-        for p in manual_root.rglob("*"):
-            if not p.is_file():
-                continue
-            if p.suffix.lower() == ".in":
-                in_files.append(p)
+        try:
+            manual_root_resolved = manual_root.resolve()
+        except OSError:
+            return []
+
+        in_files: list[tuple[str, Path]] = []
+        all_files: list[tuple[str, Path]] = []
+        for dirpath, dirnames, filenames in os.walk(manual_root, topdown=True, followlinks=False):
+            dir_root = Path(dirpath)
+            keep_dirs: list[str] = []
+            for name in sorted(dirnames):
+                d = dir_root / name
+                if d.is_symlink():
+                    continue
+                try:
+                    resolved = d.resolve()
+                except OSError:
+                    continue
+                if manual_root_resolved in resolved.parents or manual_root_resolved == resolved:
+                    keep_dirs.append(name)
+            dirnames[:] = keep_dirs
+
+            for name in sorted(filenames):
+                p = dir_root / name
+                if p.is_symlink() or not p.exists() or not p.is_file():
+                    continue
+                try:
+                    resolved = p.resolve()
+                except OSError:
+                    continue
+                if manual_root_resolved not in resolved.parents and manual_root_resolved != resolved:
+                    continue
+                rel = str(p.relative_to(manual_root))
+                all_files.append((rel, p))
+                if p.suffix.lower() == ".in":
+                    in_files.append((rel, p))
+
         if in_files:
-            return sorted(in_files, key=lambda p: str(p.relative_to(manual_root)))
+            return [p for _, p in sorted(in_files)]
 
         # Backward-compatible fallback: when no *.in exists, treat all files as manual tests.
-        files = [p for p in manual_root.rglob("*") if p.is_file()]
-        return sorted(files, key=lambda p: str(p.relative_to(manual_root)))
+        return [p for _, p in sorted(all_files)]
 
     def _effective_compile_jobs(self, configured: object, target_count: int) -> int:
         auto_jobs = max(1, min(4, os.cpu_count() or 1))
