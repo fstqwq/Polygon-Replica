@@ -212,6 +212,26 @@ def main() -> None:
             raise RuntimeError("workspace provision race returned inconsistent workspace paths")
         if not (race_workspace / ".git").is_dir():
             raise RuntimeError("workspace provision race produced workspace without git metadata")
+        repair_user = f"wsrepair-{uuid.uuid4().hex[:8]}"
+        repair_workspace = Path(workspace_service.ensure_workspace("sample", repair_user, False)).resolve()
+        repair_user_row = db.fetch_one("SELECT id FROM users WHERE username=?", [repair_user])
+        if repair_user_row is None:
+            raise RuntimeError("workspace repair check setup failed: user row missing")
+        db.execute(
+            "DELETE FROM workspaces WHERE problem_id=? AND user_id=?",
+            [problem_row["id"], repair_user_row["id"]],
+        )
+        repaired_path = Path(workspace_service.ensure_workspace("sample", repair_user, False)).resolve()
+        if repaired_path != repair_workspace:
+            raise RuntimeError("workspace repair path changed after missing-row recovery")
+        repaired_rows = db.fetch_all(
+            "SELECT path FROM workspaces WHERE problem_id=? AND user_id=?",
+            [problem_row["id"], repair_user_row["id"]],
+        )
+        if len(repaired_rows) != 1:
+            raise RuntimeError(f"workspace repair should recreate exactly one row, got={len(repaired_rows)}")
+        if Path(str(repaired_rows[0]["path"])).resolve() != repair_workspace:
+            raise RuntimeError("workspace repair recreated row with unexpected workspace path")
         bad_line = client.get(
             "/problems/sample/alice/files",
             params={"path": "README.problem.md", "line": "not-a-number"},
@@ -511,6 +531,7 @@ def main() -> None:
         )
     # Insert a same-timestamp candidate set larger than one batch to ensure keyset pagination
     # can continue scanning within equal created_at values.
+    db.execute("DELETE FROM previews WHERE id LIKE 'p-tie-%'")
     tie_prefix = f"p-tie-{uuid.uuid4().hex[:6]}"
     tie_created_at = f"9999-12-31T23:59:59.{uuid.uuid4().hex}Z"
     tie_valid_preview_id = f"{tie_prefix}-000"

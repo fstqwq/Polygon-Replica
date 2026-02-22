@@ -90,6 +90,14 @@ class WorkspaceService:
 
         workspace = self.settings.workspace_root / str(u["id"]) / problem
         bare = self.settings.bare_root / p["repo_name"]
+        ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
+
+        # Steady-state fast path: avoid provisioning lock when workspace and DB row already exist.
+        if ws_row is not None and workspace.exists() and (workspace / ".git").is_dir():
+            if refresh_status:
+                self.refresh_workspace_status(problem, username)
+            return workspace
+
         with self._workspace_provision_lock(workspace.parent, problem):
             workspace_created = False
             if not workspace.exists():
@@ -100,9 +108,7 @@ class WorkspaceService:
                 self._seed_problem_repo(workspace)
                 workspace_created = True
 
-            ws_row = self.db.fetch_one(
-                "SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]]
-            )
+            ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
             ws_row_created = False
             if ws_row is None:
                 try:
