@@ -83,6 +83,7 @@ def main() -> None:
             {
                 "generator_runs": 1,
                 "compile_jobs": 3,
+                "validate_jobs": 2,
                 "solve_jobs": 2,
                 "run_jobs": 2,
                 "validator_args": ["--self-check"],
@@ -138,6 +139,10 @@ def main() -> None:
         raise RuntimeError(f"manifest generation_params missing max_passes: {generation_params}")
     if int(generation_params.get("compile_jobs", 0)) != 3:
         raise RuntimeError(f"manifest generation_params missing compile_jobs: {generation_params}")
+    if int(generation_params.get("validate_jobs", 0)) != 2:
+        raise RuntimeError(f"manifest generation_params missing validate_jobs: {generation_params}")
+    if int(generation_params.get("validate_jobs_effective", 0)) != 2:
+        raise RuntimeError(f"manifest generation_params missing validate_jobs_effective: {generation_params}")
     if int(generation_params.get("solve_jobs", 0)) != 2:
         raise RuntimeError(f"manifest generation_params missing solve_jobs: {generation_params}")
     if int(generation_params.get("solve_jobs_effective", 0)) != 2:
@@ -149,6 +154,9 @@ def main() -> None:
     compile_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "compile.log").read_text(encoding="utf-8")
     if "compile_jobs=3" not in compile_log:
         raise RuntimeError("compile log missing configured compile_jobs marker")
+    validate_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "validate.log").read_text(encoding="utf-8")
+    if "validate_jobs=2" not in validate_log:
+        raise RuntimeError("validate log missing configured validate_jobs marker")
     solve_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "solve.log").read_text(encoding="utf-8")
     if "solve_jobs=2" not in solve_log:
         raise RuntimeError("solve log missing configured solve_jobs marker")

@@ -72,6 +72,7 @@ class BuildService:
             "require_validator": True,
             "require_checker": True,
             "compile_jobs": 0,
+            "validate_jobs": 0,
             "solve_jobs": 0,
             "run_jobs": 0,
             "generator_args": [],
@@ -99,6 +100,10 @@ class BuildService:
             cfg["compile_jobs"] = max(0, min(16, int(cfg.get("compile_jobs", 0))))
         except Exception:
             cfg["compile_jobs"] = 0
+        try:
+            cfg["validate_jobs"] = max(0, min(16, int(cfg.get("validate_jobs", 0))))
+        except Exception:
+            cfg["validate_jobs"] = 0
         try:
             cfg["solve_jobs"] = max(0, min(16, int(cfg.get("solve_jobs", 0))))
         except Exception:
@@ -305,12 +310,40 @@ class BuildService:
             current_step = "validate"
             validator = compiled_bins["validator"]
             validator_args = [str(x) for x in build_cfg.get("validator_args", [])]
-            vlogs = []
+            validate_jobs = self._effective_compile_jobs(build_cfg.get("validate_jobs", 0), len(test_files))
+            validate_results: dict[str, tuple[int, str, str, str | None]] = {}
+            validate_root = logs_dir / "validate_runs"
+            validate_root.mkdir(parents=True, exist_ok=True)
+            with ThreadPoolExecutor(max_workers=validate_jobs) as pool:
+                future_map = {}
+                for t in test_files:
+                    test_cwd = validate_root / t.stem
+                    test_cwd.mkdir(parents=True, exist_ok=True)
+                    future_map[
+                        pool.submit(
+                            run_cmd,
+                            [str(validator), *validator_args],
+                            stdin_path=t,
+                            timeout=30,
+                            cwd=test_cwd,
+                        )
+                    ] = t
+                for future in as_completed(future_map):
+                    t = future_map[future]
+                    try:
+                        proc = future.result()
+                        validate_results[t.name] = (proc.returncode, proc.stdout, proc.stderr, None)
+                    except Exception as exc:
+                        validate_results[t.name] = (-1, "", "", str(exc))
+
+            vlogs = [f"validate_jobs={validate_jobs}"]
             for t in test_files:
                 failing_test = t.name
-                proc = run_cmd([str(validator), *validator_args], stdin_path=t, timeout=30)
-                vlogs.append(f"{t.name}: args={validator_args} rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
-                if not self._validator_ok(proc.returncode):
+                rc, stdout, stderr, err = validate_results[t.name]
+                if err is not None:
+                    raise RuntimeError(f"validator failed on {t.name}: {err}")
+                vlogs.append(f"{t.name}: args={validator_args} rc={rc}\n{stdout}{stderr}\n")
+                if not self._validator_ok(rc):
                     raise RuntimeError(f"validator failed on {t.name}")
             (logs_dir / "validate.log").write_text("\n".join(vlogs), encoding="utf-8")
             steps.append({"step": "validate", "status": "ok", "log": "logs/validate.log"})
@@ -354,6 +387,8 @@ class BuildService:
                 generation_params={
                     "generator_runs": int(build_cfg.get("generator_runs", 3)),
                     "compile_jobs": compile_jobs,
+                    "validate_jobs": int(build_cfg.get("validate_jobs", 0)),
+                    "validate_jobs_effective": validate_jobs,
                     "solve_jobs": int(build_cfg.get("solve_jobs", 0)),
                     "solve_jobs_effective": solve_jobs,
                     "run_jobs": int(build_cfg.get("run_jobs", 0)),
