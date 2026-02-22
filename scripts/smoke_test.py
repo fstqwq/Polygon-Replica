@@ -301,6 +301,10 @@ def main() -> None:
         '#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 0; cout<<x<<"\\n";}',
         encoding="utf-8",
     )
+    (ws / "solutions/re_interactive.cpp").write_text(
+        '#include <bits/stdc++.h>\nint main(){std::cerr<<"interactive forced re\\n"; return 1;}',
+        encoding="utf-8",
+    )
     (ws / "validators/validator.cpp").write_text(
         "#include <bits/stdc++.h>\nusing namespace std; int main(){long long x; if(!(cin>>x)) return 43; if(x<0) return 43; string rest; getline(cin,rest); return 42;}",
         encoding="utf-8",
@@ -409,6 +413,25 @@ def main() -> None:
     interactive_summary = json.loads(rrow_interactive["summary_json"])
     if not interactive_summary.get("tests") or interactive_summary["tests"][0].get("verdict") != "OK":
         raise RuntimeError("interactive run did not produce OK verdict")
+
+    run_id_interactive_re = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        submission_path="solutions/re_interactive.cpp",
+        mode="interactive",
+    )
+    rrow_interactive_re = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_interactive_re])
+    if rrow_interactive_re is None or rrow_interactive_re["status"] != "ok":
+        raise RuntimeError(f"interactive RE run failed unexpectedly: {rrow_interactive_re}")
+    interactive_re_summary = json.loads(rrow_interactive_re["summary_json"])
+    if not interactive_re_summary.get("tests") or interactive_re_summary["tests"][0].get("verdict") != "RE":
+        raise RuntimeError("interactive RE run did not produce RE verdict")
+    first_test = interactive_re_summary["tests"][0]["test"]
+    interactive_re_transcript = Path(rrow_interactive_re["artifact_path"]) / f"{Path(first_test).stem}.transcript.txt"
+    transcript_text = interactive_re_transcript.read_text(encoding="utf-8")
+    if "submission stderr:" not in transcript_text or "interactive forced re" not in transcript_text:
+        raise RuntimeError("interactive RE run transcript missing captured submission stderr")
 
     dep_stem = f"cache_dep_{uuid.uuid4().hex[:8]}"
     dep_header = ws / f"solutions/{dep_stem}.h"

@@ -129,78 +129,129 @@ class RunService:
         feedback_dir: Path,
         timeout_sec: int = 30,
     ) -> tuple[str, int, int]:
-        sub = subprocess.Popen(
-            [str(submission_bin)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            bufsize=0,
-        )
-        itr_env = dict(os.environ)
-        itr_env["FEEDBACK_DIR"] = str(feedback_dir)
-        itr = subprocess.Popen(
-            [str(interactor_bin), str(test), str(ans)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            bufsize=0,
-            env=itr_env,
-        )
-        start = time.monotonic()
-        sel = selectors.DefaultSelector()
-        if itr.stdout:
-            sel.register(itr.stdout, selectors.EVENT_READ, ("itr", "out"))
-        if sub.stdout:
-            sel.register(sub.stdout, selectors.EVENT_READ, ("sub", "out"))
-        with transcript.open("w", encoding="utf-8") as tf:
-            try:
-                while True:
-                    if time.monotonic() - start > timeout_sec:
-                        sub.kill()
-                        itr.kill()
-                        return "TLE", int((time.monotonic() - start) * 1000), 0
-                    events = sel.select(timeout=0.2)
-                    for key, _ in events:
-                        stream_owner, _stream_kind = key.data
-                        data = os.read(key.fileobj.fileno(), 4096)
-                        if not data:
-                            sel.unregister(key.fileobj)
-                            continue
-                        decoded = data.decode("utf-8", errors="replace")
-                        if stream_owner == "itr":
-                            tf.write(f"I> {decoded}")
-                            if sub.stdin:
-                                sub.stdin.write(data)
-                                sub.stdin.flush()
-                        else:
-                            tf.write(f"S> {decoded}")
-                            if itr.stdin:
-                                itr.stdin.write(data)
-                                itr.stdin.flush()
-                    tf.flush()
-                    if sub.poll() is not None and itr.poll() is not None:
-                        break
-            finally:
-                sel.close()
-                if sub.stdin:
-                    sub.stdin.close()
-                if itr.stdin:
-                    itr.stdin.close()
+        sub_err_path = transcript.with_name(f"{transcript.stem}.submission.stderr.txt")
+        itr_err_path = transcript.with_name(f"{transcript.stem}.interactor.stderr.txt")
+        with sub_err_path.open("wb") as sub_err_fh, itr_err_path.open("wb") as itr_err_fh:
+            sub = subprocess.Popen(
+                [str(submission_bin)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=sub_err_fh,
+                text=False,
+                bufsize=0,
+            )
+            itr_env = dict(os.environ)
+            itr_env["FEEDBACK_DIR"] = str(feedback_dir)
+            itr = subprocess.Popen(
+                [str(interactor_bin), str(test), str(ans)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=itr_err_fh,
+                text=False,
+                bufsize=0,
+                env=itr_env,
+            )
+            start = time.monotonic()
+            sel = selectors.DefaultSelector()
+            if itr.stdout:
+                sel.register(itr.stdout, selectors.EVENT_READ, ("itr", "out"))
+            if sub.stdout:
+                sel.register(sub.stdout, selectors.EVENT_READ, ("sub", "out"))
+            timed_out = False
+            with transcript.open("w", encoding="utf-8") as tf:
+                try:
+                    while True:
+                        if time.monotonic() - start > timeout_sec:
+                            timed_out = True
+                            sub.kill()
+                            itr.kill()
+                            break
+                        events = sel.select(timeout=0.2)
+                        for key, _ in events:
+                            stream_owner, _stream_kind = key.data
+                            try:
+                                data = os.read(key.fileobj.fileno(), 4096)
+                            except OSError:
+                                data = b""
+                            if not data:
+                                try:
+                                    sel.unregister(key.fileobj)
+                                except Exception:
+                                    pass
+                                if stream_owner == "itr" and sub.stdin:
+                                    try:
+                                        sub.stdin.close()
+                                    except Exception:
+                                        pass
+                                    sub.stdin = None
+                                if stream_owner == "sub" and itr.stdin:
+                                    try:
+                                        itr.stdin.close()
+                                    except Exception:
+                                        pass
+                                    itr.stdin = None
+                                continue
+                            decoded = data.decode("utf-8", errors="replace")
+                            if stream_owner == "itr":
+                                tf.write(f"I> {decoded}")
+                                if sub.stdin:
+                                    try:
+                                        sub.stdin.write(data)
+                                        sub.stdin.flush()
+                                    except (BrokenPipeError, OSError, ValueError):
+                                        try:
+                                            sub.stdin.close()
+                                        except Exception:
+                                            pass
+                                        sub.stdin = None
+                            else:
+                                tf.write(f"S> {decoded}")
+                                if itr.stdin:
+                                    try:
+                                        itr.stdin.write(data)
+                                        itr.stdin.flush()
+                                    except (BrokenPipeError, OSError, ValueError):
+                                        try:
+                                            itr.stdin.close()
+                                        except Exception:
+                                            pass
+                                        itr.stdin = None
+                        tf.flush()
+                        if sub.poll() is not None and itr.poll() is not None:
+                            break
+                finally:
+                    sel.close()
+                    if sub.stdin:
+                        sub.stdin.close()
+                    if itr.stdin:
+                        itr.stdin.close()
 
-            sub.wait(timeout=2)
-            itr.wait(timeout=2)
-            if sub.returncode != 0:
-                err = sub.stderr.read() if sub.stderr else b""
-                tf.write(f"submission stderr:\n{err.decode('utf-8', errors='replace')}\n")
-                return "RE", int((time.monotonic() - start) * 1000), 0
-            itr_verdict = self._validator_style_verdict(itr.returncode or 0)
-            if itr_verdict != "OK":
-                err = itr.stderr.read() if itr.stderr else b""
-                tf.write(f"interactor stderr:\n{err.decode('utf-8', errors='replace')}\n")
-                return itr_verdict, int((time.monotonic() - start) * 1000), 0
-            return "OK", int((time.monotonic() - start) * 1000), 0
+                for proc in [sub, itr]:
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            pass
+
+                sub_err_fh.flush()
+                itr_err_fh.flush()
+                elapsed = int((time.monotonic() - start) * 1000)
+                if timed_out:
+                    return "TLE", elapsed, 0
+
+                if sub.returncode != 0:
+                    err = sub_err_path.read_text(encoding="utf-8", errors="replace") if sub_err_path.exists() else ""
+                    tf.write(f"submission stderr:\n{err}\n")
+                    return "RE", elapsed, 0
+                itr_verdict = self._validator_style_verdict(itr.returncode or 0)
+                if itr_verdict != "OK":
+                    err = itr_err_path.read_text(encoding="utf-8", errors="replace") if itr_err_path.exists() else ""
+                    tf.write(f"interactor stderr:\n{err}\n")
+                    return itr_verdict, elapsed, 0
+                return "OK", elapsed, 0
 
     def _run_pass(
         self,
