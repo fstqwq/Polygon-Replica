@@ -62,7 +62,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.
 - Branch-list API now degrades safely to current branch on git enumeration errors instead of returning 500.
 - Run detail links now use workspace-scoped run-artifact endpoints (`/runs/{run_id}/artifacts/...` and `/runs/{run_id}/download-dir`) so replay files work for both valid builds and invalid preflight runs.
-- Artifact and run-artifact browse/zip directory exports now skip symlinks and out-of-root targets to prevent archive-path escape/exfiltration via crafted artifact trees.
+- Artifact and run-artifact browse/zip directory exports now perform symlink-safe walks (no symlink-directory traversal) and skip out-of-root resolved targets to prevent archive-path escape/exfiltration via crafted artifact trees.
 - Run summaries now expose `feedback_dir` as a stable run-relative path (`feedback_dir`) instead of host-absolute filesystem paths.
 - Build generator execution now streams output directly into test files to avoid buffering full generated tests in memory
 

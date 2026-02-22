@@ -92,15 +92,33 @@ def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Pat
 def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
     root_resolved = root.resolve()
     safe_files: list[Path] = []
-    for p in sorted(target.rglob("*")):
-        if not p.is_file():
-            continue
-        if p.is_symlink():
-            continue
-        resolved = p.resolve()
-        if root_resolved not in resolved.parents and root_resolved != resolved:
-            continue
-        safe_files.append(p)
+    for dirpath, dirnames, filenames in os.walk(target, topdown=True, followlinks=False):
+        dir_root = Path(dirpath)
+        pruned_dirs: list[str] = []
+        for name in dirnames:
+            d = dir_root / name
+            if d.is_symlink():
+                continue
+            try:
+                resolved = d.resolve()
+            except OSError:
+                continue
+            if root_resolved in resolved.parents or root_resolved == resolved:
+                pruned_dirs.append(name)
+        dirnames[:] = pruned_dirs
+
+        for name in filenames:
+            p = dir_root / name
+            if p.is_symlink():
+                continue
+            try:
+                resolved = p.resolve()
+            except OSError:
+                continue
+            if root_resolved not in resolved.parents and root_resolved != resolved:
+                continue
+            safe_files.append(p)
+    safe_files.sort(key=lambda p: str(p.relative_to(root)))
     return safe_files
 
 

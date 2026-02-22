@@ -405,7 +405,7 @@ def main() -> None:
         raise RuntimeError(f"upload run failed: {rrow_upload}")
 
     run_id_multi = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="multi-pass")
-    rrow_multi = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_multi])
+    rrow_multi = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_multi])
     if rrow_multi is None or rrow_multi["status"] != "ok":
         raise RuntimeError(f"multi-pass run failed: {rrow_multi}")
     multi_summary = json.loads(rrow_multi["summary_json"])
@@ -549,6 +549,39 @@ def main() -> None:
         invalid_summary_file = client.get(f"/problems/sample/alice/runs/{run_id_bad_build}/artifacts/summary.json")
         if invalid_summary_file.status_code != 200:
             raise RuntimeError(f"invalid run summary.json should be readable status={invalid_summary_file.status_code}")
+    run_leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-zip-leak-{uuid.uuid4().hex[:8]}.txt"
+    run_leak_src.write_text("run-leak\n", encoding="utf-8")
+    run_escape_name = "999.run-escape.txt"
+    run_feedback_root = Path(rrow_multi["artifact_path"]) / "feedback_dir"
+    run_escape_link = run_feedback_root / run_escape_name
+    run_symlink_supported = True
+    try:
+        run_escape_link.symlink_to(run_leak_src)
+    except (OSError, NotImplementedError):
+        run_symlink_supported = False
+    if run_symlink_supported:
+        try:
+            with TestClient(app) as client:
+                run_browse = client.get(
+                    f"/problems/sample/alice/runs/{run_id_multi}/browse",
+                    params={"rel": "feedback_dir"},
+                )
+                if run_browse.status_code != 200:
+                    raise RuntimeError(f"run artifact browse failed during symlink hardening check: {run_browse.status_code}")
+                if run_escape_name in run_browse.text:
+                    raise RuntimeError("run artifact browse leaked symlink escape entry")
+                run_zip = client.get(
+                    f"/problems/sample/alice/runs/{run_id_multi}/download-dir",
+                    params={"rel": "feedback_dir"},
+                )
+                if run_zip.status_code != 200:
+                    raise RuntimeError(f"run artifact zip failed during symlink hardening check: {run_zip.status_code}")
+                with zipfile.ZipFile(BytesIO(run_zip.content)) as zf:
+                    if any(Path(name).name == run_escape_name for name in zf.namelist()):
+                        raise RuntimeError("run artifact zip included symlink escape entry")
+        finally:
+            run_escape_link.unlink(missing_ok=True)
+    run_leak_src.unlink(missing_ok=True)
 
     build_id_missing_artifacts = build_service.run_build("sample", "alice")
     brow_missing_artifacts = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_missing_artifacts])
@@ -696,11 +729,18 @@ def main() -> None:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
     leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"zip-leak-{uuid.uuid4().hex[:8]}.txt"
     leak_src.write_text("leak-check\n", encoding="utf-8")
+    leak_dir = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"zip-leak-dir-{uuid.uuid4().hex[:8]}"
+    leak_dir.mkdir(parents=True, exist_ok=True)
+    leak_dir_file = leak_dir / "hidden.out"
+    leak_dir_file.write_text("hidden\n", encoding="utf-8")
     escape_name = "999.escape.in"
     escape_link = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "tests" / escape_name
+    escape_dir_name = "998.escape-dir"
+    escape_dir_link = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "tests" / escape_dir_name
     symlink_supported = True
     try:
         escape_link.symlink_to(leak_src)
+        escape_dir_link.symlink_to(leak_dir, target_is_directory=True)
     except (OSError, NotImplementedError):
         symlink_supported = False
     if symlink_supported:
@@ -714,6 +754,8 @@ def main() -> None:
                     raise RuntimeError(f"artifact browse failed during symlink hardening check: {browse_resp.status_code}")
                 if escape_name in browse_resp.text:
                     raise RuntimeError("artifact browse leaked symlink escape entry")
+                if escape_dir_name in browse_resp.text:
+                    raise RuntimeError("artifact browse leaked symlink directory escape entry")
                 zip_resp = client.get(
                     f"/problems/sample/alice/artifacts/{build_id}/download-dir",
                     params={"rel": "tests"},
@@ -721,11 +763,16 @@ def main() -> None:
                 if zip_resp.status_code != 200:
                     raise RuntimeError(f"artifact zip failed during symlink hardening check: {zip_resp.status_code}")
                 with zipfile.ZipFile(BytesIO(zip_resp.content)) as zf:
-                    if any(Path(name).name == escape_name for name in zf.namelist()):
+                    names = zf.namelist()
+                    if any(Path(name).name == escape_name for name in names):
                         raise RuntimeError("artifact zip included symlink escape entry")
+                    if any(escape_dir_name in Path(name).parts for name in names):
+                        raise RuntimeError("artifact zip included symlink directory escape entry")
         finally:
             escape_link.unlink(missing_ok=True)
+            escape_dir_link.unlink(missing_ok=True)
     leak_src.unlink(missing_ok=True)
+    shutil.rmtree(leak_dir, ignore_errors=True)
 
     workspace_service.ensure_workspace("sample", "bob")
     bob_preview_id = preview_service.compile_preview("sample", "bob")
