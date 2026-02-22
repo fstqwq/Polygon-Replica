@@ -1312,6 +1312,21 @@ def main() -> None:
         raise RuntimeError(
             "run feedback key-file discovery should be deterministic and ignore unsafe symlinked files"
         )
+    feedback_root_outside = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"feedback-root-outside-{uuid.uuid4().hex[:8]}"
+    feedback_root_outside.mkdir(parents=True, exist_ok=True)
+    (feedback_root_outside / "judgemessage.txt").write_text("outside-judge", encoding="utf-8")
+    feedback_root_link = run_cfg_root / f"feedback-root-link-{uuid.uuid4().hex[:8]}"
+    feedback_root_symlink_supported = True
+    try:
+        feedback_root_link.symlink_to(feedback_root_outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        feedback_root_symlink_supported = False
+    if feedback_root_symlink_supported:
+        outside_feedback_files = run_service._feedback_key_files(feedback_root_link, run_cfg_root)
+        if outside_feedback_files:
+            raise RuntimeError("run feedback key-file discovery should reject symlinked feedback roots")
+        feedback_root_link.unlink(missing_ok=True)
+    shutil.rmtree(feedback_root_outside, ignore_errors=True)
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()

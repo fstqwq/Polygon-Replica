@@ -409,6 +409,14 @@ class RunService:
             base_root_resolved = base_root.resolve()
         except OSError:
             return []
+        if test_feedback_dir.is_symlink():
+            return []
+        try:
+            test_feedback_resolved = test_feedback_dir.resolve()
+        except OSError:
+            return []
+        if base_root_resolved not in test_feedback_resolved.parents and base_root_resolved != test_feedback_resolved:
+            return []
         wanted = {"judgemessage.txt", "teammessage.txt", "nextpass.in"}
         keys: list[str] = []
         for dirpath, dirnames, filenames in os.walk(test_feedback_dir, topdown=True, followlinks=False):
