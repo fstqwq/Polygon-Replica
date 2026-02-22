@@ -17,6 +17,11 @@ Operational policy:
 - Export/format behavior, schemas, and regression examples for Kattis packaging should be derived from upstream `problem-package-format` spec/examples.
 - When required files/tests are missing locally, obtain or refresh them from these upstream repositories.
 
+## Progress Tracking
+
+- Current implementation status is tracked in `PROGRESS.md`.
+- Keep `PROGRESS.md` updated whenever milestone status or validation state changes.
+
 ## System Overview
 
 ### Core Concepts
