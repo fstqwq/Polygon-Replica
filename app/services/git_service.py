@@ -120,7 +120,7 @@ class GitService:
             next_dirs: list[str] = []
             for name in sorted(dirnames):
                 d = dir_root / name
-                if ".git" in d.parts or d.is_symlink():
+                if ".git" in d.parts or ".polygonlike.lock" in d.parts or d.is_symlink():
                     continue
                 try:
                     resolved = d.resolve()
@@ -134,7 +134,7 @@ class GitService:
 
             for name in sorted(filenames):
                 p = dir_root / name
-                if ".git" in p.parts or p.is_symlink():
+                if ".git" in p.parts or ".polygonlike.lock" in p.parts or p.is_symlink():
                     continue
                 try:
                     resolved = p.resolve()

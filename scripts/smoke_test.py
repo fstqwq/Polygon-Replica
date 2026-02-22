@@ -544,6 +544,17 @@ def main() -> None:
             link_file.unlink(missing_ok=True)
     shutil.rmtree(list_leak_dir, ignore_errors=True)
     list_leak_file.unlink(missing_ok=True)
+    lock_marker = ws / ".polygonlike.lock"
+    lock_marker.write_text("lock\n", encoding="utf-8")
+    try:
+        with TestClient(app) as client:
+            files_page = client.get("/problems/sample/alice/files")
+            if files_page.status_code != 200:
+                raise RuntimeError(f"files page failed during lock-file listing check: {files_page.status_code}")
+            if ".polygonlike.lock" in files_page.text:
+                raise RuntimeError("files page should not list workspace lock files")
+    finally:
+        lock_marker.unlink(missing_ok=True)
 
     cached_preview_id = f"p-{uuid.uuid4().hex[:12]}"
     cached_preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / cached_preview_id
