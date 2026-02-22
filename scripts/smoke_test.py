@@ -65,7 +65,11 @@ def main() -> None:
         encoding="utf-8",
     )
     (ws / "checkers/checker.cpp").write_text(
-        "#include <bits/stdc++.h>\nusing namespace std; int main(int argc,char** argv){ifstream out(argv[2]), ans(argv[3]); long long a,b; if(!(out>>a) || !(ans>>b)) return 1; return a==b?0:1;}",
+        "#include <bits/stdc++.h>\n#include <filesystem>\nusing namespace std; int main(int argc,char** argv){ifstream out(argv[2]); long long a=0; if(!(out>>a)) return 1; const char* fb=getenv(\"FEEDBACK_DIR\"); if(fb){ filesystem::create_directories(fb); ofstream(string(fb)+\"/judgemessage.txt\")<<\"judge\"; ofstream(string(fb)+\"/teammessage.txt\")<<\"team\"; if(a>0){ ofstream(string(fb)+\"/nextpass.in\")<<(a-1)<<\"\\n\"; } } return a>=0?0:1; }",
+        encoding="utf-8",
+    )
+    (ws / "interactors/interactor.cpp").write_text(
+        "#include <bits/stdc++.h>\n#include <filesystem>\nusing namespace std; int main(int argc,char** argv){ if(argc<2) return 1; ifstream in(argv[1]); long long x=0; if(!(in>>x)) return 2; cout<<x<<endl; long long y=0; if(!(cin>>y)) return 3; const char* fb=getenv(\"FEEDBACK_DIR\"); if(fb){ filesystem::create_directories(fb); ofstream(string(fb)+\"/judgemessage.txt\")<<\"judge\"; ofstream(string(fb)+\"/teammessage.txt\")<<\"team\"; } return x==y?0:1; }",
         encoding="utf-8",
     )
     (ws / "generators/gen.cpp").write_text('#include <bits/stdc++.h>\nint main(){std::cout<<1<<"\\n";}', encoding="utf-8")
@@ -101,6 +105,22 @@ def main() -> None:
     if rrow_upload is None or rrow_upload["status"] != "ok":
         raise RuntimeError(f"upload run failed: {rrow_upload}")
 
+    run_id_multi = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="multi-pass")
+    rrow_multi = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_multi])
+    if rrow_multi is None or rrow_multi["status"] != "ok":
+        raise RuntimeError(f"multi-pass run failed: {rrow_multi}")
+    multi_summary = json.loads(rrow_multi["summary_json"])
+    if not multi_summary.get("tests") or len(multi_summary["tests"][0].get("passes", [])) < 2:
+        raise RuntimeError("multi-pass run did not execute multiple passes")
+
+    run_id_interactive = run_service.run_submission("sample", "alice", build_id, submission_path="solutions/main.cpp", mode="interactive")
+    rrow_interactive = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_interactive])
+    if rrow_interactive is None or rrow_interactive["status"] != "ok":
+        raise RuntimeError(f"interactive run failed: {rrow_interactive}")
+    interactive_summary = json.loads(rrow_interactive["summary_json"])
+    if not interactive_summary.get("tests") or interactive_summary["tests"][0].get("verdict") != "OK":
+        raise RuntimeError("interactive run did not produce OK verdict")
+
     for export_type in ["kattis", "domjudge", "polygon-standard", "polygon-full"]:
         out = export_service.create_export("sample", build_id, export_type)
         if not out.exists():
@@ -114,7 +134,7 @@ def main() -> None:
         if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
 
-    print("smoke_ok", preview_id, build_id, run_id_ws, run_id_upload)
+    print("smoke_ok", preview_id, build_id, run_id_ws, run_id_upload, run_id_multi, run_id_interactive)
 
 
 if __name__ == "__main__":

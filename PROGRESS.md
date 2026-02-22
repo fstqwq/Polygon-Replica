@@ -79,6 +79,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Preview service now fails gracefully when `pdflatex` is unavailable.
 - Export generation hardened with metadata checks and guaranteed temp directory cleanup.
 - Added reusable local validation script: `scripts/smoke_test.py`.
+- Smoke coverage now includes `pass-fail`, `multi-pass`, and `interactive` run modes.
 
 ## Upstream Dependency Integration
 

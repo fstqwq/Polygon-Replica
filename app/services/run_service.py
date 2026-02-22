@@ -238,9 +238,10 @@ class RunService:
             ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(sub_src, sub_bin, include_dirs)
 
         compile_log = f"{cout}\n{cerr}".strip()
+        compile_log_file = run_root / "compile.log"
+        compile_log_file.write_text((compile_log + "\n") if compile_log else "", encoding="utf-8")
         compile_diagnostics = self._collect_diagnostics(compile_workspace, compile_log)
         if not ok:
-            (run_root / "compile.log").write_text(compile_log + "\n", encoding="utf-8")
             self.db.execute(
                 "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
                 [
@@ -362,6 +363,7 @@ class RunService:
                 "tests": verdicts,
                 "feedback_dir": str(feedback_dir),
                 "compile_diagnostics": compile_diagnostics,
+                "compile_log": "compile.log",
                 "toolchain_digest": toolchain_digest,
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

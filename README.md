@@ -38,3 +38,4 @@ Open: `http://127.0.0.1:8000`
   - `./scripts/sync_upstream_assets.sh`
 - Run local end-to-end validation with:
   - `.venv/bin/python ./scripts/smoke_test.py`
+  - Covers pass-fail, multi-pass, and interactive run flows.
