@@ -1052,9 +1052,13 @@ def main() -> None:
     validate_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "validate.log").read_text(encoding="utf-8")
     if "validate_jobs=2" not in validate_log:
         raise RuntimeError("validate log missing configured validate_jobs marker")
+    if "001.in" not in validate_log:
+        raise RuntimeError("validate log should include per-test entries")
     solve_log = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "solve.log").read_text(encoding="utf-8")
     if "solve_jobs=2" not in solve_log:
         raise RuntimeError("solve log missing configured solve_jobs marker")
+    if "001.in" not in solve_log:
+        raise RuntimeError("solve log should include per-test entries")
     cache_root = Path(os.environ["POLYGONLIKE_CACHE_ROOT"]) / "compile"
     cache_count = lambda: len(list(cache_root.rglob("*.bin")))
     cache_after_build_first = cache_count()

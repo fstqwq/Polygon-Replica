@@ -339,70 +339,72 @@ class BuildService:
             validator = compiled_bins["validator"]
             validator_args = [str(x) for x in build_cfg.get("validator_args", [])]
             validate_jobs = self._effective_compile_jobs(build_cfg.get("validate_jobs", 0), len(test_files))
-            validate_results: dict[str, tuple[int, str, str, str | None]] = {}
+            validate_results: dict[str, tuple[int, str | None]] = {}
             validate_root = logs_dir / "validate_runs"
             validate_root.mkdir(parents=True, exist_ok=True)
-            with ThreadPoolExecutor(max_workers=validate_jobs) as pool:
-                future_map = {}
-                for t in test_files:
-                    test_cwd = validate_root / t.stem
-                    test_cwd.mkdir(parents=True, exist_ok=True)
-                    future_map[
-                        pool.submit(
-                            run_cmd,
-                            [str(validator), *validator_args],
-                            stdin_path=t,
-                            timeout=30,
-                            cwd=test_cwd,
-                        )
-                    ] = t
-                for future in as_completed(future_map):
-                    t = future_map[future]
-                    try:
-                        proc = future.result()
-                        validate_results[t.name] = (proc.returncode, proc.stdout, proc.stderr, None)
-                    except Exception as exc:
-                        validate_results[t.name] = (-1, "", "", str(exc))
+            with (logs_dir / "validate.log").open("w", encoding="utf-8") as vlog:
+                vlog.write(f"validate_jobs={validate_jobs}\n")
+                with ThreadPoolExecutor(max_workers=validate_jobs) as pool:
+                    future_map = {}
+                    for t in test_files:
+                        test_cwd = validate_root / t.stem
+                        test_cwd.mkdir(parents=True, exist_ok=True)
+                        future_map[
+                            pool.submit(
+                                run_cmd,
+                                [str(validator), *validator_args],
+                                stdin_path=t,
+                                timeout=30,
+                                cwd=test_cwd,
+                            )
+                        ] = t
+                    for future in as_completed(future_map):
+                        t = future_map[future]
+                        try:
+                            proc = future.result()
+                            validate_results[t.name] = (proc.returncode, None)
+                            vlog.write(f"{t.name}: args={validator_args} rc={proc.returncode}\n{proc.stdout}{proc.stderr}\n")
+                        except Exception as exc:
+                            validate_results[t.name] = (-1, str(exc))
+                            vlog.write(f"{t.name}: args={validator_args} rc=-1\n{exc}\n")
 
-            vlogs = [f"validate_jobs={validate_jobs}"]
-            for t in test_files:
-                failing_test = t.name
-                rc, stdout, stderr, err = validate_results[t.name]
-                if err is not None:
-                    raise RuntimeError(f"validator failed on {t.name}: {err}")
-                vlogs.append(f"{t.name}: args={validator_args} rc={rc}\n{stdout}{stderr}\n")
-                if not self._validator_ok(rc):
-                    raise RuntimeError(f"validator failed on {t.name}")
-            (logs_dir / "validate.log").write_text("\n".join(vlogs), encoding="utf-8")
+                for t in test_files:
+                    failing_test = t.name
+                    rc, err = validate_results[t.name]
+                    if err is not None:
+                        raise RuntimeError(f"validator failed on {t.name}: {err}")
+                    if not self._validator_ok(rc):
+                        raise RuntimeError(f"validator failed on {t.name}")
             steps.append({"step": "validate", "status": "ok", "log": "logs/validate.log"})
 
             current_step = "solve"
             accepted = compiled_bins["accepted_solution"]
             solve_jobs = self._effective_compile_jobs(build_cfg.get("solve_jobs", 0), len(test_files))
-            solve_results: dict[str, tuple[int, str, str | None]] = {}
-            with ThreadPoolExecutor(max_workers=solve_jobs) as pool:
-                future_map = {}
-                for t in test_files:
-                    out = artifact_paths.ans / t.name.replace(".in", ".ans")
-                    future_map[pool.submit(run_cmd, [str(accepted)], stdin_path=t, stdout_path=out, timeout=30)] = t
-                for future in as_completed(future_map):
-                    t = future_map[future]
-                    try:
-                        proc = future.result()
-                        solve_results[t.name] = (proc.returncode, proc.stderr, None)
-                    except Exception as exc:
-                        solve_results[t.name] = (-1, "", str(exc))
+            solve_results: dict[str, tuple[int, str | None]] = {}
+            with (logs_dir / "solve.log").open("w", encoding="utf-8") as slog:
+                slog.write(f"solve_jobs={solve_jobs}\n")
+                with ThreadPoolExecutor(max_workers=solve_jobs) as pool:
+                    future_map = {}
+                    for t in test_files:
+                        out = artifact_paths.ans / t.name.replace(".in", ".ans")
+                        future_map[pool.submit(run_cmd, [str(accepted)], stdin_path=t, stdout_path=out, timeout=30)] = t
+                    for future in as_completed(future_map):
+                        t = future_map[future]
+                        try:
+                            proc = future.result()
+                            solve_results[t.name] = (proc.returncode, None)
+                            slog.write(f"{t.name}: rc={proc.returncode}\n{proc.stderr}\n")
+                        except Exception as exc:
+                            solve_results[t.name] = (-1, str(exc))
+                            slog.write(f"{t.name}: rc=-1\n{exc}\n")
 
-            slog = [f"solve_jobs={solve_jobs}"]
-            for t in test_files:
-                failing_test = t.name
-                rc, stderr, err = solve_results[t.name]
-                if err is not None:
-                    raise RuntimeError(f"accepted solution failed on {t.name}: {err}")
-                slog.append(f"{t.name}: rc={rc}\n{stderr}\n")
-                if rc != 0:
-                    raise RuntimeError(f"accepted solution failed on {t.name}")
-            (logs_dir / "solve.log").write_text("\n".join(slog), encoding="utf-8")
+                for t in test_files:
+                    failing_test = t.name
+                    rc, err = solve_results[t.name]
+                    if err is not None:
+                        raise RuntimeError(f"accepted solution failed on {t.name}: {err}")
+                    if rc != 0:
+                        raise RuntimeError(f"accepted solution failed on {t.name}")
             steps.append({"step": "solve", "status": "ok", "log": "logs/solve.log"})
 
             (logs_dir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
