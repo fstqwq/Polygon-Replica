@@ -201,6 +201,14 @@ def _audit(actor_user_id: int, problem_id: int, action: str, details: dict) -> N
     )
 
 
+def _normalize_page_target(page: str) -> str:
+    raw = str(page or "").strip().lower()
+    aliases = {"artifacts": "build", "runs": "run"}
+    normalized = aliases.get(raw, raw)
+    allowed = {"files", "git", "build", "preview", "run", "export"}
+    return normalized if normalized in allowed else "files"
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> RedirectResponse:
     return RedirectResponse("/problems/sample/alice/files")
@@ -210,18 +218,20 @@ def home() -> RedirectResponse:
 def switch_workspace(problem: str = Form(...), user: str = Form(...), page: str = Form("files")):
     workspace_service.ensure_problem(problem, f"{problem.title()} Problem")
     workspace_service.ensure_workspace(problem, user)
-    return RedirectResponse(f"/problems/{problem}/{user}/{page}", status_code=303)
+    target_page = _normalize_page_target(page)
+    return RedirectResponse(f"/problems/{problem}/{user}/{target_page}", status_code=303)
 
 
 @app.post("/switch-branch")
 def switch_branch(problem: str = Form(...), user: str = Form(...), branch: str = Form(...), page: str = Form("files")):
+    target_page = _normalize_page_target(page)
     ctx = page_ctx(problem, user)
     workspace = Path(ctx["workspace"]["path"])
     try:
         with workspace_service.workspace_lock(workspace):
             git_service.switch_branch(workspace, branch, create=False)
         _audit(ctx["user"]["id"], ctx["problem"]["id"], "git.switch", {"branch": branch, "create": False})
-        return RedirectResponse(f"/problems/{problem}/{user}/{page}", status_code=303)
+        return RedirectResponse(f"/problems/{problem}/{user}/{target_page}", status_code=303)
     except Exception as exc:
         return RedirectResponse(f"/problems/{problem}/{user}/git?message={quote_plus(str(exc))}", status_code=303)
 

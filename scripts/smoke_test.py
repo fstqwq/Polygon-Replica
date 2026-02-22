@@ -76,6 +76,32 @@ def main() -> None:
         legacy_manifest = client.get("/api/problems/sample/builds/b-nonexistent/manifest")
         if legacy_manifest.status_code != 400:
             raise RuntimeError(f"legacy manifest endpoint should require workspace context, status={legacy_manifest.status_code}")
+        for posted_page, expected_page in [("runs", "run"), ("artifacts", "build"), ("not-a-page", "files")]:
+            switch_workspace = client.post(
+                "/switch-workspace",
+                data={"problem": "sample", "user": "alice", "page": posted_page},
+                follow_redirects=False,
+            )
+            if switch_workspace.status_code != 303:
+                raise RuntimeError(
+                    f"switch-workspace should redirect for page={posted_page}, status={switch_workspace.status_code}"
+                )
+            location = switch_workspace.headers.get("location", "")
+            if location != f"/problems/sample/alice/{expected_page}":
+                raise RuntimeError(
+                    f"switch-workspace page normalization mismatch: page={posted_page} location={location}"
+                )
+        for posted_page, expected_page in [("runs", "run"), ("artifacts", "build"), ("not-a-page", "files")]:
+            switch_branch = client.post(
+                "/switch-branch",
+                data={"problem": "sample", "user": "alice", "branch": "main", "page": posted_page},
+                follow_redirects=False,
+            )
+            if switch_branch.status_code != 303:
+                raise RuntimeError(f"switch-branch should redirect for page={posted_page}, status={switch_branch.status_code}")
+            location = switch_branch.headers.get("location", "")
+            if location != f"/problems/sample/alice/{expected_page}":
+                raise RuntimeError(f"switch-branch page normalization mismatch: page={posted_page} location={location}")
 
     snapshot_repo = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-check-{uuid.uuid4().hex[:8]}"
     snapshot_repo.mkdir(parents=True, exist_ok=True)

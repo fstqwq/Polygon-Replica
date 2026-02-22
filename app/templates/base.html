@@ -47,6 +47,8 @@
     (function () {
       var parts = window.location.pathname.split("/");
       var page = parts.length >= 5 ? parts[4] : "files";
+      if (page === "artifacts") page = "build";
+      if (page === "runs") page = "run";
       var allowed = { files: 1, git: 1, build: 1, preview: 1, run: 1, export: 1 };
       if (!allowed[page]) page = "files";
       document.querySelectorAll("input.page-target").forEach(function (el) {
