@@ -102,6 +102,24 @@ def main() -> None:
             location = switch_branch.headers.get("location", "")
             if location != f"/problems/sample/alice/{expected_page}":
                 raise RuntimeError(f"switch-branch page normalization mismatch: page={posted_page} location={location}")
+        upload_path = f"notes/upload-smoke-{uuid.uuid4().hex[:8]}.bin"
+        upload_payload = bytes(range(256)) * 4096
+        upload_resp = client.post(
+            "/problems/sample/alice/files/upload",
+            data={"path": upload_path},
+            files={"upload": ("upload-smoke.bin", upload_payload, "application/octet-stream")},
+            follow_redirects=False,
+        )
+        if upload_resp.status_code != 303:
+            raise RuntimeError(f"files upload should redirect status={upload_resp.status_code}")
+        download_resp = client.get(
+            "/problems/sample/alice/files/download",
+            params={"path": upload_path},
+        )
+        if download_resp.status_code != 200:
+            raise RuntimeError(f"uploaded file download failed status={download_resp.status_code}")
+        if download_resp.content != upload_payload:
+            raise RuntimeError("uploaded file payload mismatch after round-trip")
 
     snapshot_repo = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-check-{uuid.uuid4().hex[:8]}"
     snapshot_repo.mkdir(parents=True, exist_ok=True)

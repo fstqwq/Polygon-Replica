@@ -309,12 +309,18 @@ def files_new(problem: str, user: str, path: str = Form(...)):
 async def files_upload(problem: str, user: str, path: str = Form(...), upload: UploadFile = File(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False)
     workspace = Path(ctx["workspace"]["path"])
-    payload = await upload.read()
+    total_bytes = 0
     with workspace_service.workspace_lock(workspace):
         abs_path = _safe_workspace_path(workspace, path)
         abs_path.parent.mkdir(parents=True, exist_ok=True)
-        abs_path.write_bytes(payload)
-    _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.upload", {"path": path, "bytes": len(payload)})
+        with abs_path.open("wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                total_bytes += len(chunk)
+    _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.upload", {"path": path, "bytes": total_bytes})
     return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(path)}&message=uploaded", status_code=303)
 
 
