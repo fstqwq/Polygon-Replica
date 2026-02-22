@@ -88,6 +88,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses on hot build/preview paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, avoiding a redundant post-build `SELECT status FROM builds` query.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
+- Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
 - Git page status now runs `git diff` only when unstaged tracked changes are present; clean, staged-only, and untracked-only states skip the extra diff subprocess.
 - Artifact manifest writing now uses a single deterministic streaming directory walk (instead of materializing full `rglob` lists), reducing memory overhead for large build artifacts.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.

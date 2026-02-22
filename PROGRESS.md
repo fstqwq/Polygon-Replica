@@ -151,6 +151,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses in hot mutation paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, removing a redundant post-build status lookup query.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
+- Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
 - Git page status flow now conditionally skips `git diff` unless porcelain status indicates unstaged tracked changes, reducing unnecessary subprocess work in clean/untracked/staged-only states.
 - Artifact manifest generation now streams a deterministic sorted directory walk (symlink-skipping) instead of materializing `rglob` lists, lowering memory overhead on large artifact trees.
 - Added DB indexes for workspace-scoped history filters (`problem_id,workspace_id,created_at`) and preview-reuse lookup (`problem_id,source_commit,status,created_at`).

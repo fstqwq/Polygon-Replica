@@ -158,12 +158,18 @@ class BuildService:
         manual_root = snapshot / "tests" / "manual"
         if not manual_root.exists():
             return []
-        files = sorted(
-            [p for p in manual_root.rglob("*") if p.is_file()],
-            key=lambda p: str(p.relative_to(manual_root)),
-        )
-        in_files = [p for p in files if p.suffix.lower() == ".in"]
-        return in_files if in_files else files
+        in_files: list[Path] = []
+        for p in manual_root.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() == ".in":
+                in_files.append(p)
+        if in_files:
+            return sorted(in_files, key=lambda p: str(p.relative_to(manual_root)))
+
+        # Backward-compatible fallback: when no *.in exists, treat all files as manual tests.
+        files = [p for p in manual_root.rglob("*") if p.is_file()]
+        return sorted(files, key=lambda p: str(p.relative_to(manual_root)))
 
     def _effective_compile_jobs(self, configured: object, target_count: int) -> int:
         auto_jobs = max(1, min(4, os.cpu_count() or 1))
