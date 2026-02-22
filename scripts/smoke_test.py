@@ -663,6 +663,22 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    bad_nested_run_id = f"r-badnested-{uuid.uuid4().hex[:8]}"
+    db.execute(
+        "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            bad_nested_run_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            build_id,
+            "pass-fail",
+            "failed",
+            json.dumps({"error": "injected nested artifact root"}),
+            str((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs").resolve()),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
     with TestClient(app) as client:
         valid_summary_file = client.get(f"/problems/sample/alice/runs/{run_id_multi}/artifacts/summary.json")
         if valid_summary_file.status_code != 200:
@@ -692,6 +708,9 @@ def main() -> None:
         )
         if poisoned_browse.status_code != 404:
             raise RuntimeError("run artifact browse should reject DB-poisoned artifact roots")
+        poisoned_nested_artifact = client.get(f"/problems/sample/alice/runs/{bad_nested_run_id}/artifacts/compile.log")
+        if poisoned_nested_artifact.status_code != 404:
+            raise RuntimeError("run artifact endpoint should reject DB-poisoned nested artifact roots")
     run_leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-zip-leak-{uuid.uuid4().hex[:8]}.txt"
     run_leak_src.write_text("run-leak\n", encoding="utf-8")
     run_escape_name = "999.run-escape.txt"
