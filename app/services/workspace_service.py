@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import shlex
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -155,10 +156,13 @@ class WorkspaceService:
         snap = self.settings.run_root / run_id / "src"
         ensure_dir(snap.parent)
         if commit:
-            clone_proc = run_cmd(["git", "clone", str(workspace), str(snap)])
-            if clone_proc.returncode != 0:
-                raise RuntimeError(clone_proc.stderr or clone_proc.stdout)
-            proc = run_cmd(["git", "-C", str(snap), "checkout", commit])
+            ensure_dir(snap)
+            cmd = (
+                "set -euo pipefail; "
+                f"git -C {shlex.quote(str(workspace))} archive {shlex.quote(commit)} "
+                f"| tar -x -C {shlex.quote(str(snap))}"
+            )
+            proc = run_cmd(["bash", "-lc", cmd], timeout=120)
             if proc.returncode != 0:
                 raise RuntimeError(proc.stderr or proc.stdout)
         else:

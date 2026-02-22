@@ -40,7 +40,14 @@
         <td>{{ t.verdict }}</td>
         <td>{{ t.time_ms }}</td>
         <td><pre>{{ t.passes }}</pre></td>
-        <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/logs/run-{{ detail.id }}/{{ t.test.replace('.in', '.transcript.txt') }}">transcript</a></td>
+        <td>
+          {% if t.transcript %}
+          <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/{{ t.transcript }}">transcript</a><br />
+          {% endif %}
+          {% for ff in t.feedback_files %}
+          <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ detail.build_id }}/{{ ff }}">{{ ff }}</a><br />
+          {% endfor %}
+        </td>
       </tr>
       {% endfor %}
     </table>

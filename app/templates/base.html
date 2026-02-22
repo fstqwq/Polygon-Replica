@@ -18,8 +18,20 @@
     <form method="post" action="/switch-workspace">
       <input name="problem" value="{{ ctx.problem.slug }}" />
       <input name="user" value="{{ ctx.user.username }}" />
-      <input name="page" value="files" />
+      <input class="page-target" name="page" value="files" />
       <button type="submit">Switch Workspace</button>
+    </form>
+    <form method="post" action="/switch-branch">
+      <input type="hidden" name="problem" value="{{ ctx.problem.slug }}" />
+      <input type="hidden" name="user" value="{{ ctx.user.username }}" />
+      <input class="page-target" type="hidden" name="page" value="files" />
+      <label>Branch</label>
+      <select name="branch">
+        {% for b in ctx.branches %}
+        <option value="{{ b }}" {% if b == ctx.workspace.branch %}selected{% endif %}>{{ b }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Switch Branch</button>
     </form>
   </header>
   <nav class="nav">
@@ -31,5 +43,16 @@
     <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export">Export</a>
   </nav>
   <main class="container">{% block content %}{% endblock %}</main>
+  <script>
+    (function () {
+      var parts = window.location.pathname.split("/");
+      var page = parts.length >= 5 ? parts[4] : "files";
+      var allowed = { files: 1, git: 1, build: 1, preview: 1, run: 1, export: 1 };
+      if (!allowed[page]) page = "files";
+      document.querySelectorAll("input.page-target").forEach(function (el) {
+        el.value = page;
+      });
+    })();
+  </script>
 </body>
 </html>

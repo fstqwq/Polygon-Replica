@@ -4,7 +4,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 
 - Git-backed per-problem repositories with per-user workspaces
 - Local filesystem artifact store (`tests`, `ans`, `logs`, `statement_preview`, `export`, `manifest.json`)
-- Minimum metadata database schema (`problems`, `users`, `repo_acl`, `workspaces`, `builds`, `runs`, `exports`, `audit_log`)
+- Minimum metadata database schema (`problems`, `users`, `repo_acl`, `workspaces`, `builds`, `previews`, `runs`, `exports`, `audit_log`)
 - Unified compiler layer with cache key `(toolchain_digest, source_hash)` and `testlib.h` include path support
 - TeX preview compilation and log capture
 - Build pipeline (`compile -> generate -> validate -> solve -> persist`) with failed-step metadata
@@ -34,3 +34,5 @@ Open: `http://127.0.0.1:8000`
   - Kattis package spec/schemas/examples from `Kattis/problem-package-format`
 - Refresh vendored upstream files with:
   - `./scripts/sync_upstream_assets.sh`
+- Run local end-to-end validation with:
+  - `.venv/bin/python ./scripts/smoke_test.py`

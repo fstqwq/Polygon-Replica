@@ -60,14 +60,19 @@ This file tracks implementation status against `AGENTS.md` milestones.
 
 - Added DB `previews` table and indexes for `workspaces/builds/previews/runs/exports/audit_log` hot paths.
 - Added preview history API: `/api/problems/{problem}/workspaces/{user}/recent-previews`.
+- Added `recent_preview` field to workspace status API.
+- Added global branch switching control in the shared header across all UI pages.
 - Build failure summaries now include `failed_step` and `failed_test`.
 - Run execution now supports submission source from workspace path or direct file upload.
 - Run compile diagnostics are parsed and surfaced in UI with file/line links when linkable.
 - Added per-pass memory usage capture using `/usr/bin/time` when available (`0` fallback).
 - Multi-pass feedback is isolated per test/pass to prevent cross-test contamination.
+- Run detail now exposes concrete artifact links for interactive transcripts and key feedback files.
+- Commit-based snapshot creation now uses `git archive` extraction (faster and avoids clone overhead).
 - Ephemeral snapshot directories are cleaned after build/preview jobs.
 - Preview service now fails gracefully when `pdflatex` is unavailable.
 - Export generation hardened with metadata checks and guaranteed temp directory cleanup.
+- Added reusable local validation script: `scripts/smoke_test.py`.
 
 ## Upstream Dependency Integration
 
@@ -79,6 +84,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 
 - `python3 -m compileall app`: pass.
 - Local smoke validation (venv, UI/API routing, build/preview/run/export path, upload run path): pass under local `./var` roots.
+- `./scripts/smoke_test.py` (with `.venv/bin/python`): pass.
 
 ## Known Operational Notes
 

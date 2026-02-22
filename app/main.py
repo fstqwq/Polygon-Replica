@@ -47,7 +47,13 @@ def startup() -> None:
 def page_ctx(problem: str, user: str) -> dict:
     workspace_service.ensure_workspace(problem, user)
     workspace_service.refresh_workspace_status(problem, user)
-    return workspace_service.workspace_context(problem, user)
+    ctx = workspace_service.workspace_context(problem, user)
+    workspace = Path(ctx["workspace"]["path"])
+    try:
+        ctx["branches"] = git_service.list_branches(workspace)
+    except Exception:
+        ctx["branches"] = [ctx["workspace"].get("branch") or "main"]
+    return ctx
 
 
 def _safe_workspace_path(workspace: Path, rel: str) -> Path:
@@ -84,6 +90,19 @@ def switch_workspace(problem: str = Form(...), user: str = Form(...), page: str 
     workspace_service.ensure_problem(problem, f"{problem.title()} Problem")
     workspace_service.ensure_workspace(problem, user)
     return RedirectResponse(f"/problems/{problem}/{user}/{page}", status_code=303)
+
+
+@app.post("/switch-branch")
+def switch_branch(problem: str = Form(...), user: str = Form(...), branch: str = Form(...), page: str = Form("files")):
+    ctx = page_ctx(problem, user)
+    workspace = Path(ctx["workspace"]["path"])
+    try:
+        with workspace_service.workspace_lock(workspace):
+            git_service.switch_branch(workspace, branch, create=False)
+        _audit(ctx["user"]["id"], ctx["problem"]["id"], "git.switch", {"branch": branch, "create": False})
+        return RedirectResponse(f"/problems/{problem}/{user}/{page}", status_code=303)
+    except Exception as exc:
+        return RedirectResponse(f"/problems/{problem}/{user}/git?message={quote_plus(str(exc))}", status_code=303)
 
 
 @app.get("/problems/{problem}/{user}/files", response_class=HTMLResponse)
@@ -181,12 +200,11 @@ def git_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx["workspace"]["path"])
     status = git_service.status(workspace)
-    branches = git_service.list_branches(workspace)
     message = request.query_params.get("message", "")
     return templates.TemplateResponse(
         request,
         "git.html",
-        {"ctx": ctx, "status": status, "branches": branches, "message": message},
+        {"ctx": ctx, "status": status, "branches": ctx.get("branches", []), "message": message},
     )
 
 
@@ -464,6 +482,7 @@ def api_workspace_status(problem: str, user: str):
         "head": ctx["workspace"]["head_commit"],
         "dirty": bool(ctx["workspace"]["dirty"]),
         "recent_build": ctx["latest_build"],
+        "recent_preview": ctx.get("latest_preview"),
     }
 
 
