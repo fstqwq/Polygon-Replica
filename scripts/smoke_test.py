@@ -438,6 +438,64 @@ def main() -> None:
         )
         if forbidden_delete.status_code != 303 or "reserved+path" not in forbidden_delete.headers.get("location", ""):
             raise RuntimeError(f"reserved-path delete should redirect with error message: {forbidden_delete.headers}")
+        symlink_component_target = alice_ws / f"path-alias-target-{uuid.uuid4().hex[:8]}"
+        symlink_component_target.mkdir(parents=True, exist_ok=True)
+        (symlink_component_target / "existing.txt").write_text("existing\n", encoding="utf-8")
+        symlink_component_link = alice_ws / f"path-alias-{uuid.uuid4().hex[:8]}"
+        symlink_component_supported = True
+        try:
+            symlink_component_link.symlink_to(symlink_component_target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            symlink_component_supported = False
+        if symlink_component_supported:
+            try:
+                alias_download = client.get(
+                    "/problems/sample/alice/files/download",
+                    params={"path": f"{symlink_component_link.name}/existing.txt"},
+                )
+                if alias_download.status_code != 400:
+                    raise RuntimeError(
+                        "download should reject symlinked workspace path components"
+                        f", status={alias_download.status_code}"
+                    )
+                alias_upload = client.post(
+                    "/problems/sample/alice/files/upload",
+                    data={"path": f"{symlink_component_link.name}/upload.txt"},
+                    files={"upload": ("upload.txt", b"alias\n", "text/plain")},
+                    follow_redirects=False,
+                )
+                if alias_upload.status_code != 400:
+                    raise RuntimeError(
+                        "upload should reject symlinked workspace path components"
+                        f", status={alias_upload.status_code}"
+                    )
+                alias_save = client.post(
+                    "/problems/sample/alice/files/save",
+                    data={"path": f"{symlink_component_link.name}/save.txt", "content": "alias\n"},
+                    follow_redirects=False,
+                )
+                if alias_save.status_code != 303 or "invalid+path" not in alias_save.headers.get("location", ""):
+                    raise RuntimeError(
+                        "save should reject symlinked workspace path components with invalid-path message"
+                    )
+                alias_new = client.post(
+                    "/problems/sample/alice/files/new",
+                    data={"path": f"{symlink_component_link.name}/new.txt"},
+                    follow_redirects=False,
+                )
+                if alias_new.status_code != 303 or "invalid+path" not in alias_new.headers.get("location", ""):
+                    raise RuntimeError(
+                        "new should reject symlinked workspace path components with invalid-path message"
+                    )
+            finally:
+                symlink_component_link.unlink(missing_ok=True)
+                if (symlink_component_target / "upload.txt").exists():
+                    raise RuntimeError("upload should not write through symlinked workspace path components")
+                if (symlink_component_target / "save.txt").exists():
+                    raise RuntimeError("save should not write through symlinked workspace path components")
+                if (symlink_component_target / "new.txt").exists():
+                    raise RuntimeError("new should not write through symlinked workspace path components")
+        shutil.rmtree(symlink_component_target, ignore_errors=True)
 
     snapshot_repo = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"snapshot-check-{uuid.uuid4().hex[:8]}"
     snapshot_repo.mkdir(parents=True, exist_ok=True)
@@ -2077,6 +2135,42 @@ def main() -> None:
                 raise RuntimeError("symlinked submission path failure did not include symlink rejection")
         finally:
             symlink_submission_path.unlink(missing_ok=True)
+    symlink_component_submission_dir = ws / f"run-symlink-dir-{uuid.uuid4().hex[:8]}"
+    symlink_component_submission_supported = True
+    try:
+        symlink_component_submission_dir.symlink_to(ws / "solutions", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        symlink_component_submission_supported = False
+    if symlink_component_submission_supported:
+        try:
+            run_id_symlink_component_submission = run_service.run_submission(
+                "sample",
+                "alice",
+                build_id,
+                submission_path=f"{symlink_component_submission_dir.name}/main.cpp",
+                mode="pass-fail",
+            )
+            rrow_symlink_component_submission = db.fetch_one(
+                "SELECT status,summary_json FROM runs WHERE id=?",
+                [run_id_symlink_component_submission],
+            )
+            if (
+                rrow_symlink_component_submission is None
+                or rrow_symlink_component_submission["status"] != "failed"
+            ):
+                raise RuntimeError(
+                    "symlink-component submission path run should fail"
+                    f": {rrow_symlink_component_submission}"
+                )
+            symlink_component_submission_summary = json.loads(
+                rrow_symlink_component_submission["summary_json"]
+            )
+            if "symlink" not in str(symlink_component_submission_summary.get("error", "")):
+                raise RuntimeError(
+                    "symlink-component submission path failure did not include symlink rejection"
+                )
+        finally:
+            symlink_component_submission_dir.unlink(missing_ok=True)
 
     run_id_bad_build = run_service.run_submission(
         "sample",

@@ -84,7 +84,8 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build validator acceptance now supports both return code `0` and Kattis-style success code `42`.
 - Runner checker/interactor verdict mapping now supports both testlib (`0`) and Kattis output-validator (`42=OK`, `43=WA`) conventions.
 - Run submission source paths are now constrained to workspace boundaries to prevent path traversal.
-- Run workspace submission paths now reject reserved internal workspace files (`.git/*`, `.polygonlike.lock`) and symlinked submission aliases.
+- Run workspace submission paths now reject reserved internal workspace files (`.git/*`, `.polygonlike.lock`), symlinked submission aliases, and symlinked path components.
+- Workspace file save/new/upload/download paths now reject symlinked path components to prevent alias-based path escapes.
 - Git commit staging now explicitly excludes `.polygonlike.lock`, preventing internal workspace lock files from being committed into problem history.
 - Git commit staging lock-file exclusion now also applies to nested `.polygonlike.lock` paths via glob pathspec filtering.
 - Build config now carries runner controls in `generation_params` (`checker_mode`, `checker_args`, `max_passes`, `validator_args`) for build-consistent run behavior.
@@ -234,7 +235,8 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates preview page rejection of symlinked preview `statement.pdf`/`latex.log` artifacts (no leak rendering / no PDF embed).
 - Smoke coverage now validates workspace manifest endpoint rejection for symlinked `manifest.json` artifacts.
 - Smoke coverage now validates artifact and run-artifact file/browse endpoint rejection for symlinked path-component aliases inside artifact roots.
-- Smoke coverage now validates run submission-path rejection for reserved internal workspace files and symlinked submission aliases.
+- Smoke coverage now validates run submission-path rejection for reserved internal workspace files, symlinked submission aliases, and symlinked path components.
+- Smoke coverage now validates Files-route rejection for symlinked workspace path components across save/new/upload/download operations.
 
 ## Upstream Dependency Integration
 

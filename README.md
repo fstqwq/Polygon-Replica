@@ -31,7 +31,8 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`
 - Validator/checker/interactor compatibility: accepts both testlib-style (`0`) and Kattis-style (`42/43`) verdict exit codes
 - Run source safety: workspace submission paths are validated to stay within workspace root
-- Runner workspace submission paths now reject reserved internal files (for example `.git/*`, `.polygonlike.lock`) and symlinked submission aliases.
+- Runner workspace submission paths now reject reserved internal files (for example `.git/*`, `.polygonlike.lock`), symlinked submission aliases, and symlinked path components.
+- Workspace file save/new/upload/download routes now reject symlinked path components to prevent alias-based path escapes.
 - Git commit flow now unstages `.polygonlike.lock` before commit, preventing internal workspace lock files from entering repository history.
 - Git commit lock-file exclusion now also covers nested `.polygonlike.lock` paths via glob pathspec filtering.
 - Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
@@ -191,4 +192,5 @@ Open: `http://127.0.0.1:8000`
   - Adds preview-page symlink regressions ensuring symlinked preview `statement.pdf`/`latex.log` are ignored and not rendered.
   - Adds workspace-manifest API regression ensuring symlinked `manifest.json` artifacts are rejected.
   - Adds artifact and run-artifact endpoint regressions ensuring symlinked directory path components are rejected for file and browse views.
-  - Adds run submission-path regressions for reserved internal workspace paths and symlinked submission aliases.
+  - Adds run submission-path regressions for reserved internal workspace paths, symlinked submission aliases, and symlinked path components.
+  - Adds Files-route regressions ensuring save/new/upload/download reject symlinked workspace path components.

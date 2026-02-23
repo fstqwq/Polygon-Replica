@@ -85,13 +85,17 @@ def page_ctx(
 
 
 def _safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool = False) -> Path:
-    path = (workspace / rel).resolve()
-    if workspace.resolve() not in path.parents and workspace.resolve() != path:
+    ws_root = workspace.resolve()
+    candidate = workspace / rel
+    path = candidate.resolve()
+    if ws_root not in path.parents and ws_root != path:
         raise HTTPException(status_code=400, detail="invalid path")
-    if not allow_workspace_root and path == workspace.resolve():
+    if _contains_symlink_component(ws_root, candidate):
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not allow_workspace_root and path == ws_root:
         raise HTTPException(status_code=400, detail="invalid path")
     try:
-        rel_parts = path.relative_to(workspace.resolve()).parts
+        rel_parts = path.relative_to(ws_root).parts
     except ValueError:
         raise HTTPException(status_code=400, detail="invalid path")
     if ".git" in rel_parts or ".polygonlike.lock" in rel_parts:

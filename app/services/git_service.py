@@ -20,10 +20,35 @@ class GitService:
     def _invalidate_branch_cache(self, workspace: Path) -> None:
         self._branch_cache.pop(self._workspace_key(workspace), None)
 
+    def _contains_symlink_component(self, root: Path, candidate: Path) -> bool:
+        try:
+            if root.is_symlink():
+                return True
+        except OSError:
+            return True
+        try:
+            rel = candidate.relative_to(root)
+        except ValueError:
+            return True
+        cur = root
+        for part in rel.parts:
+            cur = cur / part
+            try:
+                if cur.is_symlink():
+                    return True
+            except OSError:
+                return True
+            if not cur.exists():
+                break
+        return False
+
     def _resolve_user_path(self, workspace: Path, rel_path: str, allow_workspace_root: bool = False) -> Path:
         ws_root = workspace.resolve()
-        p = (workspace / rel_path).resolve()
+        candidate = workspace / rel_path
+        p = candidate.resolve()
         if ws_root not in p.parents and p != ws_root:
+            raise ValueError("invalid path")
+        if self._contains_symlink_component(ws_root, candidate):
             raise ValueError("invalid path")
         if not allow_workspace_root and p == ws_root:
             raise ValueError("invalid path")

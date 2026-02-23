@@ -70,12 +70,12 @@ class RunService:
 
     def _resolve_submission_source(self, workspace: Path, submission_path: str) -> Path:
         candidate = workspace / submission_path
-        source = candidate.resolve()
         ws_resolved = workspace.resolve()
+        source = candidate.resolve()
         if ws_resolved not in source.parents:
             raise RuntimeError("submission_path must be inside the workspace")
-        if candidate.exists() and candidate.is_symlink():
-            raise RuntimeError("submission_path cannot be a symlink")
+        if self._contains_symlink_component(ws_resolved, candidate):
+            raise RuntimeError("submission_path cannot include symlink path components")
         try:
             rel_parts = source.relative_to(ws_resolved).parts
         except ValueError:
@@ -177,6 +177,28 @@ class RunService:
             return str(artifact_root.resolve())
         except OSError:
             return str(artifact_root)
+
+    def _contains_symlink_component(self, root: Path, candidate: Path) -> bool:
+        try:
+            if root.is_symlink():
+                return True
+        except OSError:
+            return True
+        try:
+            rel = candidate.relative_to(root)
+        except ValueError:
+            return True
+        cur = root
+        for part in rel.parts:
+            cur = cur / part
+            try:
+                if cur.is_symlink():
+                    return True
+            except OSError:
+                return True
+            if not cur.exists():
+                break
+        return False
 
     def _cache_get(self, cache: dict, key: str):
         with self._cache_lock:
