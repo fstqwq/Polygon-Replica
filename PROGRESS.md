@@ -152,6 +152,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
 - Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
+- Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error for oversized payloads to avoid heavy decode/render paths from oversized DB blobs.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
 - Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
 - `/api/problems` now uses a capped, narrow projection query (`200` rows) instead of unbounded `SELECT *`, preventing oversized problem-list payloads.
@@ -259,6 +260,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates `/api/problems` problem-list cap behavior.
 - Smoke coverage now validates Build/Run diagnostic-message truncation behavior with inline truncation markers.
 - Smoke coverage now validates Files-page oversized file-content rendering caps, including read-only/disabled-save safeguards for truncated views.
+- Smoke coverage now validates Build/Run page oversized `summary_json` rendering paths, ensuring bounded fallback errors instead of unbounded JSON decode in UI detail views.
 
 ## Upstream Dependency Integration
 

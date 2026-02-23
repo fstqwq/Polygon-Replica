@@ -63,6 +63,7 @@ def main() -> None:
         PREVIEW_LOG_REF_LIST_LIMIT,
         RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
         RUN_DETAIL_TEST_LIST_LIMIT,
+        SUMMARY_JSON_UI_CHAR_LIMIT,
         UI_LOG_TEXT_CHAR_LIMIT,
         WORKSPACE_BRANCH_LIST_LIMIT,
         WORKSPACE_FILE_LIST_LIMIT,
@@ -2158,6 +2159,45 @@ def main() -> None:
             "1970-01-01T00:00:00Z",
         ],
     )
+    summary_json_limit = int(SUMMARY_JSON_UI_CHAR_LIMIT)
+    if summary_json_limit < 4096:
+        raise RuntimeError(f"summary_json UI parse limit should be a sane positive bound, got={summary_json_limit}")
+    oversized_json_build_id = f"b-bigjson-{uuid.uuid4().hex[:8]}"
+    oversized_json_run_id = f"r-bigger-{uuid.uuid4().hex[:8]}"
+    oversized_summary_blob = "S" * (summary_json_limit + 512)
+    oversized_summary_json = json.dumps({"blob": oversized_summary_blob, "tests": [{"test": "001.in", "verdict": "OK"}]})
+    if len(oversized_summary_json) <= summary_json_limit:
+        raise RuntimeError("oversized summary_json fixture did not exceed configured UI parse cap")
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            oversized_json_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "failed",
+            oversized_summary_json,
+            str(build_artifact_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    db.execute(
+        "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            oversized_json_run_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            build_id,
+            "pass-fail",
+            "failed",
+            oversized_summary_json,
+            str(run_artifact_row["artifact_path"]),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
     bad_root_build_id = f"b-badroot-{uuid.uuid4().hex[:8]}"
     poison_marker = f"poison-build-log-{uuid.uuid4().hex[:8]}"
     poison_log = ws / "logs" / f"{poison_marker}.log"
@@ -2205,6 +2245,11 @@ def main() -> None:
             raise RuntimeError(f"build page should handle malformed summary_json, status={bad_build_page.status_code}")
         if "invalid summary_json for build" not in bad_build_page.text:
             raise RuntimeError("build page did not surface malformed summary_json fallback")
+        oversized_build_page = client.get("/problems/sample/alice/build", params={"build_id": oversized_json_build_id})
+        if oversized_build_page.status_code != 200:
+            raise RuntimeError(f"build page should handle oversized summary_json, status={oversized_build_page.status_code}")
+        if "summary_json for build exceeds UI parse limit" not in oversized_build_page.text:
+            raise RuntimeError("build page did not surface oversized summary_json fallback")
         poisoned_build_page = client.get("/problems/sample/alice/build", params={"build_id": bad_root_build_id})
         if poisoned_build_page.status_code != 200:
             raise RuntimeError(
@@ -2228,6 +2273,11 @@ def main() -> None:
             raise RuntimeError(f"run page should handle malformed summary_json, status={bad_run_page.status_code}")
         if "invalid summary_json for run" not in bad_run_page.text:
             raise RuntimeError("run page did not surface malformed summary_json fallback")
+        oversized_run_page = client.get("/problems/sample/alice/run", params={"run_id": oversized_json_run_id})
+        if oversized_run_page.status_code != 200:
+            raise RuntimeError(f"run page should handle oversized summary_json, status={oversized_run_page.status_code}")
+        if "summary_json for run exceeds UI parse limit" not in oversized_run_page.text:
+            raise RuntimeError("run page did not surface oversized summary_json fallback")
     run_tests_limit = int(RUN_DETAIL_TEST_LIST_LIMIT)
     run_diag_limit = int(RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT)
     if run_tests_limit < 8:

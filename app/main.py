@@ -53,6 +53,7 @@ PREVIEW_LOG_REF_LIST_LIMIT = 200
 WORKSPACE_BRANCH_LIST_LIMIT = 200
 API_PROBLEMS_LIST_LIMIT = 200
 DIAGNOSTIC_MESSAGE_CHAR_LIMIT = 4096
+SUMMARY_JSON_UI_CHAR_LIMIT = 1048576
 
 
 @app.on_event("startup")
@@ -373,8 +374,16 @@ def _normalize_page_target(page: str) -> str:
 def _parse_summary_json(raw: str | None, label: str) -> dict | None:
     if not raw:
         return None
+    text = str(raw)
+    if len(text) > SUMMARY_JSON_UI_CHAR_LIMIT:
+        return {
+            "error": f"summary_json for {label} exceeds UI parse limit ({SUMMARY_JSON_UI_CHAR_LIMIT} chars)",
+            "summary_json_too_large": True,
+            "summary_json_chars": len(text),
+            "summary_json_char_limit": SUMMARY_JSON_UI_CHAR_LIMIT,
+        }
     try:
-        payload = json.loads(raw)
+        payload = json.loads(text)
     except Exception:
         return {"error": f"invalid summary_json for {label}"}
     if isinstance(payload, dict):
