@@ -66,10 +66,19 @@ class RunService:
         return result
 
     def _resolve_submission_source(self, workspace: Path, submission_path: str) -> Path:
-        source = (workspace / submission_path).resolve()
+        candidate = workspace / submission_path
+        source = candidate.resolve()
         ws_resolved = workspace.resolve()
         if ws_resolved not in source.parents:
             raise RuntimeError("submission_path must be inside the workspace")
+        if candidate.exists() and candidate.is_symlink():
+            raise RuntimeError("submission_path cannot be a symlink")
+        try:
+            rel_parts = source.relative_to(ws_resolved).parts
+        except ValueError:
+            raise RuntimeError("submission_path must be inside the workspace")
+        if ".git" in rel_parts or ".polygonlike.lock" in rel_parts:
+            raise RuntimeError("submission_path is reserved")
         if not source.exists() or not source.is_file():
             raise RuntimeError(f"submission source not found: {submission_path}")
         return source

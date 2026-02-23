@@ -1868,6 +1868,48 @@ def main() -> None:
     if traversal_summary.get("feedback_dir") != "feedback_dir":
         raise RuntimeError("failed run summary should expose feedback_dir as repository-relative path")
 
+    run_id_reserved = run_service.run_submission(
+        "sample",
+        "alice",
+        build_id,
+        submission_path=".git/config",
+        mode="pass-fail",
+    )
+    rrow_reserved = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_reserved])
+    if rrow_reserved is None or rrow_reserved["status"] != "failed":
+        raise RuntimeError(f"reserved submission path run should fail: {rrow_reserved}")
+    reserved_summary = json.loads(rrow_reserved["summary_json"])
+    if "reserved" not in str(reserved_summary.get("error", "")):
+        raise RuntimeError("reserved submission path failure did not include reserved-path rejection")
+
+    symlink_submission_rel = f"solutions/run-symlink-{uuid.uuid4().hex[:8]}.cpp"
+    symlink_submission_path = ws / symlink_submission_rel
+    symlink_submission_supported = True
+    try:
+        symlink_submission_path.symlink_to(ws / "solutions/main.cpp")
+    except (OSError, NotImplementedError):
+        symlink_submission_supported = False
+    if symlink_submission_supported:
+        try:
+            run_id_symlink_submission = run_service.run_submission(
+                "sample",
+                "alice",
+                build_id,
+                submission_path=symlink_submission_rel,
+                mode="pass-fail",
+            )
+            rrow_symlink_submission = db.fetch_one(
+                "SELECT status,summary_json FROM runs WHERE id=?",
+                [run_id_symlink_submission],
+            )
+            if rrow_symlink_submission is None or rrow_symlink_submission["status"] != "failed":
+                raise RuntimeError(f"symlinked submission path run should fail: {rrow_symlink_submission}")
+            symlink_submission_summary = json.loads(rrow_symlink_submission["summary_json"])
+            if "symlink" not in str(symlink_submission_summary.get("error", "")):
+                raise RuntimeError("symlinked submission path failure did not include symlink rejection")
+        finally:
+            symlink_submission_path.unlink(missing_ok=True)
+
     run_id_bad_build = run_service.run_submission(
         "sample",
         "alice",
