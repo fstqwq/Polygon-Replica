@@ -1086,11 +1086,10 @@ def export_page(request: Request, problem: str, user: str):
     )
     exports = db.fetch_all(
         """
-        SELECT e.id,e.build_id,e.export_type,e.filename,e.sha256,e.size_bytes,e.source_commit,e.created_at
-        FROM exports e
-        JOIN builds b ON b.id = e.build_id
-        WHERE e.problem_id=? AND b.workspace_id=?
-        ORDER BY e.created_at DESC
+        SELECT id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at
+        FROM exports
+        WHERE problem_id=? AND workspace_id=?
+        ORDER BY created_at DESC
         LIMIT 40
         """,
         [ctx["problem"]["id"], workspace_id],
@@ -1286,11 +1285,10 @@ def api_recent_exports(problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     rows = db.fetch_all(
         """
-        SELECT e.id,e.build_id,e.export_type,e.filename,e.size_bytes,e.sha256,e.source_commit,e.created_at
-        FROM exports e
-        JOIN builds b ON b.id = e.build_id
-        WHERE e.problem_id=? AND b.workspace_id=?
-        ORDER BY e.created_at DESC
+        SELECT id,build_id,export_type,filename,size_bytes,sha256,source_commit,created_at
+        FROM exports
+        WHERE problem_id=? AND workspace_id=?
+        ORDER BY created_at DESC
         LIMIT 20
         """,
         [ctx["problem"]["id"], ctx["workspace"]["id"]],

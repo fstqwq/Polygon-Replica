@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS exports (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
     build_id TEXT NOT NULL,
+    workspace_id INTEGER,
     export_type TEXT NOT NULL,
     filename TEXT NOT NULL,
     sha256 TEXT NOT NULL,
@@ -149,7 +150,30 @@ class DB:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
             conn.commit()
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        self._migrate_exports_workspace_id(conn)
+
+    def _migrate_exports_workspace_id(self, conn: sqlite3.Connection) -> None:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
+        if "workspace_id" not in cols:
+            conn.execute("ALTER TABLE exports ADD COLUMN workspace_id INTEGER")
+        conn.execute(
+            """
+            UPDATE exports
+            SET workspace_id = (
+                SELECT b.workspace_id
+                FROM builds b
+                WHERE b.id = exports.build_id
+            )
+            WHERE workspace_id IS NULL
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exports_problem_workspace_created ON exports(problem_id, workspace_id, created_at DESC)"
+        )
 
     @contextmanager
     def conn(self):

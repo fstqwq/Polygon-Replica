@@ -71,6 +71,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Export test-data copy now streams safe test discovery and captures sample selection inline, avoiding full test-list materialization for large exports.
 - Export test-data answer lookup now pre-indexes safe `ans/*.ans` files once per export, avoiding repeated per-test answer-path safety checks.
 - Workspace pages and recent-* APIs are now strictly workspace-scoped (build/preview/run/export history no longer leaks entries from other users on the same problem).
+- Export rows now persist `workspace_id` (with startup backfill for legacy rows), and Export page / recent-exports API now use direct workspace-scoped reads from `exports` without joining `builds`.
 - Artifact download/browse/file endpoints now enforce workspace ownership for both build and preview artifact ids.
 - Preview page now ignores foreign-workspace `preview_id` query values to prevent cross-workspace log/PDF detail leaks.
 - Export UI now rejects cross-workspace `build_id` selections before export generation.
@@ -232,3 +233,4 @@ Open: `http://127.0.0.1:8000`
   - Adds run-config sidecar regressions ensuring `logs/run_config.json` is emitted and preferred over manifest generation-params during run-config loading.
   - Adds run-config sidecar backfill regressions ensuring manifest-only artifacts get sidecar synthesis and subsequent loads prefer the synthesized sidecar.
   - Adds workspace-manifest API regressions ensuring large `files` lists are capped with truncation metadata.
+  - Adds export-metadata regressions ensuring `exports.workspace_id` persistence and workspace-scoped export query behavior.

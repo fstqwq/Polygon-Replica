@@ -583,11 +583,12 @@ class ExportService:
             digest = sha256_file(out)
 
             self.db.execute(
-                "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO exports(id,problem_id,build_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 [
                     export_id,
                     problem_row["id"],
                     build_id,
+                    build_row["workspace_id"],
                     export_type,
                     out.name,
                     digest,

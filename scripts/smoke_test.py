@@ -106,6 +106,12 @@ def main() -> None:
             raise RuntimeError("workspace status API should expose a non-empty HEAD commit")
         if not str(status_payload.get("branch") or "").strip():
             raise RuntimeError("workspace status API should expose a non-empty branch")
+        export_columns = {str(row["name"]) for row in db.fetch_all("PRAGMA table_info(exports)")}
+        if "workspace_id" not in export_columns:
+            raise RuntimeError("exports table should expose workspace_id for workspace-scoped export reads")
+        export_indexes = {str(row["name"]) for row in db.fetch_all("PRAGMA index_list(exports)")}
+        if "idx_exports_problem_workspace_created" not in export_indexes:
+            raise RuntimeError("exports table missing workspace-scoped listing index")
         problems_limit = int(API_PROBLEMS_LIST_LIMIT)
         if problems_limit < 8:
             raise RuntimeError(f"api problems list limit should be a sane positive bound, got={problems_limit}")
@@ -3541,6 +3547,16 @@ def main() -> None:
         raise RuntimeError("expected at least two kattis export records")
     if str(recent_kattis[0]["filename"]) == str(recent_kattis[1]["filename"]):
         raise RuntimeError("kattis export records should preserve distinct filenames per generation")
+    export_workspace_rows = db.fetch_all(
+        "SELECT workspace_id FROM exports WHERE problem_id=? AND build_id=? ORDER BY created_at DESC LIMIT 8",
+        [ctx["problem"]["id"], build_id],
+    )
+    expected_workspace_id = int(ctx["workspace"]["id"])
+    if not export_workspace_rows:
+        raise RuntimeError("expected export rows for workspace-id persistence checks")
+    for row in export_workspace_rows:
+        if int(row["workspace_id"] or -1) != expected_workspace_id:
+            raise RuntimeError("exports should persist workspace_id for workspace-scoped listing")
 
     missing_workspace_build_id = f"b-missingws-{uuid.uuid4().hex[:8]}"
     missing_workspace_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / missing_workspace_build_id).resolve()
@@ -3865,6 +3881,7 @@ def main() -> None:
     shutil.rmtree(leak_dir, ignore_errors=True)
 
     workspace_service.ensure_workspace("sample", "bob")
+    bob_ctx = workspace_service.workspace_context("sample", "bob", include_recent=False)
     bob_preview_id = preview_service.compile_preview("sample", "bob")
     bob_build_id = build_service.run_build("sample", "bob")
     bob_run_id = run_service.run_submission(
@@ -3889,11 +3906,12 @@ def main() -> None:
         raise RuntimeError("cross-workspace run did not report workspace ownership preflight failure")
     bob_export_id = f"e-{uuid.uuid4().hex[:10]}"
     db.execute(
-        "INSERT INTO exports(id,problem_id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO exports(id,problem_id,build_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
         [
             bob_export_id,
             ctx["problem"]["id"],
             bob_build_id,
+            bob_ctx["workspace"]["id"],
             "polygon-standard",
             "bob-fake.zip",
             "0" * 64,

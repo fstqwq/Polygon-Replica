@@ -134,6 +134,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Export build-root resolution now canonicalizes build artifact ids/roots and rejects traversal-style build ids before artifact reads.
 - Kattis/DOMjudge export now rejects builds with missing `source_commit` metadata to preserve explicit commit provenance.
 - Build/Preview/Run/Export pages and recent-* APIs are now workspace-scoped (`workspace_id` filtered or build-joined), preventing cross-user history leakage within the same problem.
+- Export rows now persist `workspace_id` (with startup backfill for legacy rows), and Export page / recent-exports API now use direct workspace-scoped reads from `exports` without joining `builds`.
 - Artifact endpoints (`browse`, `download-dir`, file reads) now verify artifact id ownership against the active workspace (builds and previews).
 - Preview detail selection now validates `preview_id` ownership and suppresses foreign-workspace detail rendering.
 - Run preflight now rejects cross-workspace build ids (`build does not belong to selected workspace`) with deterministic failed-run persistence.
@@ -274,6 +275,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates run-config sidecar emission and run-config loading preference for `logs/run_config.json` over manifest generation-params.
 - Smoke coverage now validates run-config sidecar backfill for manifest-only artifacts and sidecar reuse on subsequent config loads.
 - Smoke coverage now validates workspace-manifest API files-list capping behavior with truncation metadata.
+- Smoke coverage now validates `exports.workspace_id` persistence/index presence and workspace-scoped export history filtering behavior.
 
 ## Upstream Dependency Integration
 
