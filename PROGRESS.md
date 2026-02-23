@@ -147,6 +147,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Artifact and run-artifact browser pages now cap file listings (`512` entries) and surface truncation indicators, preventing oversized HTML responses on large artifact trees.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
+- Git page diff collection now streams `git diff` output to temporary files and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Workspace provisioning now supports optional status refresh while still forcing refresh on newly created workspace clones/rows.
 - Workspace provisioning now has a steady-state fast path that bypasses provisioning-lock acquisition when workspace clone + DB row already exist, reducing lock contention on normal request paths.
 - Workspace ensure/status-refresh flow now reuses previously resolved problem/user ids (and ensured user rows) instead of re-querying them during hot-path refresh updates.

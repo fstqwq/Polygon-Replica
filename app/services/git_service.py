@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import threading
 from pathlib import Path
 from time import monotonic
@@ -137,16 +138,27 @@ class GitService:
             out.extend(chunk)
         return "".join(out)
 
+    def _append_truncation_marker(self, text: str, max_chars: int) -> str:
+        clipped = text
+        if "\n" in clipped:
+            clipped = clipped.rsplit("\n", 1)[0] + "\n"
+        return clipped + f"... [truncated; showing first {max_chars} characters]\n"
+
     def _truncate_text(self, text: str, max_chars: int) -> tuple[str, bool]:
         if max_chars <= 0:
             return text, False
         if len(text) <= max_chars:
             return text, False
-        clipped = text[:max_chars]
-        if "\n" in clipped:
-            clipped = clipped.rsplit("\n", 1)[0] + "\n"
-        clipped += f"... [truncated; showing first {max_chars} characters]\n"
-        return clipped, True
+        return self._append_truncation_marker(text[:max_chars], max_chars), True
+
+    def _read_text_prefix(self, path: Path, max_chars: int) -> tuple[str, bool]:
+        if max_chars <= 0:
+            return path.read_text(encoding="utf-8", errors="replace"), False
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(max_chars + 1)
+        if len(text) <= max_chars:
+            return text, False
+        return text[:max_chars], True
 
     def status(self, workspace: Path) -> dict:
         proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"])
@@ -182,24 +194,35 @@ class GitService:
         diff_truncated = False
         diff_limit = max(1, int(self.DIFF_MAX_CHARS))
         if need_diff:
-            diff_proc = run_cmd(
-                [
-                    "git",
-                    "-C",
-                    str(workspace),
-                    "diff",
-                    "--",
-                    ".",
-                    ":(exclude).polygonlike.lock",
-                    ":(exclude)**/.polygonlike.lock",
-                ]
-            )
-            if diff_proc.returncode == 0:
-                raw_diff = diff_proc.stdout
-            else:
-                raw_diff = run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout
-            filtered_diff = self._filter_reserved_diff(raw_diff)
-            diff_text, diff_truncated = self._truncate_text(filtered_diff, diff_limit)
+            tmp_path: Path | None = None
+            try:
+                fd, tmp_name = tempfile.mkstemp(prefix="git-diff-", suffix=".patch")
+                os.close(fd)
+                tmp_path = Path(tmp_name)
+                diff_proc = run_cmd(
+                    [
+                        "git",
+                        "-C",
+                        str(workspace),
+                        "diff",
+                        "--",
+                        ".",
+                        ":(exclude).polygonlike.lock",
+                        ":(exclude)**/.polygonlike.lock",
+                    ],
+                    stdout_path=tmp_path,
+                )
+                if diff_proc.returncode == 0:
+                    diff_text, diff_truncated = self._read_text_prefix(tmp_path, diff_limit)
+                    if diff_truncated:
+                        diff_text = self._append_truncation_marker(diff_text, diff_limit)
+                else:
+                    raw_diff = run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout
+                    filtered_diff = self._filter_reserved_diff(raw_diff)
+                    diff_text, diff_truncated = self._truncate_text(filtered_diff, diff_limit)
+            finally:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
         else:
             diff_text = ""
         return {

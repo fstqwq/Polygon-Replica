@@ -84,6 +84,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Artifact and run-artifact browser pages now cap file listings (`512` entries) and surface truncation indicators, preventing oversized HTML responses on large artifact trees.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
+- Git page diff collection now streams `git diff` output to a temporary file and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
 - Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
