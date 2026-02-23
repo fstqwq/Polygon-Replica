@@ -91,7 +91,7 @@ class ExportService:
         for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             keep_dirs: list[str] = []
-            for name in sorted(dirnames):
+            for name in dirnames:
                 d = dir_root / name
                 if d.is_symlink():
                     continue
@@ -101,8 +101,10 @@ class ExportService:
                     continue
                 if root_resolved in resolved.parents or root_resolved == resolved:
                     keep_dirs.append(name)
-            dirnames[:] = keep_dirs
-            for name in sorted(filenames):
+            dirnames[:] = sorted(keep_dirs)
+
+            safe_filenames: list[str] = []
+            for name in filenames:
                 p = dir_root / name
                 if p.is_symlink():
                     continue
@@ -114,7 +116,10 @@ class ExportService:
                     continue
                 if not p.is_file():
                     continue
-                yield p
+                safe_filenames.append(name)
+
+            for name in sorted(safe_filenames):
+                yield dir_root / name
 
     def _copy_path(self, src: Path, dst: Path) -> None:
         if not src.exists():

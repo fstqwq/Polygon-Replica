@@ -158,6 +158,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run detail links now use workspace-scoped run-artifact endpoints (`/runs/{run_id}/artifacts/...` and `/runs/{run_id}/download-dir`) so replay files work for both valid builds and invalid preflight runs.
 - Artifact and run-artifact browse/zip directory exports now perform symlink-safe walks (no symlink-directory traversal) and skip out-of-root resolved targets to prevent archive-path escape/exfiltration via crafted artifact trees.
 - Artifact/run-artifact zip generation and export directory-copy walks now stream from iterator-based safe traversal (reducing peak memory on large artifact trees).
+- Export safe-descendant traversal now filters directory/file entries before sorting, reducing per-directory sorting overhead when many entries are rejected by symlink/path-safety checks.
 - Run summaries now expose `feedback_dir` as a stable run-relative path (`feedback_dir`) instead of host-absolute filesystem paths.
 - Run config loading now prefers a small `logs/run_config.json` sidecar (with manifest fallback), lazily backfills that sidecar for manifest-only legacy artifacts, and caches parsed settings in-process (copy-on-read), reducing repeated full-`manifest.json` reads/parses across submissions.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
