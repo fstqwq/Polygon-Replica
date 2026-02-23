@@ -35,6 +35,10 @@ class PreviewService:
         current_preview_id: str,
         artifacts,
     ) -> str | None:
+        try:
+            artifact_base = (self.workspace_service.settings.artifacts_root / problem).resolve()
+        except OSError:
+            return None
         batch_size = 50
         cursor_created_at: str | None = None
         cursor_id: str | None = None
@@ -66,18 +70,14 @@ class PreviewService:
                 break
 
             for row in rows:
-                root = self._preview_artifact_root(problem, str(row["id"]))
+                root = self._preview_artifact_root(problem, str(row["id"]), artifact_base=artifact_base)
                 if root is None:
-                    continue
-                try:
-                    root_resolved = root.resolve()
-                except OSError:
                     continue
                 src_pdf = root / "statement_preview" / "statement.pdf"
                 src_log = root / "logs" / "latex.log"
-                if not self._is_safe_regular_file(root, src_pdf, root_resolved=root_resolved):
+                if not self._is_safe_regular_file(root, src_pdf, root_resolved=root):
                     continue
-                if not self._is_safe_regular_file(root, src_log, root_resolved=root_resolved):
+                if not self._is_safe_regular_file(root, src_log, root_resolved=root):
                     continue
 
                 artifacts.statement_preview.mkdir(parents=True, exist_ok=True)
@@ -94,10 +94,18 @@ class PreviewService:
             cursor_id = tail_id
         return None
 
-    def _preview_artifact_root(self, problem: str, preview_id: str) -> Path | None:
+    def _preview_artifact_root(
+        self,
+        problem: str,
+        preview_id: str,
+        artifact_base: Path | None = None,
+    ) -> Path | None:
         if not is_canonical_artifact_id(preview_id):
             return None
-        base = (self.workspace_service.settings.artifacts_root / problem).resolve()
+        try:
+            base = artifact_base if artifact_base is not None else (self.workspace_service.settings.artifacts_root / problem).resolve()
+        except OSError:
+            return None
         root = (base / preview_id).resolve()
         try:
             rel = root.relative_to(base)

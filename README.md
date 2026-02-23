@@ -54,6 +54,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Preview compilation now reuses cached successful artifacts for identical commit-based preview requests (copying cached PDF/log instead of re-running TeX)
 - Preview compilation now also reuses cached artifacts for clean workspace-HEAD requests when immutable.
 - Preview reuse candidate selection now scans paged history with keyset pagination (`created_at`,`id`) instead of offset paging, preventing stale/poisoned recent rows from starving valid cache hits while keeping deep-history scans efficient.
+- Preview reuse now resolves the problem artifact base once per scan and reuses canonical candidate roots for safe-file checks, avoiding redundant root resolution per candidate row.
 - Build/Preview commit selectors now canonicalize refs (`main`, tags, short SHAs) to immutable commit SHAs before snapshot/cache decisions.
 - Build/Preview invalid commit refs are now persisted as failed records (with error summaries) instead of uncaught service exceptions.
 - Failed commit-ref jobs now preserve the originally requested ref in `source_ref` metadata for clearer audit/provenance.

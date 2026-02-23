@@ -117,6 +117,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Preview service now reuses cached successful artifacts for identical commit-based preview requests (copying existing PDF/log).
 - Preview service now also reuses cached artifacts for clean workspace-HEAD requests where source state is immutable.
 - Preview reuse candidate selection now scans paged history using keyset pagination (`created_at`,`id`) rather than offset paging, so poisoned/stale recent rows do not block valid cache hits and deep-history scans stay efficient.
+- Preview reuse now resolves the problem artifact base once per scan and reuses canonical candidate roots for safe-file checks, avoiding redundant root resolution per candidate row.
 - Build/Preview commit inputs are now canonicalized via `git rev-parse --verify <ref>^{commit}` so moving refs (e.g., `main`) map to immutable SHA metadata/cache keys.
 - Build/Preview invalid commit refs are now captured as normal failed records (`status=failed`) with persisted error summaries/logs instead of uncaught service exceptions.
 - Invalid commit-ref failures now retain the requested ref in `source_ref` metadata (instead of workspace branch fallback) for auditability.
