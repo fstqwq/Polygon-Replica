@@ -26,6 +26,9 @@
 </ul>
 {% endif %}
 <h2>latex.log</h2>
+{% if log_truncated %}
+<p><em>Showing first {{ log_char_limit }} characters.</em></p>
+{% endif %}
 <pre>{{ log }}</pre>
 {% endif %}
 {% endblock %}

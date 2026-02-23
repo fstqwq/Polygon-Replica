@@ -43,6 +43,7 @@ templates = Jinja2Templates(directory="app/templates")
 WORKSPACE_BUILD_SELECTOR_LIMIT = 200
 WORKSPACE_FILE_LIST_LIMIT = 1024
 ARTIFACT_BROWSE_FILE_LIMIT = 512
+UI_LOG_TEXT_CHAR_LIMIT = 131072
 
 
 @app.on_event("startup")
@@ -364,6 +365,19 @@ def _read_text_safe(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _read_text_safe_limited(path: Path, max_chars: int) -> tuple[str, bool]:
+    cap = max(1, int(max_chars))
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        text = fh.read(cap + 1)
+    if len(text) <= cap:
+        return text, False
+    clipped = text[:cap]
+    if "\n" in clipped:
+        clipped = clipped.rsplit("\n", 1)[0] + "\n"
+    clipped += f"... [truncated; showing first {cap} characters]\n"
+    return clipped, True
+
+
 def _parse_line_param(raw: str | None, default: int = 1) -> int:
     try:
         line = int(str(raw or "").strip())
@@ -661,7 +675,15 @@ def build_page(request: Request, problem: str, user: str):
                         continue
                     if artifact_root not in resolved.parents and artifact_root != resolved:
                         continue
-                    logs.append({"name": p.name, "content": _read_text_safe(p)})
+                    content, truncated = _read_text_safe_limited(p, UI_LOG_TEXT_CHAR_LIMIT)
+                    logs.append(
+                        {
+                            "name": p.name,
+                            "content": content,
+                            "truncated": truncated,
+                            "char_limit": UI_LOG_TEXT_CHAR_LIMIT,
+                        }
+                    )
         except HTTPException:
             logs = []
         summary = _parse_summary_json(detail["summary_json"], "build")
@@ -696,6 +718,7 @@ def preview_page(request: Request, problem: str, user: str):
         [ctx["problem"]["id"], workspace_id],
     )
     log = ""
+    log_truncated = False
     pdf_exists = False
     log_refs = []
     if preview_id:
@@ -721,7 +744,7 @@ def preview_page(request: Request, problem: str, user: str):
             except HTTPException:
                 lp = None
             if lp is not None:
-                log = _read_text_safe(lp)
+                log, log_truncated = _read_text_safe_limited(lp, UI_LOG_TEXT_CHAR_LIMIT)
                 tex_ref = re.compile(r"(?P<file>[\\w./-]+\\.tex):(?P<line>\\d+)")
                 for line in log.splitlines():
                     m = tex_ref.search(line)
@@ -735,6 +758,8 @@ def preview_page(request: Request, problem: str, user: str):
             "preview_id": preview_id,
             "previews": previews,
             "log": log,
+            "log_truncated": log_truncated,
+            "log_char_limit": UI_LOG_TEXT_CHAR_LIMIT,
             "pdf_exists": pdf_exists,
             "log_refs": log_refs,
         },

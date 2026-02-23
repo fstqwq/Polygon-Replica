@@ -148,6 +148,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
 - Git page diff collection now streams `git diff` output to temporary files and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
+- Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
 - Workspace provisioning now supports optional status refresh while still forcing refresh on newly created workspace clones/rows.
 - Workspace provisioning now has a steady-state fast path that bypasses provisioning-lock acquisition when workspace clone + DB row already exist, reducing lock contention on normal request paths.
 - Workspace ensure/status-refresh flow now reuses previously resolved problem/user ids (and ensured user rows) instead of re-querying them during hot-path refresh updates.
@@ -244,6 +245,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates run submission-path rejection for reserved internal workspace files, symlinked submission aliases, and symlinked path components.
 - Smoke coverage now validates Files-route rejection for symlinked workspace path components across save/new/upload/download operations.
 - Smoke coverage now validates Git-page status-line and diff-character capping behavior, including truncation markers and UI indicators.
+- Smoke coverage now validates Build/Preview page oversized-log truncation behavior, including UI indicators.
 
 ## Upstream Dependency Integration
 

@@ -55,6 +55,7 @@ def main() -> None:
     from fastapi.testclient import TestClient
     from app.main import (
         ARTIFACT_BROWSE_FILE_LIMIT,
+        UI_LOG_TEXT_CHAR_LIMIT,
         WORKSPACE_FILE_LIST_LIMIT,
         app,
         build_service,
@@ -1542,6 +1543,42 @@ def main() -> None:
                 "preview artifact file should be accessible in workspace"
                 f", status={preview_artifact_file.status_code}"
             )
+    log_render_limit = int(UI_LOG_TEXT_CHAR_LIMIT)
+    if log_render_limit < 1024:
+        raise RuntimeError(f"UI log render limit should be a sane positive bound, got={log_render_limit}")
+    build_log_tail_marker = f"build-log-tail-{uuid.uuid4().hex[:8]}"
+    preview_log_tail_marker = f"preview-log-tail-{uuid.uuid4().hex[:8]}"
+    oversized_blob = ("L" * 4096 + "\n") * ((log_render_limit // 4096) + 32)
+    oversized_build_log = build_logs_root / "oversized.log"
+    oversized_build_log.write_text("build-head\n" + oversized_blob + build_log_tail_marker + "\n", encoding="utf-8")
+    (preview_root / "logs" / "latex.log").write_text(
+        "preview-head\n" + oversized_blob + preview_log_tail_marker + "\n",
+        encoding="utf-8",
+    )
+    with TestClient(app) as client:
+        build_page_with_large_log = client.get("/problems/sample/alice/build", params={"build_id": build_id})
+        if build_page_with_large_log.status_code != 200:
+            raise RuntimeError(
+                "build page should remain available when rendering oversized logs"
+                f", status={build_page_with_large_log.status_code}"
+            )
+        if "oversized.log" not in build_page_with_large_log.text:
+            raise RuntimeError("build page should render oversized log entry names")
+        if f"Showing first {log_render_limit} characters." not in build_page_with_large_log.text:
+            raise RuntimeError("build page should surface oversized-log truncation indicator")
+        if build_log_tail_marker in build_page_with_large_log.text:
+            raise RuntimeError("build page should hide oversized log content beyond render cap")
+        preview_page_with_large_log = client.get("/problems/sample/alice/preview", params={"preview_id": preview_id})
+        if preview_page_with_large_log.status_code != 200:
+            raise RuntimeError(
+                "preview page should remain available when rendering oversized latex logs"
+                f", status={preview_page_with_large_log.status_code}"
+            )
+        if f"Showing first {log_render_limit} characters." not in preview_page_with_large_log.text:
+            raise RuntimeError("preview page should surface oversized-log truncation indicator")
+        if preview_log_tail_marker in preview_page_with_large_log.text:
+            raise RuntimeError("preview page should hide oversized latex log content beyond render cap")
+    oversized_build_log.unlink(missing_ok=True)
     preview_symlink_page_id = f"p-{uuid.uuid4().hex[:12]}"
     preview_symlink_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_symlink_page_id
     (preview_symlink_root / "statement_preview").mkdir(parents=True, exist_ok=True)

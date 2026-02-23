@@ -48,6 +48,9 @@
     {% endif %}
     {% for l in logs %}
     <h3>{{ l.name }}</h3>
+    {% if l.truncated %}
+    <p><em>Showing first {{ l.char_limit }} characters.</em></p>
+    {% endif %}
     <pre>{{ l.content }}</pre>
     {% endfor %}
     {% else %}
