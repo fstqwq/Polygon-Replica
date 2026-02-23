@@ -54,6 +54,7 @@ WORKSPACE_BRANCH_LIST_LIMIT = 200
 API_PROBLEMS_LIST_LIMIT = 200
 DIAGNOSTIC_MESSAGE_CHAR_LIMIT = 4096
 SUMMARY_JSON_UI_CHAR_LIMIT = 1048576
+MANIFEST_JSON_API_CHAR_LIMIT = 2097152
 
 
 @app.on_event("startup")
@@ -393,6 +394,15 @@ def _parse_summary_json(raw: str | None, label: str) -> dict | None:
 
 def _read_text_safe(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _read_text_prefix_safe(path: Path, max_chars: int) -> tuple[str, bool]:
+    cap = max(1, int(max_chars))
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        text = fh.read(cap + 1)
+    if len(text) <= cap:
+        return text, False
+    return text[:cap], True
 
 
 def _read_text_safe_limited(path: Path, max_chars: int) -> tuple[str, bool]:
@@ -1239,7 +1249,20 @@ def api_workspace_manifest(problem: str, user: str, build_id: str):
         p = _safe_artifact_path(problem, build_id, "manifest.json")
     except HTTPException:
         raise HTTPException(status_code=404, detail="manifest not found")
-    return json.loads(p.read_text(encoding="utf-8"))
+    raw, truncated = _read_text_prefix_safe(p, MANIFEST_JSON_API_CHAR_LIMIT)
+    if truncated:
+        return {
+            "error": f"manifest.json exceeds API parse limit ({MANIFEST_JSON_API_CHAR_LIMIT} chars)",
+            "manifest_too_large": True,
+            "manifest_char_limit": MANIFEST_JSON_API_CHAR_LIMIT,
+        }
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return {"error": "invalid manifest.json"}
+    if isinstance(payload, dict):
+        return payload
+    return {"error": "manifest.json must be a JSON object"}
 
 
 @app.get("/api/problems/{problem}/builds/{build_id}/manifest")

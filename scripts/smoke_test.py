@@ -60,6 +60,7 @@ def main() -> None:
         BUILD_DIAGNOSTIC_LIST_LIMIT,
         BUILD_LOG_LIST_LIMIT,
         DIAGNOSTIC_MESSAGE_CHAR_LIMIT,
+        MANIFEST_JSON_API_CHAR_LIMIT,
         PREVIEW_LOG_REF_LIST_LIMIT,
         RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
         RUN_DETAIL_TEST_LIST_LIMIT,
@@ -1896,6 +1897,48 @@ def main() -> None:
                     f", status={manifest_symlink_resp.status_code}"
                 )
     manifest_symlink_target.unlink(missing_ok=True)
+    manifest_api_limit = int(MANIFEST_JSON_API_CHAR_LIMIT)
+    if manifest_api_limit < 4096:
+        raise RuntimeError(f"manifest API parse limit should be a sane positive bound, got={manifest_api_limit}")
+    manifest_oversized_build_id = f"b-manifestbig-{uuid.uuid4().hex[:8]}"
+    manifest_oversized_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / manifest_oversized_build_id
+    manifest_oversized_root.mkdir(parents=True, exist_ok=True)
+    oversized_manifest_blob = "M" * (manifest_api_limit + 1024)
+    (manifest_oversized_root / "manifest.json").write_text(
+        json.dumps({"blob": oversized_manifest_blob, "summary": {"tests_count": 0, "ans_count": 0}}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            manifest_oversized_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            "{}",
+            str(manifest_oversized_root),
+            "2099-01-03T00:00:00Z",
+            "2099-01-03T00:00:00Z",
+        ],
+    )
+    with TestClient(app) as client:
+        manifest_oversized_resp = client.get(
+            f"/api/problems/sample/workspaces/alice/builds/{manifest_oversized_build_id}/manifest"
+        )
+        if manifest_oversized_resp.status_code != 200:
+            raise RuntimeError(
+                "workspace manifest endpoint should tolerate oversized manifest payloads"
+                f", status={manifest_oversized_resp.status_code}"
+            )
+        manifest_oversized_payload = manifest_oversized_resp.json()
+        if "manifest.json exceeds API parse limit" not in str(manifest_oversized_payload.get("error", "")):
+            raise RuntimeError("workspace manifest endpoint did not surface oversized-manifest fallback")
+        if not bool(manifest_oversized_payload.get("manifest_too_large")):
+            raise RuntimeError("workspace manifest endpoint should mark oversized manifest responses as truncated")
+        if int(manifest_oversized_payload.get("manifest_char_limit", 0)) != manifest_api_limit:
+            raise RuntimeError("workspace manifest endpoint should expose manifest parse limit metadata")
     manifest = json.loads((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "manifest.json").read_text(encoding="utf-8"))
     manifest_paths = [str(item.get("path")) for item in manifest.get("files", []) if isinstance(item, dict)]
     if manifest_paths != sorted(manifest_paths):
