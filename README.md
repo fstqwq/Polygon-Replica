@@ -88,6 +88,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Artifact descendant traversal now sorts only kept directory/file names after safety filtering (instead of full `os.walk` name lists), reducing browse/download walk overhead on trees with many filtered entries.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
 - Workspace repository listing traversal now filters unsafe paths before sorting directory/file names, reducing `Files` page listing overhead on trees with many skipped entries while preserving deterministic ordering and caps.
+- Workspace repository listing now builds capped relative paths directly from traversal prefixes (instead of per-entry `Path.relative_to` objects), reducing listing allocations and fixing stale-directory path emission in capped views.
 - Files page file-content rendering now caps editor payloads (`131072` characters) and marks clipped views read-only with save disabled, preventing oversized editor responses and accidental truncation writes.
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
 - Git page diff collection now streams `git diff` output to a temporary file and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.

@@ -397,13 +397,20 @@ class GitService:
         paths: list[str] = []
         truncated = False
         capped = max(1, int(limit)) if limit is not None else None
+        reserved_names = {".git", ".polygonlike.lock"}
         stop_scan = False
         for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
+            try:
+                rel_root = dir_root.relative_to(workspace)
+            except ValueError:
+                dirnames[:] = []
+                continue
+            rel_prefix = "" if rel_root == Path(".") else rel_root.as_posix()
             candidate_dirs: list[str] = []
             for name in dirnames:
                 d = dir_root / name
-                if ".git" in d.parts or ".polygonlike.lock" in d.parts or d.is_symlink():
+                if name in reserved_names or d.is_symlink():
                     continue
                 try:
                     resolved = d.resolve()
@@ -420,7 +427,10 @@ class GitService:
                     truncated = True
                     stop_scan = True
                     break
-                paths.append(str(d.relative_to(workspace)))
+                if rel_prefix:
+                    paths.append(f"{rel_prefix}/{name}")
+                else:
+                    paths.append(name)
             if stop_scan:
                 dirnames[:] = []
                 break
@@ -429,7 +439,7 @@ class GitService:
             safe_files: list[str] = []
             for name in filenames:
                 p = dir_root / name
-                if ".git" in p.parts or ".polygonlike.lock" in p.parts or p.is_symlink():
+                if name in reserved_names or p.is_symlink():
                     continue
                 try:
                     resolved = p.resolve()
@@ -440,12 +450,14 @@ class GitService:
                 safe_files.append(name)
 
             for name in sorted(safe_files):
-                p = dir_root / name
                 if capped is not None and len(paths) >= capped:
                     truncated = True
                     stop_scan = True
                     break
-                paths.append(str(p.relative_to(workspace)))
+                if rel_prefix:
+                    paths.append(f"{rel_prefix}/{name}")
+                else:
+                    paths.append(name)
             if stop_scan:
                 break
         if capped is None:
