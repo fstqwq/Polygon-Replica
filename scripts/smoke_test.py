@@ -576,6 +576,9 @@ def main() -> None:
     lock_commit_readme = lock_commit_ws / "README.problem.md"
     lock_commit_original = lock_commit_readme.read_text(encoding="utf-8")
     lock_commit_marker = f"lock-commit-marker-{uuid.uuid4().hex[:8]}"
+    nested_lock_path = lock_commit_ws / "scratch" / ".polygonlike.lock"
+    nested_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    nested_lock_path.write_text("nested-lock\n", encoding="utf-8")
     lock_commit_readme.write_text(lock_commit_original + f"\n{lock_commit_marker}\n", encoding="utf-8")
     with TestClient(app) as client:
         lock_commit_resp = client.post(
@@ -593,6 +596,8 @@ def main() -> None:
     ).stdout.splitlines()
     if ".polygonlike.lock" in lock_commit_tree:
         raise RuntimeError("git commit should not stage or commit workspace lock files")
+    if "scratch/.polygonlike.lock" in lock_commit_tree:
+        raise RuntimeError("git commit should not stage or commit nested workspace lock files")
     lock_symlink_target = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"lock-symlink-target-{uuid.uuid4().hex[:8]}.txt"
     lock_symlink_target.write_text("do-not-touch\n", encoding="utf-8")
     lock_symlink_supported = True

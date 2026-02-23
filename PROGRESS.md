@@ -86,6 +86,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run submission source paths are now constrained to workspace boundaries to prevent path traversal.
 - Run workspace submission paths now reject reserved internal workspace files (`.git/*`, `.polygonlike.lock`) and symlinked submission aliases.
 - Git commit staging now explicitly excludes `.polygonlike.lock`, preventing internal workspace lock files from being committed into problem history.
+- Git commit staging lock-file exclusion now also applies to nested `.polygonlike.lock` paths via glob pathspec filtering.
 - Build config now carries runner controls in `generation_params` (`checker_mode`, `checker_args`, `max_passes`, `validator_args`) for build-consistent run behavior.
 - Runner now preflights selected `build_id` (existence/ownership/status) and records deterministic failed run metadata on invalid build selections.
 - Runner preflight artifact existence check now evaluates pre-existing build artifact state before run directory creation (prevents false-positive runnable states).
@@ -224,7 +225,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates symlinked workspace lock-path rejection and confirms blocked file writes remain unchanged.
 - Smoke coverage now validates upload-route symlinked lock-path rejection (HTTP 400) and confirms no target file is created.
 - Smoke coverage now validates Git page/backend status filtering for lock-file-only workspace changes (`.polygonlike.lock`) and confirms no diff output is produced.
-- Smoke coverage now validates git commits never stage/commit `.polygonlike.lock` even when workspace locking is active.
+- Smoke coverage now validates git commits never stage/commit root or nested `.polygonlike.lock` paths even when workspace locking is active.
 - Smoke coverage now validates run submission-path rejection for reserved internal workspace files and symlinked submission aliases.
 
 ## Upstream Dependency Integration

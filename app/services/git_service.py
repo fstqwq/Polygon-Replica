@@ -115,7 +115,18 @@ class GitService:
         run_cmd(["git", "-C", str(workspace), "config", "user.email", email])
         run_cmd(["git", "-C", str(workspace), "add", "."])
         # Never allow internal workspace lock files to enter repository history.
-        run_cmd(["git", "-C", str(workspace), "reset", "--quiet", "--", ".polygonlike.lock"])
+        run_cmd(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "reset",
+                "--quiet",
+                "--",
+                ".polygonlike.lock",
+                ":(glob)**/.polygonlike.lock",
+            ]
+        )
         proc = run_cmd(["git", "-C", str(workspace), "commit", "-m", message])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
