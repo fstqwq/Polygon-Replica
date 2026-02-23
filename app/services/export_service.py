@@ -87,32 +87,31 @@ class ExportService:
     def _iter_safe_descendant_files(self, root: Path):
         if not root.exists() or not root.is_dir():
             return
+        if root.is_symlink():
+            return
         root_resolved = root.resolve()
         for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
+            try:
+                dir_root_resolved = dir_root.resolve()
+            except OSError:
+                dirnames[:] = []
+                continue
+            if root_resolved not in dir_root_resolved.parents and root_resolved != dir_root_resolved:
+                dirnames[:] = []
+                continue
             keep_dirs: list[str] = []
             for name in dirnames:
                 d = dir_root / name
                 if d.is_symlink():
                     continue
-                try:
-                    resolved = d.resolve()
-                except OSError:
-                    continue
-                if root_resolved in resolved.parents or root_resolved == resolved:
-                    keep_dirs.append(name)
+                keep_dirs.append(name)
             dirnames[:] = sorted(keep_dirs)
 
             safe_filenames: list[str] = []
             for name in filenames:
                 p = dir_root / name
                 if p.is_symlink():
-                    continue
-                try:
-                    resolved = p.resolve()
-                except OSError:
-                    continue
-                if root_resolved not in resolved.parents and root_resolved != resolved:
                     continue
                 if not p.is_file():
                     continue

@@ -230,6 +230,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Artifact directory browse/zip and run-artifact browse/zip now enforce symlink-safe file enumeration (no symlink-directory traversal, skip symlink entries, and skip out-of-root resolved targets).
 - Artifact/run-artifact zip and export directory-copy flows now use iterator-based safe traversal streams instead of pre-materialized file lists (lower memory overhead for large trees).
 - Export safe-descendant traversal now filters directory/file entries before sorting, reducing per-directory sorting overhead when many entries are rejected by symlink/path-safety checks.
+- Export safe-descendant traversal now validates each walked directory once (with symlink-pruned child traversal), avoiding per-child path-resolution checks during export copy walks while preserving in-root safety.
 - Run summaries now normalize `feedback_dir` to the stable relative token `feedback_dir` (avoids leaking host-absolute run paths in API/UI payloads).
 - Run config loading now prefers a small `logs/run_config.json` sidecar (with manifest fallback), lazily backfills that sidecar for manifest-only legacy artifacts, and caches parsed settings in-process (copy-on-read), reducing repeated full-`manifest.json` reads/parses across submissions.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
