@@ -152,6 +152,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
 - Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
+- Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on very large artifact `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error for oversized payloads to avoid heavy decode/render paths from oversized DB blobs.
 - Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning bounded fallback metadata for oversized manifests to avoid unbounded decode/response paths.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.

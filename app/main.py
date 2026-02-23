@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import re
@@ -233,6 +234,40 @@ def _safe_descendant_files(root: Path, target: Path, limit: int | None = None) -
             break
         files.append(p)
     return files, truncated
+
+
+def _iter_safe_artifact_logs(logs_root: Path, artifact_root: Path):
+    with os.scandir(logs_root) as entries:
+        for entry in entries:
+            if not entry.name.endswith(".log"):
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            p = Path(entry.path)
+            try:
+                resolved = p.resolve()
+            except OSError:
+                continue
+            if artifact_root not in resolved.parents and artifact_root != resolved:
+                continue
+            yield p
+
+
+def _collect_capped_artifact_logs(logs_root: Path, artifact_root: Path, limit: int) -> tuple[list[Path], int, bool]:
+    cap = max(1, int(limit))
+    total = 0
+
+    def _iter():
+        nonlocal total
+        for path in _iter_safe_artifact_logs(logs_root, artifact_root):
+            total += 1
+            yield path
+
+    selected = heapq.nsmallest(cap, _iter(), key=lambda p: p.name)
+    return selected, total, total > cap
 
 
 def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
@@ -772,19 +807,12 @@ def build_page(request: Request, problem: str, user: str):
             artifact_root = _artifact_root(problem, str(detail["id"]))
             logs_root = artifact_root / "logs"
             if logs_root.exists() and logs_root.is_dir():
-                for p in sorted(logs_root.glob("*.log")):
-                    if p.is_symlink() or not p.is_file():
-                        continue
-                    try:
-                        resolved = p.resolve()
-                    except OSError:
-                        continue
-                    if artifact_root not in resolved.parents and artifact_root != resolved:
-                        continue
-                    logs_total += 1
-                    if len(logs) >= BUILD_LOG_LIST_LIMIT:
-                        logs_truncated = True
-                        continue
+                selected_logs, logs_total, logs_truncated = _collect_capped_artifact_logs(
+                    logs_root,
+                    artifact_root,
+                    BUILD_LOG_LIST_LIMIT,
+                )
+                for p in selected_logs:
                     content, truncated = _read_text_safe_limited(p, UI_LOG_TEXT_CHAR_LIMIT)
                     logs.append(
                         {
