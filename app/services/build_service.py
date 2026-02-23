@@ -118,15 +118,20 @@ class BuildService:
                 if self._is_safe_source_in_dir(base, candidate, root_resolved=base_resolved):
                     return candidate
         try:
-            entries = sorted(base.iterdir(), key=lambda p: p.name)
+            best: Path | None = None
+            best_name = ""
+            for candidate in base.iterdir():
+                if candidate.suffix not in CPP_EXTENSIONS:
+                    continue
+                if not self._is_safe_source_in_dir(base, candidate, root_resolved=base_resolved):
+                    continue
+                name = candidate.name
+                if best is None or name < best_name:
+                    best = candidate
+                    best_name = name
         except OSError:
             return None
-        for candidate in entries:
-            if candidate.suffix not in CPP_EXTENSIONS:
-                continue
-            if self._is_safe_source_in_dir(base, candidate, root_resolved=base_resolved):
-                return candidate
-        return None
+        return best
 
     def _resolve_source(self, snapshot: Path, rel_path: str, snapshot_resolved: Path | None = None) -> Path:
         resolved_snapshot = snapshot_resolved if snapshot_resolved is not None else snapshot.resolve()
