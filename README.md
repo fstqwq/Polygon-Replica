@@ -132,6 +132,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run artifact endpoints now validate filesystem-relative run-root shape (`<build>/logs/run-<run_id>` under problem artifacts, or `invalid-runs/<run_id>`) independent of DB-provided build-id strings, and reject DB-poisoned path overrides.
 - Build detail log loading now uses canonical artifact roots (`artifacts/<problem>/<build_id>/logs`) instead of DB-provided `artifact_path` values.
 - Workspace manifest API now reads `manifest.json` via canonical safe artifact-path checks, rejecting symlinked/unsafe manifest targets.
+- Artifact/run-artifact file and browse paths now reject symlinked path components (including symlink-directory aliases inside artifact roots), preventing alias-based bypass of safe traversal logic.
 - Preview reuse now loads candidate artifacts from canonical roots (`artifacts/<problem>/<preview_id>`), rejects dotted/traversal-like preview ids, and ignores DB-provided preview `artifact_path` values.
 - Build artifact paths now enforce canonical artifact-id roots, rejecting dotted/traversal-like build ids across artifact browse/file/manifest flows.
 - Canonical artifact-id validation is now shared across main/services (`[A-Za-z0-9_-]+`), and run/export preflight plus run-artifact root checks now reject dotted ids in addition to traversal-style ids.
@@ -188,4 +189,5 @@ Open: `http://127.0.0.1:8000`
   - Adds git-commit regressions ensuring both root and nested workspace lock files are never staged/committed.
   - Adds preview-page symlink regressions ensuring symlinked preview `statement.pdf`/`latex.log` are ignored and not rendered.
   - Adds workspace-manifest API regression ensuring symlinked `manifest.json` artifacts are rejected.
+  - Adds artifact and run-artifact endpoint regressions ensuring symlinked directory path components are rejected for file and browse views.
   - Adds run submission-path regressions for reserved internal workspace paths and symlinked submission aliases.

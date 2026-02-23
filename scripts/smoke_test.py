@@ -2265,6 +2265,27 @@ def main() -> None:
         poisoned_dot_buildid_artifact = client.get(f"/problems/sample/alice/runs/{bad_dot_buildid_run_id}/artifacts/compile.log")
         if poisoned_dot_buildid_artifact.status_code != 404:
             raise RuntimeError("run artifact endpoint should reject DB-poisoned dotted build_id roots")
+    run_multi_root = Path(str(rrow_multi["artifact_path"] or ""))
+    run_alias_symlink = run_multi_root / "alias-run-root"
+    run_alias_supported = True
+    try:
+        run_alias_symlink.symlink_to(run_multi_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        run_alias_supported = False
+    if run_alias_supported:
+        try:
+            with TestClient(app) as client:
+                run_alias_file = client.get(f"/problems/sample/alice/runs/{run_id_multi}/artifacts/alias-run-root/summary.json")
+                if run_alias_file.status_code != 404:
+                    raise RuntimeError("run artifact file endpoint should reject symlinked path components")
+                run_alias_browse = client.get(
+                    f"/problems/sample/alice/runs/{run_id_multi}/browse",
+                    params={"rel": "alias-run-root"},
+                )
+                if run_alias_browse.status_code != 404:
+                    raise RuntimeError("run artifact browse should reject symlinked path components")
+        finally:
+            run_alias_symlink.unlink(missing_ok=True)
     run_leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-zip-leak-{uuid.uuid4().hex[:8]}.txt"
     run_leak_src.write_text("run-leak\n", encoding="utf-8")
     run_escape_name = "999.run-escape.txt"
@@ -2716,6 +2737,29 @@ def main() -> None:
         )
         if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
+    artifact_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id
+    artifact_alias_symlink = artifact_root / "alias-tests"
+    artifact_alias_supported = True
+    try:
+        artifact_alias_symlink.symlink_to(artifact_root / "tests", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        artifact_alias_supported = False
+    if artifact_alias_supported:
+        try:
+            with TestClient(app) as client:
+                artifact_alias_file = client.get(
+                    f"/problems/sample/alice/artifacts/{build_id}/alias-tests/001.in"
+                )
+                if artifact_alias_file.status_code != 404:
+                    raise RuntimeError("artifact file endpoint should reject symlinked path components")
+                artifact_alias_browse = client.get(
+                    f"/problems/sample/alice/artifacts/{build_id}/browse",
+                    params={"rel": "alias-tests"},
+                )
+                if artifact_alias_browse.status_code != 404:
+                    raise RuntimeError("artifact browse should reject symlinked path components")
+        finally:
+            artifact_alias_symlink.unlink(missing_ok=True)
     leak_src = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"zip-leak-{uuid.uuid4().hex[:8]}.txt"
     leak_src.write_text("leak-check\n", encoding="utf-8")
     leak_dir = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"zip-leak-dir-{uuid.uuid4().hex[:8]}"

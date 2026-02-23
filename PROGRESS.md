@@ -194,6 +194,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run artifact endpoints now validate filesystem-relative run-root shape (`<build>/logs/run-<run_id>` under problem artifacts, or `invalid-runs/<run_id>`) independent of DB-provided build-id strings, and reject DB-poisoned path overrides.
 - Build detail log loading now uses canonical artifact roots (`artifacts/<problem>/<build_id>/logs`) instead of DB-provided build `artifact_path` metadata.
 - Workspace manifest API now reads `manifest.json` through canonical safe artifact-path checks, rejecting symlinked/unsafe manifest targets.
+- Artifact and run-artifact file/browse path resolution now rejects symlinked path components within artifact roots, preventing symlink-directory alias bypasses for direct file/directory views.
 - Preview reuse now loads candidate artifacts from canonical roots (`artifacts/<problem>/<preview_id>`), rejects dotted/traversal-like preview ids, and ignores DB-provided preview `artifact_path` metadata.
 - Build artifact path resolution now enforces canonical artifact-id roots, rejecting dotted/traversal-like build ids across browse/file/manifest paths.
 - Canonical artifact-id validation is now shared (`[A-Za-z0-9_-]+`), and run/export preflight plus run-artifact root validation reject dotted ids in addition to traversal-style ids.
@@ -231,6 +232,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates git commits never stage/commit root or nested `.polygonlike.lock` paths even when workspace locking is active.
 - Smoke coverage now validates preview page rejection of symlinked preview `statement.pdf`/`latex.log` artifacts (no leak rendering / no PDF embed).
 - Smoke coverage now validates workspace manifest endpoint rejection for symlinked `manifest.json` artifacts.
+- Smoke coverage now validates artifact and run-artifact file/browse endpoint rejection for symlinked path-component aliases inside artifact roots.
 - Smoke coverage now validates run submission-path rejection for reserved internal workspace files and symlinked submission aliases.
 
 ## Upstream Dependency Integration

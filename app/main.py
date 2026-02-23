@@ -99,6 +99,29 @@ def _safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool =
     return path
 
 
+def _contains_symlink_component(root: Path, candidate: Path) -> bool:
+    try:
+        if root.is_symlink():
+            return True
+    except OSError:
+        return True
+    try:
+        rel = candidate.relative_to(root)
+    except ValueError:
+        return True
+    cur = root
+    for part in rel.parts:
+        cur = cur / part
+        try:
+            if cur.is_symlink():
+                return True
+        except OSError:
+            return True
+        if not cur.exists():
+            break
+    return False
+
+
 def _artifact_root(problem: str, artifact_id: str) -> Path:
     aid = str(artifact_id or "")
     if not is_canonical_artifact_id(aid):
@@ -116,9 +139,12 @@ def _artifact_root(problem: str, artifact_id: str) -> Path:
 
 def _safe_artifact_path(problem: str, build_id: str, rel: str) -> Path:
     root = _artifact_root(problem, build_id)
-    path = (root / rel).resolve()
+    candidate = root / rel
+    path = candidate.resolve()
     if root not in path.parents and root != path:
         raise HTTPException(status_code=400, detail="invalid artifact path")
+    if _contains_symlink_component(root, candidate):
+        raise HTTPException(status_code=404, detail="artifact file not found")
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="artifact file not found")
     return path
@@ -126,9 +152,12 @@ def _safe_artifact_path(problem: str, build_id: str, rel: str) -> Path:
 
 def _safe_artifact_dir(problem: str, build_id: str, rel: str) -> tuple[Path, Path]:
     root = _artifact_root(problem, build_id)
-    path = (root / rel).resolve()
+    candidate = root / rel
+    path = candidate.resolve()
     if root not in path.parents and root != path:
         raise HTTPException(status_code=400, detail="invalid artifact path")
+    if _contains_symlink_component(root, candidate):
+        raise HTTPException(status_code=404, detail="artifact directory not found")
     if not path.exists() or not path.is_dir():
         raise HTTPException(status_code=404, detail="artifact directory not found")
     return root, path
@@ -215,9 +244,12 @@ def _normalize_run_artifact_rel(root: Path, run_id: str, rel: str) -> str:
 def _safe_run_artifact_path(ctx: dict, run_id: str, rel: str) -> Path:
     root = _workspace_run_artifact_root(ctx, run_id)
     norm_rel = _normalize_run_artifact_rel(root, run_id, rel)
-    path = (root / norm_rel).resolve()
+    candidate = root / norm_rel
+    path = candidate.resolve()
     if root not in path.parents and root != path:
         raise HTTPException(status_code=400, detail="invalid run artifact path")
+    if _contains_symlink_component(root, candidate):
+        raise HTTPException(status_code=404, detail="run artifact file not found")
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="run artifact file not found")
     return path
@@ -226,9 +258,12 @@ def _safe_run_artifact_path(ctx: dict, run_id: str, rel: str) -> Path:
 def _safe_run_artifact_dir(ctx: dict, run_id: str, rel: str) -> tuple[Path, Path]:
     root = _workspace_run_artifact_root(ctx, run_id)
     norm_rel = _normalize_run_artifact_rel(root, run_id, rel)
-    path = (root / norm_rel).resolve()
+    candidate = root / norm_rel
+    path = candidate.resolve()
     if root not in path.parents and root != path:
         raise HTTPException(status_code=400, detail="invalid run artifact path")
+    if _contains_symlink_component(root, candidate):
+        raise HTTPException(status_code=404, detail="run artifact directory not found")
     if not path.exists() or not path.is_dir():
         raise HTTPException(status_code=404, detail="run artifact directory not found")
     return root, path
