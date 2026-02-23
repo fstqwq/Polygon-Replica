@@ -228,6 +228,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run summaries now normalize `feedback_dir` to the stable relative token `feedback_dir` (avoids leaking host-absolute run paths in API/UI payloads).
 - Run config loading now prefers a small `logs/run_config.json` sidecar (with manifest fallback), lazily backfills that sidecar for manifest-only legacy artifacts, and caches parsed settings in-process (copy-on-read), reducing repeated full-`manifest.json` reads/parses across submissions.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
+- Run test/answer discovery now uses a shared name-only suffix scan helper for run setup hot paths, avoiding temporary `Path` object materialization when only filenames are needed.
 - Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
 - Run execution now reuses a cached immutable answer-name set per artifact root, avoiding repeated per-run list-to-set rematerialization for answer presence checks.

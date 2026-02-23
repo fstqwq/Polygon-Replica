@@ -221,7 +221,7 @@ class RunService:
         if cached is not None:
             return list(cached)
         tests_dir = artifact_root / "tests"
-        names = [p.name for p in self._safe_matching_files(tests_dir, "*.in")]
+        names = self._safe_top_level_suffix_names(tests_dir, ".in")
         self._cache_put(self._test_input_cache, cache_key, list(names))
         return list(names)
 
@@ -231,7 +231,7 @@ class RunService:
         if cached is not None:
             return list(cached)
         ans_dir = artifact_root / "ans"
-        names = [p.name for p in self._safe_matching_files(ans_dir, "*.ans")]
+        names = self._safe_top_level_suffix_names(ans_dir, ".ans")
         self._cache_put(self._answer_file_cache, cache_key, list(names))
         return list(names)
 
@@ -340,6 +340,27 @@ class RunService:
             return False
         return self._is_safe_path_within(root, path, root_resolved=root_resolved)
 
+    def _safe_top_level_suffix_names(self, root: Path, suffix: str) -> list[str]:
+        if not suffix:
+            return []
+        matched: list[str] = []
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if not name.endswith(suffix):
+                        continue
+                    try:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    matched.append(name)
+        except OSError:
+            return []
+        matched.sort()
+        return matched
+
     def _safe_matching_files(self, root: Path, pattern: str) -> list[Path]:
         files: list[Path] = []
         # Fast path for common suffix-only patterns used by run discovery (for example *.in / *.ans).
@@ -351,22 +372,7 @@ class RunService:
             and "]" not in pattern
         ):
             suffix = pattern[1:]
-            try:
-                matched: list[str] = []
-                with os.scandir(root) as entries:
-                    for entry in entries:
-                        name = entry.name
-                        if not name.endswith(suffix):
-                            continue
-                        try:
-                            if not entry.is_file(follow_symlinks=False):
-                                continue
-                        except OSError:
-                            continue
-                        matched.append(name)
-            except OSError:
-                return []
-            for name in sorted(matched):
+            for name in self._safe_top_level_suffix_names(root, suffix):
                 files.append(root / name)
             return files
 
