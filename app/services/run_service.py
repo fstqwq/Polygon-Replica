@@ -44,6 +44,12 @@ class RunService:
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
+        workspace_resolved: Path | None = None
+        if workspace is not None:
+            try:
+                workspace_resolved = workspace.resolve()
+            except OSError:
+                workspace_resolved = None
         for line in text.splitlines():
             m = DIAG_RE.match(line.strip())
             if not m:
@@ -51,13 +57,13 @@ class RunService:
             file_path = Path(m.group("file"))
             rel = str(file_path)
             can_link = False
-            if workspace is not None:
+            if workspace_resolved is not None:
                 try:
                     if file_path.is_absolute():
-                        rel = str(file_path.resolve().relative_to(workspace.resolve()))
+                        resolved = file_path.resolve()
                     else:
-                        abs_path = (workspace / file_path).resolve()
-                        rel = str(abs_path.relative_to(workspace.resolve()))
+                        resolved = (workspace_resolved / file_path).resolve()
+                    rel = str(resolved.relative_to(workspace_resolved))
                     can_link = True
                 except Exception:
                     rel = str(file_path)

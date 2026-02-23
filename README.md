@@ -124,6 +124,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build compile-stage target logging now writes compiler stdout/stderr streams directly and parses diagnostics per stream, avoiding extra per-target merged-output string allocation while preserving empty-output diagnostic collection semantics.
 - Build diagnostics parsing now resolves the snapshot root once per compiler-output chunk (instead of per matched diagnostic line), reducing repeated path-resolution overhead on noisy compile failures.
 - Run submission compile logging now streams compiler stdout/stderr directly to run `compile.log` and parses diagnostics per stream, avoiding an extra merged-log string allocation.
+- Run compile diagnostics parsing now resolves workspace roots once per compiler-output chunk (instead of per matched diagnostic line), reducing repeated path-resolution overhead on noisy compile failures.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
 - Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
