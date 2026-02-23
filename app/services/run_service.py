@@ -26,6 +26,9 @@ class RunService:
     RUN_TIMEOUT_SENTINEL = -1_000_000_000
     ARTIFACT_CACHE_LIMIT = 256
     FEEDBACK_KEY_FILE_LIMIT = 256
+    DB_SUMMARY_TESTS_LIMIT = 200
+    DB_SUMMARY_DIAGNOSTICS_LIMIT = 200
+    DB_SUMMARY_FEEDBACK_FILES_LIMIT = 32
 
     def __init__(self, db: DB, workspace_service: WorkspaceService, toolchain: ToolchainService):
         self.db = db
@@ -551,6 +554,79 @@ class RunService:
                 if not a:
                     return True
 
+    def _cap_summary_list_field(
+        self,
+        payload: dict,
+        field: str,
+        limit: int,
+        truncated_key: str,
+        total_key: str,
+        limit_key: str,
+    ) -> list | None:
+        values = payload.get(field)
+        if not isinstance(values, list):
+            return None
+        cap = max(1, int(limit))
+        total = len(values)
+        payload[limit_key] = cap
+        payload[total_key] = total
+        if total > cap:
+            selected = values[:cap]
+            payload[field] = selected
+            payload[truncated_key] = True
+            return selected
+        payload[truncated_key] = False
+        return values
+
+    def _cap_run_test_feedback_files(self, tests: list) -> list:
+        cap = max(1, int(self.DB_SUMMARY_FEEDBACK_FILES_LIMIT))
+        normalized: list = []
+        for raw in tests:
+            if not isinstance(raw, dict):
+                normalized.append(raw)
+                continue
+            row = dict(raw)
+            feedback_files = row.get("feedback_files")
+            if isinstance(feedback_files, list):
+                total = len(feedback_files)
+                row["feedback_files_limit"] = cap
+                row["feedback_files_total"] = total
+                if total > cap:
+                    row["feedback_files"] = feedback_files[:cap]
+                    row["feedback_files_truncated"] = True
+                else:
+                    row["feedback_files_truncated"] = False
+            normalized.append(row)
+        return normalized
+
+    def _summary_for_db(self, summary: dict) -> str:
+        payload = dict(summary)
+        tests = self._cap_summary_list_field(
+            payload,
+            "tests",
+            self.DB_SUMMARY_TESTS_LIMIT,
+            "tests_truncated",
+            "tests_total",
+            "tests_limit",
+        )
+        if isinstance(tests, list):
+            payload["tests"] = self._cap_run_test_feedback_files(tests)
+        self._cap_summary_list_field(
+            payload,
+            "compile_diagnostics",
+            self.DB_SUMMARY_DIAGNOSTICS_LIMIT,
+            "compile_diagnostics_truncated",
+            "compile_diagnostics_total",
+            "compile_diagnostics_limit",
+        )
+        return json.dumps(payload)
+
+    def _finalize_run(self, run_id: str, status: str, summary: dict) -> None:
+        self.db.execute(
+            "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
+            [status, self._summary_for_db(summary), now_iso(), run_id],
+        )
+
     def _run_noninteractive_test(
         self,
         mode: str,
@@ -740,10 +816,7 @@ class RunService:
                 "toolchain_digest": "unknown",
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-            self.db.execute(
-                "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["failed", json.dumps(summary), now_iso(), run_id],
-            )
+            self._finalize_run(run_id, "failed", summary)
             return run_id
 
         assert artifact_root is not None
@@ -826,10 +899,7 @@ class RunService:
                     "run_config": run_cfg,
                 }
                 (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-                self.db.execute(
-                    "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                    ["failed", json.dumps(summary), now_iso(), run_id],
-                )
+                self._finalize_run(run_id, "failed", summary)
                 return run_id
 
             test_meta = self._load_test_input_meta(artifact_root)
@@ -942,10 +1012,7 @@ class RunService:
                 "run_config": run_cfg,
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-            self.db.execute(
-                "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["ok", json.dumps(summary), now_iso(), run_id],
-            )
+            self._finalize_run(run_id, "ok", summary)
         except Exception as exc:
             if not compile_log_file.exists():
                 compile_log_file.write_text(str(exc) + "\n", encoding="utf-8")
@@ -961,9 +1028,6 @@ class RunService:
                 "run_config": run_cfg,
             }
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-            self.db.execute(
-                "UPDATE runs SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["failed", json.dumps(summary), now_iso(), run_id],
-            )
+            self._finalize_run(run_id, "failed", summary)
 
         return run_id

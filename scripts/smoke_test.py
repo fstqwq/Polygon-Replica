@@ -2665,6 +2665,56 @@ def main() -> None:
             raise RuntimeError("run page should hide feedback files beyond per-test configured list cap")
         if f"{run_feedback_prefix}-{run_feedback_limit - 1:04d}.txt" not in run_cap_page.text:
             raise RuntimeError("run page should keep feedback files within per-test configured list cap")
+    run_db_summary_tests_limit = int(getattr(run_service, "DB_SUMMARY_TESTS_LIMIT", 0))
+    if run_db_summary_tests_limit < 8:
+        raise RuntimeError(
+            f"run DB summary tests limit should be a sane positive bound, got={run_db_summary_tests_limit}"
+        )
+    run_db_summary_cap_build_id = build_service.run_build("sample", "alice")
+    run_db_summary_cap_build = db.fetch_one("SELECT status FROM builds WHERE id=?", [run_db_summary_cap_build_id])
+    if run_db_summary_cap_build is None or run_db_summary_cap_build["status"] != "ok":
+        raise RuntimeError(f"run DB summary cap build failed: {run_db_summary_cap_build}")
+    run_db_summary_cap_total = run_db_summary_tests_limit + 24
+    run_db_summary_cap_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / run_db_summary_cap_build_id
+    run_db_summary_cap_tests = run_db_summary_cap_root / "tests"
+    run_db_summary_cap_ans = run_db_summary_cap_root / "ans"
+    for p in run_db_summary_cap_tests.glob("*.in"):
+        p.unlink(missing_ok=True)
+    for p in run_db_summary_cap_ans.glob("*.ans"):
+        p.unlink(missing_ok=True)
+    for i in range(run_db_summary_cap_total):
+        stem = f"{i + 1:03d}"
+        (run_db_summary_cap_tests / f"{stem}.in").write_text("1\n", encoding="utf-8")
+        (run_db_summary_cap_ans / f"{stem}.ans").write_text("1\n", encoding="utf-8")
+    run_id_db_summary_cap = run_service.run_submission(
+        "sample",
+        "alice",
+        run_db_summary_cap_build_id,
+        submission_path="solutions/main.cpp",
+        mode="pass-fail",
+    )
+    rrow_db_summary_cap = db.fetch_one(
+        "SELECT status,summary_json,artifact_path FROM runs WHERE id=?",
+        [run_id_db_summary_cap],
+    )
+    if rrow_db_summary_cap is None or rrow_db_summary_cap["status"] != "ok":
+        raise RuntimeError(f"run DB summary cap run failed: {rrow_db_summary_cap}")
+    db_capped_summary = json.loads(rrow_db_summary_cap["summary_json"])
+    if not db_capped_summary.get("tests_truncated"):
+        raise RuntimeError("run DB summary should mark tests list as truncated when persisted")
+    if int(db_capped_summary.get("tests_limit", 0)) != run_db_summary_tests_limit:
+        raise RuntimeError("run DB summary should expose configured persisted tests limit")
+    if int(db_capped_summary.get("tests_total", 0)) != run_db_summary_cap_total:
+        raise RuntimeError("run DB summary should expose total tests count before truncation")
+    if len(db_capped_summary.get("tests") or []) != run_db_summary_tests_limit:
+        raise RuntimeError("run DB summary should only persist capped tests list entries")
+    if any(str(t.get("test") or "") == f"{run_db_summary_cap_total:03d}.in" for t in db_capped_summary.get("tests", [])):
+        raise RuntimeError("run DB summary should not persist tests beyond capped range")
+    run_artifact_summary = json.loads(
+        (Path(rrow_db_summary_cap["artifact_path"]) / "summary.json").read_text(encoding="utf-8")
+    )
+    if len(run_artifact_summary.get("tests") or []) != run_db_summary_cap_total:
+        raise RuntimeError("run artifact summary.json should preserve full per-test results")
     poison_log.unlink(missing_ok=True)
     dot_root_log.unlink(missing_ok=True)
 
