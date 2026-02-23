@@ -106,6 +106,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Preview compilation now persists source metadata (`source_commit`, `source_ref`) during finalization, removing redundant mid-run preview-row updates while preserving canonical commit/ref recording.
 - Dirty workspace previews now clear `source_commit` metadata and skip commit-key reuse, preventing dirty snapshot outputs from polluting immutable commit preview cache provenance.
 - Git page status now runs `git diff` only when unstaged tracked changes are present; clean, staged-only, and untracked-only states skip the extra diff subprocess.
+- Git status rendering now filters internal lock-file entries (`.polygonlike.lock`) so lock bookkeeping does not pollute Git page status/diff output.
 - Artifact manifest writing now uses a single deterministic streaming directory walk (instead of materializing full `rglob` lists), reducing memory overhead for large build artifacts.
 - Artifact manifest summary counters (`tests_count`, `ans_count`) are now computed during that same manifest walk, avoiding extra tests/ans directory scans.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
@@ -179,5 +180,6 @@ Open: `http://127.0.0.1:8000`
   - Adds export source-snapshot regressions for missing workspace metadata and DB workspace-path mismatch rejection.
   - Adds lock hardening regressions for symlinked workspace lock-path rejection (with file-write no-op verification).
   - Adds lock hardening regression for upload-route symlinked lock-path rejection (HTTP 400 + no output-file write).
+  - Adds Git-page/status regressions ensuring lock-file-only workspace changes are filtered from status and diff output.
   - Adds git-commit regression ensuring workspace lock files are never staged/committed.
   - Adds run submission-path regressions for reserved internal workspace paths and symlinked submission aliases.

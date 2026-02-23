@@ -32,23 +32,80 @@ class GitService:
             raise ValueError("reserved path")
         return p
 
+    def _is_reserved_status_path(self, path: str) -> bool:
+        normalized = str(path or "").strip().strip('"')
+        return normalized == ".polygonlike.lock" or normalized.endswith("/.polygonlike.lock")
+
+    def _is_reserved_status_line(self, line: str) -> bool:
+        raw = line.rstrip("\n")
+        if not raw or raw.startswith("## "):
+            return False
+        payload = raw[3:].strip() if len(raw) >= 4 else raw.strip()
+        if " -> " in payload:
+            for part in payload.split(" -> "):
+                if self._is_reserved_status_path(part):
+                    return True
+            return False
+        return self._is_reserved_status_path(payload)
+
+    def _is_reserved_diff_header(self, line: str) -> bool:
+        prefix = "diff --git a/"
+        raw = line.rstrip("\n")
+        if not raw.startswith(prefix):
+            return False
+        rest = raw[len(prefix) :]
+        if " b/" not in rest:
+            return False
+        lhs, rhs = rest.split(" b/", 1)
+        return self._is_reserved_status_path(lhs) or self._is_reserved_status_path(rhs)
+
+    def _filter_reserved_diff(self, diff_text: str) -> str:
+        if not diff_text:
+            return ""
+        lines = diff_text.splitlines(keepends=True)
+        out: list[str] = []
+        chunk: list[str] = []
+        dropping = False
+        in_chunk = False
+        for line in lines:
+            if line.startswith("diff --git "):
+                if in_chunk and not dropping:
+                    out.extend(chunk)
+                in_chunk = True
+                chunk = [line]
+                dropping = self._is_reserved_diff_header(line)
+                continue
+            if in_chunk:
+                chunk.append(line)
+            else:
+                out.append(line)
+        if in_chunk and not dropping:
+            out.extend(chunk)
+        return "".join(out)
+
     def status(self, workspace: Path) -> dict:
         proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"])
-        status_text = proc.stdout
+        filtered_lines: list[str] = []
         need_diff = False
-        for raw in status_text.splitlines():
+        for raw in proc.stdout.splitlines():
             line = raw.rstrip("\n")
-            if not line or line.startswith("## "):
+            if not line:
                 continue
+            if line.startswith("## "):
+                filtered_lines.append(line)
+                continue
+            if self._is_reserved_status_line(line):
+                continue
+            filtered_lines.append(line)
             # "??" entries are untracked-only and do not appear in `git diff`.
             if line.startswith("??"):
                 continue
             # Porcelain format: XY<space>PATH. Y != ' ' means unstaged worktree change.
             if len(line) >= 2 and line[1] != " ":
                 need_diff = True
-                break
+        status_text = "\n".join(filtered_lines) + ("\n" if filtered_lines else "")
         if need_diff:
-            diff_text = run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout
+            diff_text = self._filter_reserved_diff(run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout)
         else:
             diff_text = ""
         return {"status": status_text, "diff": diff_text}

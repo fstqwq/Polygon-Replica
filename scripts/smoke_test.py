@@ -553,6 +553,18 @@ def main() -> None:
                 raise RuntimeError(f"files page failed during lock-file listing check: {files_page.status_code}")
             if ".polygonlike.lock" in files_page.text:
                 raise RuntimeError("files page should not list workspace lock files")
+            git_page = client.get("/problems/sample/alice/git")
+            if git_page.status_code != 200:
+                raise RuntimeError(f"git page failed during lock-file status filtering check: {git_page.status_code}")
+            if "?? .polygonlike.lock" in git_page.text or " M .polygonlike.lock" in git_page.text:
+                raise RuntimeError("git page status should not list workspace lock files")
+            if "diff --git a/.polygonlike.lock b/.polygonlike.lock" in git_page.text:
+                raise RuntimeError("git page diff should not include workspace lock files")
+        git_status = git_service.status(ws)
+        if ".polygonlike.lock" in git_status.get("status", ""):
+            raise RuntimeError("git status API should filter workspace lock file entries")
+        if ".polygonlike.lock" in str(git_status.get("diff") or ""):
+            raise RuntimeError("git diff output should filter workspace lock file entries")
     finally:
         lock_marker.unlink(missing_ok=True)
     lock_commit_problem = f"lockcommit-{uuid.uuid4().hex[:8]}"
