@@ -38,6 +38,7 @@ class RunService:
         self._run_config_cache: dict[str, dict[str, object]] = {}
         self._test_input_cache: dict[str, list[str]] = {}
         self._answer_file_cache: dict[str, list[str]] = {}
+        self._answer_file_set_cache: dict[str, frozenset[str]] = {}
         self._test_input_meta_cache: dict[str, list[tuple[str, str]]] = {}
         self._cache_lock = threading.Lock()
 
@@ -227,6 +228,15 @@ class RunService:
         names = [p.name for p in self._safe_matching_files(ans_dir, "*.ans")]
         self._cache_put(self._answer_file_cache, cache_key, list(names))
         return list(names)
+
+    def _load_answer_file_set(self, artifact_root: Path) -> frozenset[str]:
+        cache_key = self._artifact_cache_key(artifact_root)
+        cached = self._cache_get(self._answer_file_set_cache, cache_key)
+        if cached is not None:
+            return cached
+        names = frozenset(self._load_answer_files(artifact_root))
+        self._cache_put(self._answer_file_set_cache, cache_key, names)
+        return names
 
     def _load_test_input_meta(self, artifact_root: Path) -> list[tuple[str, str]]:
         cache_key = self._artifact_cache_key(artifact_root)
@@ -967,7 +977,7 @@ class RunService:
             test_meta = self._load_test_input_meta(artifact_root)
             if not test_meta:
                 raise RuntimeError("selected build has no tests")
-            answer_names = set(self._load_answer_files(artifact_root))
+            answer_names = self._load_answer_file_set(artifact_root)
             effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(test_meta))
             run_cfg["run_jobs_effective"] = effective_run_jobs
 

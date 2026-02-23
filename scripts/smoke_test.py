@@ -2342,6 +2342,9 @@ def main() -> None:
     answer_files_first.append(answer_files_marker)
     if answer_files_marker in answer_files_second:
         raise RuntimeError("run answer-file cache should return independent copies")
+    answer_file_set = run_service._load_answer_file_set(run_cfg_root)
+    if sorted(answer_file_set) != sorted(answer_files_second):
+        raise RuntimeError("run answer-file set cache should match discovered answer file names")
     cache_limit = int(getattr(run_service, "ARTIFACT_CACHE_LIMIT", 0))
     if cache_limit < 8:
         raise RuntimeError(f"run artifact cache limit should be a sane positive bound, got={cache_limit}")
@@ -2362,6 +2365,7 @@ def main() -> None:
         run_service._load_test_inputs(probe)
         run_service._load_test_input_meta(probe)
         run_service._load_answer_files(probe)
+        run_service._load_answer_file_set(probe)
         if i == 0:
             first_probe_key = run_service._artifact_cache_key(probe)
     for cache_name, cache_obj in [
@@ -2369,6 +2373,7 @@ def main() -> None:
         ("test_input", run_service._test_input_cache),
         ("test_input_meta", run_service._test_input_meta_cache),
         ("answer_file", run_service._answer_file_cache),
+        ("answer_file_set", run_service._answer_file_set_cache),
     ]:
         if len(cache_obj) > cache_limit:
             raise RuntimeError(f"run {cache_name} cache exceeded configured bound {cache_limit}")

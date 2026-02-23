@@ -215,6 +215,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
 - Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
+- Run execution now reuses a cached immutable answer-name set per artifact root, avoiding repeated per-run list-to-set rematerialization for answer presence checks.
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
 - Run feedback key-file discovery (`judgemessage.txt`, `teammessage.txt`, `nextpass.in`) now validates feedback roots before traversal and uses a single symlink-safe directory walk per test, avoiding unsafe/out-of-root scans.
 - Run feedback key-file discovery now also caps collected key files per test (`256`) to prevent pathological `feedback_files` list growth from deep feedback trees.
@@ -290,6 +291,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates DB-persisted build/run oversized diagnostic-message truncation metadata, while artifact diagnostics preserve full message text.
 - Smoke coverage now validates streamed build compile-log structure (`compile_jobs` header + expected target entries) for baseline build runs.
 - Smoke coverage now validates streamed run compile logging by requiring non-empty run `compile.log` artifacts for failed uploaded-source compiles.
+- Smoke coverage now validates run answer-file set caching parity with discovered answer names and enforces bounded eviction for that additional cache.
 
 ## Upstream Dependency Integration
 

@@ -153,6 +153,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
 - Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
+- Run execution now reuses a cached immutable answer-name set per build artifact root, avoiding repeated per-run list-to-set rematerialization during answer presence checks.
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
 - Run feedback key-file discovery (`judgemessage.txt`, `teammessage.txt`, `nextpass.in`) now validates feedback roots before traversal and uses a single symlink-safe directory walk per test, avoiding unsafe/out-of-root scans.
 - Run feedback key-file discovery now also caps collected key files per test (`256`) to prevent pathological `feedback_files` summary/list growth from deep feedback trees.
@@ -248,3 +249,4 @@ Open: `http://127.0.0.1:8000`
   - Adds build/run-summary regressions ensuring DB-persisted oversized diagnostic messages are truncated with message metadata while artifact diagnostics keep full text.
   - Adds build compile-log regressions ensuring `compile.log` still includes compile-job headers and per-target entries after streamed compile logging changes.
   - Adds run compile-error regressions ensuring failed uploaded-source runs persist non-empty `compile.log` artifacts after streamed compile logging changes.
+  - Adds run answer-file cache regressions ensuring cached answer-name set parity and bounded eviction behavior.
