@@ -132,6 +132,8 @@ class RunService:
                     params = payload.get("generation_params")
                     if isinstance(params, dict):
                         cfg.update(params)
+                        loaded = True
+                        self._write_run_config_sidecar(run_config, params)
                 except Exception:
                     pass
         checker_mode = str(cfg.get("checker_mode", "testlib")).lower()
@@ -161,6 +163,19 @@ class RunService:
         }
         self._cache_put(self._run_config_cache, cache_key, dict(resolved_cfg))
         return dict(resolved_cfg)
+
+    def _write_run_config_sidecar(self, path: Path, params: dict[str, object]) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.parent / f".{path.name}.{uuid.uuid4().hex[:8]}.tmp"
+            try:
+                tmp.write_text(json.dumps(params, indent=2), encoding="utf-8")
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+        except Exception:
+            # Sidecar backfill is a best-effort optimization and must not affect run behavior.
+            pass
 
     def _load_test_inputs(self, artifact_root: Path) -> list[str]:
         cache_key = self._artifact_cache_key(artifact_root)

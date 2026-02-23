@@ -140,7 +140,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Artifact and run-artifact browse/zip directory exports now perform symlink-safe walks (no symlink-directory traversal) and skip out-of-root resolved targets to prevent archive-path escape/exfiltration via crafted artifact trees.
 - Artifact/run-artifact zip generation and export directory-copy walks now stream from iterator-based safe traversal (reducing peak memory on large artifact trees).
 - Run summaries now expose `feedback_dir` as a stable run-relative path (`feedback_dir`) instead of host-absolute filesystem paths.
-- Run config loading now prefers a small `logs/run_config.json` sidecar (with manifest fallback) and caches parsed settings in-process (copy-on-read), reducing repeated full-`manifest.json` reads/parses across submissions.
+- Run config loading now prefers a small `logs/run_config.json` sidecar (with manifest fallback), lazily backfills that sidecar for manifest-only legacy artifacts, and caches parsed settings in-process (copy-on-read), reducing repeated full-`manifest.json` reads/parses across submissions.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
 - Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
@@ -229,3 +229,4 @@ Open: `http://127.0.0.1:8000`
   - Adds run feedback key-file regressions ensuring deterministic capped discovery behavior for large feedback trees.
   - Adds Run-page regressions ensuring per-test feedback-file link lists are capped with UI indicators.
   - Adds run-config sidecar regressions ensuring `logs/run_config.json` is emitted and preferred over manifest generation-params during run-config loading.
+  - Adds run-config sidecar backfill regressions ensuring manifest-only artifacts get sidecar synthesis and subsequent loads prefer the synthesized sidecar.

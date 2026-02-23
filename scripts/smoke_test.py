@@ -2098,6 +2098,57 @@ def main() -> None:
     if int(run_cfg_prefer.get("run_timeout_sec", 0)) != 12:
         raise RuntimeError("run config loader should prefer logs/run_config.json run_timeout_sec")
     shutil.rmtree(run_cfg_prefer_root, ignore_errors=True)
+    run_cfg_backfill_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-cfg-backfill-{uuid.uuid4().hex[:8]}"
+    run_cfg_backfill_root.mkdir(parents=True, exist_ok=True)
+    (run_cfg_backfill_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "generation_params": {
+                    "checker_mode": "kattis",
+                    "checker_args": ["--from-backfill"],
+                    "max_passes": 6,
+                    "run_jobs": 9,
+                    "run_timeout_sec": 14,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_cfg_backfill_first = run_service._load_run_config(run_cfg_backfill_root)
+    run_cfg_backfill_sidecar = run_cfg_backfill_root / "logs" / "run_config.json"
+    if not run_cfg_backfill_sidecar.exists():
+        raise RuntimeError("run config loader should backfill logs/run_config.json for manifest-only artifacts")
+    (run_cfg_backfill_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "generation_params": {
+                    "checker_mode": "testlib",
+                    "checker_args": ["--from-manifest-updated"],
+                    "max_passes": 16,
+                    "run_jobs": 1,
+                    "run_timeout_sec": 30,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    backfill_key = run_service._artifact_cache_key(run_cfg_backfill_root)
+    with run_service._cache_lock:
+        run_service._run_config_cache.pop(backfill_key, None)
+    run_cfg_backfill_second = run_service._load_run_config(run_cfg_backfill_root)
+    if str(run_cfg_backfill_first.get("checker_mode", "")) != "kattis":
+        raise RuntimeError("run config backfill setup should preserve initial checker_mode")
+    if run_cfg_backfill_first.get("checker_args") != ["--from-backfill"]:
+        raise RuntimeError("run config backfill setup should preserve initial checker_args")
+    if int(run_cfg_backfill_first.get("max_passes", 0)) != 6:
+        raise RuntimeError("run config backfill setup should preserve initial max_passes")
+    if int(run_cfg_backfill_first.get("run_jobs", 0)) != 9:
+        raise RuntimeError("run config backfill setup should preserve initial run_jobs")
+    if int(run_cfg_backfill_first.get("run_timeout_sec", 0)) != 14:
+        raise RuntimeError("run config backfill setup should preserve initial run_timeout_sec")
+    if run_cfg_backfill_second != run_cfg_backfill_first:
+        raise RuntimeError("run config loader should reuse backfilled sidecar values over updated manifest values")
+    shutil.rmtree(run_cfg_backfill_root, ignore_errors=True)
     test_inputs_first = run_service._load_test_inputs(run_cfg_root)
     test_inputs_second = run_service._load_test_inputs(run_cfg_root)
     if not test_inputs_second:
