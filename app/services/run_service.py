@@ -73,6 +73,33 @@ class RunService:
             )
         return result
 
+    def _persist_compile_outputs(
+        self,
+        compile_log_file: Path,
+        workspace: Path | None,
+        stdout_text: str,
+        stderr_text: str,
+    ) -> list[dict]:
+        diagnostics: list[dict] = []
+        wrote_any = False
+        saw_stream_text = False
+        with compile_log_file.open("w", encoding="utf-8") as clog:
+            for chunk in (stdout_text, stderr_text):
+                text = str(chunk or "")
+                if not text:
+                    continue
+                saw_stream_text = True
+                if wrote_any and not text.startswith("\n"):
+                    clog.write("\n")
+                clog.write(text)
+                if not text.endswith("\n"):
+                    clog.write("\n")
+                diagnostics.extend(self._collect_diagnostics(workspace, text))
+                wrote_any = True
+        if not saw_stream_text:
+            diagnostics.extend(self._collect_diagnostics(workspace, ""))
+        return diagnostics
+
     def _resolve_submission_source(self, workspace: Path, submission_path: str) -> Path:
         candidate = workspace / submission_path
         ws_resolved = workspace.resolve()
@@ -918,9 +945,12 @@ class RunService:
                     path_roots=[run_root, workspace],
                 )
 
-            compile_log = f"{cout}\n{cerr}".strip()
-            compile_log_file.write_text((compile_log + "\n") if compile_log else "", encoding="utf-8")
-            compile_diagnostics = self._collect_diagnostics(compile_workspace, compile_log)
+            compile_diagnostics = self._persist_compile_outputs(
+                compile_log_file,
+                compile_workspace,
+                cout,
+                cerr,
+            )
             if not ok:
                 summary = {
                     "error": "compile_error",

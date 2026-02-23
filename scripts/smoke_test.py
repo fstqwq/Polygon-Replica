@@ -2949,7 +2949,7 @@ def main() -> None:
         upload_content=b"",
         upload_filename="empty-upload.cpp",
     )
-    rrow_upload_empty = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id_upload_empty])
+    rrow_upload_empty = db.fetch_one("SELECT status,summary_json,artifact_path FROM runs WHERE id=?", [run_id_upload_empty])
     if rrow_upload_empty is None or rrow_upload_empty["status"] != "failed":
         raise RuntimeError(f"empty upload run should fail compilation (not missing submission_path): {rrow_upload_empty}")
     upload_empty_summary = json.loads(rrow_upload_empty["summary_json"])
@@ -2957,6 +2957,11 @@ def main() -> None:
         raise RuntimeError(f"empty upload run should report compile_error: {upload_empty_summary}")
     if upload_empty_summary.get("source") != "empty-upload.cpp":
         raise RuntimeError("empty upload run did not preserve uploaded filename in summary source")
+    upload_empty_compile_log = Path(rrow_upload_empty["artifact_path"]) / "compile.log"
+    if not upload_empty_compile_log.exists():
+        raise RuntimeError("empty upload run did not persist compile.log artifact")
+    if not upload_empty_compile_log.read_text(encoding="utf-8").strip():
+        raise RuntimeError("empty upload run compile.log should contain compiler output")
     with TestClient(app) as client:
         route_upload_resp = client.post(
             "/problems/sample/alice/run/execute",

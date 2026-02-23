@@ -119,6 +119,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses on hot build/preview paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, avoiding a redundant post-build `SELECT status FROM builds` query.
 - Build compile-stage logging now streams target entries directly to `logs/compile.log` during compile-result processing, avoiding in-memory accumulation of large compiler logs.
+- Run submission compile logging now streams compiler stdout/stderr directly to run `compile.log` and parses diagnostics per stream, avoiding an extra merged-log string allocation.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
 - Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
@@ -246,3 +247,4 @@ Open: `http://127.0.0.1:8000`
   - Adds build-summary persistence regressions ensuring DB-capped build diagnostics expose truncation metadata while artifact `logs/diagnostics.json` preserves full diagnostic lists.
   - Adds build/run-summary regressions ensuring DB-persisted oversized diagnostic messages are truncated with message metadata while artifact diagnostics keep full text.
   - Adds build compile-log regressions ensuring `compile.log` still includes compile-job headers and per-target entries after streamed compile logging changes.
+  - Adds run compile-error regressions ensuring failed uploaded-source runs persist non-empty `compile.log` artifacts after streamed compile logging changes.
