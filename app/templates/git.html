@@ -20,7 +20,13 @@
 <h2>Branches</h2>
 <pre>{{ branches }}</pre>
 <h2>Status</h2>
+{% if status.status_truncated %}
+<p><em>Showing first {{ status.status_line_limit }} status lines.</em></p>
+{% endif %}
 <pre>{{ status.status }}</pre>
 <h2>Diff</h2>
+{% if status.diff_truncated %}
+<p><em>Showing first {{ status.diff_char_limit }} diff characters.</em></p>
+{% endif %}
 <pre>{{ status.diff }}</pre>
 {% endblock %}

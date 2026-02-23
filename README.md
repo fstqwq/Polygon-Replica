@@ -83,6 +83,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run/Export build-selector queries are now bounded to recent workspace builds (200 rows), preventing unbounded dropdown payload growth on long-lived workspaces.
 - Artifact and run-artifact browser pages now cap file listings (`512` entries) and surface truncation indicators, preventing oversized HTML responses on large artifact trees.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
+- Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
 - Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
@@ -198,3 +199,4 @@ Open: `http://127.0.0.1:8000`
   - Adds artifact and run-artifact endpoint regressions ensuring symlinked directory path components are rejected for file and browse views.
   - Adds run submission-path regressions for reserved internal workspace paths, symlinked submission aliases, and symlinked path components.
   - Adds Files-route regressions ensuring save/new/upload/download reject symlinked workspace path components.
+  - Adds Git-page regressions ensuring status-line and diff-character caps enforce truncation markers/indicators.

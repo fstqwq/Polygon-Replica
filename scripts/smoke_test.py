@@ -222,6 +222,64 @@ def main() -> None:
         if untracked_marker in git_untracked_page.text:
             raise RuntimeError("git diff section should not include untracked file content")
         untracked_file.unlink(missing_ok=True)
+        git_status_limit = int(getattr(git_service, "STATUS_MAX_LINES", 0))
+        git_diff_limit = int(getattr(git_service, "DIFF_MAX_CHARS", 0))
+        if git_status_limit < 8:
+            raise RuntimeError(f"git status line limit should be a sane positive bound, got={git_status_limit}")
+        if git_diff_limit < 256:
+            raise RuntimeError(f"git diff char limit should be a sane positive bound, got={git_diff_limit}")
+        git_status_cap_prefix = f"0000-git-status-cap-{uuid.uuid4().hex[:8]}"
+        git_status_cap_paths: list[Path] = []
+        for i in range(git_status_limit + 24):
+            p = alice_ws / f"{git_status_cap_prefix}-{i:04d}.txt"
+            p.write_text("cap\n", encoding="utf-8")
+            git_status_cap_paths.append(p)
+        try:
+            capped_status = git_service.status(alice_ws)
+            if not bool(capped_status.get("status_truncated")):
+                raise RuntimeError("git status should signal truncation when line cap is exceeded")
+            capped_lines = [line for line in str(capped_status.get("status") or "").splitlines() if line]
+            if len(capped_lines) > git_status_limit + 2:
+                raise RuntimeError("git status output exceeded expected line cap envelope")
+            if not any("truncated" in line for line in capped_lines):
+                raise RuntimeError("git status output should include truncation marker text")
+            with TestClient(app) as client:
+                git_status_cap_page = client.get("/problems/sample/alice/git")
+                if git_status_cap_page.status_code != 200:
+                    raise RuntimeError(
+                        "git page should remain available when status output is capped"
+                        f", status={git_status_cap_page.status_code}"
+                    )
+                if f"Showing first {git_status_limit} status lines." not in git_status_cap_page.text:
+                    raise RuntimeError("git page should surface status truncation indicator")
+                if f"{git_status_cap_prefix}-{git_status_limit:04d}.txt" in git_status_cap_page.text:
+                    raise RuntimeError("git page should hide status entries beyond line cap")
+        finally:
+            for p in git_status_cap_paths:
+                p.unlink(missing_ok=True)
+        git_diff_cap_marker = f"git-diff-cap-{uuid.uuid4().hex[:8]}"
+        big_diff_payload = (git_diff_cap_marker + "\n") + ("D" * 4096 + "\n") * ((git_diff_limit // 4096) + 32)
+        tracked_file.write_text(tracked_original + "\n" + big_diff_payload, encoding="utf-8")
+        try:
+            capped_diff_status = git_service.status(alice_ws)
+            if not bool(capped_diff_status.get("diff_truncated")):
+                raise RuntimeError("git diff should signal truncation when diff cap is exceeded")
+            diff_text = str(capped_diff_status.get("diff") or "")
+            if len(diff_text) > git_diff_limit + 128:
+                raise RuntimeError("git diff output exceeded expected char cap envelope")
+            if "truncated" not in diff_text:
+                raise RuntimeError("git diff output should include truncation marker text")
+            with TestClient(app) as client:
+                git_diff_cap_page = client.get("/problems/sample/alice/git")
+                if git_diff_cap_page.status_code != 200:
+                    raise RuntimeError(
+                        "git page should remain available when diff output is capped"
+                        f", status={git_diff_cap_page.status_code}"
+                    )
+                if f"Showing first {git_diff_limit} diff characters." not in git_diff_cap_page.text:
+                    raise RuntimeError("git page should surface diff truncation indicator")
+        finally:
+            tracked_file.write_text(tracked_original, encoding="utf-8")
         selector_problem = f"buildcap-{uuid.uuid4().hex[:8]}"
         selector_user = f"u-{uuid.uuid4().hex[:6]}"
         workspace_service.ensure_problem(selector_problem, "Build Selector Cap Problem")

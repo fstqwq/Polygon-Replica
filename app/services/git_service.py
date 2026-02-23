@@ -12,6 +12,8 @@ from app.services.util import run_cmd
 class GitService:
     BRANCH_CACHE_TTL_SEC = 5.0
     BRANCH_CACHE_MAX_ENTRIES = 256
+    STATUS_MAX_LINES = 512
+    DIFF_MAX_CHARS = 131072
 
     def __init__(self) -> None:
         self._branch_cache: dict[str, tuple[float, list[str]]] = {}
@@ -135,27 +137,50 @@ class GitService:
             out.extend(chunk)
         return "".join(out)
 
+    def _truncate_text(self, text: str, max_chars: int) -> tuple[str, bool]:
+        if max_chars <= 0:
+            return text, False
+        if len(text) <= max_chars:
+            return text, False
+        clipped = text[:max_chars]
+        if "\n" in clipped:
+            clipped = clipped.rsplit("\n", 1)[0] + "\n"
+        clipped += f"... [truncated; showing first {max_chars} characters]\n"
+        return clipped, True
+
     def status(self, workspace: Path) -> dict:
         proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"])
         filtered_lines: list[str] = []
+        status_truncated = False
         need_diff = False
+        status_limit = max(1, int(self.STATUS_MAX_LINES))
         for raw in proc.stdout.splitlines():
             line = raw.rstrip("\n")
             if not line:
                 continue
+            keep_line = True
             if line.startswith("## "):
-                filtered_lines.append(line)
+                keep_line = True
+            elif self._is_reserved_status_line(line):
+                keep_line = False
+            if keep_line:
+                if len(filtered_lines) < status_limit:
+                    filtered_lines.append(line)
+                else:
+                    status_truncated = True
+            else:
                 continue
-            if self._is_reserved_status_line(line):
-                continue
-            filtered_lines.append(line)
             # "??" entries are untracked-only and do not appear in `git diff`.
             if line.startswith("??"):
                 continue
             # Porcelain format: XY<space>PATH. Y != ' ' means unstaged worktree change.
             if len(line) >= 2 and line[1] != " ":
                 need_diff = True
+        if status_truncated:
+            filtered_lines.append(f"... [truncated; showing first {status_limit} lines]")
         status_text = "\n".join(filtered_lines) + ("\n" if filtered_lines else "")
+        diff_truncated = False
+        diff_limit = max(1, int(self.DIFF_MAX_CHARS))
         if need_diff:
             diff_proc = run_cmd(
                 [
@@ -173,10 +198,18 @@ class GitService:
                 raw_diff = diff_proc.stdout
             else:
                 raw_diff = run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout
-            diff_text = self._filter_reserved_diff(raw_diff)
+            filtered_diff = self._filter_reserved_diff(raw_diff)
+            diff_text, diff_truncated = self._truncate_text(filtered_diff, diff_limit)
         else:
             diff_text = ""
-        return {"status": status_text, "diff": diff_text}
+        return {
+            "status": status_text,
+            "diff": diff_text,
+            "status_truncated": status_truncated,
+            "status_line_limit": status_limit,
+            "diff_truncated": diff_truncated,
+            "diff_char_limit": diff_limit,
+        }
 
     def commit(self, workspace: Path, message: str, name: str, email: str) -> str:
         run_cmd(["git", "-C", str(workspace), "config", "user.name", name])
