@@ -205,23 +205,37 @@ class ExportService:
         if not folder.exists() or not folder.is_dir():
             return None
         try:
-            folder_resolved = folder.resolve()
+            _ = folder.resolve()
         except OSError:
             return None
         for name in preferred or []:
             p = folder / name
-            if self._is_safe_regular_file(folder, p, root_resolved=folder_resolved):
+            if self._is_safe_regular_file(folder, p):
                 return p
 
-        first_by_suffix: dict[str, Path] = {}
-        for p in self._iter_safe_top_level_files(folder, folder_resolved=folder_resolved):
-            suffix = p.suffix
-            if suffix in self.SOURCE_SUFFIX_ORDER and suffix not in first_by_suffix:
-                first_by_suffix[suffix] = p
+        best_name_by_suffix: dict[str, str] = {}
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    name = entry.name
+                    suffix = os.path.splitext(name)[1]
+                    if suffix not in self.SOURCE_SUFFIX_ORDER:
+                        continue
+                    try:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    current = best_name_by_suffix.get(suffix)
+                    if current is None or name < current:
+                        best_name_by_suffix[suffix] = name
+        except OSError:
+            return None
+
         for suffix in self.SOURCE_SUFFIX_ORDER:
-            selected = first_by_suffix.get(suffix)
-            if selected is not None:
-                return selected
+            selected = best_name_by_suffix.get(suffix)
+            if selected:
+                return folder / selected
         return None
 
     def _file_contains_token(self, path: Path, token: str) -> bool:

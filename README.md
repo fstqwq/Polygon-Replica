@@ -144,6 +144,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
 - Export safe top-level file iteration now filters entries before sorting names, reducing per-folder sorting overhead when many entries are rejected by symlink/path-safety checks.
 - Export generic top-level file iteration now uses `os.scandir` file metadata filtering (instead of `Path.iterdir` + per-entry path-resolution checks), reducing source-scan overhead while preserving deterministic ordering.
+- Export source fallback selection now tracks per-suffix lexicographic minima during a single `os.scandir` pass, avoiding full top-level source list materialization/sorting.
 - Export mode detection now scans checker sources in bounded chunks for `nextpass.in`, preserving multi-pass inference while avoiding full-file reads for large checker sources.
 - Preview cache reuse now requires symlink-safe in-root regular files for `statement.pdf` and `latex.log`, preventing poisoned symlink preview artifacts from being reused.
 - Preview page detail rendering now resolves `statement.pdf` and `latex.log` through safe artifact-path checks, preventing symlinked/out-of-root preview files from being treated as valid UI artifacts.
