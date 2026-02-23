@@ -55,6 +55,8 @@ def main() -> None:
     from fastapi.testclient import TestClient
     from app.main import (
         ARTIFACT_BROWSE_FILE_LIMIT,
+        RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
+        RUN_DETAIL_TEST_LIST_LIMIT,
         UI_LOG_TEXT_CHAR_LIMIT,
         WORKSPACE_FILE_LIST_LIMIT,
         app,
@@ -1996,6 +1998,79 @@ def main() -> None:
             raise RuntimeError(f"run page should handle malformed summary_json, status={bad_run_page.status_code}")
         if "invalid summary_json for run" not in bad_run_page.text:
             raise RuntimeError("run page did not surface malformed summary_json fallback")
+    run_tests_limit = int(RUN_DETAIL_TEST_LIST_LIMIT)
+    run_diag_limit = int(RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT)
+    if run_tests_limit < 8:
+        raise RuntimeError(f"run detail tests limit should be a sane positive bound, got={run_tests_limit}")
+    if run_diag_limit < 8:
+        raise RuntimeError(f"run detail diagnostics limit should be a sane positive bound, got={run_diag_limit}")
+    run_cap_test_prefix = f"cap-test-{uuid.uuid4().hex[:8]}"
+    run_cap_diag_prefix = f"cap-diag-{uuid.uuid4().hex[:8]}"
+    run_cap_id = f"r-uicap-{uuid.uuid4().hex[:10]}"
+    run_cap_tests_total = run_tests_limit + 24
+    run_cap_diags_total = run_diag_limit + 24
+    run_cap_tests = [
+        {
+            "test": f"{run_cap_test_prefix}-{i:04d}.in",
+            "verdict": "OK",
+            "time_ms": 1,
+            "passes": [],
+            "feedback_files": [],
+        }
+        for i in range(run_cap_tests_total)
+    ]
+    run_cap_diags = [
+        {
+            "level": "error",
+            "file": "solutions/main.cpp",
+            "line": 1,
+            "column": 1,
+            "message": f"{run_cap_diag_prefix}-{i:04d}",
+            "can_link": True,
+        }
+        for i in range(run_cap_diags_total)
+    ]
+    db.execute("DELETE FROM runs WHERE id=?", [run_cap_id])
+    db.execute(
+        "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            run_cap_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            build_id,
+            "pass-fail",
+            "ok",
+            json.dumps(
+                {
+                    "source": "solutions/main.cpp",
+                    "tests": run_cap_tests,
+                    "compile_diagnostics": run_cap_diags,
+                }
+            ),
+            str(Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / run_cap_id),
+            "2099-01-06T00:00:00Z",
+            "2099-01-06T00:00:00Z",
+        ],
+    )
+    with TestClient(app) as client:
+        run_cap_page = client.get("/problems/sample/alice/run", params={"run_id": run_cap_id})
+        if run_cap_page.status_code != 200:
+            raise RuntimeError(
+                "run page should remain available when rendering capped test/diagnostic lists"
+                f", status={run_cap_page.status_code}"
+            )
+        if f"Showing first {run_tests_limit} tests ({run_cap_tests_total} total)." not in run_cap_page.text:
+            raise RuntimeError("run page should surface capped test-list indicator")
+        if f"Showing first {run_diag_limit} diagnostics ({run_cap_diags_total} total)." not in run_cap_page.text:
+            raise RuntimeError("run page should surface capped diagnostics indicator")
+        if f"{run_cap_test_prefix}-{run_tests_limit:04d}.in" in run_cap_page.text:
+            raise RuntimeError("run page should hide tests beyond the configured list cap")
+        if f"{run_cap_test_prefix}-{run_tests_limit - 1:04d}.in" not in run_cap_page.text:
+            raise RuntimeError("run page should keep tests within the configured list cap")
+        if f"{run_cap_diag_prefix}-{run_diag_limit:04d}" in run_cap_page.text:
+            raise RuntimeError("run page should hide compile diagnostics beyond the configured list cap")
+        if f"{run_cap_diag_prefix}-{run_diag_limit - 1:04d}" not in run_cap_page.text:
+            raise RuntimeError("run page should keep compile diagnostics within the configured list cap")
     poison_log.unlink(missing_ok=True)
     dot_root_log.unlink(missing_ok=True)
 

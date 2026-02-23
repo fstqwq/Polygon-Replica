@@ -86,6 +86,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
 - Git page diff collection now streams `git diff` output to a temporary file and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
+- Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
 - Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
@@ -203,3 +204,4 @@ Open: `http://127.0.0.1:8000`
   - Adds Files-route regressions ensuring save/new/upload/download reject symlinked workspace path components.
   - Adds Git-page regressions ensuring status-line and diff-character caps enforce truncation markers/indicators.
   - Adds Build/Preview page regressions ensuring oversized logs are truncated with UI indicators.
+  - Adds Run-page regressions ensuring oversized `summary.tests` and `summary.compile_diagnostics` lists are truncated with UI indicators.

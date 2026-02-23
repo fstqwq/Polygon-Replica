@@ -44,6 +44,8 @@ WORKSPACE_BUILD_SELECTOR_LIMIT = 200
 WORKSPACE_FILE_LIST_LIMIT = 1024
 ARTIFACT_BROWSE_FILE_LIMIT = 512
 UI_LOG_TEXT_CHAR_LIMIT = 131072
+RUN_DETAIL_TEST_LIST_LIMIT = 200
+RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT = 200
 
 
 @app.on_event("startup")
@@ -384,6 +386,28 @@ def _parse_line_param(raw: str | None, default: int = 1) -> int:
     except Exception:
         return default
     return line if line > 0 else default
+
+
+def _cap_summary_list(
+    summary: dict,
+    field: str,
+    limit: int,
+    truncated_key: str,
+    total_key: str,
+    limit_key: str,
+) -> None:
+    values = summary.get(field)
+    if not isinstance(values, list):
+        return
+    cap = max(1, int(limit))
+    total = len(values)
+    summary[limit_key] = cap
+    summary[total_key] = total
+    if total > cap:
+        summary[field] = values[:cap]
+        summary[truncated_key] = True
+        return
+    summary[truncated_key] = False
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -796,6 +820,23 @@ def run_page(request: Request, problem: str, user: str):
         else None
     )
     summary = _parse_summary_json(detail["summary_json"], "run") if detail else None
+    if isinstance(summary, dict):
+        _cap_summary_list(
+            summary,
+            "tests",
+            RUN_DETAIL_TEST_LIST_LIMIT,
+            "tests_truncated",
+            "tests_total",
+            "tests_limit",
+        )
+        _cap_summary_list(
+            summary,
+            "compile_diagnostics",
+            RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
+            "compile_diagnostics_truncated",
+            "compile_diagnostics_total",
+            "compile_diagnostics_limit",
+        )
     return templates.TemplateResponse(
         request,
         "run.html",

@@ -32,6 +32,9 @@
     {% if detail %}
     <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }} <strong>Mode:</strong> {{ detail.mode }}</p>
     {% if summary and summary.tests %}
+    {% if summary.tests_truncated %}
+    <p><em>Showing first {{ summary.tests_limit }} tests ({{ summary.tests_total }} total).</em></p>
+    {% endif %}
     <table>
       <tr><th>Test</th><th>Verdict</th><th>Time (ms)</th><th>Passes</th><th>Artifacts</th></tr>
       {% for t in summary.tests %}
@@ -60,6 +63,9 @@
     {% endif %}
     {% if summary and summary.compile_diagnostics %}
     <h3>Compile Diagnostics</h3>
+    {% if summary.compile_diagnostics_truncated %}
+    <p><em>Showing first {{ summary.compile_diagnostics_limit }} diagnostics ({{ summary.compile_diagnostics_total }} total).</em></p>
+    {% endif %}
     <ul>
       {% for d in summary.compile_diagnostics %}
       <li>
