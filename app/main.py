@@ -57,6 +57,8 @@ API_PROBLEMS_LIST_LIMIT = 200
 DIAGNOSTIC_MESSAGE_CHAR_LIMIT = 4096
 SUMMARY_JSON_UI_CHAR_LIMIT = 1048576
 MANIFEST_JSON_API_CHAR_LIMIT = 2097152
+MANIFEST_API_FILES_LIST_LIMIT = 512
+MANIFEST_API_STEPS_LIST_LIMIT = 256
 
 
 @app.on_event("startup")
@@ -481,6 +483,28 @@ def _cap_summary_list(
         summary[truncated_key] = True
         return
     summary[truncated_key] = False
+
+
+def _cap_manifest_list_field(
+    payload: dict,
+    field: str,
+    limit: int,
+    truncated_key: str,
+    total_key: str,
+    limit_key: str,
+) -> None:
+    values = payload.get(field)
+    if not isinstance(values, list):
+        return
+    cap = max(1, int(limit))
+    total = len(values)
+    payload[limit_key] = cap
+    payload[total_key] = total
+    if total > cap:
+        payload[field] = values[:cap]
+        payload[truncated_key] = True
+        return
+    payload[truncated_key] = False
 
 
 def _cap_run_test_feedback_files(summary: dict, limit: int) -> None:
@@ -1299,7 +1323,24 @@ def api_workspace_manifest(problem: str, user: str, build_id: str):
     except Exception:
         return {"error": "invalid manifest.json"}
     if isinstance(payload, dict):
-        return payload
+        capped = dict(payload)
+        _cap_manifest_list_field(
+            capped,
+            "files",
+            MANIFEST_API_FILES_LIST_LIMIT,
+            "files_truncated",
+            "files_total",
+            "files_limit",
+        )
+        _cap_manifest_list_field(
+            capped,
+            "steps",
+            MANIFEST_API_STEPS_LIST_LIMIT,
+            "steps_truncated",
+            "steps_total",
+            "steps_limit",
+        )
+        return capped
     return {"error": "manifest.json must be a JSON object"}
 
 

@@ -60,6 +60,7 @@ def main() -> None:
         BUILD_DIAGNOSTIC_LIST_LIMIT,
         BUILD_LOG_LIST_LIMIT,
         DIAGNOSTIC_MESSAGE_CHAR_LIMIT,
+        MANIFEST_API_FILES_LIST_LIMIT,
         MANIFEST_JSON_API_CHAR_LIMIT,
         PREVIEW_LOG_REF_LIST_LIMIT,
         RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
@@ -1993,6 +1994,69 @@ def main() -> None:
             raise RuntimeError("workspace manifest endpoint should mark oversized manifest responses as truncated")
         if int(manifest_oversized_payload.get("manifest_char_limit", 0)) != manifest_api_limit:
             raise RuntimeError("workspace manifest endpoint should expose manifest parse limit metadata")
+    manifest_files_limit = int(MANIFEST_API_FILES_LIST_LIMIT)
+    if manifest_files_limit < 8:
+        raise RuntimeError(f"manifest API files-list limit should be a sane positive bound, got={manifest_files_limit}")
+    manifest_files_cap_build_id = f"b-manifestfiles-{uuid.uuid4().hex[:8]}"
+    manifest_files_cap_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / manifest_files_cap_build_id
+    manifest_files_cap_root.mkdir(parents=True, exist_ok=True)
+    manifest_files_cap_total = manifest_files_limit + 24
+    manifest_files_cap_prefix = f"manifest-files-cap-{uuid.uuid4().hex[:8]}"
+    manifest_files_cap_payload = {
+        "source": {"commit": head_commit, "ref": ctx["workspace"].get("branch") or "main"},
+        "toolchain": {"digest": "smoke"},
+        "seed": 1,
+        "generation_params": {"run_jobs": 2},
+        "files": [
+            {
+                "path": f"{manifest_files_cap_prefix}/{i:04d}.in",
+                "sha256": "0" * 64,
+                "size": i,
+            }
+            for i in range(manifest_files_cap_total)
+        ],
+        "steps": [{"step": "compile", "status": "ok", "log": "logs/compile.log"}],
+    }
+    (manifest_files_cap_root / "manifest.json").write_text(json.dumps(manifest_files_cap_payload), encoding="utf-8")
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            manifest_files_cap_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            "{}",
+            str(manifest_files_cap_root),
+            "2099-01-04T00:00:00Z",
+            "2099-01-04T00:00:00Z",
+        ],
+    )
+    with TestClient(app) as client:
+        manifest_files_cap_resp = client.get(
+            f"/api/problems/sample/workspaces/alice/builds/{manifest_files_cap_build_id}/manifest"
+        )
+        if manifest_files_cap_resp.status_code != 200:
+            raise RuntimeError(
+                "workspace manifest endpoint should remain available when manifest file list is capped"
+                f", status={manifest_files_cap_resp.status_code}"
+            )
+        manifest_files_cap_json = manifest_files_cap_resp.json()
+        if not bool(manifest_files_cap_json.get("files_truncated")):
+            raise RuntimeError("workspace manifest endpoint should signal capped files-list truncation")
+        if int(manifest_files_cap_json.get("files_limit", 0)) != manifest_files_limit:
+            raise RuntimeError("workspace manifest endpoint did not expose expected files-list limit metadata")
+        if int(manifest_files_cap_json.get("files_total", 0)) != manifest_files_cap_total:
+            raise RuntimeError("workspace manifest endpoint did not expose expected files-list total metadata")
+        files_list = manifest_files_cap_json.get("files") or []
+        if len(files_list) != manifest_files_limit:
+            raise RuntimeError("workspace manifest endpoint did not enforce expected files-list cap")
+        present_paths = [str(item.get("path", "")) for item in files_list if isinstance(item, dict)]
+        if f"{manifest_files_cap_prefix}/{manifest_files_limit:04d}.in" in present_paths:
+            raise RuntimeError("workspace manifest endpoint should hide files beyond configured files-list cap")
+        if f"{manifest_files_cap_prefix}/{manifest_files_limit - 1:04d}.in" not in present_paths:
+            raise RuntimeError("workspace manifest endpoint should keep files within configured files-list cap")
     manifest = json.loads((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "manifest.json").read_text(encoding="utf-8"))
     manifest_paths = [str(item.get("path")) for item in manifest.get("files", []) if isinstance(item, dict)]
     if manifest_paths != sorted(manifest_paths):

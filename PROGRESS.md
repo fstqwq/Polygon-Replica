@@ -156,6 +156,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on very large artifact `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error for oversized payloads to avoid heavy decode/render paths from oversized DB blobs.
 - Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning bounded fallback metadata for oversized manifests to avoid unbounded decode/response paths.
+- Workspace manifest API now also caps large list fields (`files`: `512`, `steps`: `256`) with truncation metadata, preventing oversized manifest response payloads on large builds.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
 - Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
 - UI/API branch-list retrieval now uses capped git ref queries (`for-each-ref --count limit+1`) on cache misses and a bounded TTL cache for capped results, avoiding repeated uncapped branch enumeration when only capped branch lists are required.
@@ -272,6 +273,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates Run-page per-test feedback-file link capping behavior, including truncation indicators.
 - Smoke coverage now validates run-config sidecar emission and run-config loading preference for `logs/run_config.json` over manifest generation-params.
 - Smoke coverage now validates run-config sidecar backfill for manifest-only artifacts and sidecar reuse on subsequent config loads.
+- Smoke coverage now validates workspace-manifest API files-list capping behavior with truncation metadata.
 
 ## Upstream Dependency Integration
 

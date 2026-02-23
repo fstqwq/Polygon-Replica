@@ -93,6 +93,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on artifacts with very large `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error on oversized payloads to prevent expensive decode/render paths from oversized DB blobs.
 - Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning a bounded fallback payload on oversized manifests to prevent unbounded decode/response paths.
+- Workspace manifest API now also caps large list fields (`files`: `512`, `steps`: `256`) with truncation metadata, preventing oversized manifest response payloads on large builds.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
 - Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
 - UI/API branch-list retrieval now uses a capped git-ref query (`for-each-ref --count limit+1`) on cache misses and a bounded TTL cache for capped results, avoiding repeated full/uncapped branch enumeration when only capped results are needed.
@@ -230,3 +231,4 @@ Open: `http://127.0.0.1:8000`
   - Adds Run-page regressions ensuring per-test feedback-file link lists are capped with UI indicators.
   - Adds run-config sidecar regressions ensuring `logs/run_config.json` is emitted and preferred over manifest generation-params during run-config loading.
   - Adds run-config sidecar backfill regressions ensuring manifest-only artifacts get sidecar synthesis and subsequent loads prefer the synthesized sidecar.
+  - Adds workspace-manifest API regressions ensuring large `files` lists are capped with truncation metadata.
