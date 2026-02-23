@@ -55,6 +55,9 @@ def main() -> None:
     from fastapi.testclient import TestClient
     from app.main import (
         ARTIFACT_BROWSE_FILE_LIMIT,
+        BUILD_DIAGNOSTIC_LIST_LIMIT,
+        BUILD_LOG_LIST_LIMIT,
+        PREVIEW_LOG_REF_LIST_LIMIT,
         RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
         RUN_DETAIL_TEST_LIST_LIMIT,
         UI_LOG_TEXT_CHAR_LIMIT,
@@ -1581,6 +1584,112 @@ def main() -> None:
         if preview_log_tail_marker in preview_page_with_large_log.text:
             raise RuntimeError("preview page should hide oversized latex log content beyond render cap")
     oversized_build_log.unlink(missing_ok=True)
+    build_logs_list_limit = int(BUILD_LOG_LIST_LIMIT)
+    build_diag_list_limit = int(BUILD_DIAGNOSTIC_LIST_LIMIT)
+    preview_log_refs_limit = int(PREVIEW_LOG_REF_LIST_LIMIT)
+    if build_logs_list_limit < 8:
+        raise RuntimeError(f"build log-list limit should be a sane positive bound, got={build_logs_list_limit}")
+    if build_diag_list_limit < 8:
+        raise RuntimeError(f"build diagnostics limit should be a sane positive bound, got={build_diag_list_limit}")
+    if preview_log_refs_limit < 8:
+        raise RuntimeError(
+            f"preview log-reference limit should be a sane positive bound, got={preview_log_refs_limit}"
+        )
+    build_log_cap_prefix = f"0000-build-log-cap-{uuid.uuid4().hex[:8]}"
+    build_log_cap_paths: list[Path] = []
+    for i in range(build_logs_list_limit + 24):
+        p = build_logs_root / f"{build_log_cap_prefix}-{i:04d}.log"
+        p.write_text("cap\n", encoding="utf-8")
+        build_log_cap_paths.append(p)
+    try:
+        with TestClient(app) as client:
+            build_page_with_many_logs = client.get("/problems/sample/alice/build", params={"build_id": build_id})
+            if build_page_with_many_logs.status_code != 200:
+                raise RuntimeError(
+                    "build page should remain available when log-file list is capped"
+                    f", status={build_page_with_many_logs.status_code}"
+                )
+            if f"Showing first {build_logs_list_limit} logs (" not in build_page_with_many_logs.text:
+                raise RuntimeError("build page should surface capped log-list indicator")
+            if f"{build_log_cap_prefix}-{build_logs_list_limit:04d}.log" in build_page_with_many_logs.text:
+                raise RuntimeError("build page should hide log files beyond the configured list cap")
+            if f"{build_log_cap_prefix}-{build_logs_list_limit - 1:04d}.log" not in build_page_with_many_logs.text:
+                raise RuntimeError("build page should keep log files within the configured list cap")
+    finally:
+        for p in build_log_cap_paths:
+            p.unlink(missing_ok=True)
+    build_diag_cap_id = f"b-diagcap-{uuid.uuid4().hex[:8]}"
+    build_diag_cap_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_diag_cap_id
+    (build_diag_cap_root / "logs").mkdir(parents=True, exist_ok=True)
+    (build_diag_cap_root / "logs" / "compile.log").write_text("diag-cap\n", encoding="utf-8")
+    build_diag_prefix = f"build-diag-cap-{uuid.uuid4().hex[:8]}"
+    build_diag_total = build_diag_list_limit + 24
+    build_diag_entries = [
+        {
+            "level": "error",
+            "file": "solutions/main.cpp",
+            "line": 1,
+            "column": 1,
+            "message": f"{build_diag_prefix}-{i:04d}",
+        }
+        for i in range(build_diag_total)
+    ]
+    db.execute("DELETE FROM builds WHERE id=?", [build_diag_cap_id])
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            build_diag_cap_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "failed",
+            json.dumps({"diagnostics": build_diag_entries}),
+            str(build_diag_cap_root),
+            "2099-01-07T00:00:00Z",
+            "2099-01-07T00:00:00Z",
+        ],
+    )
+    with TestClient(app) as client:
+        build_page_with_many_diags = client.get("/problems/sample/alice/build", params={"build_id": build_diag_cap_id})
+        if build_page_with_many_diags.status_code != 200:
+            raise RuntimeError(
+                "build page should remain available when diagnostics list is capped"
+                f", status={build_page_with_many_diags.status_code}"
+            )
+        if (
+            f"Showing first {build_diag_list_limit} diagnostics ({build_diag_total} total)."
+            not in build_page_with_many_diags.text
+        ):
+            raise RuntimeError("build page should surface capped diagnostics indicator")
+        if f"{build_diag_prefix}-{build_diag_list_limit:04d}" in build_page_with_many_diags.text:
+            raise RuntimeError("build page should hide diagnostics beyond the configured list cap")
+        if f"{build_diag_prefix}-{build_diag_list_limit - 1:04d}" not in build_page_with_many_diags.text:
+            raise RuntimeError("build page should keep diagnostics within the configured list cap")
+    db.execute("DELETE FROM builds WHERE id=?", [build_diag_cap_id])
+    shutil.rmtree(build_diag_cap_root, ignore_errors=True)
+    preview_ref_prefix = f"preview-ref-cap-{uuid.uuid4().hex[:8]}"
+    preview_ref_total = preview_log_refs_limit + 24
+    preview_ref_lines = "\n".join(
+        f"statement/main.tex:{i + 1} {preview_ref_prefix}-{i:04d}" for i in range(preview_ref_total)
+    )
+    (preview_root / "logs" / "latex.log").write_text(preview_ref_lines + "\n", encoding="utf-8")
+    with TestClient(app) as client:
+        preview_page_with_many_refs = client.get("/problems/sample/alice/preview", params={"preview_id": preview_id})
+        if preview_page_with_many_refs.status_code != 200:
+            raise RuntimeError(
+                "preview page should remain available when log-reference list is capped"
+                f", status={preview_page_with_many_refs.status_code}"
+            )
+        if f"Showing first {preview_log_refs_limit} references (" not in preview_page_with_many_refs.text:
+            raise RuntimeError("preview page should surface capped log-reference indicator")
+        ref_link_prefix = "files?path=statement/main.tex&line="
+        if preview_page_with_many_refs.text.count(ref_link_prefix) != preview_log_refs_limit:
+            raise RuntimeError("preview page did not enforce expected log-reference list cap")
+        if f"{ref_link_prefix}{preview_log_refs_limit + 1}" in preview_page_with_many_refs.text:
+            raise RuntimeError("preview page should hide log references beyond the configured list cap")
+        if f"{ref_link_prefix}{preview_log_refs_limit}" not in preview_page_with_many_refs.text:
+            raise RuntimeError("preview page should keep log references within the configured list cap")
     preview_symlink_page_id = f"p-{uuid.uuid4().hex[:12]}"
     preview_symlink_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_symlink_page_id
     (preview_symlink_root / "statement_preview").mkdir(parents=True, exist_ok=True)

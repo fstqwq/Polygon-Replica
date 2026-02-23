@@ -19,6 +19,9 @@
 {% endif %}
 {% if log_refs %}
 <h2>Log References</h2>
+{% if log_refs_truncated %}
+<p><em>Showing first {{ log_refs_limit }} references ({{ log_refs_total }} total).</em></p>
+{% endif %}
 <ul>
   {% for r in log_refs %}
   <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>

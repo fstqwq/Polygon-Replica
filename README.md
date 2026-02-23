@@ -87,6 +87,8 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Git page diff collection now streams `git diff` output to a temporary file and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
 - Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
+- Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
+- Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
 - Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
@@ -205,3 +207,5 @@ Open: `http://127.0.0.1:8000`
   - Adds Git-page regressions ensuring status-line and diff-character caps enforce truncation markers/indicators.
   - Adds Build/Preview page regressions ensuring oversized logs are truncated with UI indicators.
   - Adds Run-page regressions ensuring oversized `summary.tests` and `summary.compile_diagnostics` lists are truncated with UI indicators.
+  - Adds Build-page regressions ensuring oversized log-file and diagnostics lists are truncated with UI indicators.
+  - Adds Preview-page regressions ensuring oversized log-reference lists are truncated with UI indicators.

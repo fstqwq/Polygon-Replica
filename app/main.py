@@ -46,6 +46,9 @@ ARTIFACT_BROWSE_FILE_LIMIT = 512
 UI_LOG_TEXT_CHAR_LIMIT = 131072
 RUN_DETAIL_TEST_LIST_LIMIT = 200
 RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT = 200
+BUILD_LOG_LIST_LIMIT = 200
+BUILD_DIAGNOSTIC_LIST_LIMIT = 200
+PREVIEW_LOG_REF_LIST_LIMIT = 200
 
 
 @app.on_event("startup")
@@ -683,8 +686,12 @@ def build_page(request: Request, problem: str, user: str):
         else None
     )
     logs = []
+    logs_total = 0
+    logs_truncated = False
     summary = None
     diagnostics = []
+    diagnostics_total = 0
+    diagnostics_truncated = False
     if detail:
         try:
             artifact_root = _artifact_root(problem, str(detail["id"]))
@@ -698,6 +705,10 @@ def build_page(request: Request, problem: str, user: str):
                     except OSError:
                         continue
                     if artifact_root not in resolved.parents and artifact_root != resolved:
+                        continue
+                    logs_total += 1
+                    if len(logs) >= BUILD_LOG_LIST_LIMIT:
+                        logs_truncated = True
                         continue
                     content, truncated = _read_text_safe_limited(p, UI_LOG_TEXT_CHAR_LIMIT)
                     logs.append(
@@ -713,11 +724,29 @@ def build_page(request: Request, problem: str, user: str):
         summary = _parse_summary_json(detail["summary_json"], "build")
         if summary:
             maybe_diagnostics = summary.get("diagnostics", [])
-            diagnostics = maybe_diagnostics if isinstance(maybe_diagnostics, list) else []
+            if isinstance(maybe_diagnostics, list):
+                diagnostics_total = len(maybe_diagnostics)
+                diagnostics = maybe_diagnostics[:BUILD_DIAGNOSTIC_LIST_LIMIT]
+                diagnostics_truncated = diagnostics_total > BUILD_DIAGNOSTIC_LIST_LIMIT
+            else:
+                diagnostics = []
     return templates.TemplateResponse(
         request,
         "build.html",
-        {"ctx": ctx, "builds": builds, "detail": detail, "logs": logs, "summary": summary, "diagnostics": diagnostics},
+        {
+            "ctx": ctx,
+            "builds": builds,
+            "detail": detail,
+            "logs": logs,
+            "logs_total": logs_total,
+            "logs_truncated": logs_truncated,
+            "logs_limit": BUILD_LOG_LIST_LIMIT,
+            "summary": summary,
+            "diagnostics": diagnostics,
+            "diagnostics_total": diagnostics_total,
+            "diagnostics_truncated": diagnostics_truncated,
+            "diagnostics_limit": BUILD_DIAGNOSTIC_LIST_LIMIT,
+        },
     )
 
 
@@ -745,6 +774,8 @@ def preview_page(request: Request, problem: str, user: str):
     log_truncated = False
     pdf_exists = False
     log_refs = []
+    log_refs_total = 0
+    log_refs_truncated = False
     if preview_id:
         preview_row = db.fetch_one(
             "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
@@ -769,10 +800,14 @@ def preview_page(request: Request, problem: str, user: str):
                 lp = None
             if lp is not None:
                 log, log_truncated = _read_text_safe_limited(lp, UI_LOG_TEXT_CHAR_LIMIT)
-                tex_ref = re.compile(r"(?P<file>[\\w./-]+\\.tex):(?P<line>\\d+)")
+                tex_ref = re.compile(r"(?P<file>[\w./-]+\.tex):(?P<line>\d+)")
                 for line in log.splitlines():
                     m = tex_ref.search(line)
                     if m:
+                        log_refs_total += 1
+                        if len(log_refs) >= PREVIEW_LOG_REF_LIST_LIMIT:
+                            log_refs_truncated = True
+                            continue
                         log_refs.append({"file": m.group("file"), "line": int(m.group("line")), "context": line})
     return templates.TemplateResponse(
         request,
@@ -786,6 +821,9 @@ def preview_page(request: Request, problem: str, user: str):
             "log_char_limit": UI_LOG_TEXT_CHAR_LIMIT,
             "pdf_exists": pdf_exists,
             "log_refs": log_refs,
+            "log_refs_total": log_refs_total,
+            "log_refs_truncated": log_refs_truncated,
+            "log_refs_limit": PREVIEW_LOG_REF_LIST_LIMIT,
         },
     )
 
