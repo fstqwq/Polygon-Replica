@@ -558,7 +558,9 @@ class RunService:
             return []
         if base_root_resolved not in test_feedback_resolved.parents and base_root_resolved != test_feedback_resolved:
             return []
-        wanted = {"judgemessage.txt", "teammessage.txt", "nextpass.in"}
+        wanted_judge = "judgemessage.txt"
+        wanted_next = "nextpass.in"
+        wanted_team = "teammessage.txt"
         cap = max(1, int(self.FEEDBACK_KEY_FILE_LIMIT))
         keys: list[str] = []
         stop_scan = False
@@ -577,11 +579,26 @@ class RunService:
                     keep_dirs.append(name)
             dirnames[:] = sorted(keep_dirs)
 
-            matched_names: list[str] = []
+            has_judge = False
+            has_next = False
+            has_team = False
             for name in filenames:
-                if name in wanted:
-                    matched_names.append(name)
-            for name in sorted(matched_names):
+                if name == wanted_judge:
+                    has_judge = True
+                elif name == wanted_next:
+                    has_next = True
+                elif name == wanted_team:
+                    has_team = True
+
+            ordered_names: list[str] = []
+            if has_judge:
+                ordered_names.append(wanted_judge)
+            if has_next:
+                ordered_names.append(wanted_next)
+            if has_team:
+                ordered_names.append(wanted_team)
+
+            for name in ordered_names:
                 p = dir_root / name
                 if not self._is_safe_regular_file(base_root, p, root_resolved=base_root_resolved):
                     continue
