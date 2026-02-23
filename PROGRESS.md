@@ -153,6 +153,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
 - Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
+- `/api/problems` now uses a capped, narrow projection query (`200` rows) instead of unbounded `SELECT *`, preventing oversized problem-list payloads.
 - Workspace provisioning now supports optional status refresh while still forcing refresh on newly created workspace clones/rows.
 - Workspace provisioning now has a steady-state fast path that bypasses provisioning-lock acquisition when workspace clone + DB row already exist, reducing lock contention on normal request paths.
 - Workspace ensure/status-refresh flow now reuses previously resolved problem/user ids (and ensured user rows) instead of re-querying them during hot-path refresh updates.
@@ -253,6 +254,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates Run-page `summary.tests` and `summary.compile_diagnostics` list capping behavior, including UI indicators.
 - Smoke coverage now validates Build-page log-file/diagnostics list caps and Preview-page log-reference list caps, including UI indicators.
 - Smoke coverage now validates Files-header branch-list caps and branches-API truncation metadata behavior.
+- Smoke coverage now validates `/api/problems` problem-list cap behavior.
 
 ## Upstream Dependency Integration
 

@@ -56,6 +56,7 @@ def main() -> None:
     from fastapi.testclient import TestClient
     from app.main import (
         ARTIFACT_BROWSE_FILE_LIMIT,
+        API_PROBLEMS_LIST_LIMIT,
         BUILD_DIAGNOSTIC_LIST_LIMIT,
         BUILD_LOG_LIST_LIMIT,
         PREVIEW_LOG_REF_LIST_LIMIT,
@@ -98,6 +99,38 @@ def main() -> None:
             raise RuntimeError("workspace status API should expose a non-empty HEAD commit")
         if not str(status_payload.get("branch") or "").strip():
             raise RuntimeError("workspace status API should expose a non-empty branch")
+        problems_limit = int(API_PROBLEMS_LIST_LIMIT)
+        if problems_limit < 8:
+            raise RuntimeError(f"api problems list limit should be a sane positive bound, got={problems_limit}")
+        problems_prefix = f"api-problems-cap-{uuid.uuid4().hex[:8]}"
+        inserted_problem_slugs: list[str] = []
+        for i in range(problems_limit + 24):
+            slug = f"{problems_prefix}-{i:03d}"
+            created = f"2199-01-01T{(i // 3600) % 24:02d}:{(i // 60) % 60:02d}:{i % 60:02d}Z"
+            db.execute("DELETE FROM problems WHERE slug=?", [slug])
+            db.execute(
+                "INSERT INTO problems(slug,name,repo_name,created_at) VALUES(?,?,?,?)",
+                [slug, f"API Problems Cap {i:03d}", f"{slug}.git", created],
+            )
+            inserted_problem_slugs.append(slug)
+        try:
+            api_problems_payload = client.get("/api/problems")
+            if api_problems_payload.status_code != 200:
+                raise RuntimeError(
+                    "api problems endpoint should remain available when problem list is capped"
+                    f", status={api_problems_payload.status_code}"
+                )
+            problems_json = api_problems_payload.json()
+            if len(problems_json) != problems_limit:
+                raise RuntimeError("api problems endpoint did not enforce expected list cap")
+            rendered_slugs = [str(p.get("slug") or "") for p in problems_json]
+            if f"{problems_prefix}-{problems_limit + 23:03d}" not in rendered_slugs:
+                raise RuntimeError("api problems endpoint omitted newest capped problem slug")
+            if f"{problems_prefix}-000" in rendered_slugs:
+                raise RuntimeError("api problems endpoint included oldest problem slug beyond cap")
+        finally:
+            for slug in inserted_problem_slugs:
+                db.execute("DELETE FROM problems WHERE slug=?", [slug])
         alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
         alice_ws_status = workspace_service.read_workspace_status(Path(alice_ctx["workspace"]["path"]))
         if not str(alice_ws_status.get("head_commit") or "").strip():

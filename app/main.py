@@ -50,6 +50,7 @@ BUILD_LOG_LIST_LIMIT = 200
 BUILD_DIAGNOSTIC_LIST_LIMIT = 200
 PREVIEW_LOG_REF_LIST_LIMIT = 200
 WORKSPACE_BRANCH_LIST_LIMIT = 200
+API_PROBLEMS_LIST_LIMIT = 200
 
 
 @app.on_event("startup")
@@ -1094,7 +1095,11 @@ def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
 
 @app.get("/api/problems")
 def api_problems():
-    return [dict(r) for r in db.fetch_all("SELECT * FROM problems ORDER BY created_at DESC")]
+    rows = db.fetch_all(
+        "SELECT id,slug,name,repo_name,created_at FROM problems ORDER BY created_at DESC LIMIT ?",
+        [API_PROBLEMS_LIST_LIMIT],
+    )
+    return [dict(r) for r in rows]
 
 
 @app.get("/api/problems/{problem}/workspaces/{user}/status")
