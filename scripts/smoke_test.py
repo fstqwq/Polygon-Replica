@@ -145,6 +145,51 @@ def main() -> None:
             raise RuntimeError("git branch cache should evict oldest entries under pressure")
         with git_service._branch_cache_lock:
             git_service._branch_cache.clear()
+        problem_cache_limit = int(getattr(workspace_service, "PROBLEM_CACHE_MAX_ENTRIES", 0))
+        user_cache_limit = int(getattr(workspace_service, "USER_CACHE_MAX_ENTRIES", 0))
+        if problem_cache_limit < 8:
+            raise RuntimeError(
+                f"workspace problem cache limit should be a sane positive bound, got={problem_cache_limit}"
+            )
+        if user_cache_limit < 8:
+            raise RuntimeError(
+                f"workspace user cache limit should be a sane positive bound, got={user_cache_limit}"
+            )
+        problem_cache_probe_prefix = f"problem-cache-probe-{uuid.uuid4().hex[:8]}"
+        first_problem_cache_key = ""
+        for i in range(problem_cache_limit + 24):
+            cache_key = f"{problem_cache_probe_prefix}-{i:03d}"
+            workspace_service._cache_put(
+                workspace_service._problem_cache,
+                cache_key,
+                {"id": i, "slug": cache_key},
+                problem_cache_limit,
+            )
+            if i == 0:
+                first_problem_cache_key = cache_key
+        if len(workspace_service._problem_cache) > problem_cache_limit:
+            raise RuntimeError("workspace problem cache exceeded configured bound")
+        if first_problem_cache_key in workspace_service._problem_cache:
+            raise RuntimeError("workspace problem cache should evict oldest entries under pressure")
+        user_cache_probe_prefix = f"user-cache-probe-{uuid.uuid4().hex[:8]}"
+        first_user_cache_key = ""
+        for i in range(user_cache_limit + 24):
+            cache_key = f"{user_cache_probe_prefix}-{i:03d}"
+            workspace_service._cache_put(
+                workspace_service._user_cache,
+                cache_key,
+                {"id": i, "username": cache_key},
+                user_cache_limit,
+            )
+            if i == 0:
+                first_user_cache_key = cache_key
+        if len(workspace_service._user_cache) > user_cache_limit:
+            raise RuntimeError("workspace user cache exceeded configured bound")
+        if first_user_cache_key in workspace_service._user_cache:
+            raise RuntimeError("workspace user cache should evict oldest entries under pressure")
+        with workspace_service._cache_lock:
+            workspace_service._problem_cache.clear()
+            workspace_service._user_cache.clear()
         tracked_file = alice_ws / "README.problem.md"
         tracked_original = tracked_file.read_text(encoding="utf-8")
         tracked_marker = f"git-dirty-marker-{uuid.uuid4().hex[:8]}"

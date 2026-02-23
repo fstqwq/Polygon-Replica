@@ -4,6 +4,7 @@ import errno
 import fcntl
 import os
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,12 +17,33 @@ from app.services.util import copytree, ensure_dir, extract_git_archive, remove_
 
 class WorkspaceService:
     IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    PROBLEM_CACHE_MAX_ENTRIES = 512
+    USER_CACHE_MAX_ENTRIES = 2048
 
     def __init__(self, db: DB, settings: Settings):
         self.db = db
         self.settings = settings
         self._problem_cache: dict[str, dict] = {}
         self._user_cache: dict[str, dict] = {}
+        self._cache_lock = threading.Lock()
+
+    def _cache_get(self, cache: dict[str, dict], key: str) -> dict | None:
+        with self._cache_lock:
+            value = cache.get(key)
+            if value is None:
+                return None
+            # Promote on access so active identities stay resident.
+            cache.pop(key, None)
+            cache[key] = value
+            return value
+
+    def _cache_put(self, cache: dict[str, dict], key: str, value: dict, max_entries: int) -> None:
+        with self._cache_lock:
+            cache.pop(key, None)
+            cache[key] = value
+            while len(cache) > max_entries:
+                oldest_key = next(iter(cache))
+                cache.pop(oldest_key, None)
 
     def _validate_identifier(self, value: str, label: str) -> str:
         ident = str(value or "").strip()
@@ -54,11 +76,11 @@ class WorkspaceService:
             )
             row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
         if row is not None:
-            self._problem_cache[slug] = dict(row)
+            self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
 
     def ensure_user(self, username: str):
         username = self._validate_identifier(username, "user")
-        cached = self._user_cache.get(username)
+        cached = self._cache_get(self._user_cache, username)
         if cached is not None:
             return cached
         row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
@@ -71,31 +93,31 @@ class WorkspaceService:
         if row is None:
             raise RuntimeError(f"unable to ensure user row for {username}")
         row_dict = dict(row)
-        self._user_cache[username] = row_dict
+        self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
         return row_dict
 
     def _problem_row(self, slug: str):
         slug = self._validate_identifier(slug, "problem")
-        cached = self._problem_cache.get(slug)
+        cached = self._cache_get(self._problem_cache, slug)
         if cached is not None:
             return cached
         row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
         if row is None:
             raise ValueError(f"Unknown problem: {slug}")
         row_dict = dict(row)
-        self._problem_cache[slug] = row_dict
+        self._cache_put(self._problem_cache, slug, row_dict, self.PROBLEM_CACHE_MAX_ENTRIES)
         return row_dict
 
     def _user_row(self, username: str):
         username = self._validate_identifier(username, "user")
-        cached = self._user_cache.get(username)
+        cached = self._cache_get(self._user_cache, username)
         if cached is not None:
             return cached
         row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
         if row is None:
             raise ValueError(f"Unknown user: {username}")
         row_dict = dict(row)
-        self._user_cache[username] = row_dict
+        self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
         return row_dict
 
     @contextmanager
