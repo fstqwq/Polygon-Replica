@@ -41,6 +41,7 @@ app = FastAPI(title="Polygonlike")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 WORKSPACE_BUILD_SELECTOR_LIMIT = 200
+ARTIFACT_BROWSE_FILE_LIMIT = 512
 
 
 @app.on_event("startup")
@@ -197,8 +198,16 @@ def _iter_safe_descendant_files(root: Path, target: Path):
             yield p
 
 
-def _safe_descendant_files(root: Path, target: Path) -> list[Path]:
-    return sorted(_iter_safe_descendant_files(root, target), key=lambda p: str(p.relative_to(root)))
+def _safe_descendant_files(root: Path, target: Path, limit: int | None = None) -> tuple[list[Path], bool]:
+    files: list[Path] = []
+    truncated = False
+    capped = max(1, int(limit)) if limit is not None else None
+    for p in _iter_safe_descendant_files(root, target):
+        if capped is not None and len(files) >= capped:
+            truncated = True
+            break
+        files.append(p)
+    return files, truncated
 
 
 def _workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
@@ -883,11 +892,19 @@ def artifact_browse(request: Request, problem: str, user: str, build_id: str, re
     ctx = page_ctx(problem, user)
     _assert_workspace_artifact_access(ctx, build_id)
     root, target = _safe_artifact_dir(problem, build_id, rel)
-    files = [str(p.relative_to(root)) for p in _safe_descendant_files(root, target)]
+    files_raw, truncated = _safe_descendant_files(root, target, limit=ARTIFACT_BROWSE_FILE_LIMIT)
+    files = [str(p.relative_to(root)) for p in files_raw]
     return templates.TemplateResponse(
         request,
         "artifact_browser.html",
-        {"ctx": ctx, "build_id": build_id, "rel": rel, "files": files},
+        {
+            "ctx": ctx,
+            "build_id": build_id,
+            "rel": rel,
+            "files": files,
+            "truncated": truncated,
+            "file_limit": ARTIFACT_BROWSE_FILE_LIMIT,
+        },
     )
 
 
@@ -921,11 +938,19 @@ def run_artifact_download_dir(problem: str, user: str, run_id: str, rel: str = "
 def run_artifact_browse(request: Request, problem: str, user: str, run_id: str, rel: str = "feedback_dir"):
     ctx = page_ctx(problem, user)
     root, target = _safe_run_artifact_dir(ctx, run_id, rel)
-    files = [str(p.relative_to(root)) for p in _safe_descendant_files(root, target)]
+    files_raw, truncated = _safe_descendant_files(root, target, limit=ARTIFACT_BROWSE_FILE_LIMIT)
+    files = [str(p.relative_to(root)) for p in files_raw]
     return templates.TemplateResponse(
         request,
         "run_artifact_browser.html",
-        {"ctx": ctx, "run_id": run_id, "rel": rel, "files": files},
+        {
+            "ctx": ctx,
+            "run_id": run_id,
+            "rel": rel,
+            "files": files,
+            "truncated": truncated,
+            "file_limit": ARTIFACT_BROWSE_FILE_LIMIT,
+        },
     )
 
 

@@ -53,7 +53,17 @@ def main() -> None:
     ensure_local_env()
 
     from fastapi.testclient import TestClient
-    from app.main import app, build_service, db, export_service, git_service, preview_service, run_service, workspace_service
+    from app.main import (
+        ARTIFACT_BROWSE_FILE_LIMIT,
+        app,
+        build_service,
+        db,
+        export_service,
+        git_service,
+        preview_service,
+        run_service,
+        workspace_service,
+    )
     from app.services.util import run_cmd
 
     with TestClient(app) as client:
@@ -2425,6 +2435,35 @@ def main() -> None:
         )
         if valid_feedback_zip.status_code != 200 or valid_feedback_zip.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"run artifact feedback zip failed status={valid_feedback_zip.status_code}")
+    run_browse_limit = int(ARTIFACT_BROWSE_FILE_LIMIT)
+    if run_browse_limit < 8:
+        raise RuntimeError(f"artifact browse file limit should be a sane positive bound, got={run_browse_limit}")
+    run_browse_cap_name = f"browse-cap-{uuid.uuid4().hex[:8]}"
+    run_browse_cap_dir = Path(str(rrow_multi["artifact_path"] or "")) / "feedback_dir" / run_browse_cap_name
+    run_browse_cap_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(run_browse_limit + 24):
+        (run_browse_cap_dir / f"{i:04d}.txt").write_text("cap\n", encoding="utf-8")
+    with TestClient(app) as client:
+        run_browse_cap_resp = client.get(
+            f"/problems/sample/alice/runs/{run_id_multi}/browse",
+            params={"rel": f"feedback_dir/{run_browse_cap_name}"},
+        )
+        if run_browse_cap_resp.status_code != 200:
+            raise RuntimeError(
+                "run artifact browse should remain available when directory listing is capped"
+                f", status={run_browse_cap_resp.status_code}"
+            )
+        run_link_prefix = (
+            f"/problems/sample/alice/runs/{run_id_multi}/artifacts/feedback_dir/{run_browse_cap_name}/"
+        )
+        if run_browse_cap_resp.text.count(run_link_prefix) != run_browse_limit:
+            raise RuntimeError("run artifact browse did not enforce expected file listing cap")
+        if f"limit {run_browse_limit}" not in run_browse_cap_resp.text:
+            raise RuntimeError("run artifact browse did not surface capped-listing indicator")
+        if f"{run_browse_limit:04d}.txt" in run_browse_cap_resp.text:
+            raise RuntimeError("run artifact browse should hide entries beyond the listing cap")
+    shutil.rmtree(run_browse_cap_dir, ignore_errors=True)
+    with TestClient(app) as client:
         invalid_compile_file = client.get(f"/problems/sample/alice/runs/{run_id_bad_build}/artifacts/compile.log")
         if invalid_compile_file.status_code != 200:
             raise RuntimeError(f"invalid run compile.log should be readable status={invalid_compile_file.status_code}")
@@ -2925,6 +2964,51 @@ def main() -> None:
         )
         if r.status_code != 200 or r.headers.get("content-type", "").find("zip") == -1:
             raise RuntimeError(f"download-dir failed status={r.status_code}")
+    artifact_browse_limit = int(ARTIFACT_BROWSE_FILE_LIMIT)
+    if artifact_browse_limit < 8:
+        raise RuntimeError(f"artifact browse file limit should be a sane positive bound, got={artifact_browse_limit}")
+    browse_cap_build_id = f"b-browsecap-{uuid.uuid4().hex[:8]}"
+    browse_cap_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / browse_cap_build_id
+    (browse_cap_root / "tests").mkdir(parents=True, exist_ok=True)
+    (browse_cap_root / "ans").mkdir(parents=True, exist_ok=True)
+    (browse_cap_root / "logs").mkdir(parents=True, exist_ok=True)
+    (browse_cap_root / "export").mkdir(parents=True, exist_ok=True)
+    (browse_cap_root / "manifest.json").write_text("{}", encoding="utf-8")
+    for i in range(artifact_browse_limit + 24):
+        (browse_cap_root / "tests" / f"{i:04d}.in").write_text("1\n", encoding="utf-8")
+    db.execute("DELETE FROM builds WHERE id=?", [browse_cap_build_id])
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            browse_cap_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            "{}",
+            str(browse_cap_root),
+            "2099-01-05T00:00:00Z",
+            "2099-01-05T00:00:00Z",
+        ],
+    )
+    with TestClient(app) as client:
+        artifact_browse_cap_resp = client.get(
+            f"/problems/sample/alice/artifacts/{browse_cap_build_id}/browse",
+            params={"rel": "tests"},
+        )
+        if artifact_browse_cap_resp.status_code != 200:
+            raise RuntimeError(
+                "artifact browse should remain available when directory listing is capped"
+                f", status={artifact_browse_cap_resp.status_code}"
+            )
+        artifact_link_prefix = f"/problems/sample/alice/artifacts/{browse_cap_build_id}/tests/"
+        if artifact_browse_cap_resp.text.count(artifact_link_prefix) != artifact_browse_limit:
+            raise RuntimeError("artifact browse did not enforce expected file listing cap")
+        if f"limit {artifact_browse_limit}" not in artifact_browse_cap_resp.text:
+            raise RuntimeError("artifact browse did not surface capped-listing indicator")
+        if f"{artifact_browse_limit:04d}.in" in artifact_browse_cap_resp.text:
+            raise RuntimeError("artifact browse should hide entries beyond the listing cap")
     artifact_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id
     artifact_alias_symlink = artifact_root / "alias-tests"
     artifact_alias_supported = True
