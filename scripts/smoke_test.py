@@ -55,6 +55,7 @@ def main() -> None:
     from fastapi.testclient import TestClient
     from app.main import (
         ARTIFACT_BROWSE_FILE_LIMIT,
+        WORKSPACE_FILE_LIST_LIMIT,
         app,
         build_service,
         db,
@@ -673,6 +674,32 @@ def main() -> None:
             link_file.unlink(missing_ok=True)
     shutil.rmtree(list_leak_dir, ignore_errors=True)
     list_leak_file.unlink(missing_ok=True)
+    files_browse_limit = int(WORKSPACE_FILE_LIST_LIMIT)
+    if files_browse_limit < 8:
+        raise RuntimeError(f"workspace file listing limit should be a sane positive bound, got={files_browse_limit}")
+    files_browse_cap_dir_name = f"0000-files-cap-{uuid.uuid4().hex[:8]}"
+    files_browse_cap_dir = ws / files_browse_cap_dir_name
+    files_browse_cap_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(files_browse_limit + 24):
+        (files_browse_cap_dir / f"{i:04d}.txt").write_text("cap\n", encoding="utf-8")
+    try:
+        with TestClient(app) as client:
+            files_browse_cap_page = client.get("/problems/sample/alice/files")
+            if files_browse_cap_page.status_code != 200:
+                raise RuntimeError(
+                    "files page should remain available when workspace file listing is capped"
+                    f", status={files_browse_cap_page.status_code}"
+                )
+            if files_browse_cap_page.text.count('href="?path=') != files_browse_limit:
+                raise RuntimeError("files page did not enforce expected workspace file listing cap")
+            if f"limit {files_browse_limit}" not in files_browse_cap_page.text:
+                raise RuntimeError("files page did not surface capped-listing indicator")
+            if f"{files_browse_cap_dir_name}/0000.txt" not in files_browse_cap_page.text:
+                raise RuntimeError("files page should still list capped-directory entries")
+            if f"{files_browse_cap_dir_name}/{files_browse_limit:04d}.txt" in files_browse_cap_page.text:
+                raise RuntimeError("files page should hide entries beyond the listing cap")
+    finally:
+        shutil.rmtree(files_browse_cap_dir, ignore_errors=True)
     lock_marker = ws / ".polygonlike.lock"
     lock_nested_marker = ws / "scratch" / ".polygonlike.lock"
     lock_nested_marker.parent.mkdir(parents=True, exist_ok=True)

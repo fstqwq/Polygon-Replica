@@ -250,9 +250,16 @@ class GitService:
         return list(branches)
 
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
+        files, _ = self.list_files_capped(workspace, rel=rel, limit=None)
+        return files
+
+    def list_files_capped(self, workspace: Path, rel: str = ".", limit: int | None = None) -> tuple[list[str], bool]:
         workspace_root = workspace.resolve()
         base = self._resolve_user_path(workspace, rel, allow_workspace_root=True)
         paths: list[str] = []
+        truncated = False
+        capped = max(1, int(limit)) if limit is not None else None
+        stop_scan = False
         for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             next_dirs: list[str] = []
@@ -267,7 +274,14 @@ class GitService:
                 if workspace_root not in resolved.parents and workspace_root != resolved:
                     continue
                 next_dirs.append(name)
+                if capped is not None and len(paths) >= capped:
+                    truncated = True
+                    stop_scan = True
+                    break
                 paths.append(str(d.relative_to(workspace)))
+            if stop_scan:
+                dirnames[:] = []
+                break
             dirnames[:] = next_dirs
 
             for name in sorted(filenames):
@@ -280,9 +294,16 @@ class GitService:
                     continue
                 if workspace_root not in resolved.parents and workspace_root != resolved:
                     continue
+                if capped is not None and len(paths) >= capped:
+                    truncated = True
+                    stop_scan = True
+                    break
                 paths.append(str(p.relative_to(workspace)))
-        paths.sort()
-        return paths
+            if stop_scan:
+                break
+        if capped is None:
+            paths.sort()
+        return paths, truncated
 
     def read_file(self, workspace: Path, rel_path: str) -> str:
         p = self._resolve_user_path(workspace, rel_path)

@@ -5,6 +5,9 @@
 <div class="grid">
   <section>
     <h2>Repository Files</h2>
+    {% if files_truncated %}
+    <p><em>Showing first {{ files|length }} files (limit {{ file_limit }}).</em></p>
+    {% endif %}
     <ul class="files">
       {% for f in files %}
       <li><a href="?path={{ f }}">{{ f }}</a></li>

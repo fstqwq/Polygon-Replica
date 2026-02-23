@@ -41,6 +41,7 @@ app = FastAPI(title="Polygonlike")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 WORKSPACE_BUILD_SELECTOR_LIMIT = 200
+WORKSPACE_FILE_LIST_LIMIT = 1024
 ARTIFACT_BROWSE_FILE_LIMIT = 512
 
 
@@ -413,13 +414,15 @@ def files_page(request: Request, problem: str, user: str):
     except Exception:
         selected = "README.problem.md"
         content = git_service.read_file(workspace, selected)
-    files = git_service.list_files(workspace)
+    files, files_truncated = git_service.list_files_capped(workspace, limit=WORKSPACE_FILE_LIST_LIMIT)
     return templates.TemplateResponse(
         request,
         "files.html",
         {
             "ctx": ctx,
             "files": files,
+            "files_truncated": files_truncated,
+            "file_limit": WORKSPACE_FILE_LIST_LIMIT,
             "selected": selected,
             "content": content,
             "selected_line": selected_line,
