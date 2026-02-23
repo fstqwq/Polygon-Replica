@@ -51,6 +51,7 @@ BUILD_DIAGNOSTIC_LIST_LIMIT = 200
 PREVIEW_LOG_REF_LIST_LIMIT = 200
 WORKSPACE_BRANCH_LIST_LIMIT = 200
 API_PROBLEMS_LIST_LIMIT = 200
+DIAGNOSTIC_MESSAGE_CHAR_LIMIT = 4096
 
 
 @app.on_event("startup")
@@ -438,6 +439,32 @@ def _cap_branch_names(branches: list[str], current_branch: str, limit: int) -> t
     return capped, True
 
 
+def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
+    cap = max(1, int(max_chars))
+    text = str(value or "")
+    if len(text) <= cap:
+        return text, False
+    return text[:cap] + f"... [truncated; showing first {cap} characters]", True
+
+
+def _normalize_diagnostics(entries: list, message_limit: int) -> list[dict]:
+    normalized: list[dict] = []
+    for raw in entries:
+        item = raw if isinstance(raw, dict) else {"message": str(raw or "")}
+        msg, msg_truncated = _truncate_inline_text(str(item.get("message") or ""), message_limit)
+        row = dict(item)
+        row["message"] = msg
+        row["message_truncated"] = msg_truncated
+        row["message_limit"] = message_limit
+        row.setdefault("level", "error")
+        row.setdefault("file", "")
+        row.setdefault("line", 0)
+        row.setdefault("column", 0)
+        row.setdefault("can_link", False)
+        normalized.append(row)
+    return normalized
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> RedirectResponse:
     return RedirectResponse("/problems/sample/alice/files")
@@ -751,7 +778,10 @@ def build_page(request: Request, problem: str, user: str):
             maybe_diagnostics = summary.get("diagnostics", [])
             if isinstance(maybe_diagnostics, list):
                 diagnostics_total = len(maybe_diagnostics)
-                diagnostics = maybe_diagnostics[:BUILD_DIAGNOSTIC_LIST_LIMIT]
+                diagnostics = _normalize_diagnostics(
+                    maybe_diagnostics[:BUILD_DIAGNOSTIC_LIST_LIMIT],
+                    DIAGNOSTIC_MESSAGE_CHAR_LIMIT,
+                )
                 diagnostics_truncated = diagnostics_total > BUILD_DIAGNOSTIC_LIST_LIMIT
             else:
                 diagnostics = []
@@ -900,6 +930,9 @@ def run_page(request: Request, problem: str, user: str):
             "compile_diagnostics_total",
             "compile_diagnostics_limit",
         )
+        compile_diags = summary.get("compile_diagnostics")
+        if isinstance(compile_diags, list):
+            summary["compile_diagnostics"] = _normalize_diagnostics(compile_diags, DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
     return templates.TemplateResponse(
         request,
         "run.html",

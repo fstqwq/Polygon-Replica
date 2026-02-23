@@ -59,6 +59,7 @@ def main() -> None:
         API_PROBLEMS_LIST_LIMIT,
         BUILD_DIAGNOSTIC_LIST_LIMIT,
         BUILD_LOG_LIST_LIMIT,
+        DIAGNOSTIC_MESSAGE_CHAR_LIMIT,
         PREVIEW_LOG_REF_LIST_LIMIT,
         RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
         RUN_DETAIL_TEST_LIST_LIMIT,
@@ -1672,6 +1673,7 @@ def main() -> None:
     build_logs_list_limit = int(BUILD_LOG_LIST_LIMIT)
     build_diag_list_limit = int(BUILD_DIAGNOSTIC_LIST_LIMIT)
     preview_log_refs_limit = int(PREVIEW_LOG_REF_LIST_LIMIT)
+    diag_message_limit = int(DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
     if build_logs_list_limit < 8:
         raise RuntimeError(f"build log-list limit should be a sane positive bound, got={build_logs_list_limit}")
     if build_diag_list_limit < 8:
@@ -1680,6 +1682,8 @@ def main() -> None:
         raise RuntimeError(
             f"preview log-reference limit should be a sane positive bound, got={preview_log_refs_limit}"
         )
+    if diag_message_limit < 128:
+        raise RuntimeError(f"diagnostic message limit should be a sane positive bound, got={diag_message_limit}")
     build_log_cap_prefix = f"0000-build-log-cap-{uuid.uuid4().hex[:8]}"
     build_log_cap_paths: list[Path] = []
     for i in range(build_logs_list_limit + 24):
@@ -1708,6 +1712,7 @@ def main() -> None:
     (build_diag_cap_root / "logs").mkdir(parents=True, exist_ok=True)
     (build_diag_cap_root / "logs" / "compile.log").write_text("diag-cap\n", encoding="utf-8")
     build_diag_prefix = f"build-diag-cap-{uuid.uuid4().hex[:8]}"
+    build_diag_msg_tail_marker = f"build-diag-msg-tail-{uuid.uuid4().hex[:8]}"
     build_diag_total = build_diag_list_limit + 24
     build_diag_entries = [
         {
@@ -1719,6 +1724,7 @@ def main() -> None:
         }
         for i in range(build_diag_total)
     ]
+    build_diag_entries[0]["message"] = ("E" * (diag_message_limit + 64)) + build_diag_msg_tail_marker
     db.execute("DELETE FROM builds WHERE id=?", [build_diag_cap_id])
     db.execute(
         "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -1751,6 +1757,10 @@ def main() -> None:
             raise RuntimeError("build page should hide diagnostics beyond the configured list cap")
         if f"{build_diag_prefix}-{build_diag_list_limit - 1:04d}" not in build_page_with_many_diags.text:
             raise RuntimeError("build page should keep diagnostics within the configured list cap")
+        if build_diag_msg_tail_marker in build_page_with_many_diags.text:
+            raise RuntimeError("build page should truncate oversized diagnostic messages")
+        if f"truncated; showing first {diag_message_limit} characters" not in build_page_with_many_diags.text:
+            raise RuntimeError("build page should expose oversized diagnostic-message truncation marker")
     db.execute("DELETE FROM builds WHERE id=?", [build_diag_cap_id])
     shutil.rmtree(build_diag_cap_root, ignore_errors=True)
     preview_ref_prefix = f"preview-ref-cap-{uuid.uuid4().hex[:8]}"
@@ -2200,6 +2210,7 @@ def main() -> None:
         raise RuntimeError(f"run detail diagnostics limit should be a sane positive bound, got={run_diag_limit}")
     run_cap_test_prefix = f"cap-test-{uuid.uuid4().hex[:8]}"
     run_cap_diag_prefix = f"cap-diag-{uuid.uuid4().hex[:8]}"
+    run_diag_msg_tail_marker = f"run-diag-msg-tail-{uuid.uuid4().hex[:8]}"
     run_cap_id = f"r-uicap-{uuid.uuid4().hex[:10]}"
     run_cap_tests_total = run_tests_limit + 24
     run_cap_diags_total = run_diag_limit + 24
@@ -2224,6 +2235,7 @@ def main() -> None:
         }
         for i in range(run_cap_diags_total)
     ]
+    run_cap_diags[0]["message"] = ("R" * (diag_message_limit + 64)) + run_diag_msg_tail_marker
     db.execute("DELETE FROM runs WHERE id=?", [run_cap_id])
     db.execute(
         "INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -2265,6 +2277,10 @@ def main() -> None:
             raise RuntimeError("run page should hide compile diagnostics beyond the configured list cap")
         if f"{run_cap_diag_prefix}-{run_diag_limit - 1:04d}" not in run_cap_page.text:
             raise RuntimeError("run page should keep compile diagnostics within the configured list cap")
+        if run_diag_msg_tail_marker in run_cap_page.text:
+            raise RuntimeError("run page should truncate oversized compile diagnostic messages")
+        if f"truncated; showing first {diag_message_limit} characters" not in run_cap_page.text:
+            raise RuntimeError("run page should expose oversized diagnostic-message truncation marker")
     poison_log.unlink(missing_ok=True)
     dot_root_log.unlink(missing_ok=True)
 
