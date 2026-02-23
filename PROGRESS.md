@@ -164,6 +164,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
 - Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
 - Preview cache reuse now requires symlink-safe in-root regular files for `statement.pdf` and `latex.log`, preventing poisoned symlink preview artifacts from being reused.
+- Preview page now validates `statement.pdf` and `latex.log` through safe artifact-path checks, so symlinked/out-of-root preview files are ignored in UI detail rendering.
 - Workspace file listing now suppresses `.polygonlike.lock` entries in addition to `.git`, preventing lock-file metadata leaks into Files UI navigation.
 - Preview compilation now persists source metadata (`source_commit`, `source_ref`) during finalization, removing redundant mid-run preview-row updates while preserving canonical commit/ref recording.
 - Dirty workspace previews now clear `source_commit` metadata and skip commit-key reuse, preventing dirty snapshot outputs from polluting immutable commit preview cache provenance.
@@ -192,6 +193,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build/Run detail pages now parse `summary_json` defensively and surface fallback errors for malformed JSON instead of raising 500 errors.
 - Run artifact endpoints now validate filesystem-relative run-root shape (`<build>/logs/run-<run_id>` under problem artifacts, or `invalid-runs/<run_id>`) independent of DB-provided build-id strings, and reject DB-poisoned path overrides.
 - Build detail log loading now uses canonical artifact roots (`artifacts/<problem>/<build_id>/logs`) instead of DB-provided build `artifact_path` metadata.
+- Workspace manifest API now reads `manifest.json` through canonical safe artifact-path checks, rejecting symlinked/unsafe manifest targets.
 - Preview reuse now loads candidate artifacts from canonical roots (`artifacts/<problem>/<preview_id>`), rejects dotted/traversal-like preview ids, and ignores DB-provided preview `artifact_path` metadata.
 - Build artifact path resolution now enforces canonical artifact-id roots, rejecting dotted/traversal-like build ids across browse/file/manifest paths.
 - Canonical artifact-id validation is now shared (`[A-Za-z0-9_-]+`), and run/export preflight plus run-artifact root validation reject dotted ids in addition to traversal-style ids.
@@ -227,6 +229,8 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates upload-route symlinked lock-path rejection (HTTP 400) and confirms no target file is created.
 - Smoke coverage now validates Git page/backend status filtering for both root and nested lock-file workspace changes and confirms no lock-file diff output is produced.
 - Smoke coverage now validates git commits never stage/commit root or nested `.polygonlike.lock` paths even when workspace locking is active.
+- Smoke coverage now validates preview page rejection of symlinked preview `statement.pdf`/`latex.log` artifacts (no leak rendering / no PDF embed).
+- Smoke coverage now validates workspace manifest endpoint rejection for symlinked `manifest.json` artifacts.
 - Smoke coverage now validates run submission-path rejection for reserved internal workspace files and symlinked submission aliases.
 
 ## Upstream Dependency Integration

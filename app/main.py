@@ -660,10 +660,16 @@ def preview_page(request: Request, problem: str, user: str):
         except HTTPException:
             preview_id = ""
         else:
-            lp = root / "logs" / "latex.log"
-            pdf = root / "statement_preview" / "statement.pdf"
-            pdf_exists = pdf.exists()
-            if lp.exists():
+            try:
+                _safe_artifact_path(problem, preview_id, "statement_preview/statement.pdf")
+                pdf_exists = True
+            except HTTPException:
+                pdf_exists = False
+            try:
+                lp = _safe_artifact_path(problem, preview_id, "logs/latex.log")
+            except HTTPException:
+                lp = None
+            if lp is not None:
                 log = _read_text_safe(lp)
                 tex_ref = re.compile(r"(?P<file>[\\w./-]+\\.tex):(?P<line>\\d+)")
                 for line in log.splitlines():
@@ -977,8 +983,9 @@ def api_workspace_manifest(problem: str, user: str, build_id: str):
     )
     if row is None:
         raise HTTPException(status_code=404, detail="manifest not found in workspace")
-    p = _artifact_root(problem, build_id) / "manifest.json"
-    if not p.exists():
+    try:
+        p = _safe_artifact_path(problem, build_id, "manifest.json")
+    except HTTPException:
         raise HTTPException(status_code=404, detail="manifest not found")
     return json.loads(p.read_text(encoding="utf-8"))
 

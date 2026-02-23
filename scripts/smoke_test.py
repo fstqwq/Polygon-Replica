@@ -1328,6 +1328,90 @@ def main() -> None:
                 "preview artifact file should be accessible in workspace"
                 f", status={preview_artifact_file.status_code}"
             )
+    preview_symlink_page_id = f"p-{uuid.uuid4().hex[:12]}"
+    preview_symlink_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_symlink_page_id
+    (preview_symlink_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+    (preview_symlink_root / "logs").mkdir(parents=True, exist_ok=True)
+    preview_page_leak_marker = f"preview-page-leak-{uuid.uuid4().hex[:8]}"
+    preview_page_leak_log = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"preview-page-leak-{uuid.uuid4().hex[:8]}.log"
+    preview_page_leak_pdf = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"preview-page-leak-{uuid.uuid4().hex[:8]}.pdf"
+    preview_page_leak_log.write_text(preview_page_leak_marker + "\n", encoding="utf-8")
+    preview_page_leak_pdf.write_bytes(b"%PDF-1.4\n% preview page symlink leak\n")
+    preview_page_symlink_supported = True
+    try:
+        (preview_symlink_root / "logs" / "latex.log").symlink_to(preview_page_leak_log)
+        (preview_symlink_root / "statement_preview" / "statement.pdf").symlink_to(preview_page_leak_pdf)
+    except (OSError, NotImplementedError):
+        preview_page_symlink_supported = False
+    db.execute(
+        "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [
+            preview_symlink_page_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            str(preview_symlink_root),
+            "2099-01-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        ],
+    )
+    if preview_page_symlink_supported:
+        with TestClient(app) as client:
+            preview_symlink_page = client.get(
+                "/problems/sample/alice/preview",
+                params={"preview_id": preview_symlink_page_id},
+            )
+            if preview_symlink_page.status_code != 200:
+                raise RuntimeError(
+                    "preview page should reject symlinked preview artifacts without failing"
+                    f", status={preview_symlink_page.status_code}"
+                )
+            if preview_page_leak_marker in preview_symlink_page.text:
+                raise RuntimeError("preview page should not render symlinked latex.log content")
+            if "PDF present: yes" in preview_symlink_page.text:
+                raise RuntimeError("preview page should not report symlinked statement.pdf as present")
+            if f"/artifacts/{preview_symlink_page_id}/statement_preview/statement.pdf" in preview_symlink_page.text:
+                raise RuntimeError("preview page should not embed symlinked statement.pdf artifacts")
+    preview_page_leak_log.unlink(missing_ok=True)
+    preview_page_leak_pdf.unlink(missing_ok=True)
+    manifest_symlink_build_id = f"b-manifestlink-{uuid.uuid4().hex[:8]}"
+    manifest_symlink_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / manifest_symlink_build_id
+    manifest_symlink_root.mkdir(parents=True, exist_ok=True)
+    manifest_symlink_target = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"manifest-link-leak-{uuid.uuid4().hex[:8]}.json"
+    manifest_symlink_target.write_text("{\"leak\":true}\n", encoding="utf-8")
+    manifest_symlink_supported = True
+    try:
+        (manifest_symlink_root / "manifest.json").symlink_to(manifest_symlink_target)
+    except (OSError, NotImplementedError):
+        manifest_symlink_supported = False
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            manifest_symlink_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            "{}",
+            str(manifest_symlink_root),
+            "2099-01-02T00:00:00Z",
+            "2099-01-02T00:00:00Z",
+        ],
+    )
+    if manifest_symlink_supported:
+        with TestClient(app) as client:
+            manifest_symlink_resp = client.get(
+                f"/api/problems/sample/workspaces/alice/builds/{manifest_symlink_build_id}/manifest"
+            )
+            if manifest_symlink_resp.status_code != 404:
+                raise RuntimeError(
+                    "workspace manifest endpoint should reject symlinked manifest artifacts"
+                    f", status={manifest_symlink_resp.status_code}"
+                )
+    manifest_symlink_target.unlink(missing_ok=True)
     manifest = json.loads((Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "manifest.json").read_text(encoding="utf-8"))
     manifest_paths = [str(item.get("path")) for item in manifest.get("files", []) if isinstance(item, dict)]
     if manifest_paths != sorted(manifest_paths):

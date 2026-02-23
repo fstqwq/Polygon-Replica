@@ -101,6 +101,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
 - Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
 - Preview cache reuse now requires symlink-safe in-root regular files for `statement.pdf` and `latex.log`, preventing poisoned symlink preview artifacts from being reused.
+- Preview page detail rendering now resolves `statement.pdf` and `latex.log` through safe artifact-path checks, preventing symlinked/out-of-root preview files from being treated as valid UI artifacts.
 - Workspace file listing now suppresses `.polygonlike.lock` entries in addition to `.git`, preventing lock-file metadata leaks into Files UI navigation.
 - Workspace/provision lock acquisition now rejects symlinked/invalid lock paths (`O_NOFOLLOW` where available), preventing lock-file symlink redirection during mutating operations.
 - Files upload now stages writes through a same-directory temp file and atomically `os.replace`s on success, preventing partial-file corruption on interrupted writes while preserving streaming behavior.
@@ -130,6 +131,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build/Run detail pages now handle malformed `summary_json` rows defensively (no 500 on corrupted metadata; fallback error shown in UI).
 - Run artifact endpoints now validate filesystem-relative run-root shape (`<build>/logs/run-<run_id>` under problem artifacts, or `invalid-runs/<run_id>`) independent of DB-provided build-id strings, and reject DB-poisoned path overrides.
 - Build detail log loading now uses canonical artifact roots (`artifacts/<problem>/<build_id>/logs`) instead of DB-provided `artifact_path` values.
+- Workspace manifest API now reads `manifest.json` via canonical safe artifact-path checks, rejecting symlinked/unsafe manifest targets.
 - Preview reuse now loads candidate artifacts from canonical roots (`artifacts/<problem>/<preview_id>`), rejects dotted/traversal-like preview ids, and ignores DB-provided preview `artifact_path` values.
 - Build artifact paths now enforce canonical artifact-id roots, rejecting dotted/traversal-like build ids across artifact browse/file/manifest flows.
 - Canonical artifact-id validation is now shared across main/services (`[A-Za-z0-9_-]+`), and run/export preflight plus run-artifact root checks now reject dotted ids in addition to traversal-style ids.
@@ -184,4 +186,6 @@ Open: `http://127.0.0.1:8000`
   - Adds lock hardening regression for upload-route symlinked lock-path rejection (HTTP 400 + no output-file write).
   - Adds Git-page/status regressions ensuring root and nested lock-file workspace changes are filtered from status and diff output.
   - Adds git-commit regressions ensuring both root and nested workspace lock files are never staged/committed.
+  - Adds preview-page symlink regressions ensuring symlinked preview `statement.pdf`/`latex.log` are ignored and not rendered.
+  - Adds workspace-manifest API regression ensuring symlinked `manifest.json` artifacts are rejected.
   - Adds run submission-path regressions for reserved internal workspace paths and symlinked submission aliases.
