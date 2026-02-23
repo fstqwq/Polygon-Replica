@@ -300,7 +300,9 @@ class BuildService:
                     keep_dirs.append(name)
             dirnames[:] = keep_dirs
 
-            for name in sorted(filenames):
+            safe_entries: list[tuple[str, Path, bool]] = []
+            has_in_file = False
+            for name in filenames:
                 p = dir_root / name
                 if p.is_symlink() or not p.exists() or not p.is_file():
                     continue
@@ -311,13 +313,21 @@ class BuildService:
                 if manual_root_resolved not in resolved.parents and manual_root_resolved != resolved:
                     continue
                 rel = str(p.relative_to(manual_root))
+                is_in = p.suffix.lower() == ".in"
+                safe_entries.append((rel, p, is_in))
+                if is_in:
+                    has_in_file = True
+
+            if has_in_file:
                 if all_files is not None:
+                    all_files.clear()
+                    all_files = None
+                for rel, p, is_in in safe_entries:
+                    if is_in:
+                        in_files.append((rel, p))
+            elif all_files is not None:
+                for rel, p, _ in safe_entries:
                     all_files.append((rel, p))
-                if p.suffix.lower() == ".in":
-                    in_files.append((rel, p))
-                    if all_files is not None:
-                        all_files.clear()
-                        all_files = None
 
         if in_files:
             return [p for _, p in sorted(in_files)]
