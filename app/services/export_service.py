@@ -19,6 +19,7 @@ class ExportService:
     }
     STEP_LOGS = ["compile.log", "generate.log", "validate.log", "solve.log", "failure.log", "latex.log", "diagnostics.json"]
     SOURCE_SUFFIX_ORDER = (".cpp", ".cc", ".cxx", ".c", ".py", ".java")
+    MODE_DETECT_READ_CHUNK = 65536
 
     def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path):
         self.db = db
@@ -174,6 +175,27 @@ class ExportService:
                 return selected
         return None
 
+    def _file_contains_token(self, path: Path, token: str) -> bool:
+        needle = str(token or "").encode("utf-8")
+        if not needle:
+            return False
+        overlap = max(0, len(needle) - 1)
+        carry = b""
+        chunk_size = max(4096, int(self.MODE_DETECT_READ_CHUNK))
+        try:
+            with path.open("rb") as fh:
+                while True:
+                    chunk = fh.read(chunk_size)
+                    if not chunk:
+                        break
+                    data = carry + chunk
+                    if needle in data:
+                        return True
+                    carry = data[-overlap:] if overlap and len(data) > overlap else data if overlap else b""
+        except OSError:
+            return False
+        return False
+
     def _problem_mode(self, snapshot: Path | None) -> str:
         allowed = {"pass-fail", "interactive", "multi-pass"}
         if snapshot is None:
@@ -204,11 +226,8 @@ class ExportService:
             checkers_dir_resolved = None
         if checkers_dir_resolved is not None:
             for checker_src in self._iter_safe_top_level_files(checkers_dir, folder_resolved=checkers_dir_resolved):
-                try:
-                    if "nextpass.in" in checker_src.read_text(encoding="utf-8", errors="ignore"):
-                        return "multi-pass"
-                except Exception:
-                    continue
+                if self._file_contains_token(checker_src, "nextpass.in"):
+                    return "multi-pass"
         return "pass-fail"
 
     def _snapshot_source(

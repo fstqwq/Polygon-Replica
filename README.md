@@ -121,6 +121,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build C++ source auto-discovery now performs a single deterministic directory pass with symlink-safe in-root filtering, reducing glob/sort overhead and preventing unsafe symlinked source selection.
 - Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
 - Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
+- Export mode detection now scans checker sources in bounded chunks for `nextpass.in`, preserving multi-pass inference while avoiding full-file reads for large checker sources.
 - Preview cache reuse now requires symlink-safe in-root regular files for `statement.pdf` and `latex.log`, preventing poisoned symlink preview artifacts from being reused.
 - Preview page detail rendering now resolves `statement.pdf` and `latex.log` through safe artifact-path checks, preventing symlinked/out-of-root preview files from being treated as valid UI artifacts.
 - Workspace file listing now suppresses `.polygonlike.lock` entries in addition to `.git`, preventing lock-file metadata leaks into Files UI navigation.
@@ -234,3 +235,4 @@ Open: `http://127.0.0.1:8000`
   - Adds run-config sidecar backfill regressions ensuring manifest-only artifacts get sidecar synthesis and subsequent loads prefer the synthesized sidecar.
   - Adds workspace-manifest API regressions ensuring large `files` lists are capped with truncation metadata.
   - Adds export-metadata regressions ensuring `exports.workspace_id` persistence and workspace-scoped export query behavior.
+  - Adds export-mode regressions ensuring chunked checker-marker scanning still detects `nextpass.in` across chunk boundaries.

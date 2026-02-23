@@ -3400,6 +3400,18 @@ def main() -> None:
     export_mode_from_safe_checker = export_service._problem_mode(export_mode_probe)
     if export_mode_from_safe_checker != "multi-pass":
         raise RuntimeError("export mode detection should detect multi-pass from safe checker sources")
+    mode_detect_chunk = int(getattr(export_service, "MODE_DETECT_READ_CHUNK", 0))
+    if mode_detect_chunk < 4096:
+        raise RuntimeError(f"export mode detect chunk size should be a sane positive bound, got={mode_detect_chunk}")
+    export_mode_boundary_probe = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"export-mode-boundary-{uuid.uuid4().hex[:8]}"
+    export_mode_boundary_checkers = export_mode_boundary_probe / "checkers"
+    export_mode_boundary_checkers.mkdir(parents=True, exist_ok=True)
+    marker = b"nextpass.in"
+    split_prefix = b"A" * max(1, mode_detect_chunk - 4)
+    (export_mode_boundary_checkers / "checker_boundary.cpp").write_bytes(split_prefix + marker + b"\n")
+    export_mode_from_boundary_checker = export_service._problem_mode(export_mode_boundary_probe)
+    if export_mode_from_boundary_checker != "multi-pass":
+        raise RuntimeError("export mode detection should detect markers split across chunk boundaries")
 
     (ws / "config/build.json").write_text(
         json.dumps(
