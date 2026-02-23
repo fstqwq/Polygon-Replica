@@ -2273,6 +2273,68 @@ def main() -> None:
     if str(recent_kattis[0]["filename"]) == str(recent_kattis[1]["filename"]):
         raise RuntimeError("kattis export records should preserve distinct filenames per generation")
 
+    invalid_logs_build_id = f"b-badlogs-{uuid.uuid4().hex[:8]}"
+    invalid_logs_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / invalid_logs_build_id).resolve()
+    invalid_logs_root.mkdir(parents=True, exist_ok=True)
+    (invalid_logs_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (invalid_logs_root / "logs").write_text("not a directory\n", encoding="utf-8")
+    (invalid_logs_root / "export").mkdir(parents=True, exist_ok=True)
+    db.execute("DELETE FROM builds WHERE id=?", [invalid_logs_build_id])
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            invalid_logs_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            json.dumps({"error": "injected logs file instead of directory"}),
+            str(invalid_logs_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    try:
+        export_service.create_export("sample", invalid_logs_build_id, "polygon-standard")
+        raise RuntimeError("polygon-standard export should reject invalid logs/ artifact type")
+    except ValueError as exc:
+        if "incomplete build artifacts for export" not in str(exc):
+            raise RuntimeError(f"invalid-logs export rejection reason mismatch: {exc}")
+    shutil.rmtree(invalid_logs_root, ignore_errors=True)
+
+    invalid_tests_build_id = f"b-badtests-{uuid.uuid4().hex[:8]}"
+    invalid_tests_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / invalid_tests_build_id).resolve()
+    invalid_tests_root.mkdir(parents=True, exist_ok=True)
+    (invalid_tests_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (invalid_tests_root / "logs").mkdir(parents=True, exist_ok=True)
+    (invalid_tests_root / "tests").write_text("not a directory\n", encoding="utf-8")
+    (invalid_tests_root / "ans").mkdir(parents=True, exist_ok=True)
+    (invalid_tests_root / "export").mkdir(parents=True, exist_ok=True)
+    db.execute("DELETE FROM builds WHERE id=?", [invalid_tests_build_id])
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            invalid_tests_build_id,
+            ctx["problem"]["id"],
+            ctx["workspace"]["id"],
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            json.dumps({"error": "injected tests file instead of directory"}),
+            str(invalid_tests_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    try:
+        export_service.create_export("sample", invalid_tests_build_id, "polygon-full")
+        raise RuntimeError("polygon-full export should reject invalid tests/ artifact type")
+    except ValueError as exc:
+        if "incomplete build artifacts for export" not in str(exc):
+            raise RuntimeError(f"invalid-tests export rejection reason mismatch: {exc}")
+    shutil.rmtree(invalid_tests_root, ignore_errors=True)
+
     build_id_polygon_snapshotless = build_service.run_build("sample", "alice")
     brow_polygon_snapshotless = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id_polygon_snapshotless])
     if brow_polygon_snapshotless is None or brow_polygon_snapshotless["status"] != "ok":

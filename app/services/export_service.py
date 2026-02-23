@@ -48,15 +48,39 @@ class ExportService:
     def _is_safe_regular_file(self, root: Path, p: Path, root_resolved: Path | None = None) -> bool:
         if p.is_symlink() or not p.exists() or not p.is_file():
             return False
+        return self._is_safe_path_within(root, p, root_resolved=root_resolved)
+
+    def _is_safe_path_within(self, root: Path, path: Path, root_resolved: Path | None = None) -> bool:
         try:
             resolved_root = root_resolved if root_resolved is not None else root.resolve()
-        except OSError:
-            return False
-        try:
-            resolved = p.resolve()
+            resolved = path.resolve()
         except OSError:
             return False
         return resolved_root in resolved.parents or resolved_root == resolved
+
+    def _validate_required_paths(self, build_root: Path, required: list[tuple[str, str]]) -> list[str]:
+        try:
+            root_resolved = build_root.resolve()
+        except OSError:
+            return [rel for rel, _kind in required]
+
+        issues: list[str] = []
+        for rel, kind in required:
+            p = build_root / rel
+            display = rel if kind == "file" else f"{rel}/"
+            if not p.exists():
+                issues.append(display)
+                continue
+            if p.is_symlink():
+                issues.append(display)
+                continue
+            if kind == "dir":
+                if not p.is_dir() or not self._is_safe_path_within(build_root, p, root_resolved=root_resolved):
+                    issues.append(display)
+                continue
+            if not p.is_file() or not self._is_safe_path_within(build_root, p, root_resolved=root_resolved):
+                issues.append(display)
+        return issues
 
     def _iter_safe_descendant_files(self, root: Path):
         if not root.exists() or not root.is_dir():
@@ -485,10 +509,10 @@ class ExportService:
         build_root = self._canonical_build_root(problem, build_id)
         if not build_root.exists():
             raise ValueError(f"unknown build artifacts: {build_id}")
-        required_paths = [build_root / "manifest.json", build_root / "logs"]
+        required_paths: list[tuple[str, str]] = [("manifest.json", "file"), ("logs", "dir")]
         if export_type in {"kattis", "domjudge", "polygon-full"}:
-            required_paths.extend([build_root / "tests", build_root / "ans"])
-        missing_paths = [str(p.relative_to(build_root)) for p in required_paths if not p.exists()]
+            required_paths.extend([("tests", "dir"), ("ans", "dir")])
+        missing_paths = self._validate_required_paths(build_root, required_paths)
         if missing_paths:
             raise ValueError(
                 "incomplete build artifacts for export: " + ", ".join(sorted(missing_paths))
