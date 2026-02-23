@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import fcntl
+import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -100,7 +102,24 @@ class WorkspaceService:
     def _workspace_provision_lock(self, workspace_parent: Path, problem: str):
         ensure_dir(workspace_parent)
         lock_path = workspace_parent / f".{problem}.provision.lock"
-        with lock_path.open("w", encoding="utf-8") as lock_file:
+        with self._exclusive_lock_file(lock_path, "workspace provision"):
+            yield
+
+    @contextmanager
+    def _exclusive_lock_file(self, lock_path: Path, label: str):
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if not hasattr(os, "O_NOFOLLOW") and lock_path.is_symlink():
+            raise ValueError(f"{label} lock path is invalid")
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(str(lock_path), flags, 0o600)
+        except OSError as exc:
+            if exc.errno in {errno.ELOOP, errno.EPERM, errno.EACCES}:
+                raise ValueError(f"{label} lock path is invalid") from exc
+            raise
+        with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -382,10 +401,5 @@ class WorkspaceService:
     @contextmanager
     def workspace_lock(self, workspace: Path):
         lock_path = workspace / ".polygonlike.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("w", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with self._exclusive_lock_file(lock_path, "workspace"):
+            yield

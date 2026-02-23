@@ -99,6 +99,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
 - Preview cache reuse now requires symlink-safe in-root regular files for `statement.pdf` and `latex.log`, preventing poisoned symlink preview artifacts from being reused.
 - Workspace file listing now suppresses `.polygonlike.lock` entries in addition to `.git`, preventing lock-file metadata leaks into Files UI navigation.
+- Workspace/provision lock acquisition now rejects symlinked/invalid lock paths (`O_NOFOLLOW` where available), preventing lock-file symlink redirection during mutating operations.
 - Preview compilation now persists source metadata (`source_commit`, `source_ref`) during finalization, removing redundant mid-run preview-row updates while preserving canonical commit/ref recording.
 - Dirty workspace previews now clear `source_commit` metadata and skip commit-key reuse, preventing dirty snapshot outputs from polluting immutable commit preview cache provenance.
 - Git page status now runs `git diff` only when unstaged tracked changes are present; clean, staged-only, and untracked-only states skip the extra diff subprocess.
@@ -173,3 +174,4 @@ Open: `http://127.0.0.1:8000`
   - Adds dotted-id hardening regressions for preview-reuse candidate roots, run/export preflight build-id validation, and run-artifact root shape validation.
   - Adds export preflight regressions for invalid required artifact path types (`logs/` and `tests/` accidentally materialized as files).
   - Adds export source-snapshot regressions for missing workspace metadata and DB workspace-path mismatch rejection.
+  - Adds lock hardening regressions for symlinked workspace lock-path rejection (with file-write no-op verification).

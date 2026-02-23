@@ -555,6 +555,35 @@ def main() -> None:
                 raise RuntimeError("files page should not list workspace lock files")
     finally:
         lock_marker.unlink(missing_ok=True)
+    lock_symlink_target = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"lock-symlink-target-{uuid.uuid4().hex[:8]}.txt"
+    lock_symlink_target.write_text("do-not-touch\n", encoding="utf-8")
+    lock_symlink_supported = True
+    original_readme = (ws / "README.problem.md").read_text(encoding="utf-8")
+    blocked_content = f"blocked-lock-write-{uuid.uuid4().hex[:8]}\n"
+    try:
+        (ws / ".polygonlike.lock").symlink_to(lock_symlink_target)
+    except (OSError, NotImplementedError):
+        lock_symlink_supported = False
+    if lock_symlink_supported:
+        try:
+            with TestClient(app) as client:
+                save_page = client.post(
+                    "/problems/sample/alice/files/save",
+                    data={"path": "README.problem.md", "content": blocked_content},
+                )
+                if save_page.status_code != 200:
+                    raise RuntimeError(
+                        f"files save should degrade with lock-symlink error message, status={save_page.status_code}"
+                    )
+                if "workspace lock path is invalid" not in save_page.text:
+                    raise RuntimeError("files save did not surface lock-symlink rejection message")
+            if (ws / "README.problem.md").read_text(encoding="utf-8") != original_readme:
+                raise RuntimeError("files save should not modify target file when workspace lock path is invalid")
+            if lock_symlink_target.read_text(encoding="utf-8") != "do-not-touch\n":
+                raise RuntimeError("workspace lock acquisition should not follow symlinked lock targets")
+        finally:
+            (ws / ".polygonlike.lock").unlink(missing_ok=True)
+    lock_symlink_target.unlink(missing_ok=True)
 
     cached_preview_id = f"p-{uuid.uuid4().hex[:12]}"
     cached_preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / cached_preview_id

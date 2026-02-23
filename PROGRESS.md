@@ -192,6 +192,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Canonical artifact-id validation is now shared (`[A-Za-z0-9_-]+`), and run/export preflight plus run-artifact root validation reject dotted ids in addition to traversal-style ids.
 - Export preflight now validates required artifact path types/safety (`manifest.json` file, `logs/tests/ans` directories as required) and rejects malformed/symlinked required paths before packaging.
 - Kattis/DOMjudge export source snapshotting now validates workspace metadata/path integrity (workspace row exists, DB path matches canonical `/workspaces/<uid>/<problem>`, `.git` present) and fails closed on mismatches.
+- Workspace and provision lock acquisition now reject symlinked/invalid lock files (`O_NOFOLLOW` where available), preventing lock-file symlink redirection during mutation/provision flows.
 - Workspace file listing now performs symlink-safe traversal (no symlink-directory walk; symlinked outside files/dirs are excluded from Files page listing).
 - Workspace context now validates DB workspace-path integrity against expected per-user location and rejects mismatched/missing/non-git workspace paths.
 - Workspace context integrity failures now propagate as deterministic HTTP 500 responses instead of uncaught runtime exceptions in request handlers.
@@ -216,6 +217,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now also validates dotted-id rejection in preview-reuse candidate scanning, run/export preflight build-id checks, and run-artifact root-shape checks.
 - Smoke coverage now validates export preflight rejection when required artifact paths (`logs/`, `tests/`) are present as files instead of directories.
 - Smoke coverage now validates export source-snapshot rejection for missing workspace metadata and DB workspace-path mismatches.
+- Smoke coverage now validates symlinked workspace lock-path rejection and confirms blocked file writes remain unchanged.
 
 ## Upstream Dependency Integration
 
