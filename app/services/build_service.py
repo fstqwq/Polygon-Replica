@@ -22,6 +22,7 @@ CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 
 class BuildService:
     DB_SUMMARY_DIAGNOSTICS_LIMIT = 200
+    DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
 
     def __init__(self, db: DB, workspace_service: WorkspaceService, artifacts: ArtifactService, toolchain: ToolchainService):
         self.db = db
@@ -61,7 +62,33 @@ class BuildService:
             "diagnostics_total",
             "diagnostics_limit",
         )
+        diagnostics = payload.get("diagnostics")
+        if isinstance(diagnostics, list):
+            payload["diagnostics"] = self._normalize_diagnostics_for_db(
+                diagnostics,
+                self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
+            )
         return json.dumps(payload)
+
+    def _truncate_inline_text(self, value: str, max_chars: int) -> tuple[str, bool]:
+        cap = max(1, int(max_chars))
+        text = str(value or "")
+        if len(text) <= cap:
+            return text, False
+        return text[:cap] + f"... [truncated; showing first {cap} characters]", True
+
+    def _normalize_diagnostics_for_db(self, entries: list, message_limit: int) -> list[dict]:
+        normalized: list[dict] = []
+        cap = max(1, int(message_limit))
+        for raw in entries:
+            item = raw if isinstance(raw, dict) else {"message": str(raw or "")}
+            msg, msg_truncated = self._truncate_inline_text(str(item.get("message") or ""), cap)
+            row = dict(item)
+            row["message"] = msg
+            row["message_truncated"] = bool(msg_truncated)
+            row["message_limit"] = cap
+            normalized.append(row)
+        return normalized
 
     def _is_safe_source_in_dir(self, root: Path, path: Path, root_resolved: Path | None = None) -> bool:
         if path.is_symlink() or not path.exists() or not path.is_file():

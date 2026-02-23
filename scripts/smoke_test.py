@@ -1858,12 +1858,18 @@ def main() -> None:
         raise RuntimeError(
             f"build DB summary diagnostics limit should be a sane positive bound, got={build_db_diag_limit}"
         )
+    build_db_diag_msg_limit = int(getattr(build_service, "DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT", 0))
+    if build_db_diag_msg_limit < 128:
+        raise RuntimeError(
+            f"build DB summary diagnostic message limit should be a sane positive bound, got={build_db_diag_msg_limit}"
+        )
     build_db_diag_prefix = f"build-db-diag-cap-{uuid.uuid4().hex[:8]}"
+    build_db_diag_msg_tail_marker = f"build-db-diag-msg-tail-{uuid.uuid4().hex[:8]}"
     build_db_diag_total_seed = build_db_diag_limit + 37
     original_collect_diagnostics = build_service._collect_diagnostics
 
     def _patched_collect_diagnostics(_self, _snapshot, _text):
-        return [
+        rows = [
             {
                 "level": "error",
                 "file": "solutions/main.cpp",
@@ -1873,6 +1879,8 @@ def main() -> None:
             }
             for i in range(build_db_diag_total_seed)
         ]
+        rows[0]["message"] = ("B" * (build_db_diag_msg_limit + 64)) + build_db_diag_msg_tail_marker
+        return rows
 
     build_service._collect_diagnostics = types.MethodType(_patched_collect_diagnostics, build_service)
     try:
@@ -1896,6 +1904,16 @@ def main() -> None:
     build_diag_db_total = int(build_diag_db_summary.get("diagnostics_total", 0))
     if build_diag_db_total <= build_db_diag_limit:
         raise RuntimeError("build DB summary should preserve total diagnostics count before truncation")
+    first_build_db_diag = build_diag_db_values[0] if build_diag_db_values and isinstance(build_diag_db_values[0], dict) else {}
+    first_build_db_msg = str(first_build_db_diag.get("message") or "")
+    if build_db_diag_msg_tail_marker in first_build_db_msg:
+        raise RuntimeError("build DB summary should truncate oversized diagnostic messages before persistence")
+    if f"truncated; showing first {build_db_diag_msg_limit} characters" not in first_build_db_msg:
+        raise RuntimeError("build DB summary should include truncation marker for oversized diagnostic messages")
+    if not first_build_db_diag.get("message_truncated"):
+        raise RuntimeError("build DB summary should mark oversized diagnostic messages as truncated")
+    if int(first_build_db_diag.get("message_limit", 0)) != build_db_diag_msg_limit:
+        raise RuntimeError("build DB summary should persist diagnostic message limit metadata")
     if any(
         str(d.get("message") or "") == f"{build_db_diag_prefix}-{build_db_diag_limit:04d}"
         for d in build_diag_db_values
@@ -1909,6 +1927,11 @@ def main() -> None:
         raise RuntimeError("build artifact diagnostics.json should preserve full diagnostics list")
     if len(build_diag_full_values) != build_diag_db_total:
         raise RuntimeError("build DB diagnostics_total should match full diagnostics artifact length")
+    first_build_artifact_diag = (
+        build_diag_full_values[0] if build_diag_full_values and isinstance(build_diag_full_values[0], dict) else {}
+    )
+    if build_db_diag_msg_tail_marker not in str(first_build_artifact_diag.get("message") or ""):
+        raise RuntimeError("build artifact diagnostics should retain full oversized diagnostic messages")
     with TestClient(app) as client:
         build_page_db_diag_cap = client.get("/problems/sample/alice/build", params={"build_id": build_diag_db_cap_id})
         if build_page_db_diag_cap.status_code != 200:
@@ -1921,6 +1944,8 @@ def main() -> None:
             not in build_page_db_diag_cap.text
         ):
             raise RuntimeError("build page should honor persisted build-summary diagnostics truncation metadata")
+        if f"truncated; showing first {build_db_diag_msg_limit} characters" not in build_page_db_diag_cap.text:
+            raise RuntimeError("build page should render persisted build-summary diagnostic message truncation marker")
     preview_ref_prefix = f"preview-ref-cap-{uuid.uuid4().hex[:8]}"
     preview_ref_total = preview_log_refs_limit + 24
     preview_ref_lines = "\n".join(
@@ -2796,6 +2821,103 @@ def main() -> None:
             not in run_db_summary_cap_page.text
         ):
             raise RuntimeError("run page should honor persisted run-summary truncation metadata")
+    run_db_diag_limit = int(getattr(run_service, "DB_SUMMARY_DIAGNOSTICS_LIMIT", 0))
+    run_db_diag_msg_limit = int(getattr(run_service, "DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT", 0))
+    if run_db_diag_limit < 8:
+        raise RuntimeError(f"run DB summary diagnostics limit should be a sane positive bound, got={run_db_diag_limit}")
+    if run_db_diag_msg_limit < 128:
+        raise RuntimeError(
+            f"run DB summary diagnostic message limit should be a sane positive bound, got={run_db_diag_msg_limit}"
+        )
+    run_db_diag_prefix = f"run-db-diag-cap-{uuid.uuid4().hex[:8]}"
+    run_db_diag_msg_tail_marker = f"run-db-diag-msg-tail-{uuid.uuid4().hex[:8]}"
+    run_db_diag_total_seed = run_db_diag_limit + 29
+    original_run_collect_diagnostics = run_service._collect_diagnostics
+
+    def _patched_run_collect_diagnostics(_self, _workspace, _text):
+        rows = [
+            {
+                "level": "error",
+                "file": "solutions/main.cpp",
+                "line": 1,
+                "column": 1,
+                "message": f"{run_db_diag_prefix}-{i:04d}",
+                "can_link": True,
+            }
+            for i in range(run_db_diag_total_seed)
+        ]
+        rows[0]["message"] = ("R" * (run_db_diag_msg_limit + 64)) + run_db_diag_msg_tail_marker
+        return rows
+
+    run_service._collect_diagnostics = types.MethodType(_patched_run_collect_diagnostics, run_service)
+    try:
+        run_id_db_diag_cap = run_service.run_submission(
+            "sample",
+            "alice",
+            build_id,
+            submission_path="solutions/main.cpp",
+            mode="pass-fail",
+        )
+    finally:
+        run_service._collect_diagnostics = original_run_collect_diagnostics
+    rrow_db_diag_cap = db.fetch_one(
+        "SELECT status,summary_json,artifact_path FROM runs WHERE id=?",
+        [run_id_db_diag_cap],
+    )
+    if rrow_db_diag_cap is None or rrow_db_diag_cap["status"] != "ok":
+        raise RuntimeError(f"run DB diagnostics cap run failed: {rrow_db_diag_cap}")
+    run_db_diag_summary = json.loads(rrow_db_diag_cap["summary_json"])
+    run_db_diag_values = run_db_diag_summary.get("compile_diagnostics") or []
+    if len(run_db_diag_values) != run_db_diag_limit:
+        raise RuntimeError("run DB summary should persist only capped compile diagnostics entries")
+    if not run_db_diag_summary.get("compile_diagnostics_truncated"):
+        raise RuntimeError("run DB summary should mark compile diagnostics list as truncated")
+    if int(run_db_diag_summary.get("compile_diagnostics_limit", 0)) != run_db_diag_limit:
+        raise RuntimeError("run DB summary should expose configured compile diagnostics limit")
+    run_db_diag_total = int(run_db_diag_summary.get("compile_diagnostics_total", 0))
+    if run_db_diag_total <= run_db_diag_limit:
+        raise RuntimeError("run DB summary should preserve total diagnostics count before truncation")
+    first_run_db_diag = run_db_diag_values[0] if run_db_diag_values and isinstance(run_db_diag_values[0], dict) else {}
+    first_run_db_msg = str(first_run_db_diag.get("message") or "")
+    if run_db_diag_msg_tail_marker in first_run_db_msg:
+        raise RuntimeError("run DB summary should truncate oversized diagnostic messages before persistence")
+    if f"truncated; showing first {run_db_diag_msg_limit} characters" not in first_run_db_msg:
+        raise RuntimeError("run DB summary should include truncation marker for oversized diagnostic messages")
+    if not first_run_db_diag.get("message_truncated"):
+        raise RuntimeError("run DB summary should mark oversized diagnostic messages as truncated")
+    if int(first_run_db_diag.get("message_limit", 0)) != run_db_diag_msg_limit:
+        raise RuntimeError("run DB summary should persist diagnostic message limit metadata")
+    if any(
+        str(d.get("message") or "") == f"{run_db_diag_prefix}-{run_db_diag_limit:04d}"
+        for d in run_db_diag_values
+        if isinstance(d, dict)
+    ):
+        raise RuntimeError("run DB summary should not include diagnostics beyond capped range")
+    run_artifact_diag_summary = json.loads(
+        (Path(rrow_db_diag_cap["artifact_path"]) / "summary.json").read_text(encoding="utf-8")
+    )
+    run_artifact_diags = run_artifact_diag_summary.get("compile_diagnostics") or []
+    if len(run_artifact_diags) <= run_db_diag_limit:
+        raise RuntimeError("run artifact summary.json should preserve full compile diagnostics list")
+    if len(run_artifact_diags) != run_db_diag_total:
+        raise RuntimeError("run DB compile_diagnostics_total should match full diagnostics artifact length")
+    first_run_artifact_diag = run_artifact_diags[0] if run_artifact_diags and isinstance(run_artifact_diags[0], dict) else {}
+    if run_db_diag_msg_tail_marker not in str(first_run_artifact_diag.get("message") or ""):
+        raise RuntimeError("run artifact summary should retain full oversized diagnostic messages")
+    with TestClient(app) as client:
+        run_page_db_diag_cap = client.get("/problems/sample/alice/run", params={"run_id": run_id_db_diag_cap})
+        if run_page_db_diag_cap.status_code != 200:
+            raise RuntimeError(
+                "run page should remain available for DB-capped run diagnostics summaries"
+                f", status={run_page_db_diag_cap.status_code}"
+            )
+        if (
+            f"Showing first {run_db_diag_limit} diagnostics ({run_db_diag_total} total)."
+            not in run_page_db_diag_cap.text
+        ):
+            raise RuntimeError("run page should honor persisted run-summary diagnostics truncation metadata")
+        if f"truncated; showing first {run_db_diag_msg_limit} characters" not in run_page_db_diag_cap.text:
+            raise RuntimeError("run page should render persisted run-summary diagnostic message truncation marker")
     poison_log.unlink(missing_ok=True)
     dot_root_log.unlink(missing_ok=True)
 

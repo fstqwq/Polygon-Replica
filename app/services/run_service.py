@@ -29,6 +29,7 @@ class RunService:
     DB_SUMMARY_TESTS_LIMIT = 200
     DB_SUMMARY_DIAGNOSTICS_LIMIT = 200
     DB_SUMMARY_FEEDBACK_FILES_LIMIT = 32
+    DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
 
     def __init__(self, db: DB, workspace_service: WorkspaceService, toolchain: ToolchainService):
         self.db = db
@@ -619,7 +620,38 @@ class RunService:
             "compile_diagnostics_total",
             "compile_diagnostics_limit",
         )
+        diagnostics = payload.get("compile_diagnostics")
+        if isinstance(diagnostics, list):
+            payload["compile_diagnostics"] = self._normalize_diagnostics_for_db(
+                diagnostics,
+                self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
+            )
         return json.dumps(payload)
+
+    def _truncate_inline_text(self, value: str, max_chars: int) -> tuple[str, bool]:
+        cap = max(1, int(max_chars))
+        text = str(value or "")
+        if len(text) <= cap:
+            return text, False
+        return text[:cap] + f"... [truncated; showing first {cap} characters]", True
+
+    def _normalize_diagnostics_for_db(self, entries: list, message_limit: int) -> list[dict]:
+        normalized: list[dict] = []
+        cap = max(1, int(message_limit))
+        for raw in entries:
+            item = raw if isinstance(raw, dict) else {"message": str(raw or "")}
+            msg, msg_truncated = self._truncate_inline_text(str(item.get("message") or ""), cap)
+            row = dict(item)
+            row["message"] = msg
+            row["message_truncated"] = bool(msg_truncated)
+            row["message_limit"] = cap
+            row.setdefault("level", "error")
+            row.setdefault("file", "")
+            row.setdefault("line", 0)
+            row.setdefault("column", 0)
+            row.setdefault("can_link", False)
+            normalized.append(row)
+        return normalized
 
     def _finalize_run(self, run_id: str, status: str, summary: dict) -> None:
         self.db.execute(

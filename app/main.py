@@ -569,14 +569,28 @@ def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
 
 
 def _normalize_diagnostics(entries: list, message_limit: int) -> list[dict]:
+    def _int_or_none(raw) -> int | None:
+        try:
+            value = int(raw)
+        except Exception:
+            return None
+        return value if value > 0 else None
+
     normalized: list[dict] = []
     for raw in entries:
         item = raw if isinstance(raw, dict) else {"message": str(raw or "")}
         msg, msg_truncated = _truncate_inline_text(str(item.get("message") or ""), message_limit)
+        persisted_truncated = bool(item.get("message_truncated")) if isinstance(item, dict) else False
+        persisted_limit = _int_or_none(item.get("message_limit")) if isinstance(item, dict) else None
         row = dict(item)
         row["message"] = msg
-        row["message_truncated"] = msg_truncated
-        row["message_limit"] = message_limit
+        row["message_truncated"] = bool(msg_truncated) or persisted_truncated
+        if msg_truncated:
+            row["message_limit"] = message_limit
+        elif persisted_truncated and persisted_limit is not None:
+            row["message_limit"] = persisted_limit
+        else:
+            row["message_limit"] = message_limit
         row.setdefault("level", "error")
         row.setdefault("file", "")
         row.setdefault("line", 0)

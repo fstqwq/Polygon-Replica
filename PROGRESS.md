@@ -157,6 +157,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run-page list capping now preserves persisted run-summary truncation metadata when present, so UI indicators continue to reflect full-result totals from DB-capped summaries.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
 - Build persistence now caps `builds.summary_json` diagnostics at write time (with truncation metadata) while preserving full diagnostics in artifact `logs/diagnostics.json`, reducing DB metadata growth on diagnostic-heavy builds.
+- Build/Run DB summary persistence now also truncates oversized diagnostic message text with message-level metadata, while full diagnostic text remains available in artifact logs/summaries.
 - Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on very large artifact `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error for oversized payloads to avoid heavy decode/render paths from oversized DB blobs.
 - Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning bounded fallback metadata for oversized manifests to avoid unbounded decode/response paths.
@@ -284,6 +285,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates DB-capped run summary persistence (tests truncation metadata) while run artifact `summary.json` retains full per-test results.
 - Smoke coverage now validates Run-page indicator rendering for DB-capped run summaries using persisted truncation metadata.
 - Smoke coverage now validates DB-capped build diagnostics persistence (with truncation metadata) while artifact `logs/diagnostics.json` retains full diagnostics.
+- Smoke coverage now validates DB-persisted build/run oversized diagnostic-message truncation metadata, while artifact diagnostics preserve full message text.
 
 ## Upstream Dependency Integration
 
