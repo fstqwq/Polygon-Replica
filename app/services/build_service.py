@@ -288,7 +288,7 @@ class BuildService:
         for dirpath, dirnames, filenames in os.walk(manual_root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             keep_dirs: list[str] = []
-            for name in sorted(dirnames):
+            for name in dirnames:
                 d = dir_root / name
                 if d.is_symlink():
                     continue
@@ -298,7 +298,7 @@ class BuildService:
                     continue
                 if manual_root_resolved in resolved.parents or manual_root_resolved == resolved:
                     keep_dirs.append(name)
-            dirnames[:] = keep_dirs
+            dirnames[:] = sorted(keep_dirs)
 
             safe_entries: list[tuple[str, Path, bool]] = []
             has_in_file = False
