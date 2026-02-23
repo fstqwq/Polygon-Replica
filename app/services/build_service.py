@@ -297,19 +297,17 @@ class BuildService:
         def _is_in_name(name: str) -> bool:
             return os.path.splitext(name)[1].lower() == ".in"
 
-        def _collect_safe_entries(dir_root: Path, names: list[str]) -> list[tuple[str, Path, bool]]:
+        def _collect_safe_entries(
+            dir_root: Path,
+            names: list[str],
+            rel_prefix: str,
+        ) -> list[tuple[str, Path, bool]]:
             safe_entries: list[tuple[str, Path, bool]] = []
             for name in names:
                 p = dir_root / name
                 if p.is_symlink() or not p.exists() or not p.is_file():
                     continue
-                try:
-                    resolved = p.resolve()
-                except OSError:
-                    continue
-                if manual_root_resolved not in resolved.parents and manual_root_resolved != resolved:
-                    continue
-                rel = str(p.relative_to(manual_root))
+                rel = f"{rel_prefix}/{name}" if rel_prefix else name
                 safe_entries.append((rel, p, _is_in_name(name)))
             return safe_entries
 
@@ -317,32 +315,41 @@ class BuildService:
         all_files: list[tuple[str, Path]] | None = []
         for dirpath, dirnames, filenames in os.walk(manual_root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
+            try:
+                dir_root_resolved = dir_root.resolve()
+            except OSError:
+                dirnames[:] = []
+                continue
+            if manual_root_resolved not in dir_root_resolved.parents and manual_root_resolved != dir_root_resolved:
+                dirnames[:] = []
+                continue
+            try:
+                rel_root = dir_root.relative_to(manual_root)
+            except ValueError:
+                dirnames[:] = []
+                continue
+            rel_prefix = "" if rel_root == Path(".") else rel_root.as_posix()
             keep_dirs: list[str] = []
             for name in dirnames:
                 d = dir_root / name
                 if d.is_symlink():
                     continue
-                try:
-                    resolved = d.resolve()
-                except OSError:
-                    continue
-                if manual_root_resolved in resolved.parents or manual_root_resolved == resolved:
-                    keep_dirs.append(name)
+                keep_dirs.append(name)
             dirnames[:] = sorted(keep_dirs)
 
             in_candidates = [name for name in filenames if _is_in_name(name)]
             has_in_file = False
             if in_candidates:
                 # Fast path: when safe *.in files exist, we can skip validating sidecar files.
-                safe_entries = _collect_safe_entries(dir_root, in_candidates)
+                safe_entries = _collect_safe_entries(dir_root, in_candidates, rel_prefix)
                 has_in_file = bool(safe_entries)
                 if not has_in_file and all_files is not None:
-                    safe_entries = _collect_safe_entries(dir_root, filenames)
+                    safe_entries = _collect_safe_entries(dir_root, filenames, rel_prefix)
                     has_in_file = any(is_in for _, _, is_in in safe_entries)
             elif all_files is None:
                 safe_entries = []
             else:
-                safe_entries = _collect_safe_entries(dir_root, filenames)
+                safe_entries = _collect_safe_entries(dir_root, filenames, rel_prefix)
 
             if has_in_file:
                 if all_files is not None:
