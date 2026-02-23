@@ -201,7 +201,7 @@ def _iter_safe_descendant_files(root: Path, target: Path):
     for dirpath, dirnames, filenames in os.walk(target, topdown=True, followlinks=False):
         dir_root = Path(dirpath)
         pruned_dirs: list[str] = []
-        for name in sorted(dirnames):
+        for name in dirnames:
             d = dir_root / name
             if d.is_symlink():
                 continue
@@ -211,9 +211,10 @@ def _iter_safe_descendant_files(root: Path, target: Path):
                 continue
             if root_resolved in resolved.parents or root_resolved == resolved:
                 pruned_dirs.append(name)
-        dirnames[:] = pruned_dirs
+        dirnames[:] = sorted(pruned_dirs)
 
-        for name in sorted(filenames):
+        safe_filenames: list[str] = []
+        for name in filenames:
             p = dir_root / name
             if p.is_symlink():
                 continue
@@ -223,7 +224,9 @@ def _iter_safe_descendant_files(root: Path, target: Path):
                 continue
             if root_resolved not in resolved.parents and root_resolved != resolved:
                 continue
-            yield p
+            safe_filenames.append(name)
+        for name in sorted(safe_filenames):
+            yield dir_root / name
 
 
 def _safe_descendant_files(root: Path, target: Path, limit: int | None = None) -> tuple[list[str], bool]:
