@@ -49,6 +49,7 @@ RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT = 200
 BUILD_LOG_LIST_LIMIT = 200
 BUILD_DIAGNOSTIC_LIST_LIMIT = 200
 PREVIEW_LOG_REF_LIST_LIMIT = 200
+WORKSPACE_BRANCH_LIST_LIMIT = 200
 
 
 @app.on_event("startup")
@@ -84,11 +85,23 @@ def page_ctx(
     if include_branches:
         workspace = Path(ctx["workspace"]["path"])
         try:
-            ctx["branches"] = git_service.list_branches(workspace)
+            branches_all = git_service.list_branches(workspace)
+            branches, branches_truncated = _cap_branch_names(
+                branches_all,
+                str(ctx["workspace"].get("branch") or "main"),
+                WORKSPACE_BRANCH_LIST_LIMIT,
+            )
+            ctx["branches"] = branches
+            ctx["branches_truncated"] = branches_truncated
+            ctx["branch_limit"] = WORKSPACE_BRANCH_LIST_LIMIT
         except Exception:
             ctx["branches"] = [ctx["workspace"].get("branch") or "main"]
+            ctx["branches_truncated"] = False
+            ctx["branch_limit"] = WORKSPACE_BRANCH_LIST_LIMIT
     else:
         ctx["branches"] = [ctx["workspace"].get("branch") or "main"]
+        ctx["branches_truncated"] = False
+        ctx["branch_limit"] = WORKSPACE_BRANCH_LIST_LIMIT
     return ctx
 
 
@@ -411,6 +424,17 @@ def _cap_summary_list(
         summary[truncated_key] = True
         return
     summary[truncated_key] = False
+
+
+def _cap_branch_names(branches: list[str], current_branch: str, limit: int) -> tuple[list[str], bool]:
+    cap = max(1, int(limit))
+    if len(branches) <= cap:
+        return list(branches), False
+    capped = list(branches[:cap])
+    current = str(current_branch or "").strip()
+    if current and current not in capped:
+        capped[-1] = current
+    return capped, True
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1092,10 +1116,16 @@ def api_workspace_branches(problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     try:
-        branches = git_service.list_branches(workspace)
+        branches_all = git_service.list_branches(workspace)
+        branches, truncated = _cap_branch_names(
+            branches_all,
+            str(ctx["workspace"].get("branch") or "main"),
+            WORKSPACE_BRANCH_LIST_LIMIT,
+        )
     except Exception:
         branches = [ctx["workspace"].get("branch") or "main"]
-    return {"branches": branches, "current": ctx["workspace"]["branch"]}
+        truncated = False
+    return {"branches": branches, "current": ctx["workspace"]["branch"], "truncated": truncated, "limit": WORKSPACE_BRANCH_LIST_LIMIT}
 
 
 @app.get("/api/problems/{problem}/workspaces/{user}/recent-builds")

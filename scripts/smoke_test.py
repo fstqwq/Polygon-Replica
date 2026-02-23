@@ -10,6 +10,7 @@ import uuid
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from time import monotonic
 
 
 def ensure_local_env() -> None:
@@ -61,6 +62,7 @@ def main() -> None:
         RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
         RUN_DETAIL_TEST_LIST_LIMIT,
         UI_LOG_TEXT_CHAR_LIMIT,
+        WORKSPACE_BRANCH_LIST_LIMIT,
         WORKSPACE_FILE_LIST_LIMIT,
         app,
         build_service,
@@ -162,6 +164,56 @@ def main() -> None:
             raise RuntimeError("git branch cache should evict oldest entries under pressure")
         with git_service._branch_cache_lock:
             git_service._branch_cache.clear()
+        branch_ui_limit = int(WORKSPACE_BRANCH_LIST_LIMIT)
+        if branch_ui_limit < 8:
+            raise RuntimeError(f"workspace branch-list limit should be a sane positive bound, got={branch_ui_limit}")
+        branch_ui_prefix = f"branch-ui-cap-{uuid.uuid4().hex[:8]}"
+        branch_ui_entries = [f"{branch_ui_prefix}-{i:03d}" for i in range(branch_ui_limit + 24)]
+        current_branch = str(alice_ctx["workspace"].get("branch") or "main")
+        if current_branch not in branch_ui_entries:
+            branch_ui_entries.insert(0, current_branch)
+        cache_key = git_service._workspace_key(alice_ws)
+        with git_service._branch_cache_lock:
+            previous_branch_cache_entry = git_service._branch_cache.get(cache_key)
+        try:
+            git_service._branch_cache_put(cache_key, monotonic(), branch_ui_entries)
+            with TestClient(app) as client:
+                files_page_with_many_branches = client.get("/problems/sample/alice/files")
+                if files_page_with_many_branches.status_code != 200:
+                    raise RuntimeError(
+                        "files page should remain available when branch list is capped"
+                        f", status={files_page_with_many_branches.status_code}"
+                    )
+                if f"Showing first {branch_ui_limit} branches." not in files_page_with_many_branches.text:
+                    raise RuntimeError("files page header should surface capped branch-list indicator")
+                if branch_ui_entries[branch_ui_limit] in files_page_with_many_branches.text:
+                    raise RuntimeError("files page header should hide branches beyond configured branch-list cap")
+                if branch_ui_entries[branch_ui_limit - 1] not in files_page_with_many_branches.text:
+                    raise RuntimeError("files page header should keep branches within configured branch-list cap")
+                branches_api_resp = client.get("/api/problems/sample/workspaces/alice/branches")
+                if branches_api_resp.status_code != 200:
+                    raise RuntimeError(
+                        "workspace branches API should remain available when branch list is capped"
+                        f", status={branches_api_resp.status_code}"
+                    )
+                branches_payload = branches_api_resp.json()
+                if not bool(branches_payload.get("truncated")):
+                    raise RuntimeError("workspace branches API should signal capped branch-list truncation")
+                if int(branches_payload.get("limit") or 0) != branch_ui_limit:
+                    raise RuntimeError("workspace branches API did not expose expected branch-list limit metadata")
+                api_branches = branches_payload.get("branches") or []
+                if len(api_branches) != branch_ui_limit:
+                    raise RuntimeError("workspace branches API did not enforce expected branch-list cap")
+                if branch_ui_entries[branch_ui_limit] in api_branches:
+                    raise RuntimeError("workspace branches API should hide branches beyond configured cap")
+                if branch_ui_entries[branch_ui_limit - 1] not in api_branches:
+                    raise RuntimeError("workspace branches API should keep branches within configured cap")
+        finally:
+            with git_service._branch_cache_lock:
+                if previous_branch_cache_entry is None:
+                    git_service._branch_cache.pop(cache_key, None)
+                else:
+                    git_service._branch_cache[cache_key] = previous_branch_cache_entry
         problem_cache_limit = int(getattr(workspace_service, "PROBLEM_CACHE_MAX_ENTRIES", 0))
         user_cache_limit = int(getattr(workspace_service, "USER_CACHE_MAX_ENTRIES", 0))
         if problem_cache_limit < 8:

@@ -31,6 +31,9 @@
         <option value="{{ b }}" {% if b == ctx.workspace.branch %}selected{% endif %}>{{ b }}</option>
         {% endfor %}
       </select>
+      {% if ctx.branches_truncated %}
+      <em>Showing first {{ ctx.branch_limit }} branches.</em>
+      {% endif %}
       <button type="submit">Switch Branch</button>
     </form>
   </header>

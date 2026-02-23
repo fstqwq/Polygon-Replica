@@ -89,6 +89,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
+- Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
 - Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
 - Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
@@ -209,3 +210,4 @@ Open: `http://127.0.0.1:8000`
   - Adds Run-page regressions ensuring oversized `summary.tests` and `summary.compile_diagnostics` lists are truncated with UI indicators.
   - Adds Build-page regressions ensuring oversized log-file and diagnostics lists are truncated with UI indicators.
   - Adds Preview-page regressions ensuring oversized log-reference lists are truncated with UI indicators.
+  - Adds Files-header/branches-API regressions ensuring oversized branch lists are truncated with indicators/metadata.
