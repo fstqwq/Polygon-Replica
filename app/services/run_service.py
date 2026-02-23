@@ -335,10 +335,6 @@ class RunService:
         return self._is_safe_path_within(root, path, root_resolved=root_resolved)
 
     def _safe_matching_files(self, root: Path, pattern: str) -> list[Path]:
-        try:
-            root_resolved = root.resolve()
-        except OSError:
-            return []
         files: list[Path] = []
         # Fast path for common suffix-only patterns used by run discovery (for example *.in / *.ans).
         if (
@@ -350,16 +346,28 @@ class RunService:
         ):
             suffix = pattern[1:]
             try:
-                candidates = sorted(root.iterdir(), key=lambda p: p.name)
+                matched: list[str] = []
+                with os.scandir(root) as entries:
+                    for entry in entries:
+                        name = entry.name
+                        if not name.endswith(suffix):
+                            continue
+                        try:
+                            if not entry.is_file(follow_symlinks=False):
+                                continue
+                        except OSError:
+                            continue
+                        matched.append(name)
             except OSError:
                 return []
-            for p in candidates:
-                if not p.name.endswith(suffix):
-                    continue
-                if self._is_safe_regular_file(root, p, root_resolved=root_resolved):
-                    files.append(p)
+            for name in sorted(matched):
+                files.append(root / name)
             return files
 
+        try:
+            root_resolved = root.resolve()
+        except OSError:
+            return []
         for p in sorted(root.glob(pattern)):
             if self._is_safe_regular_file(root, p, root_resolved=root_resolved):
                 files.append(p)

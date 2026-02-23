@@ -219,7 +219,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
 - Run feedback key-file discovery (`judgemessage.txt`, `teammessage.txt`, `nextpass.in`) now validates feedback roots before traversal and uses a single symlink-safe directory walk per test, avoiding unsafe/out-of-root scans.
 - Run feedback key-file discovery now also caps collected key files per test (`256`) to prevent pathological `feedback_files` list growth from deep feedback trees.
-- Runner safe file matching now uses a suffix fast path for common non-recursive patterns (`*.in`, `*.ans`), reducing glob overhead while preserving ordering and symlink safety.
+- Runner safe file matching now uses an `os.scandir` suffix fast path for common non-recursive patterns (`*.in`, `*.ans`), sorting only matched entries (instead of full-directory sorting), reducing run discovery overhead while preserving deterministic ordering and symlink safety.
 - Runner safe file-matching now resolves artifact roots once per scan, reducing repeated path-resolution overhead during test/answer discovery.
 - Switch workspace/branch routes now normalize posted page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`) for redirect correctness without JS dependency.
 - Build/Run detail pages now parse `summary_json` defensively and surface fallback errors for malformed JSON instead of raising 500 errors.
