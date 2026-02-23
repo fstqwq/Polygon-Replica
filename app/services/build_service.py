@@ -120,15 +120,26 @@ class BuildService:
         try:
             best: Path | None = None
             best_name = ""
-            for candidate in base.iterdir():
-                if candidate.suffix not in CPP_EXTENSIONS:
-                    continue
-                if not self._is_safe_source_in_dir(base, candidate, root_resolved=base_resolved):
-                    continue
-                name = candidate.name
-                if best is None or name < best_name:
-                    best = candidate
-                    best_name = name
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if Path(name).suffix not in CPP_EXTENSIONS:
+                        continue
+                    try:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    candidate = base / name
+                    try:
+                        resolved = candidate.resolve()
+                    except OSError:
+                        continue
+                    if base_resolved not in resolved.parents and base_resolved != resolved:
+                        continue
+                    if best is None or name < best_name:
+                        best = candidate
+                        best_name = name
         except OSError:
             return None
         return best

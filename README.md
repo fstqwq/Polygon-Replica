@@ -136,6 +136,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build manual-test discovery directory pruning now sorts only kept subdirectories (instead of full `os.walk` directory lists), reducing traversal overhead on trees with many filtered entries.
 - Build C++ source auto-discovery now performs a single deterministic directory pass with symlink-safe in-root filtering, reducing glob/sort overhead and preventing unsafe symlinked source selection.
 - Build C++ source auto-discovery now tracks the lexicographically first safe candidate during that pass (instead of sorting full directory entries), reducing per-directory sorting overhead while preserving deterministic selection.
+- Build C++ source auto-discovery now uses `os.scandir` entry metadata to prefilter candidate files before path-resolution checks, reducing per-entry stat overhead while preserving deterministic lexicographic selection.
 - Build configured-source resolution now reuses a single resolved snapshot root across generator/validator/checker/interactor/accepted source selection, reducing repeated `snapshot.resolve()` work during build setup.
 - Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
 - Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
