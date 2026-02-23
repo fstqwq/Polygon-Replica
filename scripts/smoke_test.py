@@ -2442,6 +2442,32 @@ def main() -> None:
         raise RuntimeError("build compile stream helper should still collect diagnostics once for empty compiler outputs")
     if build_stream_probe_log.getvalue() != "":
         raise RuntimeError("build compile stream helper should not emit log text for empty compiler outputs")
+    manual_prefer_probe = run_cfg_root / f"manual-prefer-probe-{uuid.uuid4().hex[:8]}"
+    (manual_prefer_probe / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+    (manual_prefer_probe / "tests" / "manual" / "b.in").write_text("2\n", encoding="utf-8")
+    (manual_prefer_probe / "tests" / "manual" / "a.in").write_text("1\n", encoding="utf-8")
+    (manual_prefer_probe / "tests" / "manual" / "c.ans").write_text("sidecar\n", encoding="utf-8")
+    manual_prefer_files = [p.name for p in build_service._manual_test_sources(manual_prefer_probe)]
+    if manual_prefer_files != ["a.in", "b.in"]:
+        raise RuntimeError("manual test discovery should prefer sorted *.in entries when present")
+    shutil.rmtree(manual_prefer_probe, ignore_errors=True)
+    manual_fallback_probe = run_cfg_root / f"manual-fallback-probe-{uuid.uuid4().hex[:8]}"
+    (manual_fallback_probe / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+    (manual_fallback_probe / "tests" / "manual" / "b.txt").write_text("b\n", encoding="utf-8")
+    (manual_fallback_probe / "tests" / "manual" / "a.txt").write_text("a\n", encoding="utf-8")
+    manual_fallback_outside = run_cfg_root / f"manual-fallback-outside-{uuid.uuid4().hex[:8]}.txt"
+    manual_fallback_outside.write_text("outside\n", encoding="utf-8")
+    try:
+        (manual_fallback_probe / "tests" / "manual" / "0.txt").symlink_to(manual_fallback_outside)
+    except OSError:
+        pass
+    manual_fallback_files = [p.name for p in build_service._manual_test_sources(manual_fallback_probe)]
+    if manual_fallback_files != ["a.txt", "b.txt"]:
+        raise RuntimeError(
+            "manual test discovery fallback should return deterministic non-*.in files and skip symlinked entries"
+        )
+    shutil.rmtree(manual_fallback_probe, ignore_errors=True)
+    manual_fallback_outside.unlink(missing_ok=True)
     feedback_probe = run_cfg_root / f"feedback-probe-{uuid.uuid4().hex[:8]}"
     (feedback_probe / "pass1").mkdir(parents=True, exist_ok=True)
     (feedback_probe / "pass2").mkdir(parents=True, exist_ok=True)

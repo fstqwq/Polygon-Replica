@@ -188,6 +188,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
 - Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
+- Build manual-test discovery now drops fallback-file accumulation as soon as `*.in` tests are detected, reducing temporary memory usage in mixed manual-test directories while preserving deterministic no-`*.in` fallback behavior.
 - Build manual-test discovery now uses a single symlink-safe traversal, avoiding duplicate scans and excluding symlinked manual test entries.
 - Build C++ source auto-discovery now performs a single deterministic directory pass with symlink-safe in-root filtering, reducing glob/sort overhead and preventing unsafe symlinked source selection.
 - Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
@@ -296,6 +297,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates run answer-file set caching parity with discovered answer names and enforces bounded eviction for that additional cache.
 - Smoke coverage now validates export top-level suffix matching for deterministic safe `.ans` discovery with symlink skipping.
 - Smoke coverage now validates build compile-stream helper empty-output behavior (single diagnostics collection with no emitted log text).
+- Smoke coverage now validates manual-test source discovery preference (`*.in`) and deterministic no-`*.in` fallback behavior with symlink skipping.
 
 ## Upstream Dependency Integration
 

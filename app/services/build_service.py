@@ -274,7 +274,7 @@ class BuildService:
             return []
 
         in_files: list[tuple[str, Path]] = []
-        all_files: list[tuple[str, Path]] = []
+        all_files: list[tuple[str, Path]] | None = []
         for dirpath, dirnames, filenames in os.walk(manual_root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             keep_dirs: list[str] = []
@@ -301,14 +301,20 @@ class BuildService:
                 if manual_root_resolved not in resolved.parents and manual_root_resolved != resolved:
                     continue
                 rel = str(p.relative_to(manual_root))
-                all_files.append((rel, p))
+                if all_files is not None:
+                    all_files.append((rel, p))
                 if p.suffix.lower() == ".in":
                     in_files.append((rel, p))
+                    if all_files is not None:
+                        all_files.clear()
+                        all_files = None
 
         if in_files:
             return [p for _, p in sorted(in_files)]
 
         # Backward-compatible fallback: when no *.in exists, treat all files as manual tests.
+        if all_files is None:
+            return []
         return [p for _, p in sorted(all_files)]
 
     def _effective_compile_jobs(self, configured: object, target_count: int) -> int:

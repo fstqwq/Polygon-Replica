@@ -125,6 +125,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
 - Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
+- Build manual-test discovery now drops fallback-file accumulation as soon as real `*.in` tests are observed, reducing temporary memory usage in mixed manual-test directories while preserving deterministic fallback behavior when no `*.in` files exist.
 - Build manual-test discovery now uses a single symlink-safe traversal, avoiding duplicate scans and excluding symlinked manual test entries.
 - Build C++ source auto-discovery now performs a single deterministic directory pass with symlink-safe in-root filtering, reducing glob/sort overhead and preventing unsafe symlinked source selection.
 - Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
@@ -254,3 +255,4 @@ Open: `http://127.0.0.1:8000`
   - Adds run answer-file cache regressions ensuring cached answer-name set parity and bounded eviction behavior.
   - Adds export suffix-discovery regressions ensuring deterministic safe `.ans` top-level matching and symlink skipping.
   - Adds build compile-stream helper regressions ensuring empty compile outputs still trigger a single diagnostics collection pass without emitting spurious log text.
+  - Adds manual-test discovery regressions ensuring `*.in` preference and deterministic fallback behavior (with symlink skipping) for no-`*.in` manual directories.
