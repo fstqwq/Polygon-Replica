@@ -559,7 +559,7 @@ class RunService:
         for dirpath, dirnames, filenames in os.walk(test_feedback_dir, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             keep_dirs: list[str] = []
-            for name in sorted(dirnames):
+            for name in dirnames:
                 d = dir_root / name
                 if d.is_symlink():
                     continue
@@ -569,11 +569,13 @@ class RunService:
                     continue
                 if base_root_resolved in resolved.parents or base_root_resolved == resolved:
                     keep_dirs.append(name)
-            dirnames[:] = keep_dirs
+            dirnames[:] = sorted(keep_dirs)
 
-            for name in sorted(filenames):
-                if name not in wanted:
-                    continue
+            matched_names: list[str] = []
+            for name in filenames:
+                if name in wanted:
+                    matched_names.append(name)
+            for name in sorted(matched_names):
                 p = dir_root / name
                 if not self._is_safe_regular_file(base_root, p, root_resolved=base_root_resolved):
                     continue

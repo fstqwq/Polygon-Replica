@@ -161,6 +161,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
 - Run feedback key-file discovery (`judgemessage.txt`, `teammessage.txt`, `nextpass.in`) now validates feedback roots before traversal and uses a single symlink-safe directory walk per test, avoiding unsafe/out-of-root scans.
 - Run feedback key-file discovery now also caps collected key files per test (`256`) to prevent pathological `feedback_files` summary/list growth from deep feedback trees.
+- Run feedback key-file discovery now sorts only matched key-file names per directory (instead of every filename), reducing scan overhead on large feedback trees while keeping deterministic ordering.
 - Runner safe file matching now uses an `os.scandir` suffix fast path for common non-recursive patterns (`*.in`, `*.ans`), sorting only matched entries (instead of full-directory sorting), reducing run discovery overhead while preserving deterministic ordering and symlink safety.
 - Runner safe file-matching now resolves artifact roots once per scan, reducing repeated path-resolution overhead during test/answer discovery.
 - Workspace/branch switch routes now normalize page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`), so redirects remain valid even without client-side page-target JS.
