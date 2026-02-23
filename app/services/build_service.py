@@ -386,18 +386,24 @@ class BuildService:
                         compile_results[name] = future.result()
 
             compiled_bins: dict[str, Path] = {}
-            compile_log = [f"compile_jobs={compile_jobs}"]
-            for name, source, output in compile_targets:
-                if source is None:
-                    compile_log.append(f"[{name}] missing source\n")
-                    continue
-                ok, out, err, toolchain_digest = compile_results[name]
-                merged = f"{out}\n{err}".strip()
-                diagnostics.extend(self._collect_diagnostics(snapshot, merged))
-                compile_log.append(f"[{name}] source={source}\n{merged}\n")
-                if not ok:
-                    raise RuntimeError(f"compile failed: {name}")
-                compiled_bins[name] = output
+            compile_log_path = logs_dir / "compile.log"
+            with compile_log_path.open("w", encoding="utf-8") as clog:
+                clog.write(f"compile_jobs={compile_jobs}\n")
+                for name, source, output in compile_targets:
+                    if source is None:
+                        clog.write(f"[{name}] missing source\n\n")
+                        continue
+                    ok, out, err, toolchain_digest = compile_results[name]
+                    merged = f"{out}\n{err}".strip()
+                    diagnostics.extend(self._collect_diagnostics(snapshot, merged))
+                    clog.write(f"[{name}] source={source}\n")
+                    if merged:
+                        clog.write(merged)
+                        clog.write("\n")
+                    clog.write("\n")
+                    if not ok:
+                        raise RuntimeError(f"compile failed: {name}")
+                    compiled_bins[name] = output
 
             has_generator_compiled = any(name.startswith("generator") for name in compiled_bins)
             if build_cfg.get("require_generator") and not has_generator_compiled:
@@ -409,7 +415,6 @@ class BuildService:
             if "accepted_solution" not in compiled_bins:
                 raise RuntimeError("accepted solution source is required")
 
-            (logs_dir / "compile.log").write_text("\n".join(compile_log), encoding="utf-8")
             steps.append({"step": "compile", "status": "ok", "log": "logs/compile.log"})
 
             current_step = "generate"

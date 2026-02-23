@@ -181,6 +181,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Preview creation now persists `artifact_path` at insert time, removing a redundant metadata update write per preview.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses in hot mutation paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, removing a redundant post-build status lookup query.
+- Build compile-stage logging now streams target entries directly to `logs/compile.log` during compile-result processing, avoiding in-memory accumulation of large compiler logs.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
 - Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
@@ -286,6 +287,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates Run-page indicator rendering for DB-capped run summaries using persisted truncation metadata.
 - Smoke coverage now validates DB-capped build diagnostics persistence (with truncation metadata) while artifact `logs/diagnostics.json` retains full diagnostics.
 - Smoke coverage now validates DB-persisted build/run oversized diagnostic-message truncation metadata, while artifact diagnostics preserve full message text.
+- Smoke coverage now validates streamed build compile-log structure (`compile_jobs` header + expected target entries) for baseline build runs.
 
 ## Upstream Dependency Integration
 

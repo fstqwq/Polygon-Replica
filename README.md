@@ -118,6 +118,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Preview creation now writes `artifact_path` at row insert time, removing a redundant follow-up preview metadata update.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses on hot build/preview paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, avoiding a redundant post-build `SELECT status FROM builds` query.
+- Build compile-stage logging now streams target entries directly to `logs/compile.log` during compile-result processing, avoiding in-memory accumulation of large compiler logs.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
 - Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
@@ -244,3 +245,4 @@ Open: `http://127.0.0.1:8000`
   - Adds run-page regressions ensuring persisted run-summary truncation metadata remains visible in UI indicators for DB-capped summaries.
   - Adds build-summary persistence regressions ensuring DB-capped build diagnostics expose truncation metadata while artifact `logs/diagnostics.json` preserves full diagnostic lists.
   - Adds build/run-summary regressions ensuring DB-persisted oversized diagnostic messages are truncated with message metadata while artifact diagnostics keep full text.
+  - Adds build compile-log regressions ensuring `compile.log` still includes compile-job headers and per-target entries after streamed compile logging changes.

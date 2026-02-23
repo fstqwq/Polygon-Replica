@@ -1663,6 +1663,12 @@ def main() -> None:
     brow = db.fetch_one("SELECT status FROM builds WHERE id=?", [build_id])
     if brow is None or brow["status"] != "ok":
         raise RuntimeError(f"build failed: {brow}")
+    compile_log_path = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id / "logs" / "compile.log"
+    compile_log_text = compile_log_path.read_text(encoding="utf-8")
+    if "compile_jobs=" not in compile_log_text:
+        raise RuntimeError("build compile.log should include compile_jobs header")
+    if "[accepted_solution] source=" not in compile_log_text:
+        raise RuntimeError("build compile.log should include accepted_solution compile entry")
     ws_recent = db.fetch_one("SELECT recent_build_status FROM workspaces WHERE id=?", [ctx["workspace"]["id"]])
     if ws_recent is None or ws_recent["recent_build_status"] != "ok":
         raise RuntimeError(f"workspace recent_build_status mismatch after successful build: {ws_recent}")
