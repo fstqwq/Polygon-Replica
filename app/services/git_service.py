@@ -305,6 +305,54 @@ class GitService:
         self._branch_cache_put(key, now, branches)
         return list(branches)
 
+    def list_branches_capped(
+        self,
+        workspace: Path,
+        current_branch: str,
+        limit: int,
+        force_refresh: bool = False,
+    ) -> tuple[list[str], bool]:
+        cap = max(1, int(limit))
+        key = self._workspace_key(workspace)
+        now = monotonic()
+        cached = self._branch_cache_get(key, now, force_refresh=force_refresh)
+        if cached is not None:
+            if len(cached) <= cap:
+                return list(cached), False
+            selected = list(cached[:cap])
+            current = str(current_branch or "").strip()
+            if current and current not in selected:
+                selected[-1] = current
+            return selected, True
+
+        proc = run_cmd(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "for-each-ref",
+                "--format",
+                "%(refname:short)",
+                "--count",
+                str(cap + 1),
+                "refs/heads",
+            ]
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        branches = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        truncated = len(branches) > cap
+        if truncated:
+            branches = branches[:cap]
+        current = str(current_branch or "").strip()
+        if current and current not in branches:
+            if branches:
+                branches[-1] = current
+            else:
+                branches = [current]
+                truncated = False
+        return branches, truncated
+
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
         files, _ = self.list_files_capped(workspace, rel=rel, limit=None)
         return files

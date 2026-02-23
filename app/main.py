@@ -91,9 +91,8 @@ def page_ctx(
     if include_branches:
         workspace = Path(ctx["workspace"]["path"])
         try:
-            branches_all = git_service.list_branches(workspace)
-            branches, branches_truncated = _cap_branch_names(
-                branches_all,
+            branches, branches_truncated = git_service.list_branches_capped(
+                workspace,
                 str(ctx["workspace"].get("branch") or "main"),
                 WORKSPACE_BRANCH_LIST_LIMIT,
             )
@@ -481,17 +480,6 @@ def _cap_summary_list(
         summary[truncated_key] = True
         return
     summary[truncated_key] = False
-
-
-def _cap_branch_names(branches: list[str], current_branch: str, limit: int) -> tuple[list[str], bool]:
-    cap = max(1, int(limit))
-    if len(branches) <= cap:
-        return list(branches), False
-    capped = list(branches[:cap])
-    current = str(current_branch or "").strip()
-    if current and current not in capped:
-        capped[-1] = current
-    return capped, True
 
 
 def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
@@ -1205,9 +1193,8 @@ def api_workspace_branches(problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     try:
-        branches_all = git_service.list_branches(workspace)
-        branches, truncated = _cap_branch_names(
-            branches_all,
+        branches, truncated = git_service.list_branches_capped(
+            workspace,
             str(ctx["workspace"].get("branch") or "main"),
             WORKSPACE_BRANCH_LIST_LIMIT,
         )

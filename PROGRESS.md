@@ -157,6 +157,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning bounded fallback metadata for oversized manifests to avoid unbounded decode/response paths.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
 - Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
+- UI/API branch-list retrieval now uses capped git ref queries (`for-each-ref --count limit+1`) on cache misses, avoiding full branch enumeration output when only capped branch lists are required.
 - `/api/problems` now uses a capped, narrow projection query (`200` rows) instead of unbounded `SELECT *`, preventing oversized problem-list payloads.
 - Build/Run diagnostics now cap rendered diagnostic message text (`4096` characters per entry), preventing oversized diagnostic payloads from bloating detail pages.
 - Workspace provisioning now supports optional status refresh while still forcing refresh on newly created workspace clones/rows.
