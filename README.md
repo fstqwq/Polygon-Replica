@@ -177,6 +177,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run test/answer discovery now uses a shared name-only suffix scan helper for run setup hot paths, avoiding temporary `Path` object materialization when only filenames are needed.
 - Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
 - Run test-input stem extraction now uses a lightweight filename fast path for `*.in` entries (with splitext fallback), avoiding per-test `Path(...)` object construction in run setup.
+- Run test-input/answer/input-meta caches now store immutable tuples and keep list copy-on-read API behavior, reducing redundant cache-write list duplication on hot run setup paths.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
 - Run execution now reuses a cached immutable answer-name set per build artifact root, avoiding repeated per-run list-to-set rematerialization during answer presence checks.
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.

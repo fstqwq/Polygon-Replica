@@ -36,10 +36,10 @@ class RunService:
         self.workspace_service = workspace_service
         self.toolchain = toolchain
         self._run_config_cache: dict[str, dict[str, object]] = {}
-        self._test_input_cache: dict[str, list[str]] = {}
-        self._answer_file_cache: dict[str, list[str]] = {}
+        self._test_input_cache: dict[str, tuple[str, ...]] = {}
+        self._answer_file_cache: dict[str, tuple[str, ...]] = {}
         self._answer_file_set_cache: dict[str, frozenset[str]] = {}
-        self._test_input_meta_cache: dict[str, list[tuple[str, str]]] = {}
+        self._test_input_meta_cache: dict[str, tuple[tuple[str, str], ...]] = {}
         self._cache_lock = threading.Lock()
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
@@ -221,8 +221,8 @@ class RunService:
         if cached is not None:
             return list(cached)
         tests_dir = artifact_root / "tests"
-        names = self._safe_top_level_suffix_names(tests_dir, ".in")
-        self._cache_put(self._test_input_cache, cache_key, list(names))
+        names = tuple(self._safe_top_level_suffix_names(tests_dir, ".in"))
+        self._cache_put(self._test_input_cache, cache_key, names)
         return list(names)
 
     def _load_answer_files(self, artifact_root: Path) -> list[str]:
@@ -231,8 +231,8 @@ class RunService:
         if cached is not None:
             return list(cached)
         ans_dir = artifact_root / "ans"
-        names = self._safe_top_level_suffix_names(ans_dir, ".ans")
-        self._cache_put(self._answer_file_cache, cache_key, list(names))
+        names = tuple(self._safe_top_level_suffix_names(ans_dir, ".ans"))
+        self._cache_put(self._answer_file_cache, cache_key, names)
         return list(names)
 
     def _load_answer_file_set(self, artifact_root: Path) -> frozenset[str]:
@@ -249,8 +249,8 @@ class RunService:
         cached = self._cache_get(self._test_input_meta_cache, cache_key)
         if cached is not None:
             return list(cached)
-        meta = [(name, self._test_name_stem(name)) for name in self._load_test_inputs(artifact_root)]
-        self._cache_put(self._test_input_meta_cache, cache_key, list(meta))
+        meta = tuple((name, self._test_name_stem(name)) for name in self._load_test_inputs(artifact_root))
+        self._cache_put(self._test_input_meta_cache, cache_key, meta)
         return list(meta)
 
     def _test_name_stem(self, name: str) -> str:
