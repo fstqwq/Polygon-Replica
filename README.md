@@ -134,6 +134,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build manual-test discovery now uses a single symlink-safe traversal, avoiding duplicate scans and excluding symlinked manual test entries.
 - Build manual-test discovery now classifies each directory pass before writing fallback entries, so directories containing safe `*.in` files avoid unnecessary fallback buffering and per-directory filename sorting.
 - Build manual-test discovery directory pruning now sorts only kept subdirectories (instead of full `os.walk` directory lists), reducing traversal overhead on trees with many filtered entries.
+- Build manual-test discovery now validates `*.in` candidates before full-directory fallback scanning, skipping unnecessary sidecar file safety checks when safe `*.in` tests are present.
 - Build C++ source auto-discovery now performs a single deterministic directory pass with symlink-safe in-root filtering, reducing glob/sort overhead and preventing unsafe symlinked source selection.
 - Build C++ source auto-discovery now tracks the lexicographically first safe candidate during that pass (instead of sorting full directory entries), reducing per-directory sorting overhead while preserving deterministic selection.
 - Build C++ source auto-discovery now uses `os.scandir` metadata plus suffix-tuple checks for top-level fallback selection, avoiding per-entry path resolution while preserving deterministic lexicographic selection.
