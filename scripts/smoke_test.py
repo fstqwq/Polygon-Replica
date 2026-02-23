@@ -64,6 +64,7 @@ def main() -> None:
         PREVIEW_LOG_REF_LIST_LIMIT,
         RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
         RUN_DETAIL_TEST_LIST_LIMIT,
+        RUN_TEST_FEEDBACK_FILE_LIST_LIMIT,
         SUMMARY_JSON_UI_CHAR_LIMIT,
         UI_LOG_TEXT_CHAR_LIMIT,
         WORKSPACE_BRANCH_LIST_LIMIT,
@@ -2400,16 +2401,23 @@ def main() -> None:
             raise RuntimeError("run page did not surface oversized summary_json fallback")
     run_tests_limit = int(RUN_DETAIL_TEST_LIST_LIMIT)
     run_diag_limit = int(RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT)
+    run_feedback_limit = int(RUN_TEST_FEEDBACK_FILE_LIST_LIMIT)
     if run_tests_limit < 8:
         raise RuntimeError(f"run detail tests limit should be a sane positive bound, got={run_tests_limit}")
     if run_diag_limit < 8:
         raise RuntimeError(f"run detail diagnostics limit should be a sane positive bound, got={run_diag_limit}")
+    if run_feedback_limit < 4:
+        raise RuntimeError(
+            f"run detail feedback-files limit should be a sane positive bound, got={run_feedback_limit}"
+        )
     run_cap_test_prefix = f"cap-test-{uuid.uuid4().hex[:8]}"
     run_cap_diag_prefix = f"cap-diag-{uuid.uuid4().hex[:8]}"
     run_diag_msg_tail_marker = f"run-diag-msg-tail-{uuid.uuid4().hex[:8]}"
     run_cap_id = f"r-uicap-{uuid.uuid4().hex[:10]}"
     run_cap_tests_total = run_tests_limit + 24
     run_cap_diags_total = run_diag_limit + 24
+    run_feedback_prefix = f"run-feedback-cap-{uuid.uuid4().hex[:8]}"
+    run_feedback_total = run_feedback_limit + 24
     run_cap_tests = [
         {
             "test": f"{run_cap_test_prefix}-{i:04d}.in",
@@ -2419,6 +2427,9 @@ def main() -> None:
             "feedback_files": [],
         }
         for i in range(run_cap_tests_total)
+    ]
+    run_cap_tests[0]["feedback_files"] = [
+        f"feedback_dir/{run_feedback_prefix}-{i:04d}.txt" for i in range(run_feedback_total)
     ]
     run_cap_diags = [
         {
@@ -2477,6 +2488,12 @@ def main() -> None:
             raise RuntimeError("run page should truncate oversized compile diagnostic messages")
         if f"truncated; showing first {diag_message_limit} characters" not in run_cap_page.text:
             raise RuntimeError("run page should expose oversized diagnostic-message truncation marker")
+        if f"Showing first {run_feedback_limit} feedback files ({run_feedback_total} total)." not in run_cap_page.text:
+            raise RuntimeError("run page should surface capped feedback-file list indicator")
+        if f"{run_feedback_prefix}-{run_feedback_limit:04d}.txt" in run_cap_page.text:
+            raise RuntimeError("run page should hide feedback files beyond per-test configured list cap")
+        if f"{run_feedback_prefix}-{run_feedback_limit - 1:04d}.txt" not in run_cap_page.text:
+            raise RuntimeError("run page should keep feedback files within per-test configured list cap")
     poison_log.unlink(missing_ok=True)
     dot_root_log.unlink(missing_ok=True)
 

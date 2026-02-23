@@ -151,6 +151,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Git page diff collection now streams `git diff` output to temporary files and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
 - Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
+- Run detail rendering now also caps per-test feedback-file links (`32` each) with truncation indicators, preventing pathological per-test link payload growth.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
 - Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on very large artifact `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error for oversized payloads to avoid heavy decode/render paths from oversized DB blobs.
@@ -268,6 +269,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates workspace-manifest API oversized `manifest.json` handling, ensuring bounded fallback metadata instead of unbounded JSON decode paths.
 - Smoke coverage now validates capped-branch cache reuse behavior and bounded eviction for UI/API branch-list retrieval.
 - Smoke coverage now validates run feedback key-file capped discovery behavior on large feedback trees.
+- Smoke coverage now validates Run-page per-test feedback-file link capping behavior, including truncation indicators.
 
 ## Upstream Dependency Integration
 

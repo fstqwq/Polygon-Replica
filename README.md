@@ -88,6 +88,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Git page diff collection now streams `git diff` output to a temporary file and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
 - Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
+- Run detail rendering now also caps per-test feedback-file links (`32` each) with truncation indicators, preventing pathological per-test link payload growth.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
 - Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on artifacts with very large `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error on oversized payloads to prevent expensive decode/render paths from oversized DB blobs.
@@ -226,3 +227,4 @@ Open: `http://127.0.0.1:8000`
   - Adds workspace-manifest API regressions ensuring oversized `manifest.json` payloads return bounded fallback metadata instead of unbounded decode paths.
   - Adds capped-branch cache regressions ensuring cache-hit reuse plus bound/eviction behavior for UI/API branch-list retrieval.
   - Adds run feedback key-file regressions ensuring deterministic capped discovery behavior for large feedback trees.
+  - Adds Run-page regressions ensuring per-test feedback-file link lists are capped with UI indicators.

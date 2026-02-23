@@ -48,6 +48,7 @@ ARTIFACT_BROWSE_FILE_LIMIT = 512
 UI_LOG_TEXT_CHAR_LIMIT = 131072
 RUN_DETAIL_TEST_LIST_LIMIT = 200
 RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT = 200
+RUN_TEST_FEEDBACK_FILE_LIST_LIMIT = 32
 BUILD_LOG_LIST_LIMIT = 200
 BUILD_DIAGNOSTIC_LIST_LIMIT = 200
 PREVIEW_LOG_REF_LIST_LIMIT = 200
@@ -480,6 +481,27 @@ def _cap_summary_list(
         summary[truncated_key] = True
         return
     summary[truncated_key] = False
+
+
+def _cap_run_test_feedback_files(summary: dict, limit: int) -> None:
+    tests = summary.get("tests")
+    if not isinstance(tests, list):
+        return
+    cap = max(1, int(limit))
+    for row in tests:
+        if not isinstance(row, dict):
+            continue
+        files = row.get("feedback_files")
+        if not isinstance(files, list):
+            continue
+        total = len(files)
+        row["feedback_files_limit"] = cap
+        row["feedback_files_total"] = total
+        if total > cap:
+            row["feedback_files"] = files[:cap]
+            row["feedback_files_truncated"] = True
+            continue
+        row["feedback_files_truncated"] = False
 
 
 def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
@@ -969,6 +991,7 @@ def run_page(request: Request, problem: str, user: str):
             "compile_diagnostics_total",
             "compile_diagnostics_limit",
         )
+        _cap_run_test_feedback_files(summary, RUN_TEST_FEEDBACK_FILE_LIST_LIMIT)
         compile_diags = summary.get("compile_diagnostics")
         if isinstance(compile_diags, list):
             summary["compile_diagnostics"] = _normalize_diagnostics(compile_diags, DIAGNOSTIC_MESSAGE_CHAR_LIMIT)

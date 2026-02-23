@@ -50,6 +50,9 @@
           {% for ff in t.feedback_files %}
           <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/runs/{{ detail.id }}/artifacts/{{ ff }}">{{ ff }}</a><br />
           {% endfor %}
+          {% if t.feedback_files_truncated %}
+          <em>Showing first {{ t.feedback_files_limit }} feedback files ({{ t.feedback_files_total }} total).</em><br />
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
