@@ -35,10 +35,13 @@
   <section>
     <h2>{{ selected }} {% if selected_line %}(line {{ selected_line }}){% endif %}</h2>
     <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}">Download file</a></p>
+    {% if content_truncated %}
+    <p><em>Showing first {{ content_char_limit }} characters; Save is disabled for truncated file views.</em></p>
+    {% endif %}
     <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/save">
       <input type="hidden" name="path" value="{{ selected }}" />
-      <textarea name="content">{{ content }}</textarea>
-      <button type="submit">Save</button>
+      <textarea name="content" {% if content_truncated %}readonly{% endif %}>{{ content }}</textarea>
+      <button type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
     </form>
   </section>
 </div>

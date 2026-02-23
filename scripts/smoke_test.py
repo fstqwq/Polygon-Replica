@@ -66,6 +66,7 @@ def main() -> None:
         UI_LOG_TEXT_CHAR_LIMIT,
         WORKSPACE_BRANCH_LIST_LIMIT,
         WORKSPACE_FILE_LIST_LIMIT,
+        WORKSPACE_FILE_VIEW_CHAR_LIMIT,
         app,
         build_service,
         db,
@@ -850,6 +851,31 @@ def main() -> None:
                 raise RuntimeError("files page should hide entries beyond the listing cap")
     finally:
         shutil.rmtree(files_browse_cap_dir, ignore_errors=True)
+    file_view_limit = int(WORKSPACE_FILE_VIEW_CHAR_LIMIT)
+    if file_view_limit < 1024:
+        raise RuntimeError(f"workspace file view char limit should be a sane positive bound, got={file_view_limit}")
+    large_file_rel = f"statement/files-view-cap-{uuid.uuid4().hex[:8]}.txt"
+    large_file_path = ws / large_file_rel
+    large_file_path.parent.mkdir(parents=True, exist_ok=True)
+    large_file_path.write_text("A" * (file_view_limit + 256), encoding="utf-8")
+    try:
+        with TestClient(app) as client:
+            large_file_page = client.get("/problems/sample/alice/files", params={"path": large_file_rel})
+            if large_file_page.status_code != 200:
+                raise RuntimeError(
+                    "files page should remain available when file content rendering is capped"
+                    f", status={large_file_page.status_code}"
+                )
+            if f"Showing first {file_view_limit} characters" not in large_file_page.text:
+                raise RuntimeError("files page did not surface truncated-content indicator")
+            if f"... [truncated; showing first {file_view_limit} characters]" not in large_file_page.text:
+                raise RuntimeError("files page did not render truncated content marker")
+            if '<textarea name="content" readonly>' not in large_file_page.text:
+                raise RuntimeError("files page should render truncated file views as read-only")
+            if 'title="Cannot save truncated file view"' not in large_file_page.text or 'disabled' not in large_file_page.text:
+                raise RuntimeError("files page should disable save for truncated file views")
+    finally:
+        large_file_path.unlink(missing_ok=True)
     lock_marker = ws / ".polygonlike.lock"
     lock_nested_marker = ws / "scratch" / ".polygonlike.lock"
     lock_nested_marker.parent.mkdir(parents=True, exist_ok=True)

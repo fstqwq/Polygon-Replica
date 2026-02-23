@@ -42,6 +42,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 WORKSPACE_BUILD_SELECTOR_LIMIT = 200
 WORKSPACE_FILE_LIST_LIMIT = 1024
+WORKSPACE_FILE_VIEW_CHAR_LIMIT = 131072
 ARTIFACT_BROWSE_FILE_LIMIT = 512
 UI_LOG_TEXT_CHAR_LIMIT = 131072
 RUN_DETAIL_TEST_LIST_LIMIT = 200
@@ -502,11 +503,12 @@ def files_page(request: Request, problem: str, user: str):
     selected = request.query_params.get("path", "README.problem.md")
     selected_line = _parse_line_param(request.query_params.get("line", "1"))
     content = ""
+    content_truncated = False
     try:
-        content = git_service.read_file(workspace, selected)
+        content, content_truncated = git_service.read_file_limited(workspace, selected, WORKSPACE_FILE_VIEW_CHAR_LIMIT)
     except Exception:
         selected = "README.problem.md"
-        content = git_service.read_file(workspace, selected)
+        content, content_truncated = git_service.read_file_limited(workspace, selected, WORKSPACE_FILE_VIEW_CHAR_LIMIT)
     files, files_truncated = git_service.list_files_capped(workspace, limit=WORKSPACE_FILE_LIST_LIMIT)
     return templates.TemplateResponse(
         request,
@@ -518,6 +520,8 @@ def files_page(request: Request, problem: str, user: str):
             "file_limit": WORKSPACE_FILE_LIST_LIMIT,
             "selected": selected,
             "content": content,
+            "content_truncated": content_truncated,
+            "content_char_limit": WORKSPACE_FILE_VIEW_CHAR_LIMIT,
             "selected_line": selected_line,
             "message": request.query_params.get("message", ""),
         },

@@ -365,6 +365,15 @@ class GitService:
         p = self._resolve_user_path(workspace, rel_path)
         return p.read_text(encoding="utf-8")
 
+    def read_file_limited(self, workspace: Path, rel_path: str, max_chars: int) -> tuple[str, bool]:
+        p = self._resolve_user_path(workspace, rel_path)
+        cap = max(1, int(max_chars))
+        with p.open("r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(cap + 1)
+        if len(text) <= cap:
+            return text, False
+        return self._append_truncation_marker(text[:cap], cap), True
+
     def write_file(self, workspace: Path, rel_path: str, content: str) -> None:
         p = self._resolve_user_path(workspace, rel_path)
         if p.exists() and p.is_dir():

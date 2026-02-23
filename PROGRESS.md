@@ -146,6 +146,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run/Export page build-selector queries are now capped to recent workspace builds (200 rows) to prevent unbounded dropdown payload growth on long-lived workspaces.
 - Artifact and run-artifact browser pages now cap file listings (`512` entries) and surface truncation indicators, preventing oversized HTML responses on large artifact trees.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
+- Files page file-content rendering now caps editor payloads (`131072` characters) and marks clipped views read-only with save disabled, preventing oversized editor responses and accidental truncation writes.
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
 - Git page diff collection now streams `git diff` output to temporary files and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
@@ -257,6 +258,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates Files-header branch-list caps and branches-API truncation metadata behavior.
 - Smoke coverage now validates `/api/problems` problem-list cap behavior.
 - Smoke coverage now validates Build/Run diagnostic-message truncation behavior with inline truncation markers.
+- Smoke coverage now validates Files-page oversized file-content rendering caps, including read-only/disabled-save safeguards for truncated views.
 
 ## Upstream Dependency Integration
 

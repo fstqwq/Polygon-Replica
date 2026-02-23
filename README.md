@@ -83,6 +83,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run/Export build-selector queries are now bounded to recent workspace builds (200 rows), preventing unbounded dropdown payload growth on long-lived workspaces.
 - Artifact and run-artifact browser pages now cap file listings (`512` entries) and surface truncation indicators, preventing oversized HTML responses on large artifact trees.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
+- Files page file-content rendering now caps editor payloads (`131072` characters) and marks clipped views read-only with save disabled, preventing oversized editor responses and accidental truncation writes.
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
 - Git page diff collection now streams `git diff` output to a temporary file and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
 - Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
@@ -215,3 +216,4 @@ Open: `http://127.0.0.1:8000`
   - Adds Files-header/branches-API regressions ensuring oversized branch lists are truncated with indicators/metadata.
   - Adds `/api/problems` regressions ensuring capped problem-list payload behavior.
   - Adds Build/Run diagnostics regressions ensuring oversized diagnostic messages are truncated with inline truncation markers.
+  - Adds Files-page regressions ensuring oversized file-content views are truncated with read-only/disabled-save safeguards.
