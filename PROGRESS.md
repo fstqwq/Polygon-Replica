@@ -169,6 +169,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Dirty workspace previews now clear `source_commit` metadata and skip commit-key reuse, preventing dirty snapshot outputs from polluting immutable commit preview cache provenance.
 - Git page status flow now conditionally skips `git diff` unless porcelain status indicates unstaged tracked changes, reducing unnecessary subprocess work in clean/untracked/staged-only states.
 - Git status filtering now drops internal lock-file entries (`.polygonlike.lock`) from rendered status/diff output, keeping Git UI output aligned with workspace dirty-state semantics.
+- Git diff generation now applies lock-file exclusions directly in git pathspecs (with reserved-diff fallback filtering), reducing unnecessary diff parsing on lock-file-only changes.
 - Artifact manifest generation now streams a deterministic sorted directory walk (symlink-skipping) instead of materializing `rglob` lists, lowering memory overhead on large artifact trees.
 - Artifact manifest summary counters (`tests_count`, `ans_count`) are now computed during that same manifest walk, avoiding extra tests/ans directory scans.
 - Added DB indexes for workspace-scoped history filters (`problem_id,workspace_id,created_at`) and preview-reuse lookup (`problem_id,source_commit,status,created_at`).
@@ -224,7 +225,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates export source-snapshot rejection for missing workspace metadata and DB workspace-path mismatches.
 - Smoke coverage now validates symlinked workspace lock-path rejection and confirms blocked file writes remain unchanged.
 - Smoke coverage now validates upload-route symlinked lock-path rejection (HTTP 400) and confirms no target file is created.
-- Smoke coverage now validates Git page/backend status filtering for lock-file-only workspace changes (`.polygonlike.lock`) and confirms no diff output is produced.
+- Smoke coverage now validates Git page/backend status filtering for both root and nested lock-file workspace changes and confirms no lock-file diff output is produced.
 - Smoke coverage now validates git commits never stage/commit root or nested `.polygonlike.lock` paths even when workspace locking is active.
 - Smoke coverage now validates run submission-path rejection for reserved internal workspace files and symlinked submission aliases.
 

@@ -105,7 +105,23 @@ class GitService:
                 need_diff = True
         status_text = "\n".join(filtered_lines) + ("\n" if filtered_lines else "")
         if need_diff:
-            diff_text = self._filter_reserved_diff(run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout)
+            diff_proc = run_cmd(
+                [
+                    "git",
+                    "-C",
+                    str(workspace),
+                    "diff",
+                    "--",
+                    ".",
+                    ":(exclude).polygonlike.lock",
+                    ":(exclude)**/.polygonlike.lock",
+                ]
+            )
+            if diff_proc.returncode == 0:
+                raw_diff = diff_proc.stdout
+            else:
+                raw_diff = run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout
+            diff_text = self._filter_reserved_diff(raw_diff)
         else:
             diff_text = ""
         return {"status": status_text, "diff": diff_text}

@@ -545,7 +545,10 @@ def main() -> None:
     shutil.rmtree(list_leak_dir, ignore_errors=True)
     list_leak_file.unlink(missing_ok=True)
     lock_marker = ws / ".polygonlike.lock"
+    lock_nested_marker = ws / "scratch" / ".polygonlike.lock"
+    lock_nested_marker.parent.mkdir(parents=True, exist_ok=True)
     lock_marker.write_text("lock\n", encoding="utf-8")
+    lock_nested_marker.write_text("nested-lock\n", encoding="utf-8")
     try:
         with TestClient(app) as client:
             files_page = client.get("/problems/sample/alice/files")
@@ -558,8 +561,12 @@ def main() -> None:
                 raise RuntimeError(f"git page failed during lock-file status filtering check: {git_page.status_code}")
             if "?? .polygonlike.lock" in git_page.text or " M .polygonlike.lock" in git_page.text:
                 raise RuntimeError("git page status should not list workspace lock files")
+            if "?? scratch/.polygonlike.lock" in git_page.text or " M scratch/.polygonlike.lock" in git_page.text:
+                raise RuntimeError("git page status should not list nested workspace lock files")
             if "diff --git a/.polygonlike.lock b/.polygonlike.lock" in git_page.text:
                 raise RuntimeError("git page diff should not include workspace lock files")
+            if "diff --git a/scratch/.polygonlike.lock b/scratch/.polygonlike.lock" in git_page.text:
+                raise RuntimeError("git page diff should not include nested workspace lock files")
         git_status = git_service.status(ws)
         if ".polygonlike.lock" in git_status.get("status", ""):
             raise RuntimeError("git status API should filter workspace lock file entries")
@@ -567,6 +574,7 @@ def main() -> None:
             raise RuntimeError("git diff output should filter workspace lock file entries")
     finally:
         lock_marker.unlink(missing_ok=True)
+        lock_nested_marker.unlink(missing_ok=True)
     lock_commit_problem = f"lockcommit-{uuid.uuid4().hex[:8]}"
     lock_commit_user = f"u-{uuid.uuid4().hex[:6]}"
     workspace_service.ensure_problem(lock_commit_problem, "Lock Commit Exclusion Problem")
