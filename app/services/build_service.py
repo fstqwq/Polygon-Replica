@@ -460,28 +460,31 @@ class BuildService:
             steps.append({"step": "solve", "status": "ok", "log": "logs/solve.log"})
 
             (logs_dir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
+            generation_params = {
+                "generator_runs": int(build_cfg.get("generator_runs", 3)),
+                "compile_jobs": compile_jobs,
+                "validate_jobs": int(build_cfg.get("validate_jobs", 0)),
+                "validate_jobs_effective": validate_jobs,
+                "solve_jobs": int(build_cfg.get("solve_jobs", 0)),
+                "solve_jobs_effective": solve_jobs,
+                "run_jobs": int(build_cfg.get("run_jobs", 0)),
+                "run_timeout_sec": int(build_cfg.get("run_timeout_sec", 30)),
+                "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
+                "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
+                "validator_args": [str(x) for x in build_cfg.get("validator_args", [])],
+                "checker_args": [str(x) for x in build_cfg.get("checker_args", [])],
+                "checker_mode": str(build_cfg.get("checker_mode", "testlib")),
+                "max_passes": int(build_cfg.get("max_passes", 16)),
+            }
+            # Small runner-focused config sidecar avoids full manifest reads on run setup hot paths.
+            (logs_dir / "run_config.json").write_text(json.dumps(generation_params, indent=2), encoding="utf-8")
             self.artifacts.write_manifest(
                 artifact_paths,
                 source_commit=source_commit,
                 source_ref=source_ref,
                 toolchain_digest=toolchain_digest,
                 seed=seed,
-                generation_params={
-                    "generator_runs": int(build_cfg.get("generator_runs", 3)),
-                    "compile_jobs": compile_jobs,
-                    "validate_jobs": int(build_cfg.get("validate_jobs", 0)),
-                    "validate_jobs_effective": validate_jobs,
-                    "solve_jobs": int(build_cfg.get("solve_jobs", 0)),
-                    "solve_jobs_effective": solve_jobs,
-                    "run_jobs": int(build_cfg.get("run_jobs", 0)),
-                    "run_timeout_sec": int(build_cfg.get("run_timeout_sec", 30)),
-                    "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
-                    "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
-                    "validator_args": [str(x) for x in build_cfg.get("validator_args", [])],
-                    "checker_args": [str(x) for x in build_cfg.get("checker_args", [])],
-                    "checker_mode": str(build_cfg.get("checker_mode", "testlib")),
-                    "max_passes": int(build_cfg.get("max_passes", 16)),
-                },
+                generation_params=generation_params,
                 steps=steps,
             )
 

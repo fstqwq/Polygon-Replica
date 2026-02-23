@@ -202,7 +202,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Artifact directory browse/zip and run-artifact browse/zip now enforce symlink-safe file enumeration (no symlink-directory traversal, skip symlink entries, and skip out-of-root resolved targets).
 - Artifact/run-artifact zip and export directory-copy flows now use iterator-based safe traversal streams instead of pre-materialized file lists (lower memory overhead for large trees).
 - Run summaries now normalize `feedback_dir` to the stable relative token `feedback_dir` (avoids leaking host-absolute run paths in API/UI payloads).
-- Run config loading now caches parsed per-build manifest runner settings in-process (copy-on-read), reducing repeated `manifest.json` reads/parses across submissions.
+- Run config loading now prefers a small `logs/run_config.json` sidecar (with manifest fallback) and caches parsed settings in-process (copy-on-read), reducing repeated full-`manifest.json` reads/parses across submissions.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
 - Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
@@ -270,6 +270,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates capped-branch cache reuse behavior and bounded eviction for UI/API branch-list retrieval.
 - Smoke coverage now validates run feedback key-file capped discovery behavior on large feedback trees.
 - Smoke coverage now validates Run-page per-test feedback-file link capping behavior, including truncation indicators.
+- Smoke coverage now validates run-config sidecar emission and run-config loading preference for `logs/run_config.json` over manifest generation-params.
 
 ## Upstream Dependency Integration
 

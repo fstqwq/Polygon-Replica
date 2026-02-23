@@ -107,15 +107,33 @@ class RunService:
             "run_jobs": 0,
             "run_timeout_sec": 30,
         }
-        manifest = artifact_root / "manifest.json"
-        if manifest.exists():
+        loaded = False
+        run_config = artifact_root / "logs" / "run_config.json"
+        if run_config.exists():
             try:
-                payload = json.loads(manifest.read_text(encoding="utf-8"))
-                params = payload.get("generation_params")
+                payload = json.loads(run_config.read_text(encoding="utf-8"))
+                params = None
+                if isinstance(payload, dict):
+                    maybe = payload.get("generation_params")
+                    if isinstance(maybe, dict):
+                        params = maybe
+                    else:
+                        params = payload
                 if isinstance(params, dict):
                     cfg.update(params)
+                    loaded = True
             except Exception:
-                pass
+                loaded = False
+        if not loaded:
+            manifest = artifact_root / "manifest.json"
+            if manifest.exists():
+                try:
+                    payload = json.loads(manifest.read_text(encoding="utf-8"))
+                    params = payload.get("generation_params")
+                    if isinstance(params, dict):
+                        cfg.update(params)
+                except Exception:
+                    pass
         checker_mode = str(cfg.get("checker_mode", "testlib")).lower()
         if checker_mode not in {"testlib", "kattis"}:
             checker_mode = "testlib"

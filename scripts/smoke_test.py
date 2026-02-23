@@ -2043,11 +2043,61 @@ def main() -> None:
     if "001.in" not in solve_log:
         raise RuntimeError("solve log should include per-test entries")
     run_cfg_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / build_id
+    run_cfg_file = run_cfg_root / "logs" / "run_config.json"
+    if not run_cfg_file.exists():
+        raise RuntimeError("build artifacts should include logs/run_config.json sidecar")
+    run_cfg_file_payload = json.loads(run_cfg_file.read_text(encoding="utf-8"))
+    if int(run_cfg_file_payload.get("run_jobs", 0)) != 2:
+        raise RuntimeError("run_config sidecar missing configured run_jobs")
+    if int(run_cfg_file_payload.get("run_timeout_sec", 0)) != 1:
+        raise RuntimeError("run_config sidecar missing configured run_timeout_sec")
+    if str(run_cfg_file_payload.get("checker_mode", "")) != "testlib":
+        raise RuntimeError("run_config sidecar missing checker_mode=testlib")
     run_cfg_first = run_service._load_run_config(run_cfg_root)
     run_cfg_second = run_service._load_run_config(run_cfg_root)
     run_cfg_first["run_jobs"] = 777
     if int(run_cfg_second.get("run_jobs", -1)) == 777:
         raise RuntimeError("run config cache should return independent copies")
+    run_cfg_prefer_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-cfg-prefer-{uuid.uuid4().hex[:8]}"
+    (run_cfg_prefer_root / "logs").mkdir(parents=True, exist_ok=True)
+    (run_cfg_prefer_root / "logs" / "run_config.json").write_text(
+        json.dumps(
+            {
+                "checker_mode": "kattis",
+                "checker_args": ["--from-sidecar"],
+                "max_passes": 5,
+                "run_jobs": 7,
+                "run_timeout_sec": 12,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_cfg_prefer_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "generation_params": {
+                    "checker_mode": "testlib",
+                    "checker_args": ["--from-manifest"],
+                    "max_passes": 16,
+                    "run_jobs": 1,
+                    "run_timeout_sec": 30,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_cfg_prefer = run_service._load_run_config(run_cfg_prefer_root)
+    if str(run_cfg_prefer.get("checker_mode", "")) != "kattis":
+        raise RuntimeError("run config loader should prefer logs/run_config.json checker_mode")
+    if run_cfg_prefer.get("checker_args") != ["--from-sidecar"]:
+        raise RuntimeError("run config loader should prefer logs/run_config.json checker_args")
+    if int(run_cfg_prefer.get("max_passes", 0)) != 5:
+        raise RuntimeError("run config loader should prefer logs/run_config.json max_passes")
+    if int(run_cfg_prefer.get("run_jobs", 0)) != 7:
+        raise RuntimeError("run config loader should prefer logs/run_config.json run_jobs")
+    if int(run_cfg_prefer.get("run_timeout_sec", 0)) != 12:
+        raise RuntimeError("run config loader should prefer logs/run_config.json run_timeout_sec")
+    shutil.rmtree(run_cfg_prefer_root, ignore_errors=True)
     test_inputs_first = run_service._load_test_inputs(run_cfg_root)
     test_inputs_second = run_service._load_test_inputs(run_cfg_root)
     if not test_inputs_second:
