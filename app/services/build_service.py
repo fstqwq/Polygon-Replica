@@ -212,6 +212,10 @@ class BuildService:
 
     def _collect_diagnostics(self, snapshot: Path, text: str) -> list[dict]:
         result: list[dict] = []
+        try:
+            snapshot_resolved = snapshot.resolve()
+        except OSError:
+            snapshot_resolved = None
         for line in text.splitlines():
             m = DIAG_RE.match(line.strip())
             if not m:
@@ -219,8 +223,14 @@ class BuildService:
             file_path = Path(m.group("file"))
             if file_path.is_absolute():
                 try:
-                    rel = str(file_path.resolve().relative_to(snapshot.resolve()))
+                    resolved = file_path.resolve()
+                    if snapshot_resolved is not None:
+                        rel = str(resolved.relative_to(snapshot_resolved))
+                    else:
+                        rel = str(resolved)
                 except ValueError:
+                    rel = str(file_path)
+                except OSError:
                     rel = str(file_path)
             else:
                 rel = str(file_path)

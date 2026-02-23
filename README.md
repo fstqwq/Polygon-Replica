@@ -122,6 +122,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, avoiding a redundant post-build `SELECT status FROM builds` query.
 - Build compile-stage logging now streams target entries directly to `logs/compile.log` during compile-result processing, avoiding in-memory accumulation of large compiler logs.
 - Build compile-stage target logging now writes compiler stdout/stderr streams directly and parses diagnostics per stream, avoiding extra per-target merged-output string allocation while preserving empty-output diagnostic collection semantics.
+- Build diagnostics parsing now resolves the snapshot root once per compiler-output chunk (instead of per matched diagnostic line), reducing repeated path-resolution overhead on noisy compile failures.
 - Run submission compile logging now streams compiler stdout/stderr directly to run `compile.log` and parses diagnostics per stream, avoiding an extra merged-log string allocation.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
