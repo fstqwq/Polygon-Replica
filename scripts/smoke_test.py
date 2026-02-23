@@ -584,6 +584,36 @@ def main() -> None:
         finally:
             (ws / ".polygonlike.lock").unlink(missing_ok=True)
     lock_symlink_target.unlink(missing_ok=True)
+    upload_lock_target = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"upload-lock-symlink-target-{uuid.uuid4().hex[:8]}.txt"
+    upload_lock_target.write_text("do-not-touch-upload\n", encoding="utf-8")
+    upload_lock_supported = True
+    upload_blocked_path = ws / "upload-lock-blocked.txt"
+    upload_blocked_path.unlink(missing_ok=True)
+    try:
+        (ws / ".polygonlike.lock").symlink_to(upload_lock_target)
+    except (OSError, NotImplementedError):
+        upload_lock_supported = False
+    if upload_lock_supported:
+        try:
+            with TestClient(app) as client:
+                upload_page = client.post(
+                    "/problems/sample/alice/files/upload",
+                    data={"path": "upload-lock-blocked.txt"},
+                    files={"upload": ("upload-lock-blocked.txt", b"blocked\n", "text/plain")},
+                )
+                if upload_page.status_code != 400:
+                    raise RuntimeError(
+                        "files upload should reject symlinked lock paths with HTTP 400"
+                    )
+                if "workspace lock path is invalid" not in upload_page.text:
+                    raise RuntimeError("files upload did not surface lock-symlink rejection message")
+            if upload_blocked_path.exists():
+                raise RuntimeError("files upload should not create target file when workspace lock path is invalid")
+            if upload_lock_target.read_text(encoding="utf-8") != "do-not-touch-upload\n":
+                raise RuntimeError("files upload lock acquisition should not follow symlinked lock targets")
+        finally:
+            (ws / ".polygonlike.lock").unlink(missing_ok=True)
+    upload_lock_target.unlink(missing_ok=True)
 
     cached_preview_id = f"p-{uuid.uuid4().hex[:12]}"
     cached_preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / cached_preview_id

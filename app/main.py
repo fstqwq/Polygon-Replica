@@ -413,21 +413,37 @@ async def files_upload(problem: str, user: str, path: str = Form(...), upload: U
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
     total_bytes = 0
-    with workspace_service.workspace_lock(workspace):
-        abs_path = _safe_workspace_path(workspace, path)
-        if abs_path.exists() and abs_path.is_dir():
-            raise HTTPException(status_code=400, detail="upload target must be a file path")
-        try:
+    tmp_path: Path | None = None
+    try:
+        with workspace_service.workspace_lock(workspace):
+            abs_path = _safe_workspace_path(workspace, path)
+            if abs_path.exists() and abs_path.is_dir():
+                raise HTTPException(status_code=400, detail="upload target must be a file path")
             abs_path.parent.mkdir(parents=True, exist_ok=True)
-            with abs_path.open("wb") as out:
-                while True:
-                    chunk = await upload.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-                    total_bytes += len(chunk)
-        except OSError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            fd, tmp_name = tempfile.mkstemp(prefix=f".upload-{abs_path.name}.", suffix=".tmp", dir=str(abs_path.parent))
+            tmp_path = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "wb") as out:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        total_bytes += len(chunk)
+                os.replace(tmp_path, abs_path)
+                tmp_path = None
+            except Exception:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
+                    tmp_path = None
+                raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
     _audit(ctx["user"]["id"], ctx["problem"]["id"], "files.upload", {"path": path, "bytes": total_bytes})
     return RedirectResponse(f"/problems/{problem}/{user}/files?path={quote_plus(path)}&message=uploaded", status_code=303)
 
