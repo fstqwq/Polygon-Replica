@@ -402,6 +402,14 @@ class GitService:
         for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             try:
+                dir_root_resolved = dir_root.resolve()
+            except OSError:
+                dirnames[:] = []
+                continue
+            if workspace_root not in dir_root_resolved.parents and workspace_root != dir_root_resolved:
+                dirnames[:] = []
+                continue
+            try:
                 rel_root = dir_root.relative_to(workspace)
             except ValueError:
                 dirnames[:] = []
@@ -411,12 +419,6 @@ class GitService:
             for name in dirnames:
                 d = dir_root / name
                 if name in reserved_names or d.is_symlink():
-                    continue
-                try:
-                    resolved = d.resolve()
-                except OSError:
-                    continue
-                if workspace_root not in resolved.parents and workspace_root != resolved:
                     continue
                 candidate_dirs.append(name)
 
@@ -441,11 +443,7 @@ class GitService:
                 p = dir_root / name
                 if name in reserved_names or p.is_symlink():
                     continue
-                try:
-                    resolved = p.resolve()
-                except OSError:
-                    continue
-                if workspace_root not in resolved.parents and workspace_root != resolved:
+                if not p.is_file():
                     continue
                 safe_files.append(name)
 
