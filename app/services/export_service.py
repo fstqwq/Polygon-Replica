@@ -149,15 +149,20 @@ class ExportService:
         if not folder.exists() or not folder.is_dir():
             return
         try:
-            resolved_root = folder_resolved if folder_resolved is not None else folder.resolve()
+            _ = folder_resolved if folder_resolved is not None else folder.resolve()
         except OSError:
             return
 
         safe_names: list[str] = []
         try:
-            for p in folder.iterdir():
-                if self._is_safe_regular_file(folder, p, root_resolved=resolved_root):
-                    safe_names.append(p.name)
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    try:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    safe_names.append(entry.name)
         except OSError:
             return
 
