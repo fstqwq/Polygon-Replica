@@ -78,6 +78,7 @@ def main() -> None:
         run_service,
         workspace_service,
     )
+    import app.services.git_service as git_service_module
     from app.services.util import run_cmd
 
     with TestClient(app) as client:
@@ -201,6 +202,53 @@ def main() -> None:
             raise RuntimeError("git branch cache should evict oldest entries under pressure")
         with git_service._branch_cache_lock:
             git_service._branch_cache.clear()
+        branch_capped_cache_limit = int(getattr(git_service, "BRANCH_CAPPED_CACHE_MAX_ENTRIES", 0))
+        if branch_capped_cache_limit < 8:
+            raise RuntimeError(
+                f"git capped-branch cache limit should be a sane positive bound, got={branch_capped_cache_limit}"
+            )
+        branch_capped_probe_prefix = f"branch-capped-cache-probe-{uuid.uuid4().hex[:8]}"
+        first_branch_capped_cache_key = ""
+        for i in range(branch_capped_cache_limit + 24):
+            cache_key = f"{branch_capped_probe_prefix}-{i:03d}"
+            git_service._branch_capped_cache_put(cache_key, float(i), [f"branch-{i:03d}"], False)
+            if i == 0:
+                first_branch_capped_cache_key = cache_key
+        if len(git_service._branch_capped_cache) > branch_capped_cache_limit:
+            raise RuntimeError("git capped-branch cache exceeded configured bound")
+        if first_branch_capped_cache_key in git_service._branch_capped_cache:
+            raise RuntimeError("git capped-branch cache should evict oldest entries under pressure")
+        with git_service._branch_cache_lock:
+            git_service._branch_capped_cache.clear()
+        cached_branch_limit = int(WORKSPACE_BRANCH_LIST_LIMIT)
+        cached_current_branch = str(alice_ctx["workspace"].get("branch") or "main")
+        cached_branches_first, _ = git_service.list_branches_capped(
+            alice_ws,
+            cached_current_branch,
+            cached_branch_limit,
+            force_refresh=True,
+        )
+        if not cached_branches_first:
+            raise RuntimeError("capped branch listing should return at least one branch")
+        capped_cache_key = git_service._capped_branch_cache_key(alice_ws, cached_branch_limit)
+        with git_service._branch_cache_lock:
+            if capped_cache_key not in git_service._branch_capped_cache:
+                raise RuntimeError("capped branch listing should populate capped-branch cache")
+        original_git_run_cmd = git_service_module.run_cmd
+        try:
+            def _fail_git_run_cmd(*args, **kwargs):
+                raise RuntimeError("unexpected git command during capped-branch cache hit")
+
+            git_service_module.run_cmd = _fail_git_run_cmd
+            cached_branches_second, _ = git_service.list_branches_capped(
+                alice_ws,
+                cached_current_branch,
+                cached_branch_limit,
+            )
+        finally:
+            git_service_module.run_cmd = original_git_run_cmd
+        if cached_branches_second != cached_branches_first:
+            raise RuntimeError("capped branch listing cache hit should preserve cached results")
         branch_ui_limit = int(WORKSPACE_BRANCH_LIST_LIMIT)
         if branch_ui_limit < 8:
             raise RuntimeError(f"workspace branch-list limit should be a sane positive bound, got={branch_ui_limit}")
@@ -209,11 +257,16 @@ def main() -> None:
         current_branch = str(alice_ctx["workspace"].get("branch") or "main")
         if current_branch not in branch_ui_entries:
             branch_ui_entries.insert(0, current_branch)
-        cache_key = git_service._workspace_key(alice_ws)
+        cache_key = git_service._capped_branch_cache_key(alice_ws, branch_ui_limit)
         with git_service._branch_cache_lock:
-            previous_branch_cache_entry = git_service._branch_cache.get(cache_key)
+            previous_branch_cache_entry = git_service._branch_capped_cache.get(cache_key)
         try:
-            git_service._branch_cache_put(cache_key, monotonic(), branch_ui_entries)
+            git_service._branch_capped_cache_put(
+                cache_key,
+                monotonic(),
+                branch_ui_entries[:branch_ui_limit],
+                True,
+            )
             with TestClient(app) as client:
                 files_page_with_many_branches = client.get("/problems/sample/alice/files")
                 if files_page_with_many_branches.status_code != 200:
@@ -248,9 +301,9 @@ def main() -> None:
         finally:
             with git_service._branch_cache_lock:
                 if previous_branch_cache_entry is None:
-                    git_service._branch_cache.pop(cache_key, None)
+                    git_service._branch_capped_cache.pop(cache_key, None)
                 else:
-                    git_service._branch_cache[cache_key] = previous_branch_cache_entry
+                    git_service._branch_capped_cache[cache_key] = previous_branch_cache_entry
         problem_cache_limit = int(getattr(workspace_service, "PROBLEM_CACHE_MAX_ENTRIES", 0))
         user_cache_limit = int(getattr(workspace_service, "USER_CACHE_MAX_ENTRIES", 0))
         if problem_cache_limit < 8:

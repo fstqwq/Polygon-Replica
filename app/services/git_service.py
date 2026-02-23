@@ -13,11 +13,13 @@ from app.services.util import run_cmd
 class GitService:
     BRANCH_CACHE_TTL_SEC = 5.0
     BRANCH_CACHE_MAX_ENTRIES = 256
+    BRANCH_CAPPED_CACHE_MAX_ENTRIES = 512
     STATUS_MAX_LINES = 512
     DIFF_MAX_CHARS = 131072
 
     def __init__(self) -> None:
         self._branch_cache: dict[str, tuple[float, list[str]]] = {}
+        self._branch_capped_cache: dict[str, tuple[float, list[str], bool]] = {}
         self._branch_cache_lock = threading.Lock()
 
     def _workspace_key(self, workspace: Path) -> str:
@@ -27,6 +29,10 @@ class GitService:
         key = self._workspace_key(workspace)
         with self._branch_cache_lock:
             self._branch_cache.pop(key, None)
+            capped_prefix = f"{key}::"
+            stale_keys = [k for k in self._branch_capped_cache if k.startswith(capped_prefix)]
+            for stale in stale_keys:
+                self._branch_capped_cache.pop(stale, None)
 
     def _branch_cache_get(self, key: str, now: float, force_refresh: bool = False) -> list[str] | None:
         with self._branch_cache_lock:
@@ -49,6 +55,33 @@ class GitService:
             while len(self._branch_cache) > self.BRANCH_CACHE_MAX_ENTRIES:
                 oldest_key = next(iter(self._branch_cache))
                 self._branch_cache.pop(oldest_key, None)
+
+    def _capped_branch_cache_key(self, workspace: Path, limit: int) -> str:
+        return f"{self._workspace_key(workspace)}::{max(1, int(limit))}"
+
+    def _branch_capped_cache_get(
+        self, key: str, now: float, force_refresh: bool = False
+    ) -> tuple[list[str], bool] | None:
+        with self._branch_cache_lock:
+            cached = self._branch_capped_cache.get(key)
+            if force_refresh or cached is None:
+                return None
+            ts, branches, truncated = cached
+            if now - ts > self.BRANCH_CACHE_TTL_SEC:
+                self._branch_capped_cache.pop(key, None)
+                return None
+            # Promote on access to keep hot workspaces resident.
+            self._branch_capped_cache.pop(key, None)
+            self._branch_capped_cache[key] = (ts, branches, truncated)
+            return list(branches), bool(truncated)
+
+    def _branch_capped_cache_put(self, key: str, timestamp: float, branches: list[str], truncated: bool) -> None:
+        with self._branch_cache_lock:
+            self._branch_capped_cache.pop(key, None)
+            self._branch_capped_cache[key] = (timestamp, list(branches), bool(truncated))
+            while len(self._branch_capped_cache) > self.BRANCH_CAPPED_CACHE_MAX_ENTRIES:
+                oldest_key = next(iter(self._branch_capped_cache))
+                self._branch_capped_cache.pop(oldest_key, None)
 
     def _contains_symlink_component(self, root: Path, candidate: Path) -> bool:
         try:
@@ -313,17 +346,24 @@ class GitService:
         force_refresh: bool = False,
     ) -> tuple[list[str], bool]:
         cap = max(1, int(limit))
-        key = self._workspace_key(workspace)
+        key = self._capped_branch_cache_key(workspace, cap)
         now = monotonic()
-        cached = self._branch_cache_get(key, now, force_refresh=force_refresh)
-        if cached is not None:
-            if len(cached) <= cap:
-                return list(cached), False
-            selected = list(cached[:cap])
+        cached = self._branch_capped_cache_get(key, now, force_refresh=force_refresh)
+
+        def _with_current(values: list[str], truncated: bool) -> tuple[list[str], bool]:
+            selected = list(values)
             current = str(current_branch or "").strip()
             if current and current not in selected:
-                selected[-1] = current
-            return selected, True
+                if selected:
+                    selected[-1] = current
+                else:
+                    selected = [current]
+                    return selected, False
+            return selected, truncated
+
+        if cached is not None:
+            cached_branches, cached_truncated = cached
+            return _with_current(cached_branches, cached_truncated)
 
         proc = run_cmd(
             [
@@ -344,14 +384,8 @@ class GitService:
         truncated = len(branches) > cap
         if truncated:
             branches = branches[:cap]
-        current = str(current_branch or "").strip()
-        if current and current not in branches:
-            if branches:
-                branches[-1] = current
-            else:
-                branches = [current]
-                truncated = False
-        return branches, truncated
+        self._branch_capped_cache_put(key, now, branches, truncated)
+        return _with_current(branches, truncated)
 
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
         files, _ = self.list_files_capped(workspace, rel=rel, limit=None)

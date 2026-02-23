@@ -94,7 +94,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning a bounded fallback payload on oversized manifests to prevent unbounded decode/response paths.
 - Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
 - Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
-- UI/API branch-list retrieval now uses a capped git-ref query (`for-each-ref --count limit+1`) on cache misses, avoiding full branch enumeration output when only capped results are needed.
+- UI/API branch-list retrieval now uses a capped git-ref query (`for-each-ref --count limit+1`) on cache misses and a bounded TTL cache for capped results, avoiding repeated full/uncapped branch enumeration when only capped results are needed.
 - `/api/problems` now uses a capped, narrow projection query (`200` rows) instead of unbounded `SELECT *`, preventing oversized problem-list payloads.
 - Build/Run diagnostics now cap rendered diagnostic message text (`4096` characters per entry), preventing oversized diagnostic payloads from bloating detail pages.
 - Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
@@ -223,3 +223,4 @@ Open: `http://127.0.0.1:8000`
   - Adds Files-page regressions ensuring oversized file-content views are truncated with read-only/disabled-save safeguards.
   - Adds Build/Run page regressions ensuring oversized `summary_json` payloads return bounded fallback errors instead of unbounded decode paths.
   - Adds workspace-manifest API regressions ensuring oversized `manifest.json` payloads return bounded fallback metadata instead of unbounded decode paths.
+  - Adds capped-branch cache regressions ensuring cache-hit reuse plus bound/eviction behavior for UI/API branch-list retrieval.
