@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import types
 import uuid
 import zipfile
 from io import BytesIO
@@ -1852,6 +1853,74 @@ def main() -> None:
             raise RuntimeError("build page should expose oversized diagnostic-message truncation marker")
     db.execute("DELETE FROM builds WHERE id=?", [build_diag_cap_id])
     shutil.rmtree(build_diag_cap_root, ignore_errors=True)
+    build_db_diag_limit = int(getattr(build_service, "DB_SUMMARY_DIAGNOSTICS_LIMIT", 0))
+    if build_db_diag_limit < 8:
+        raise RuntimeError(
+            f"build DB summary diagnostics limit should be a sane positive bound, got={build_db_diag_limit}"
+        )
+    build_db_diag_prefix = f"build-db-diag-cap-{uuid.uuid4().hex[:8]}"
+    build_db_diag_total_seed = build_db_diag_limit + 37
+    original_collect_diagnostics = build_service._collect_diagnostics
+
+    def _patched_collect_diagnostics(_self, _snapshot, _text):
+        return [
+            {
+                "level": "error",
+                "file": "solutions/main.cpp",
+                "line": 1,
+                "column": 1,
+                "message": f"{build_db_diag_prefix}-{i:04d}",
+            }
+            for i in range(build_db_diag_total_seed)
+        ]
+
+    build_service._collect_diagnostics = types.MethodType(_patched_collect_diagnostics, build_service)
+    try:
+        build_diag_db_cap_id = build_service.run_build("sample", "alice")
+    finally:
+        build_service._collect_diagnostics = original_collect_diagnostics
+    build_diag_db_cap_row = db.fetch_one(
+        "SELECT status,summary_json,artifact_path FROM builds WHERE id=?",
+        [build_diag_db_cap_id],
+    )
+    if build_diag_db_cap_row is None or build_diag_db_cap_row["status"] != "ok":
+        raise RuntimeError(f"build DB diagnostics cap build failed: {build_diag_db_cap_row}")
+    build_diag_db_summary = json.loads(build_diag_db_cap_row["summary_json"])
+    build_diag_db_values = build_diag_db_summary.get("diagnostics") or []
+    if len(build_diag_db_values) != build_db_diag_limit:
+        raise RuntimeError("build DB summary should persist only capped diagnostics entries")
+    if not build_diag_db_summary.get("diagnostics_truncated"):
+        raise RuntimeError("build DB summary should mark diagnostics list as truncated")
+    if int(build_diag_db_summary.get("diagnostics_limit", 0)) != build_db_diag_limit:
+        raise RuntimeError("build DB summary should expose configured diagnostics limit")
+    build_diag_db_total = int(build_diag_db_summary.get("diagnostics_total", 0))
+    if build_diag_db_total <= build_db_diag_limit:
+        raise RuntimeError("build DB summary should preserve total diagnostics count before truncation")
+    if any(
+        str(d.get("message") or "") == f"{build_db_diag_prefix}-{build_db_diag_limit:04d}"
+        for d in build_diag_db_values
+        if isinstance(d, dict)
+    ):
+        raise RuntimeError("build DB summary should not include diagnostics beyond capped range")
+    build_diag_full_values = json.loads(
+        (Path(build_diag_db_cap_row["artifact_path"]) / "logs" / "diagnostics.json").read_text(encoding="utf-8")
+    )
+    if len(build_diag_full_values) <= build_db_diag_limit:
+        raise RuntimeError("build artifact diagnostics.json should preserve full diagnostics list")
+    if len(build_diag_full_values) != build_diag_db_total:
+        raise RuntimeError("build DB diagnostics_total should match full diagnostics artifact length")
+    with TestClient(app) as client:
+        build_page_db_diag_cap = client.get("/problems/sample/alice/build", params={"build_id": build_diag_db_cap_id})
+        if build_page_db_diag_cap.status_code != 200:
+            raise RuntimeError(
+                "build page should remain available for DB-capped build summaries"
+                f", status={build_page_db_diag_cap.status_code}"
+            )
+        if (
+            f"Showing first {build_db_diag_limit} diagnostics ({build_diag_db_total} total)."
+            not in build_page_db_diag_cap.text
+        ):
+            raise RuntimeError("build page should honor persisted build-summary diagnostics truncation metadata")
     preview_ref_prefix = f"preview-ref-cap-{uuid.uuid4().hex[:8]}"
     preview_ref_total = preview_log_refs_limit + 24
     preview_ref_lines = "\n".join(

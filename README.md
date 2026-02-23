@@ -93,6 +93,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run persistence now caps `runs.summary_json` test/diagnostic/feedback lists at write time (with truncation metadata) while preserving full per-test results in run artifact `summary.json`, reducing DB metadata bloat on large runs.
 - Run-page list capping now preserves persisted run-summary truncation metadata when present, so UI indicators still reflect full-result totals from DB-capped summaries.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
+- Build persistence now caps `builds.summary_json` diagnostics at write time (with truncation metadata) while preserving full diagnostics in artifact `logs/diagnostics.json`, reducing DB metadata bloat on diagnostic-heavy builds.
 - Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on artifacts with very large `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error on oversized payloads to prevent expensive decode/render paths from oversized DB blobs.
 - Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning a bounded fallback payload on oversized manifests to prevent unbounded decode/response paths.
@@ -240,3 +241,4 @@ Open: `http://127.0.0.1:8000`
   - Adds export-mode regressions ensuring chunked checker-marker scanning still detects `nextpass.in` across chunk boundaries.
   - Adds run-summary persistence regressions ensuring DB-capped run summaries expose truncation metadata while artifact `summary.json` preserves full per-test results.
   - Adds run-page regressions ensuring persisted run-summary truncation metadata remains visible in UI indicators for DB-capped summaries.
+  - Adds build-summary persistence regressions ensuring DB-capped build diagnostics expose truncation metadata while artifact `logs/diagnostics.json` preserves full diagnostic lists.

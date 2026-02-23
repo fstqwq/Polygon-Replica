@@ -21,11 +21,47 @@ CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 
 
 class BuildService:
+    DB_SUMMARY_DIAGNOSTICS_LIMIT = 200
+
     def __init__(self, db: DB, workspace_service: WorkspaceService, artifacts: ArtifactService, toolchain: ToolchainService):
         self.db = db
         self.workspace_service = workspace_service
         self.artifacts = artifacts
         self.toolchain = toolchain
+
+    def _cap_summary_list_field(
+        self,
+        payload: dict,
+        field: str,
+        limit: int,
+        truncated_key: str,
+        total_key: str,
+        limit_key: str,
+    ) -> None:
+        values = payload.get(field)
+        if not isinstance(values, list):
+            return
+        cap = max(1, int(limit))
+        total = len(values)
+        payload[limit_key] = cap
+        payload[total_key] = total
+        if total > cap:
+            payload[field] = values[:cap]
+            payload[truncated_key] = True
+            return
+        payload[truncated_key] = False
+
+    def _summary_for_db(self, summary: dict) -> str:
+        payload = dict(summary)
+        self._cap_summary_list_field(
+            payload,
+            "diagnostics",
+            self.DB_SUMMARY_DIAGNOSTICS_LIMIT,
+            "diagnostics_truncated",
+            "diagnostics_total",
+            "diagnostics_limit",
+        )
+        return json.dumps(payload)
 
     def _is_safe_source_in_dir(self, root: Path, path: Path, root_resolved: Path | None = None) -> bool:
         if path.is_symlink() or not path.exists() or not path.is_file():
@@ -490,7 +526,7 @@ class BuildService:
 
             self.db.execute(
                 "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                ["ok", json.dumps({"steps": steps, "diagnostics": diagnostics}), now_iso(), build_id],
+                ["ok", self._summary_for_db({"steps": steps, "diagnostics": diagnostics}), now_iso(), build_id],
             )
             final_status = "ok"
         except Exception as exc:
@@ -500,7 +536,7 @@ class BuildService:
                 "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
                 [
                     "failed",
-                    json.dumps(
+                    self._summary_for_db(
                         {
                             "error": str(exc),
                             "failed_step": current_step,

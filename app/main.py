@@ -894,12 +894,24 @@ def build_page(request: Request, problem: str, user: str):
         if summary:
             maybe_diagnostics = summary.get("diagnostics", [])
             if isinstance(maybe_diagnostics, list):
-                diagnostics_total = len(maybe_diagnostics)
+                _cap_summary_list(
+                    summary,
+                    "diagnostics",
+                    BUILD_DIAGNOSTIC_LIST_LIMIT,
+                    "diagnostics_truncated",
+                    "diagnostics_total",
+                    "diagnostics_limit",
+                )
+                capped = summary.get("diagnostics", [])
+                try:
+                    diagnostics_total = max(len(capped) if isinstance(capped, list) else 0, int(summary.get("diagnostics_total", 0)))
+                except Exception:
+                    diagnostics_total = len(capped) if isinstance(capped, list) else 0
                 diagnostics = _normalize_diagnostics(
-                    maybe_diagnostics[:BUILD_DIAGNOSTIC_LIST_LIMIT],
+                    capped if isinstance(capped, list) else [],
                     DIAGNOSTIC_MESSAGE_CHAR_LIMIT,
                 )
-                diagnostics_truncated = diagnostics_total > BUILD_DIAGNOSTIC_LIST_LIMIT
+                diagnostics_truncated = bool(summary.get("diagnostics_truncated"))
             else:
                 diagnostics = []
     return templates.TemplateResponse(
