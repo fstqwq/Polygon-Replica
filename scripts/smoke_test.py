@@ -2142,6 +2142,30 @@ def main() -> None:
         raise RuntimeError(
             "run feedback key-file discovery should be deterministic and ignore unsafe symlinked files"
         )
+    feedback_key_limit = int(getattr(run_service, "FEEDBACK_KEY_FILE_LIMIT", 0))
+    if feedback_key_limit < 8:
+        raise RuntimeError(f"run feedback key-file limit should be a sane positive bound, got={feedback_key_limit}")
+    feedback_cap_probe = run_cfg_root / f"feedback-cap-probe-{uuid.uuid4().hex[:8]}"
+    for i in range(feedback_key_limit + 24):
+        p = feedback_cap_probe / f"cap-{i:04d}" / "judgemessage.txt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("judge", encoding="utf-8")
+    feedback_cap_files = run_service._feedback_key_files(feedback_cap_probe, run_cfg_root)
+    if len(feedback_cap_files) != feedback_key_limit:
+        raise RuntimeError("run feedback key-file discovery should enforce configured list cap")
+    expected_first_feedback = str((feedback_cap_probe / "cap-0000" / "judgemessage.txt").relative_to(run_cfg_root))
+    expected_last_feedback = str(
+        (feedback_cap_probe / f"cap-{feedback_key_limit - 1:04d}" / "judgemessage.txt").relative_to(run_cfg_root)
+    )
+    unexpected_feedback = str(
+        (feedback_cap_probe / f"cap-{feedback_key_limit:04d}" / "judgemessage.txt").relative_to(run_cfg_root)
+    )
+    if expected_first_feedback not in feedback_cap_files:
+        raise RuntimeError("run feedback key-file discovery should keep entries within configured cap")
+    if expected_last_feedback not in feedback_cap_files:
+        raise RuntimeError("run feedback key-file discovery should keep capped tail entry")
+    if unexpected_feedback in feedback_cap_files:
+        raise RuntimeError("run feedback key-file discovery should hide entries beyond configured cap")
     feedback_root_outside = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"feedback-root-outside-{uuid.uuid4().hex[:8]}"
     feedback_root_outside.mkdir(parents=True, exist_ok=True)
     (feedback_root_outside / "judgemessage.txt").write_text("outside-judge", encoding="utf-8")

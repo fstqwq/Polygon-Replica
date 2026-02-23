@@ -25,6 +25,7 @@ DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<leve
 class RunService:
     RUN_TIMEOUT_SENTINEL = -1_000_000_000
     ARTIFACT_CACHE_LIMIT = 256
+    FEEDBACK_KEY_FILE_LIMIT = 256
 
     def __init__(self, db: DB, workspace_service: WorkspaceService, toolchain: ToolchainService):
         self.db = db
@@ -470,7 +471,9 @@ class RunService:
         if base_root_resolved not in test_feedback_resolved.parents and base_root_resolved != test_feedback_resolved:
             return []
         wanted = {"judgemessage.txt", "teammessage.txt", "nextpass.in"}
+        cap = max(1, int(self.FEEDBACK_KEY_FILE_LIMIT))
         keys: list[str] = []
+        stop_scan = False
         for dirpath, dirnames, filenames in os.walk(test_feedback_dir, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             keep_dirs: list[str] = []
@@ -493,7 +496,12 @@ class RunService:
                 if not self._is_safe_regular_file(base_root, p, root_resolved=base_root_resolved):
                     continue
                 keys.append(str(p.relative_to(base_root)))
-        return sorted(keys)
+                if len(keys) >= cap:
+                    stop_scan = True
+                    break
+            if stop_scan:
+                break
+        return keys
 
     def _files_equal(self, lhs: Path, rhs: Path) -> bool:
         if not lhs.exists() or not rhs.exists():

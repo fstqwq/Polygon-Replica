@@ -207,6 +207,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
 - Run feedback key-file discovery (`judgemessage.txt`, `teammessage.txt`, `nextpass.in`) now validates feedback roots before traversal and uses a single symlink-safe directory walk per test, avoiding unsafe/out-of-root scans.
+- Run feedback key-file discovery now also caps collected key files per test (`256`) to prevent pathological `feedback_files` list growth from deep feedback trees.
 - Runner safe file matching now uses a suffix fast path for common non-recursive patterns (`*.in`, `*.ans`), reducing glob overhead while preserving ordering and symlink safety.
 - Runner safe file-matching now resolves artifact roots once per scan, reducing repeated path-resolution overhead during test/answer discovery.
 - Switch workspace/branch routes now normalize posted page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`) for redirect correctness without JS dependency.
@@ -266,6 +267,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates Build/Run page oversized `summary_json` rendering paths, ensuring bounded fallback errors instead of unbounded JSON decode in UI detail views.
 - Smoke coverage now validates workspace-manifest API oversized `manifest.json` handling, ensuring bounded fallback metadata instead of unbounded JSON decode paths.
 - Smoke coverage now validates capped-branch cache reuse behavior and bounded eviction for UI/API branch-list retrieval.
+- Smoke coverage now validates run feedback key-file capped discovery behavior on large feedback trees.
 
 ## Upstream Dependency Integration
 

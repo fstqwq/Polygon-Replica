@@ -145,6 +145,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
 - Run feedback key-file discovery (`judgemessage.txt`, `teammessage.txt`, `nextpass.in`) now validates feedback roots before traversal and uses a single symlink-safe directory walk per test, avoiding unsafe/out-of-root scans.
+- Run feedback key-file discovery now also caps collected key files per test (`256`) to prevent pathological `feedback_files` summary/list growth from deep feedback trees.
 - Runner safe file matching now uses a suffix fast path for common non-recursive patterns (`*.in`, `*.ans`), reducing glob overhead while preserving ordering and symlink safety.
 - Runner safe file-matching now resolves artifact roots once per scan, reducing repeated path-resolution overhead during test/answer discovery.
 - Workspace/branch switch routes now normalize page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`), so redirects remain valid even without client-side page-target JS.
@@ -224,3 +225,4 @@ Open: `http://127.0.0.1:8000`
   - Adds Build/Run page regressions ensuring oversized `summary_json` payloads return bounded fallback errors instead of unbounded decode paths.
   - Adds workspace-manifest API regressions ensuring oversized `manifest.json` payloads return bounded fallback metadata instead of unbounded decode paths.
   - Adds capped-branch cache regressions ensuring cache-hit reuse plus bound/eviction behavior for UI/API branch-list retrieval.
+  - Adds run feedback key-file regressions ensuring deterministic capped discovery behavior for large feedback trees.
