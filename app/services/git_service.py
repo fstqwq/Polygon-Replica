@@ -400,8 +400,8 @@ class GitService:
         stop_scan = False
         for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
-            next_dirs: list[str] = []
-            for name in sorted(dirnames):
+            candidate_dirs: list[str] = []
+            for name in dirnames:
                 d = dir_root / name
                 if ".git" in d.parts or ".polygonlike.lock" in d.parts or d.is_symlink():
                     continue
@@ -411,6 +411,10 @@ class GitService:
                     continue
                 if workspace_root not in resolved.parents and workspace_root != resolved:
                     continue
+                candidate_dirs.append(name)
+
+            next_dirs: list[str] = []
+            for name in sorted(candidate_dirs):
                 next_dirs.append(name)
                 if capped is not None and len(paths) >= capped:
                     truncated = True
@@ -422,7 +426,8 @@ class GitService:
                 break
             dirnames[:] = next_dirs
 
-            for name in sorted(filenames):
+            safe_files: list[str] = []
+            for name in filenames:
                 p = dir_root / name
                 if ".git" in p.parts or ".polygonlike.lock" in p.parts or p.is_symlink():
                     continue
@@ -432,6 +437,10 @@ class GitService:
                     continue
                 if workspace_root not in resolved.parents and workspace_root != resolved:
                     continue
+                safe_files.append(name)
+
+            for name in sorted(safe_files):
+                p = dir_root / name
                 if capped is not None and len(paths) >= capped:
                     truncated = True
                     stop_scan = True
