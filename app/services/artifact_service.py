@@ -22,8 +22,28 @@ class ArtifactService:
         self.artifacts_root = artifacts_root
 
     def _iter_manifest_files(self, root: Path):
+        if root.is_symlink():
+            return
+        try:
+            root_resolved = root.resolve()
+        except OSError:
+            return
         for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
+            try:
+                dir_root_resolved = dir_root.resolve()
+            except OSError:
+                dirnames[:] = []
+                continue
+            if root_resolved not in dir_root_resolved.parents and root_resolved != dir_root_resolved:
+                dirnames[:] = []
+                continue
+            try:
+                rel_root = dir_root.relative_to(root)
+            except ValueError:
+                dirnames[:] = []
+                continue
+            rel_prefix = "" if rel_root == Path(".") else rel_root.as_posix()
             keep_dirs: list[str] = []
             for name in dirnames:
                 d = dir_root / name
@@ -42,7 +62,8 @@ class ArtifactService:
                 safe_filenames.append(name)
 
             for name in sorted(safe_filenames):
-                yield dir_root / name
+                rel = f"{rel_prefix}/{name}" if rel_prefix else name
+                yield rel, dir_root / name
 
     def prepare(self, problem_slug: str, build_id: str) -> ArtifactPaths:
         root = self.artifacts_root / problem_slug / build_id
@@ -68,18 +89,17 @@ class ArtifactService:
         total_size = 0
         tests_count = 0
         ans_count = 0
-        for p in self._iter_manifest_files(paths.root):
-            rel = p.relative_to(paths.root)
-            if rel == Path("manifest.json"):
+        for rel, p in self._iter_manifest_files(paths.root):
+            if rel == "manifest.json":
                 continue
-            if rel.parts and rel.parts[0] == "tests":
+            if rel == "tests" or rel.startswith("tests/"):
                 tests_count += 1
-            elif rel.parts and rel.parts[0] == "ans":
+            elif rel == "ans" or rel.startswith("ans/"):
                 ans_count += 1
             size = p.stat().st_size
             files.append(
                 {
-                    "path": str(rel),
+                    "path": rel,
                     "sha256": sha256_file(p),
                     "size": size,
                 }

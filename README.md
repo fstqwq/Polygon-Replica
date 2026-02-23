@@ -160,6 +160,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Git diff now applies lock-file exclusions at command pathspec level (with reserved-diff fallback filtering), reducing unnecessary diff parsing work when lock files change.
 - Artifact manifest writing now uses a single deterministic streaming directory walk (instead of materializing full `rglob` lists), reducing memory overhead for large build artifacts.
 - Artifact manifest traversal now filters directory/file entries before sorting, reducing per-directory sorting overhead when symlinked entries are present.
+- Artifact manifest traversal now validates each walked directory once and reuses directory-relative prefixes for file entries, reducing per-file path normalization overhead while preserving deterministic ordering and symlink safety.
 - Artifact manifest summary counters (`tests_count`, `ans_count`) are now computed during that same manifest walk, avoiding extra tests/ans directory scans.
 - Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
 - Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.
