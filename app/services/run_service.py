@@ -572,17 +572,20 @@ class RunService:
         stop_scan = False
         for dirpath, dirnames, filenames in os.walk(test_feedback_dir, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
+            try:
+                dir_root_resolved = dir_root.resolve()
+            except OSError:
+                dirnames[:] = []
+                continue
+            if base_root_resolved not in dir_root_resolved.parents and base_root_resolved != dir_root_resolved:
+                dirnames[:] = []
+                continue
             keep_dirs: list[str] = []
             for name in dirnames:
                 d = dir_root / name
                 if d.is_symlink():
                     continue
-                try:
-                    resolved = d.resolve()
-                except OSError:
-                    continue
-                if base_root_resolved in resolved.parents or base_root_resolved == resolved:
-                    keep_dirs.append(name)
+                keep_dirs.append(name)
             dirnames[:] = sorted(keep_dirs)
 
             has_judge = False
