@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 from pathlib import Path
 from time import monotonic
 
@@ -10,15 +11,41 @@ from app.services.util import run_cmd
 
 class GitService:
     BRANCH_CACHE_TTL_SEC = 5.0
+    BRANCH_CACHE_MAX_ENTRIES = 256
 
     def __init__(self) -> None:
         self._branch_cache: dict[str, tuple[float, list[str]]] = {}
+        self._branch_cache_lock = threading.Lock()
 
     def _workspace_key(self, workspace: Path) -> str:
         return str(workspace.resolve())
 
     def _invalidate_branch_cache(self, workspace: Path) -> None:
-        self._branch_cache.pop(self._workspace_key(workspace), None)
+        key = self._workspace_key(workspace)
+        with self._branch_cache_lock:
+            self._branch_cache.pop(key, None)
+
+    def _branch_cache_get(self, key: str, now: float, force_refresh: bool = False) -> list[str] | None:
+        with self._branch_cache_lock:
+            cached = self._branch_cache.get(key)
+            if force_refresh or cached is None:
+                return None
+            ts, branches = cached
+            if now - ts > self.BRANCH_CACHE_TTL_SEC:
+                self._branch_cache.pop(key, None)
+                return None
+            # Promote on access to keep hot workspaces resident.
+            self._branch_cache.pop(key, None)
+            self._branch_cache[key] = (ts, branches)
+            return list(branches)
+
+    def _branch_cache_put(self, key: str, timestamp: float, branches: list[str]) -> None:
+        with self._branch_cache_lock:
+            self._branch_cache.pop(key, None)
+            self._branch_cache[key] = (timestamp, list(branches))
+            while len(self._branch_cache) > self.BRANCH_CACHE_MAX_ENTRIES:
+                oldest_key = next(iter(self._branch_cache))
+                self._branch_cache.pop(oldest_key, None)
 
     def _contains_symlink_component(self, root: Path, candidate: Path) -> bool:
         try:
@@ -211,15 +238,15 @@ class GitService:
     def list_branches(self, workspace: Path, force_refresh: bool = False) -> list[str]:
         key = self._workspace_key(workspace)
         now = monotonic()
-        cached = self._branch_cache.get(key)
-        if not force_refresh and cached is not None and now - cached[0] <= self.BRANCH_CACHE_TTL_SEC:
-            return list(cached[1])
+        cached = self._branch_cache_get(key, now, force_refresh=force_refresh)
+        if cached is not None:
+            return cached
 
         proc = run_cmd(["git", "-C", str(workspace), "branch", "--format", "%(refname:short)"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         branches = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-        self._branch_cache[key] = (now, branches)
+        self._branch_cache_put(key, now, branches)
         return list(branches)
 
     def list_files(self, workspace: Path, rel: str = ".") -> list[str]:

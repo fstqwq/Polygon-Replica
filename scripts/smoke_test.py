@@ -129,6 +129,22 @@ def main() -> None:
         branch_list_after_delete = git_service.list_branches(alice_ws, force_refresh=True)
         if branch_cache_name in branch_list_after_delete:
             raise RuntimeError("branch cleanup failed after branch-cache check")
+        branch_cache_limit = int(getattr(git_service, "BRANCH_CACHE_MAX_ENTRIES", 0))
+        if branch_cache_limit < 8:
+            raise RuntimeError(f"git branch cache limit should be a sane positive bound, got={branch_cache_limit}")
+        branch_cache_probe_prefix = f"branch-cache-probe-{uuid.uuid4().hex[:8]}"
+        first_branch_cache_key = ""
+        for i in range(branch_cache_limit + 24):
+            cache_key = f"{branch_cache_probe_prefix}-{i:03d}"
+            git_service._branch_cache_put(cache_key, float(i), [f"branch-{i:03d}"])
+            if i == 0:
+                first_branch_cache_key = cache_key
+        if len(git_service._branch_cache) > branch_cache_limit:
+            raise RuntimeError("git branch cache exceeded configured bound")
+        if first_branch_cache_key in git_service._branch_cache:
+            raise RuntimeError("git branch cache should evict oldest entries under pressure")
+        with git_service._branch_cache_lock:
+            git_service._branch_cache.clear()
         tracked_file = alice_ws / "README.problem.md"
         tracked_original = tracked_file.read_text(encoding="utf-8")
         tracked_marker = f"git-dirty-marker-{uuid.uuid4().hex[:8]}"
