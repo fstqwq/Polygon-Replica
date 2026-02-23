@@ -84,6 +84,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build/Run/Export page queries now project only template-required columns for list/detail rows (instead of broad `SELECT *` payloads), reducing DB row transfer on hot UI views.
 - Run/Export build-selector queries are now bounded to recent workspace builds (200 rows), preventing unbounded dropdown payload growth on long-lived workspaces.
 - Artifact and run-artifact browser pages now cap file listings (`512` entries) and surface truncation indicators, preventing oversized HTML responses on large artifact trees.
+- Artifact and run-artifact browse list assembly now captures capped relative paths directly during traversal (instead of materializing `Path` objects then remapping), reducing temporary allocations on large trees.
 - Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
 - Files page file-content rendering now caps editor payloads (`131072` characters) and marks clipped views read-only with save disabled, preventing oversized editor responses and accidental truncation writes.
 - Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
