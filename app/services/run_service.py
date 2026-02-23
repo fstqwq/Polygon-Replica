@@ -7,6 +7,7 @@ import re
 import selectors
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -23,6 +24,7 @@ DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<leve
 
 class RunService:
     RUN_TIMEOUT_SENTINEL = -1_000_000_000
+    ARTIFACT_CACHE_LIMIT = 256
 
     def __init__(self, db: DB, workspace_service: WorkspaceService, toolchain: ToolchainService):
         self.db = db
@@ -32,6 +34,7 @@ class RunService:
         self._test_input_cache: dict[str, list[str]] = {}
         self._answer_file_cache: dict[str, list[str]] = {}
         self._test_input_meta_cache: dict[str, list[tuple[str, str]]] = {}
+        self._cache_lock = threading.Lock()
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
@@ -92,7 +95,7 @@ class RunService:
 
     def _load_run_config(self, artifact_root: Path) -> dict[str, object]:
         cache_key = self._artifact_cache_key(artifact_root)
-        cached = self._run_config_cache.get(cache_key)
+        cached = self._cache_get(self._run_config_cache, cache_key)
         if cached is not None:
             return dict(cached)
 
@@ -137,36 +140,36 @@ class RunService:
             "run_jobs": run_jobs,
             "run_timeout_sec": run_timeout_sec,
         }
-        self._run_config_cache[cache_key] = dict(resolved_cfg)
+        self._cache_put(self._run_config_cache, cache_key, dict(resolved_cfg))
         return dict(resolved_cfg)
 
     def _load_test_inputs(self, artifact_root: Path) -> list[str]:
         cache_key = self._artifact_cache_key(artifact_root)
-        cached = self._test_input_cache.get(cache_key)
+        cached = self._cache_get(self._test_input_cache, cache_key)
         if cached is not None:
             return list(cached)
         tests_dir = artifact_root / "tests"
         names = [p.name for p in self._safe_matching_files(tests_dir, "*.in")]
-        self._test_input_cache[cache_key] = list(names)
+        self._cache_put(self._test_input_cache, cache_key, list(names))
         return list(names)
 
     def _load_answer_files(self, artifact_root: Path) -> list[str]:
         cache_key = self._artifact_cache_key(artifact_root)
-        cached = self._answer_file_cache.get(cache_key)
+        cached = self._cache_get(self._answer_file_cache, cache_key)
         if cached is not None:
             return list(cached)
         ans_dir = artifact_root / "ans"
         names = [p.name for p in self._safe_matching_files(ans_dir, "*.ans")]
-        self._answer_file_cache[cache_key] = list(names)
+        self._cache_put(self._answer_file_cache, cache_key, list(names))
         return list(names)
 
     def _load_test_input_meta(self, artifact_root: Path) -> list[tuple[str, str]]:
         cache_key = self._artifact_cache_key(artifact_root)
-        cached = self._test_input_meta_cache.get(cache_key)
+        cached = self._cache_get(self._test_input_meta_cache, cache_key)
         if cached is not None:
             return list(cached)
         meta = [(name, Path(name).stem) for name in self._load_test_inputs(artifact_root)]
-        self._test_input_meta_cache[cache_key] = list(meta)
+        self._cache_put(self._test_input_meta_cache, cache_key, list(meta))
         return list(meta)
 
     def _artifact_cache_key(self, artifact_root: Path) -> str:
@@ -174,6 +177,24 @@ class RunService:
             return str(artifact_root.resolve())
         except OSError:
             return str(artifact_root)
+
+    def _cache_get(self, cache: dict, key: str):
+        with self._cache_lock:
+            value = cache.get(key)
+            if value is None:
+                return None
+            # Promote on access to keep hot build artifacts resident.
+            cache.pop(key, None)
+            cache[key] = value
+            return value
+
+    def _cache_put(self, cache: dict, key: str, value) -> None:
+        with self._cache_lock:
+            cache.pop(key, None)
+            cache[key] = value
+            while len(cache) > self.ARTIFACT_CACHE_LIMIT:
+                oldest_key = next(iter(cache))
+                cache.pop(oldest_key, None)
 
     def _effective_run_jobs(self, configured: object, test_count: int) -> int:
         auto_jobs = max(1, min(4, os.cpu_count() or 1))

@@ -1490,6 +1490,39 @@ def main() -> None:
     answer_files_first.append(answer_files_marker)
     if answer_files_marker in answer_files_second:
         raise RuntimeError("run answer-file cache should return independent copies")
+    cache_limit = int(getattr(run_service, "ARTIFACT_CACHE_LIMIT", 0))
+    if cache_limit < 8:
+        raise RuntimeError(f"run artifact cache limit should be a sane positive bound, got={cache_limit}")
+    run_cache_probe_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"run-cache-cap-{uuid.uuid4().hex[:8]}"
+    run_cache_probe_root.mkdir(parents=True, exist_ok=True)
+    first_probe_key = ""
+    for i in range(cache_limit + 24):
+        probe = run_cache_probe_root / f"artifact-{i:03d}"
+        (probe / "tests").mkdir(parents=True, exist_ok=True)
+        (probe / "ans").mkdir(parents=True, exist_ok=True)
+        (probe / "tests" / "001.in").write_text(f"{i}\n", encoding="utf-8")
+        (probe / "ans" / "001.ans").write_text(f"{i}\n", encoding="utf-8")
+        (probe / "manifest.json").write_text(
+            json.dumps({"generation_params": {"run_jobs": i % 4}}),
+            encoding="utf-8",
+        )
+        run_service._load_run_config(probe)
+        run_service._load_test_inputs(probe)
+        run_service._load_test_input_meta(probe)
+        run_service._load_answer_files(probe)
+        if i == 0:
+            first_probe_key = run_service._artifact_cache_key(probe)
+    for cache_name, cache_obj in [
+        ("run_config", run_service._run_config_cache),
+        ("test_input", run_service._test_input_cache),
+        ("test_input_meta", run_service._test_input_meta_cache),
+        ("answer_file", run_service._answer_file_cache),
+    ]:
+        if len(cache_obj) > cache_limit:
+            raise RuntimeError(f"run {cache_name} cache exceeded configured bound {cache_limit}")
+        if first_probe_key in cache_obj:
+            raise RuntimeError(f"run {cache_name} cache should evict oldest artifact entries under pressure")
+    shutil.rmtree(run_cache_probe_root, ignore_errors=True)
     safe_match_probe = run_cfg_root / f"safe-match-{uuid.uuid4().hex[:8]}"
     safe_match_probe.mkdir(parents=True, exist_ok=True)
     (safe_match_probe / "b.in").write_text("2\n", encoding="utf-8")
