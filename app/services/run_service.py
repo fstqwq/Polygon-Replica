@@ -249,9 +249,16 @@ class RunService:
         cached = self._cache_get(self._test_input_meta_cache, cache_key)
         if cached is not None:
             return list(cached)
-        meta = [(name, Path(name).stem) for name in self._load_test_inputs(artifact_root)]
+        meta = [(name, self._test_name_stem(name)) for name in self._load_test_inputs(artifact_root)]
         self._cache_put(self._test_input_meta_cache, cache_key, list(meta))
         return list(meta)
+
+    def _test_name_stem(self, name: str) -> str:
+        text = str(name or "")
+        # Hot path for cached *.in test discovery names.
+        if text.endswith(".in"):
+            return text[:-3]
+        return os.path.splitext(text)[0]
 
     def _artifact_cache_key(self, artifact_root: Path) -> str:
         try:

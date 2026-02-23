@@ -236,6 +236,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
 - Run test/answer discovery now uses a shared name-only suffix scan helper for run setup hot paths, avoiding temporary `Path` object materialization when only filenames are needed.
 - Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
+- Run test-input stem extraction now uses a lightweight filename fast path for `*.in` entries (with splitext fallback), avoiding per-test `Path(...)` object construction in run setup.
 - Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
 - Run execution now reuses a cached immutable answer-name set per artifact root, avoiding repeated per-run list-to-set rematerialization for answer presence checks.
 - Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
