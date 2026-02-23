@@ -152,6 +152,38 @@ class ExportService:
             if self._is_safe_regular_file(folder, p, root_resolved=resolved_root):
                 yield p
 
+    def _iter_safe_top_level_suffix_files(
+        self,
+        folder: Path,
+        suffix: str,
+        folder_resolved: Path | None = None,
+    ):
+        if not suffix or not folder.exists() or not folder.is_dir():
+            return
+        # Require a resolvable root up front so callers keep deterministic empty behavior
+        # for invalid/unreadable artifact directories.
+        try:
+            _ = folder_resolved if folder_resolved is not None else folder.resolve()
+        except OSError:
+            return
+        matched: list[str] = []
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if not name.endswith(suffix):
+                        continue
+                    try:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    matched.append(name)
+        except OSError:
+            return
+        for name in sorted(matched):
+            yield folder / name
+
     def _find_first_source(self, folder: Path, preferred: list[str] | None = None) -> Path | None:
         if not folder.exists() or not folder.is_dir():
             return None
@@ -329,20 +361,23 @@ class ExportService:
             ans_dir_resolved = None
         safe_answers: dict[str, Path] = {}
         if ans_dir_resolved is not None:
-            for ap in sorted(ans_dir.glob("*.ans")):
-                if self._is_safe_regular_file(ans_dir, ap, root_resolved=ans_dir_resolved):
-                    safe_answers[ap.name] = ap
+            for ap in self._iter_safe_top_level_suffix_files(
+                ans_dir,
+                ".ans",
+                folder_resolved=ans_dir_resolved,
+            ):
+                safe_answers[ap.name] = ap
 
         secret = data_root / "secret"
         sample = data_root / "sample"
         secret.mkdir(parents=True, exist_ok=True)
         sample.mkdir(parents=True, exist_ok=True)
 
-        for t in sorted(tests_dir.glob("*.in")):
-            if tests_dir_resolved is None or not self._is_safe_regular_file(
-                tests_dir, t, root_resolved=tests_dir_resolved
-            ):
-                continue
+        for t in self._iter_safe_top_level_suffix_files(
+            tests_dir,
+            ".in",
+            folder_resolved=tests_dir_resolved,
+        ):
             if first_test is None:
                 first_test = t
             test_count += 1

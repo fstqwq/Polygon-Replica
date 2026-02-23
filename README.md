@@ -70,6 +70,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Export input-validator fallback now uses symlink-safe file detection and replaces symlinked `validator.cpp` paths before writing defaults, preventing symlink-target overwrite.
 - Export test-data copy now streams safe test discovery and captures sample selection inline, avoiding full test-list materialization for large exports.
 - Export test-data answer lookup now pre-indexes safe `ans/*.ans` files once per export, avoiding repeated per-test answer-path safety checks.
+- Export test/answer top-level suffix discovery now uses deterministic `os.scandir`-based matching (`*.in`/`*.ans`), avoiding `glob` materialization while preserving symlink-safe ordering.
 - Workspace pages and recent-* APIs are now strictly workspace-scoped (build/preview/run/export history no longer leaks entries from other users on the same problem).
 - Export rows now persist `workspace_id` (with startup backfill for legacy rows), and Export page / recent-exports API now use direct workspace-scoped reads from `exports` without joining `builds`.
 - Artifact download/browse/file endpoints now enforce workspace ownership for both build and preview artifact ids.
@@ -250,3 +251,4 @@ Open: `http://127.0.0.1:8000`
   - Adds build compile-log regressions ensuring `compile.log` still includes compile-job headers and per-target entries after streamed compile logging changes.
   - Adds run compile-error regressions ensuring failed uploaded-source runs persist non-empty `compile.log` artifacts after streamed compile logging changes.
   - Adds run answer-file cache regressions ensuring cached answer-name set parity and bounded eviction behavior.
+  - Adds export suffix-discovery regressions ensuring deterministic safe `.ans` top-level matching and symlink skipping.

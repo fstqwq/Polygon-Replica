@@ -2397,6 +2397,24 @@ def main() -> None:
     fallback_glob_names = [p.name for p in run_service._safe_matching_files(safe_match_probe, "a.*")]
     if fallback_glob_names != ["a.ans", "a.in"]:
         raise RuntimeError("run safe matching fallback glob path should remain deterministic and safe")
+    export_suffix_probe = run_cfg_root / f"export-suffix-probe-{uuid.uuid4().hex[:8]}"
+    export_suffix_probe.mkdir(parents=True, exist_ok=True)
+    (export_suffix_probe / "b.ans").write_text("2\n", encoding="utf-8")
+    (export_suffix_probe / "a.ans").write_text("1\n", encoding="utf-8")
+    (export_suffix_probe / "a.in").write_text("1\n", encoding="utf-8")
+    export_suffix_outside = run_cfg_root / f"export-suffix-outside-{uuid.uuid4().hex[:8]}.txt"
+    export_suffix_outside.write_text("outside\n", encoding="utf-8")
+    try:
+        (export_suffix_probe / "0.ans").symlink_to(export_suffix_outside)
+    except OSError:
+        pass
+    export_ans_names = [p.name for p in export_service._iter_safe_top_level_suffix_files(export_suffix_probe, ".ans")]
+    if export_ans_names != ["a.ans", "b.ans"]:
+        raise RuntimeError(
+            "export safe top-level suffix matching should return deterministic .ans files and skip symlinked entries"
+        )
+    shutil.rmtree(export_suffix_probe, ignore_errors=True)
+    export_suffix_outside.unlink(missing_ok=True)
     feedback_probe = run_cfg_root / f"feedback-probe-{uuid.uuid4().hex[:8]}"
     (feedback_probe / "pass1").mkdir(parents=True, exist_ok=True)
     (feedback_probe / "pass2").mkdir(parents=True, exist_ok=True)

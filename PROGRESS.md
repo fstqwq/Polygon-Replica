@@ -131,6 +131,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Export input-validator fallback now uses symlink-safe file detection and replaces symlinked `validator.cpp` paths before writing defaults, preventing symlink-target overwrite.
 - Export test-data copy now streams safe test discovery and captures sample selection inline, avoiding full test-list materialization for large exports.
 - Export test-data answer lookup now pre-indexes safe `ans/*.ans` files once per export, avoiding repeated per-test answer-path safety checks.
+- Export test/answer top-level suffix discovery now uses deterministic `os.scandir`-based matching (`*.in`/`*.ans`), avoiding `glob` materialization while preserving symlink-safe ordering.
 - Export build-root resolution now canonicalizes build artifact ids/roots and rejects traversal-style build ids before artifact reads.
 - Kattis/DOMjudge export now rejects builds with missing `source_commit` metadata to preserve explicit commit provenance.
 - Build/Preview/Run/Export pages and recent-* APIs are now workspace-scoped (`workspace_id` filtered or build-joined), preventing cross-user history leakage within the same problem.
@@ -292,6 +293,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates streamed build compile-log structure (`compile_jobs` header + expected target entries) for baseline build runs.
 - Smoke coverage now validates streamed run compile logging by requiring non-empty run `compile.log` artifacts for failed uploaded-source compiles.
 - Smoke coverage now validates run answer-file set caching parity with discovered answer names and enforces bounded eviction for that additional cache.
+- Smoke coverage now validates export top-level suffix matching for deterministic safe `.ans` discovery with symlink skipping.
 
 ## Upstream Dependency Integration
 
