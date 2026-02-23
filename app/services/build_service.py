@@ -128,9 +128,10 @@ class BuildService:
                 return candidate
         return None
 
-    def _resolve_source(self, snapshot: Path, rel_path: str) -> Path:
+    def _resolve_source(self, snapshot: Path, rel_path: str, snapshot_resolved: Path | None = None) -> Path:
+        resolved_snapshot = snapshot_resolved if snapshot_resolved is not None else snapshot.resolve()
         p = (snapshot / rel_path).resolve()
-        if snapshot.resolve() not in p.parents:
+        if resolved_snapshot not in p.parents:
             raise RuntimeError(f"invalid configured source path: {rel_path}")
         if not p.exists() or not p.is_file():
             raise RuntimeError(f"configured source does not exist: {rel_path}")
@@ -143,10 +144,11 @@ class BuildService:
         config_key: str,
         folder: str,
         preferred: str | None = None,
+        snapshot_resolved: Path | None = None,
     ) -> Path | None:
         configured = build_cfg.get(config_key)
         if configured:
-            return self._resolve_source(snapshot, str(configured))
+            return self._resolve_source(snapshot, str(configured), snapshot_resolved=snapshot_resolved)
         return self._find_cpp(snapshot, folder, preferred=preferred)
 
     def _load_build_config(self, snapshot: Path) -> dict:
@@ -398,29 +400,83 @@ class BuildService:
                     )
 
             build_cfg = self._load_build_config(snapshot)
+            try:
+                snapshot_resolved = snapshot.resolve()
+            except OSError:
+                snapshot_resolved = None
             include_dirs = [snapshot / "third_party/testlib"]
             generator_targets: list[tuple[str, Path | None, Path]] = []
             configured_generators = [str(x) for x in build_cfg.get("generator_sources", []) if str(x).strip()]
             if configured_generators:
                 for idx, rel in enumerate(configured_generators, start=1):
-                    generator_targets.append((f"generator_{idx}", self._resolve_source(snapshot, rel), bin_dir / f"generator_{idx}"))
+                    generator_targets.append(
+                        (
+                            f"generator_{idx}",
+                            self._resolve_source(snapshot, rel, snapshot_resolved=snapshot_resolved),
+                            bin_dir / f"generator_{idx}",
+                        )
+                    )
             else:
-                gen_src = self._select_source(snapshot, build_cfg, "generator_source", "generators")
+                gen_src = self._select_source(
+                    snapshot,
+                    build_cfg,
+                    "generator_source",
+                    "generators",
+                    snapshot_resolved=snapshot_resolved,
+                )
                 generator_targets.append(("generator", gen_src, bin_dir / "generator"))
 
             accepted_src: Path | None
             if build_cfg.get("accepted_solution_source"):
-                accepted_src = self._resolve_source(snapshot, str(build_cfg["accepted_solution_source"]))
+                accepted_src = self._resolve_source(
+                    snapshot,
+                    str(build_cfg["accepted_solution_source"]),
+                    snapshot_resolved=snapshot_resolved,
+                )
             elif build_cfg.get("accepted_source"):
-                accepted_src = self._resolve_source(snapshot, str(build_cfg["accepted_source"]))
+                accepted_src = self._resolve_source(
+                    snapshot,
+                    str(build_cfg["accepted_source"]),
+                    snapshot_resolved=snapshot_resolved,
+                )
             else:
                 accepted_src = self._find_cpp(snapshot, "solutions", preferred="accepted.cpp") or self._find_cpp(snapshot, "solutions")
 
             compile_targets = [
                 *generator_targets,
-                ("validator", self._select_source(snapshot, build_cfg, "validator_source", "validators"), bin_dir / "validator"),
-                ("checker", self._select_source(snapshot, build_cfg, "checker_source", "checkers"), bin_dir / "checker"),
-                ("interactor", self._select_source(snapshot, build_cfg, "interactor_source", "interactors"), bin_dir / "interactor"),
+                (
+                    "validator",
+                    self._select_source(
+                        snapshot,
+                        build_cfg,
+                        "validator_source",
+                        "validators",
+                        snapshot_resolved=snapshot_resolved,
+                    ),
+                    bin_dir / "validator",
+                ),
+                (
+                    "checker",
+                    self._select_source(
+                        snapshot,
+                        build_cfg,
+                        "checker_source",
+                        "checkers",
+                        snapshot_resolved=snapshot_resolved,
+                    ),
+                    bin_dir / "checker",
+                ),
+                (
+                    "interactor",
+                    self._select_source(
+                        snapshot,
+                        build_cfg,
+                        "interactor_source",
+                        "interactors",
+                        snapshot_resolved=snapshot_resolved,
+                    ),
+                    bin_dir / "interactor",
+                ),
                 ("accepted_solution", accepted_src, bin_dir / "accepted_solution"),
             ]
 
