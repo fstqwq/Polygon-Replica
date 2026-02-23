@@ -35,7 +35,7 @@ toolchain_service = ToolchainService(settings.cache_root)
 build_service = BuildService(db, workspace_service, artifact_service, toolchain_service)
 preview_service = PreviewService(db, workspace_service, artifact_service)
 run_service = RunService(db, workspace_service, toolchain_service)
-export_service = ExportService(db, settings.artifacts_root)
+export_service = ExportService(db, settings.artifacts_root, settings.workspace_root)
 
 app = FastAPI(title="Polygonlike")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

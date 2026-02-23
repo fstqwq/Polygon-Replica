@@ -2273,6 +2273,59 @@ def main() -> None:
     if str(recent_kattis[0]["filename"]) == str(recent_kattis[1]["filename"]):
         raise RuntimeError("kattis export records should preserve distinct filenames per generation")
 
+    missing_workspace_build_id = f"b-missingws-{uuid.uuid4().hex[:8]}"
+    missing_workspace_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / missing_workspace_build_id).resolve()
+    (missing_workspace_root / "tests").mkdir(parents=True, exist_ok=True)
+    (missing_workspace_root / "ans").mkdir(parents=True, exist_ok=True)
+    (missing_workspace_root / "logs").mkdir(parents=True, exist_ok=True)
+    (missing_workspace_root / "export").mkdir(parents=True, exist_ok=True)
+    (missing_workspace_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (missing_workspace_root / "tests/001.in").write_text("1\n", encoding="utf-8")
+    (missing_workspace_root / "ans/001.ans").write_text("1\n", encoding="utf-8")
+    db.execute("DELETE FROM builds WHERE id=?", [missing_workspace_build_id])
+    db.execute(
+        "INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [
+            missing_workspace_build_id,
+            ctx["problem"]["id"],
+            999999999,
+            head_commit,
+            ctx["workspace"].get("branch") or "main",
+            "ok",
+            json.dumps({"error": "injected missing workspace metadata"}),
+            str(missing_workspace_root),
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+        ],
+    )
+    try:
+        export_service.create_export("sample", missing_workspace_build_id, "kattis")
+        raise RuntimeError("kattis export should reject missing workspace metadata for source snapshot")
+    except ValueError as exc:
+        if "workspace metadata not found" not in str(exc):
+            raise RuntimeError(f"missing-workspace export rejection reason mismatch: {exc}")
+    shutil.rmtree(missing_workspace_root, ignore_errors=True)
+
+    ws_row = db.fetch_one("SELECT path FROM workspaces WHERE id=?", [ctx["workspace"]["id"]])
+    if ws_row is None:
+        raise RuntimeError("workspace metadata row missing for export path-mismatch test")
+    original_workspace_path = str(ws_row["path"] or "")
+    db.execute(
+        "UPDATE workspaces SET path=? WHERE id=?",
+        [str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]).resolve()), ctx["workspace"]["id"]],
+    )
+    try:
+        export_service.create_export("sample", build_id, "kattis")
+        raise RuntimeError("kattis export should reject workspace path mismatch before source snapshot")
+    except ValueError as exc:
+        if "workspace path mismatch" not in str(exc):
+            raise RuntimeError(f"workspace-path-mismatch export rejection reason mismatch: {exc}")
+    finally:
+        db.execute(
+            "UPDATE workspaces SET path=? WHERE id=?",
+            [original_workspace_path, ctx["workspace"]["id"]],
+        )
+
     invalid_logs_build_id = f"b-badlogs-{uuid.uuid4().hex[:8]}"
     invalid_logs_root = (Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / invalid_logs_build_id).resolve()
     invalid_logs_root.mkdir(parents=True, exist_ok=True)

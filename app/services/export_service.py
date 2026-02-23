@@ -20,9 +20,10 @@ class ExportService:
     STEP_LOGS = ["compile.log", "generate.log", "validate.log", "solve.log", "failure.log", "latex.log", "diagnostics.json"]
     SOURCE_SUFFIX_ORDER = (".cpp", ".cc", ".cxx", ".c", ".py", ".java")
 
-    def __init__(self, db: DB, artifacts_root: Path):
+    def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path):
         self.db = db
         self.artifacts_root = artifacts_root
+        self.workspace_root = workspace_root
 
     def _canonical_build_root(self, problem: str, build_id: str) -> Path:
         aid = str(build_id or "")
@@ -210,15 +211,27 @@ class ExportService:
                     continue
         return "pass-fail"
 
-    def _snapshot_source(self, workspace_id: int | None, source_commit: str | None, tmp_root: Path) -> Path | None:
+    def _snapshot_source(
+        self,
+        workspace_id: int | None,
+        problem_slug: str,
+        source_commit: str | None,
+        tmp_root: Path,
+    ) -> Path:
         if workspace_id is None:
-            return None
-        ws_row = self.db.fetch_one("SELECT path FROM workspaces WHERE id=?", [workspace_id])
+            raise ValueError("build workspace metadata missing")
+        ws_row = self.db.fetch_one("SELECT user_id,path FROM workspaces WHERE id=?", [workspace_id])
         if ws_row is None:
-            return None
-        workspace = Path(ws_row["path"])
+            raise ValueError(f"workspace metadata not found: {workspace_id}")
+        workspace = Path(str(ws_row["path"] or "")).resolve()
+        expected_workspace = (self.workspace_root / str(ws_row["user_id"]) / problem_slug).resolve()
+        if workspace != expected_workspace:
+            raise ValueError(f"workspace path mismatch for export workspace {workspace_id}")
         if not workspace.exists() or not workspace.is_dir():
-            return None
+            raise ValueError(f"workspace path missing for export workspace {workspace_id}")
+        git_dir = workspace / ".git"
+        if not git_dir.exists() or not git_dir.is_dir():
+            raise ValueError(f"workspace git metadata missing for export workspace {workspace_id}")
 
         snapshot = tmp_root / "_source"
         source_commit = str(source_commit or "").strip()
@@ -248,9 +261,7 @@ class ExportService:
                 shutil.rmtree(snapshot, ignore_errors=True)
                 raise ValueError(str(exc))
 
-        copytree(workspace, snapshot)
-        remove_symlinks(snapshot)
-        return snapshot
+        raise ValueError("export source snapshot requires non-empty source commit")
 
     def _copy_statement(self, snapshot: Path | None, build_root: Path, dst_statement: Path) -> None:
         if snapshot is not None:
@@ -530,7 +541,12 @@ class ExportService:
         try:
             mode = "pass-fail"
             if export_type in {"kattis", "domjudge"}:
-                snapshot = self._snapshot_source(build_row["workspace_id"], source_commit, tmp_root)
+                snapshot = self._snapshot_source(
+                    build_row["workspace_id"],
+                    str(problem_row["slug"]),
+                    source_commit,
+                    tmp_root,
+                )
                 mode = self._problem_mode(snapshot)
 
             if export_type == "kattis":
