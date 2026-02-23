@@ -210,6 +210,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Git status filtering now drops internal lock-file entries (`.polygonlike.lock`) from rendered status/diff output, keeping Git UI output aligned with workspace dirty-state semantics.
 - Git diff generation now applies lock-file exclusions directly in git pathspecs (with reserved-diff fallback filtering), reducing unnecessary diff parsing on lock-file-only changes.
 - Artifact manifest generation now streams a deterministic sorted directory walk (symlink-skipping) instead of materializing `rglob` lists, lowering memory overhead on large artifact trees.
+- Artifact manifest traversal now filters directory/file entries before sorting, reducing per-directory sorting overhead when symlinked entries are present.
 - Artifact manifest summary counters (`tests_count`, `ans_count`) are now computed during that same manifest walk, avoiding extra tests/ans directory scans.
 - Added DB indexes for workspace-scoped history filters (`problem_id,workspace_id,created_at`) and preview-reuse lookup (`problem_id,source_commit,status,created_at`).
 - Added direct `workspace_id` latest-row indexes for builds/previews to speed workspace-context `latest_*` lookups.

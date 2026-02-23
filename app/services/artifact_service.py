@@ -25,19 +25,24 @@ class ArtifactService:
         for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
             keep_dirs: list[str] = []
-            for name in sorted(dirnames):
+            for name in dirnames:
                 d = dir_root / name
                 if d.is_symlink():
                     continue
                 keep_dirs.append(name)
-            dirnames[:] = keep_dirs
-            for name in sorted(filenames):
+            dirnames[:] = sorted(keep_dirs)
+
+            safe_filenames: list[str] = []
+            for name in filenames:
                 p = dir_root / name
                 if p.is_symlink():
                     continue
                 if not p.is_file():
                     continue
-                yield p
+                safe_filenames.append(name)
+
+            for name in sorted(safe_filenames):
+                yield dir_root / name
 
     def prepare(self, problem_slug: str, build_id: str) -> ArtifactPaths:
         root = self.artifacts_root / problem_slug / build_id
