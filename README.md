@@ -32,6 +32,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Validator/checker/interactor compatibility: accepts both testlib-style (`0`) and Kattis-style (`42/43`) verdict exit codes
 - Run source safety: workspace submission paths are validated to stay within workspace root
 - Runner workspace submission paths now reject reserved internal files (for example `.git/*`, `.polygonlike.lock`) and symlinked submission aliases.
+- Git commit flow now unstages `.polygonlike.lock` before commit, preventing internal workspace lock files from entering repository history.
 - Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
 - Run preflight now also rejects builds whose artifact directories are missing/corrupted before execution starts
 - Run preflight now canonicalizes build artifact ids/roots and rejects traversal-style build ids before artifact resolution.
@@ -178,4 +179,5 @@ Open: `http://127.0.0.1:8000`
   - Adds export source-snapshot regressions for missing workspace metadata and DB workspace-path mismatch rejection.
   - Adds lock hardening regressions for symlinked workspace lock-path rejection (with file-write no-op verification).
   - Adds lock hardening regression for upload-route symlinked lock-path rejection (HTTP 400 + no output-file write).
+  - Adds git-commit regression ensuring workspace lock files are never staged/committed.
   - Adds run submission-path regressions for reserved internal workspace paths and symlinked submission aliases.

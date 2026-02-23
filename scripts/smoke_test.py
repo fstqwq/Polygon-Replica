@@ -555,6 +555,32 @@ def main() -> None:
                 raise RuntimeError("files page should not list workspace lock files")
     finally:
         lock_marker.unlink(missing_ok=True)
+    lock_commit_problem = f"lockcommit-{uuid.uuid4().hex[:8]}"
+    lock_commit_user = f"u-{uuid.uuid4().hex[:6]}"
+    workspace_service.ensure_problem(lock_commit_problem, "Lock Commit Exclusion Problem")
+    workspace_service.ensure_workspace(lock_commit_problem, lock_commit_user)
+    lock_commit_ctx = workspace_service.workspace_context(lock_commit_problem, lock_commit_user, include_recent=False)
+    lock_commit_ws = Path(lock_commit_ctx["workspace"]["path"])
+    lock_commit_readme = lock_commit_ws / "README.problem.md"
+    lock_commit_original = lock_commit_readme.read_text(encoding="utf-8")
+    lock_commit_marker = f"lock-commit-marker-{uuid.uuid4().hex[:8]}"
+    lock_commit_readme.write_text(lock_commit_original + f"\n{lock_commit_marker}\n", encoding="utf-8")
+    with TestClient(app) as client:
+        lock_commit_resp = client.post(
+            f"/problems/{lock_commit_problem}/{lock_commit_user}/git/commit",
+            data={"message": "smoke lock commit exclusion"},
+            follow_redirects=False,
+        )
+        if lock_commit_resp.status_code != 303:
+            raise RuntimeError(
+                "git commit route failed during lock-file exclusion check"
+                f", status={lock_commit_resp.status_code}"
+            )
+    lock_commit_tree = run_cmd(
+        ["git", "-C", str(lock_commit_ws), "ls-tree", "--name-only", "-r", "HEAD"]
+    ).stdout.splitlines()
+    if ".polygonlike.lock" in lock_commit_tree:
+        raise RuntimeError("git commit should not stage or commit workspace lock files")
     lock_symlink_target = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"lock-symlink-target-{uuid.uuid4().hex[:8]}.txt"
     lock_symlink_target.write_text("do-not-touch\n", encoding="utf-8")
     lock_symlink_supported = True
