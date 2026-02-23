@@ -154,6 +154,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
 - Run detail rendering now also caps per-test feedback-file links (`32` each) with truncation indicators, preventing pathological per-test link payload growth.
 - Run persistence now caps `runs.summary_json` test/diagnostic/feedback lists at write time (with truncation metadata) while preserving full per-test results in run artifact `summary.json`, reducing DB metadata growth on large runs.
+- Run-page list capping now preserves persisted run-summary truncation metadata when present, so UI indicators continue to reflect full-result totals from DB-capped summaries.
 - Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
 - Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on very large artifact `logs/` directories.
 - Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error for oversized payloads to avoid heavy decode/render paths from oversized DB blobs.
@@ -280,6 +281,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates `exports.workspace_id` persistence/index presence and workspace-scoped export history filtering behavior.
 - Smoke coverage now validates export-mode chunked checker-marker scanning by detecting `nextpass.in` when split across chunk boundaries.
 - Smoke coverage now validates DB-capped run summary persistence (tests truncation metadata) while run artifact `summary.json` retains full per-test results.
+- Smoke coverage now validates Run-page indicator rendering for DB-capped run summaries using persisted truncation metadata.
 
 ## Upstream Dependency Integration
 

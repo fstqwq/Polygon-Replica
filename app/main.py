@@ -474,15 +474,32 @@ def _cap_summary_list(
     values = summary.get(field)
     if not isinstance(values, list):
         return
+
+    def _int_or_none(raw) -> int | None:
+        try:
+            value = int(raw)
+        except Exception:
+            return None
+        return value if value >= 0 else None
+
     cap = max(1, int(limit))
+    existing_total = _int_or_none(summary.get(total_key))
+    existing_truncated = summary.get(truncated_key) if isinstance(summary.get(truncated_key), bool) else None
     total = len(values)
+    if existing_total is not None:
+        total = max(total, existing_total)
+
+    shown = values
+    if len(values) > cap:
+        shown = values[:cap]
+        summary[field] = shown
+
     summary[limit_key] = cap
     summary[total_key] = total
-    if total > cap:
-        summary[field] = values[:cap]
-        summary[truncated_key] = True
+    if existing_truncated is not None:
+        summary[truncated_key] = bool(existing_truncated) or total > cap or len(values) > cap
         return
-    summary[truncated_key] = False
+    summary[truncated_key] = total > cap
 
 
 def _cap_manifest_list_field(
@@ -511,6 +528,14 @@ def _cap_run_test_feedback_files(summary: dict, limit: int) -> None:
     tests = summary.get("tests")
     if not isinstance(tests, list):
         return
+
+    def _int_or_none(raw) -> int | None:
+        try:
+            value = int(raw)
+        except Exception:
+            return None
+        return value if value >= 0 else None
+
     cap = max(1, int(limit))
     for row in tests:
         if not isinstance(row, dict):
@@ -518,14 +543,21 @@ def _cap_run_test_feedback_files(summary: dict, limit: int) -> None:
         files = row.get("feedback_files")
         if not isinstance(files, list):
             continue
+        existing_total = _int_or_none(row.get("feedback_files_total"))
+        existing_truncated = row.get("feedback_files_truncated") if isinstance(row.get("feedback_files_truncated"), bool) else None
         total = len(files)
+        if existing_total is not None:
+            total = max(total, existing_total)
+
+        if len(files) > cap:
+            row["feedback_files"] = files[:cap]
+
         row["feedback_files_limit"] = cap
         row["feedback_files_total"] = total
-        if total > cap:
-            row["feedback_files"] = files[:cap]
-            row["feedback_files_truncated"] = True
+        if existing_truncated is not None:
+            row["feedback_files_truncated"] = bool(existing_truncated) or total > cap or len(files) > cap
             continue
-        row["feedback_files_truncated"] = False
+        row["feedback_files_truncated"] = total > cap
 
 
 def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:

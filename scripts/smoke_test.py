@@ -2715,6 +2715,18 @@ def main() -> None:
     )
     if len(run_artifact_summary.get("tests") or []) != run_db_summary_cap_total:
         raise RuntimeError("run artifact summary.json should preserve full per-test results")
+    with TestClient(app) as client:
+        run_db_summary_cap_page = client.get("/problems/sample/alice/run", params={"run_id": run_id_db_summary_cap})
+        if run_db_summary_cap_page.status_code != 200:
+            raise RuntimeError(
+                "run page should remain available for DB-capped run summaries"
+                f", status={run_db_summary_cap_page.status_code}"
+            )
+        if (
+            f"Showing first {run_db_summary_tests_limit} tests ({run_db_summary_cap_total} total)."
+            not in run_db_summary_cap_page.text
+        ):
+            raise RuntimeError("run page should honor persisted run-summary truncation metadata")
     poison_log.unlink(missing_ok=True)
     dot_root_log.unlink(missing_ok=True)
 
