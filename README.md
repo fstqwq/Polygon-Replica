@@ -120,6 +120,7 @@ This repository implements a local Polygon-like problem authoring system aligned
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses on hot build/preview paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, avoiding a redundant post-build `SELECT status FROM builds` query.
 - Build compile-stage logging now streams target entries directly to `logs/compile.log` during compile-result processing, avoiding in-memory accumulation of large compiler logs.
+- Build compile-stage target logging now writes compiler stdout/stderr streams directly and parses diagnostics per stream, avoiding extra per-target merged-output string allocation while preserving empty-output diagnostic collection semantics.
 - Run submission compile logging now streams compiler stdout/stderr directly to run `compile.log` and parses diagnostics per stream, avoiding an extra merged-log string allocation.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
@@ -252,3 +253,4 @@ Open: `http://127.0.0.1:8000`
   - Adds run compile-error regressions ensuring failed uploaded-source runs persist non-empty `compile.log` artifacts after streamed compile logging changes.
   - Adds run answer-file cache regressions ensuring cached answer-name set parity and bounded eviction behavior.
   - Adds export suffix-discovery regressions ensuring deterministic safe `.ans` top-level matching and symlink skipping.
+  - Adds build compile-stream helper regressions ensuring empty compile outputs still trigger a single diagnostics collection pass without emitting spurious log text.

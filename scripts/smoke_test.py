@@ -9,7 +9,7 @@ import sys
 import types
 import uuid
 import zipfile
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from time import monotonic
 
@@ -2415,6 +2415,33 @@ def main() -> None:
         )
     shutil.rmtree(export_suffix_probe, ignore_errors=True)
     export_suffix_outside.unlink(missing_ok=True)
+    original_build_collect_for_stream = build_service._collect_diagnostics
+    build_stream_probe_calls: list[str] = []
+
+    def _patched_build_collect_for_stream(_self, _snapshot, _text):
+        build_stream_probe_calls.append(str(_text))
+        return []
+
+    build_service._collect_diagnostics = types.MethodType(
+        _patched_build_collect_for_stream,
+        build_service,
+    )
+    try:
+        build_stream_probe_log = StringIO()
+        build_stream_probe_diags = build_service._append_compile_streams(
+            build_stream_probe_log,
+            run_cfg_root,
+            "",
+            "",
+        )
+    finally:
+        build_service._collect_diagnostics = original_build_collect_for_stream
+    if build_stream_probe_diags:
+        raise RuntimeError("build compile stream helper should not report diagnostics for empty patched collector output")
+    if build_stream_probe_calls != [""]:
+        raise RuntimeError("build compile stream helper should still collect diagnostics once for empty compiler outputs")
+    if build_stream_probe_log.getvalue() != "":
+        raise RuntimeError("build compile stream helper should not emit log text for empty compiler outputs")
     feedback_probe = run_cfg_root / f"feedback-probe-{uuid.uuid4().hex[:8]}"
     (feedback_probe / "pass1").mkdir(parents=True, exist_ok=True)
     (feedback_probe / "pass2").mkdir(parents=True, exist_ok=True)

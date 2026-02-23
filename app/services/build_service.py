@@ -235,6 +235,32 @@ class BuildService:
             )
         return result
 
+    def _append_compile_streams(
+        self,
+        log_fh,
+        snapshot: Path,
+        stdout_text: str,
+        stderr_text: str,
+    ) -> list[dict]:
+        diagnostics: list[dict] = []
+        saw_stream_text = False
+        wrote_stream = False
+        for chunk in (stdout_text, stderr_text):
+            text = str(chunk or "")
+            if not text:
+                continue
+            saw_stream_text = True
+            if wrote_stream and not text.startswith("\n"):
+                log_fh.write("\n")
+            log_fh.write(text)
+            if not text.endswith("\n"):
+                log_fh.write("\n")
+            diagnostics.extend(self._collect_diagnostics(snapshot, text))
+            wrote_stream = True
+        if not saw_stream_text:
+            diagnostics.extend(self._collect_diagnostics(snapshot, ""))
+        return diagnostics
+
     def _validator_ok(self, returncode: int) -> bool:
         return returncode in {0, 42}
 
@@ -394,12 +420,15 @@ class BuildService:
                         clog.write(f"[{name}] missing source\n\n")
                         continue
                     ok, out, err, toolchain_digest = compile_results[name]
-                    merged = f"{out}\n{err}".strip()
-                    diagnostics.extend(self._collect_diagnostics(snapshot, merged))
                     clog.write(f"[{name}] source={source}\n")
-                    if merged:
-                        clog.write(merged)
-                        clog.write("\n")
+                    diagnostics.extend(
+                        self._append_compile_streams(
+                            clog,
+                            snapshot,
+                            out,
+                            err,
+                        )
+                    )
                     clog.write("\n")
                     if not ok:
                         raise RuntimeError(f"compile failed: {name}")

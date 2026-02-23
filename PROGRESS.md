@@ -183,6 +183,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses in hot mutation paths.
 - Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, removing a redundant post-build status lookup query.
 - Build compile-stage logging now streams target entries directly to `logs/compile.log` during compile-result processing, avoiding in-memory accumulation of large compiler logs.
+- Build compile-stage target logging now writes compiler stdout/stderr streams directly and parses diagnostics per stream, avoiding extra per-target merged-output string allocation while preserving empty-output diagnostic collection semantics.
 - Run submission compile logging now streams compiler stdout/stderr directly to run `compile.log` and parses diagnostics per stream, avoiding extra merged-log string allocation.
 - Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
 - Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
@@ -294,6 +295,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Smoke coverage now validates streamed run compile logging by requiring non-empty run `compile.log` artifacts for failed uploaded-source compiles.
 - Smoke coverage now validates run answer-file set caching parity with discovered answer names and enforces bounded eviction for that additional cache.
 - Smoke coverage now validates export top-level suffix matching for deterministic safe `.ans` discovery with symlink skipping.
+- Smoke coverage now validates build compile-stream helper empty-output behavior (single diagnostics collection with no emitted log text).
 
 ## Upstream Dependency Integration
 
