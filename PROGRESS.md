@@ -200,6 +200,7 @@ This file tracks implementation status against `AGENTS.md` milestones.
 - Build C++ source auto-discovery now performs a single deterministic directory pass with symlink-safe in-root filtering, reducing glob/sort overhead and preventing unsafe symlinked source selection.
 - Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
 - Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
+- Export safe top-level file iteration now filters entries before sorting names, reducing per-folder sorting overhead when many entries are rejected by symlink/path-safety checks.
 - Export mode detection now scans checker sources in bounded chunks for `nextpass.in`, preserving multi-pass inference while avoiding full-file reads for large checker sources.
 - Preview cache reuse now requires symlink-safe in-root regular files for `statement.pdf` and `latex.log`, preventing poisoned symlink preview artifacts from being reused.
 - Preview page now validates `statement.pdf` and `latex.log` through safe artifact-path checks, so symlinked/out-of-root preview files are ignored in UI detail rendering.

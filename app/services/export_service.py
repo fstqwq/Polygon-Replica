@@ -150,12 +150,19 @@ class ExportService:
             return
         try:
             resolved_root = folder_resolved if folder_resolved is not None else folder.resolve()
-            entries = sorted(folder.iterdir(), key=lambda p: p.name)
         except OSError:
             return
-        for p in entries:
-            if self._is_safe_regular_file(folder, p, root_resolved=resolved_root):
-                yield p
+
+        safe_names: list[str] = []
+        try:
+            for p in folder.iterdir():
+                if self._is_safe_regular_file(folder, p, root_resolved=resolved_root):
+                    safe_names.append(p.name)
+        except OSError:
+            return
+
+        for name in sorted(safe_names):
+            yield folder / name
 
     def _iter_safe_top_level_suffix_files(
         self,
