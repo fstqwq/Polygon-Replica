@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Tests ({{ tests_editor.summary.total }})</h1>
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>Tests Editor</h2>
+  {% if tests_editor.truncated %}
+  <p class="muted">Showing first {{ tests_editor.shown }} of {{ tests_editor.total }} tests.</p>
+  {% endif %}
+  {% if tests_editor.rows %}
+  <div class="tests-editor-list">
+    {% for row in tests_editor.rows %}
+    <article class="tests-editor-item">
+      <div class="tests-editor-row">
+        <div class="tests-editor-meta">
+          <span class="tests-index">#{{ row.index }}</span>
+          <span class="tests-kind tests-kind-{{ row.kind }}">{{ row.kind }}</span>
+          {% if row.sample %}
+          <span class="tests-kind tests-kind-manual">sample</span>
+          {% endif %}
+          <code>{{ row.payload_path }}</code>
+        </div>
+        <div class="tests-editor-actions tests-editor-actions-row">
+          <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/move">
+            <input type="hidden" name="index" value="{{ row.index }}" />
+            <input type="hidden" name="direction" value="up" />
+            <button class="linkish tests-editor-action-link" type="submit">Move Up</button>
+          </form>
+          <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/move">
+            <input type="hidden" name="index" value="{{ row.index }}" />
+            <input type="hidden" name="direction" value="down" />
+            <button class="linkish tests-editor-action-link" type="submit">Move Down</button>
+          </form>
+          <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/delete">
+            <input type="hidden" name="index" value="{{ row.index }}" />
+            <button class="linkish tests-editor-action-link tests-editor-action-danger" type="submit">Delete</button>
+          </form>
+        </div>
+      </div>
+      <pre class="test-preview">{{ row.preview }}</pre>
+      <details class="tests-editor-details">
+        <summary>{{ "Payload actions" if row.manual_large_payload else "Edit test" }}</summary>
+        {% if row.manual_large_payload %}
+        <p class="muted">
+          Inline payload editor is disabled for large manual tests.
+          Showing first {{ row.preview_bytes_limit }} bytes.
+          Size: {{ row.payload_size_human }}.
+        </p>
+        <div class="tests-editor-actions">
+          <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/payload/download?index={{ row.index }}">Download payload</a>
+          <form method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/payload/upload">
+            <input type="hidden" name="index" value="{{ row.index }}" />
+            <label class="sr-only" for="payload-upload-{{ row.index }}">Upload payload</label>
+            <input id="payload-upload-{{ row.index }}" type="file" name="payload_upload" required />
+            <button type="submit">Upload payload</button>
+          </form>
+        </div>
+        {% else %}
+        <div class="tests-form-grid tests-form-grid-edit">
+          <form class="form-stack tests-editor-form tests-editor-form-id" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/set-id">
+            <input type="hidden" name="index" value="{{ row.index }}" />
+            <label>ID</label>
+            <input type="text" name="test_id" value="{{ row.id }}" />
+            <button type="submit">Save ID</button>
+          </form>
+          <form class="form-stack tests-editor-form tests-editor-form-main" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/update">
+            <input type="hidden" name="index" value="{{ row.index }}" />
+            <label>Kind</label>
+            <select name="kind">
+              <option value="manual" {{ "selected" if row.kind == "manual" else "" }}>manual</option>
+              <option value="gen" {{ "selected" if row.kind == "gen" else "" }}>gen</option>
+            </select>
+            <label><input type="checkbox" name="sample" value="1" {{ "checked" if row.sample else "" }} /> sample</label>
+            <label>Data (<code>{{ row.payload_path }}</code>)</label>
+            <textarea class="textarea-sm" name="payload">{{ row.payload }}</textarea>
+            <button type="submit">Save Test</button>
+          </form>
+        </div>
+        {% endif %}
+      </details>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No tests in <code>{{ tests_editor.path }}</code> yet.</p>
+  {% endif %}
+</section>
+
+<div class="tests-form-grid">
+  <section class="tests-subsection">
+    <h2>Add Manual</h2>
+    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-manual">
+      <label for="add-manual-id">ID (optional, auto = next)</label>
+      <input id="add-manual-id" type="text" name="test_id" />
+      <label><input type="checkbox" name="sample" value="1" /> sample</label>
+      <label for="add-manual-input">Data (<code>manual input</code>)</label>
+      <textarea id="add-manual-input" class="textarea-md" name="manual_input"></textarea>
+      <button type="submit">Add Manual</button>
+    </form>
+  </section>
+  <section class="tests-subsection">
+    <h2>Add Gen</h2>
+    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-gen">
+      <label for="add-gen-id">ID (optional, auto = next)</label>
+      <input id="add-gen-id" type="text" name="test_id" />
+      <label><input type="checkbox" name="sample" value="1" /> sample</label>
+      <label for="add-gen-command">Data (<code>gen command</code>)</label>
+      <input id="add-gen-command" type="text" name="command" />
+      <button type="submit">Add Gen</button>
+    </form>
+  </section>
+</div>
+
+<div class="tests-form-grid tests-form-grid-batch">
+  <section class="tests-subsection">
+    <h3>Batch Manual</h3>
+    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-manual-batch">
+      <label><input type="checkbox" name="sample" value="1" /> mark batch as sample</label>
+      <input type="hidden" name="desc_prefix" value="" />
+      <label for="batch-manual-text">Data blocks</label>
+      <textarea id="batch-manual-text" class="textarea-md" name="manual_batch_text"></textarea>
+      <button type="submit">Add Manual Batch</button>
+    </form>
+    <p class="muted">Use <code>---</code> or <code>===</code> on a separate line as test separators.</p>
+  </section>
+  <section class="tests-subsection">
+    <h3>Batch Generator</h3>
+    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-gen-batch">
+      <label><input type="checkbox" name="sample" value="1" /> mark batch as sample</label>
+      <input type="hidden" name="desc_prefix" value="" />
+      <label for="batch-gen-text">Commands</label>
+      <textarea id="batch-gen-text" class="textarea-md" name="gen_batch_text"></textarea>
+      <button type="submit">Add Gen Batch</button>
+    </form>
+    <p class="muted">One generator command per line.</p>
+  </section>
+</div>
+{% endblock %}

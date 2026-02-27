@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+
+from app.impl import problem_editor as handlers
+
+router = APIRouter()
+
+router.add_api_route(
+    "/problems/{problem}/{user}/general",
+    handlers.general_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/general/save",
+    handlers.general_save,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/generators",
+    handlers.generators_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/generators/create-template",
+    handlers.generator_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/generators/save-source",
+    handlers.generator_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/checker",
+    handlers.checker_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/checker/view-standard",
+    handlers.checker_view_standard,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/checker/set-standard",
+    handlers.checker_set_standard,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/checker/create-template",
+    handlers.checker_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/checker/save-source",
+    handlers.checker_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/validator",
+    handlers.validator_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/validator/create-template",
+    handlers.validator_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/validator/save-source",
+    handlers.validator_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/interactor",
+    handlers.interactor_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/interactor/create-template",
+    handlers.interactor_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/interactor/save-source",
+    handlers.interactor_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/solutions",
+    handlers.solutions_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/solutions/create-template",
+    handlers.solutions_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/solutions/editor",
+    handlers.solutions_editor_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/solutions/save-source",
+    handlers.solutions_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/solutions/set-tag",
+    handlers.solutions_set_tag,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/solutions/rename",
+    handlers.solutions_rename,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/solutions/delete",
+    handlers.solutions_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/settings",
+    handlers.settings_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/settings/password",
+    handlers.settings_password_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/settings/system-config",
+    handlers.settings_system_config_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/settings/system-config/reset",
+    handlers.settings_system_config_reset,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/switch-workspace",
+    handlers.switch_workspace,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files",
+    handlers.files_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files/save",
+    handlers.files_save,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files/new",
+    handlers.files_new,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files/create-template",
+    handlers.files_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files/upload",
+    handlers.files_upload,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files/rename",
+    handlers.files_rename,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files/delete",
+    handlers.files_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/files/download",
+    handlers.files_download,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/workspace",
+    handlers.workspace_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/access",
+    handlers.access_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/access/grant",
+    handlers.workspace_access_grant,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/access/revoke",
+    handlers.workspace_access_revoke,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/history",
+    handlers.history_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/git/commit",
+    handlers.git_commit,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/git/push",
+    handlers.git_push,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/git/pull",
+    handlers.git_pull,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/git/restore-revision",
+    handlers.git_restore_revision,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/git/rebase/continue",
+    handlers.git_rebase_continue,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem}/{user}/git/rebase/abort",
+    handlers.git_rebase_abort,
+    methods=["POST"],
+)

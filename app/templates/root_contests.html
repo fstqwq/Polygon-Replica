@@ -1,0 +1,53 @@
+{% extends "root_base.html" %}
+{% block content %}
+<h1 class="page-title">Contests</h1>
+
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>My Contests</h2>
+  {% if entries %}
+  <table>
+    <tr>
+      <th>Contest</th>
+      <th>Role</th>
+      <th>Problems</th>
+      <th>Created</th>
+    </tr>
+    {% for row in entries %}
+    <tr class="{% if row.has_dirty %}table-row-dirty{% endif %}">
+      <td><code>{{ row.slug }}</code> - {{ row.title }}</td>
+      <td>{{ row.role }}</td>
+      <td>
+        {{ row.problem_count }}
+        {% if row.problem_slugs_preview %}
+        <span class="muted">({{ row.problem_slugs_preview }}{% if row.problem_preview_truncated %}, ...{% endif %})</span>
+        {% endif %}
+      </td>
+      <td>{{ row.created_at | local_time }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No contests yet.</p>
+  {% endif %}
+  <p class="muted">Showing up to {{ entries_limit }} contests.</p>
+</section>
+
+<section>
+  <h2>Create Contest</h2>
+  <form class="form-stack" method="post" action="/problems/{{ user.username }}/contests/create">
+    <div class="form-row">
+      <label for="contest-slug">Slug</label>
+      <input id="contest-slug" name="contest_slug" />
+    </div>
+    <div class="form-row">
+      <label for="contest-title">Title</label>
+      <input id="contest-title" name="contest_title" />
+    </div>
+    <div class="form-row">
+      <button type="submit">Create Contest</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "_component_forms.html" import create_template_form, source_editor_form %}
+{% macro standard_checker_section(active=false) -%}
+<section>
+  <h2 class="checker-section-title">Standard Checker{% if active %}<span class="checker-mode-chip checker-mode-chip-active">active</span>{% endif %}</h2>
+  {% if standard_checker_options %}
+  <form class="form-row checker-standard-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/set-standard">
+    <label for="standard-checker-name">Checker</label>
+    <select id="standard-checker-name" name="checker_name">
+      {% for checker in standard_checker_options %}
+      <option value="{{ checker.value }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.label }}</option>
+      {% endfor %}
+    </select>
+    <div class="checker-standard-actions">
+      <button type="submit">Set Checker</button>
+      <button type="submit" formaction="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/view-standard" formmethod="get">View Checker</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="flash">Standard checker catalog is unavailable: <code>third_party/upstream/testlib/checkers</code>.</p>
+  {% endif %}
+</section>
+{%- endmacro %}
+
+{% macro repository_checker_section(active=false) -%}
+<section>
+  <h2 class="checker-section-title">Repository Checker{% if active %}<span class="checker-mode-chip checker-mode-chip-active">active</span>{% endif %}</h2>
+  <p><strong>{{ "File path" if checker_status.repo_source_exists else "New file" }}:</strong> <code>{{ repo_source }}</code></p>
+  {% if checker_status.mode == "standard" %}
+  <p class="muted">Saving source here switches checker mode to repository.</p>
+  {% endif %}
+  {% if checker_status.repo_source_exists %}
+  {{ source_editor_form(
+    "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/checker/save-source",
+    repo_source,
+    repo_content,
+    repo_content_truncated,
+    content_char_limit,
+    "Save Checker Source"
+  ) }}
+  {% endif %}
+  {{ create_template_form(
+    "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/checker/create-template",
+    "Create checker.cpp template"
+  ) }}
+</section>
+{%- endmacro %}
+
+{% block content %}
+<h1 class="page-title">Checker</h1>
+{% include "_flash_message.html" %}
+
+{% set checker_mode = checker_status.mode if checker_status is defined else '' %}
+<div class="checker-layout">
+  {% if checker_mode == "standard" %}
+  {{ standard_checker_section(true) }}
+  {{ repository_checker_section(false) }}
+  {% elif checker_mode == "repository" %}
+  {{ repository_checker_section(true) }}
+  {{ standard_checker_section(false) }}
+  {% else %}
+  {{ standard_checker_section(false) }}
+  {{ repository_checker_section(false) }}
+  {% endif %}
+</div>
+{% endblock %}

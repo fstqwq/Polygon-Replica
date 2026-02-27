@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Solution Files</h1>
+{% include "_flash_message.html" %}
+<section>
+    <h2>Solutions</h2>
+    {% if entries and (not accepted_source_exists) %}
+    <p class="flash"><span class="danger">Main correct solution is required.</span></p>
+    {% endif %}
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/create-template">
+      <label for="solution-create-path">New file</label>
+      <input id="solution-create-path" name="path" placeholder="{{ solution_create_default_path }}" />
+      <button type="submit">Add Solution</button>
+    </form>
+    {% if entries_truncated %}
+    <p class="muted">Showing first {{ entries_limit }} solutions.</p>
+    {% endif %}
+    <table class="solutions-table">
+      <colgroup>
+        <col class="solutions-col-source" />
+        <col class="solutions-col-expected" />
+        <col class="solutions-col-actions" />
+      </colgroup>
+      <tr><th>Source</th><th>Expected</th><th>Actions</th></tr>
+      {% for row in entries %}
+      <tr>
+        <td>
+          <a class="solutions-source-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/editor?path={{ row.source_path }}" title="{{ row.source_path }}">
+            <code>{{ row.file_name }}</code>
+          </a>
+        </td>
+        <td class="solutions-expected-cell">
+          {% set row_tag_class = "tag-select-expected" %}
+          {% if row.expected_behavior_effective == "main_correct" %}
+          {% set row_tag_class = "tag-select-main-correct" %}
+          {% elif row.expected_behavior_effective == "accepted" %}
+          {% set row_tag_class = "tag-select-accepted" %}
+          {% elif row.expected_behavior_effective == "wrong_answer" %}
+          {% set row_tag_class = "tag-select-wrong-answer" %}
+          {% elif row.expected_behavior_effective == "time_limit_exceeded" %}
+          {% set row_tag_class = "tag-select-time-limit-exceeded" %}
+          {% elif row.expected_behavior_effective == "run_time_error" %}
+          {% set row_tag_class = "tag-select-run-time-error" %}
+          {% elif row.expected_behavior_effective == "rejected" %}
+          {% set row_tag_class = "tag-select-rejected" %}
+          {% elif row.expected_behavior_effective == "unknown" %}
+          {% set row_tag_class = "tag-select-neutral" %}
+          {% endif %}
+          <form class="inline-form tag-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/set-tag">
+            <input type="hidden" name="source_path" value="{{ row.source_path }}" />
+            <select class="tag-select {{ row_tag_class }}" data-submit-on-change="1" name="expected_behavior" aria-label="Expected behavior for {{ row.source_path }}">
+              {% for option in expected_behavior_options %}
+              <option value="{{ option.value }}" {% if row.expected_behavior_effective == option.value %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+            <noscript><button type="submit">Set</button></noscript>
+          </form>
+        </td>
+        <td class="solutions-actions-cell">
+          <form class="inline-form solutions-rename-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/rename">
+            <input type="hidden" name="old_path" value="{{ row.source_path }}" />
+            <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
+            <a href="#" class="linkish solutions-submit-link" data-submit-form="1">Rename</a>
+          </form>
+          <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}?">
+            <input type="hidden" name="source_path" value="{{ row.source_path }}" />
+            <a href="#" class="linkish solutions-submit-link" data-submit-form="1">Delete</a>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% if not entries %}
+    <p class="muted">No solution source found under <code>solutions/</code>.</p>
+    {% endif %}
+  </section>
+{% endblock %}

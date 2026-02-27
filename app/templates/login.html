@@ -1,0 +1,21 @@
+{% extends "auth_base.html" %}
+{% block auth_page_title %}Polygon-Replica Login{% endblock %}
+{% block auth_title %}Polygon-Replica{% endblock %}
+{% block auth_subtitle %}Sign in with username and password.{% endblock %}
+
+{% block auth_form %}
+<form id="login-form" class="form-stack" method="post" action="/login">
+  <label for="username">Username</label>
+  <input id="username" name="username" autofocus />
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" />
+  <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
+  <input type="hidden" name="password_proof" value="" />
+  <input type="hidden" name="next" value="{{ next_path }}" />
+  <button class="primary-action" type="submit">Sign in</button>
+</form>
+{% endblock %}
+
+{% block auth_footer %}
+<p class="muted">No account? <a href="/register{% if next_path %}?next={{ next_path | urlencode }}{% endif %}">Register</a></p>
+{% endblock %}

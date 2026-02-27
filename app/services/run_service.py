@@ -5,6 +5,7 @@ import json
 import os
 import re
 import selectors
+import signal
 import shutil
 import subprocess
 import threading
@@ -14,12 +15,14 @@ from pathlib import Path
 from typing import IO
 
 from app.db import DB, now_iso
+from app.services.sandbox import ExecSpec, SandboxBackend, create_sandbox_backend
 from app.services.toolchain_service import ToolchainService
 from app.services.util import is_canonical_artifact_id, run_cmd
 from app.services.workspace_service import WorkspaceService
 
 
 DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<level>warning|error|note):\s*(?P<msg>.*)$")
+RUN_TEST_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.in$")
 
 
 class RunService:
@@ -30,17 +33,126 @@ class RunService:
     DB_SUMMARY_DIAGNOSTICS_LIMIT = 200
     DB_SUMMARY_FEEDBACK_FILES_LIMIT = 32
     DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
+    DEFAULT_TIME_LIMIT_MS = 2000
+    TIME_LIMIT_MIN_MS = 100
+    TIME_LIMIT_MAX_MS = 30000
+    RUN_TIMEOUT_MAX_SEC = 300
+    SUBMISSION_CPP_CXXFLAGS = ["-O2", "-std=c++20", "-pipe"]
+    PATH_GUARD_SOURCE = (Path(__file__).resolve().parent / "sandbox" / "path_guard.c").resolve()
 
-    def __init__(self, db: DB, workspace_service: WorkspaceService, toolchain: ToolchainService):
+    def __init__(
+        self,
+        db: DB,
+        workspace_service: WorkspaceService,
+        toolchain: ToolchainService,
+        sandbox_backend: SandboxBackend | None = None,
+    ):
         self.db = db
         self.workspace_service = workspace_service
         self.toolchain = toolchain
+        self.sandbox = sandbox_backend or create_sandbox_backend()
+        self.default_run_memory_mb = self._env_int("POLYGONLIKE_RUN_MEMORY_MB", default=1024, min_value=16, max_value=262144)
+        self.default_run_process_limit = self._env_int("POLYGONLIKE_RUN_PROCESS_LIMIT", default=64, min_value=1, max_value=4096)
+        self.default_run_output_kb = self._env_int("POLYGONLIKE_RUN_OUTPUT_KB", default=65536, min_value=64, max_value=1048576)
         self._run_config_cache: dict[str, dict[str, object]] = {}
         self._test_input_cache: dict[str, tuple[str, ...]] = {}
         self._answer_file_cache: dict[str, tuple[str, ...]] = {}
         self._answer_file_set_cache: dict[str, frozenset[str]] = {}
         self._test_input_meta_cache: dict[str, tuple[tuple[str, str], ...]] = {}
         self._cache_lock = threading.Lock()
+        self._path_guard_lock = threading.Lock()
+
+    def _env_int(self, key: str, default: int, min_value: int, max_value: int) -> int:
+        raw = os.getenv(key)
+        if raw is None:
+            return default
+        try:
+            value = int(str(raw).strip())
+        except Exception:
+            return default
+        return max(min_value, min(max_value, value))
+
+    def _normalized_path_prefixes(self, paths: list[Path] | tuple[Path, ...] | None) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw_path in paths or []:
+            text = str(raw_path or "").strip()
+            if not text:
+                continue
+            p = Path(text)
+            try:
+                normalized = str(p.resolve())
+            except OSError:
+                normalized = str(p.absolute())
+            normalized = normalized.rstrip("/") or "/"
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(normalized)
+        return result
+
+    def _ensure_path_guard_library(self) -> Path | None:
+        source = self.PATH_GUARD_SOURCE
+        if not source.exists() or not source.is_file():
+            return None
+        cache_root = Path(self.workspace_service.settings.cache_root) / "runtime"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        target = cache_root / "path_guard.so"
+        with self._path_guard_lock:
+            try:
+                source_mtime = source.stat().st_mtime
+            except OSError:
+                return None
+            rebuild = True
+            if target.exists():
+                try:
+                    rebuild = target.stat().st_mtime < source_mtime
+                except OSError:
+                    rebuild = True
+            if rebuild:
+                tmp = cache_root / f".path_guard-{uuid.uuid4().hex[:8]}.tmp.so"
+                cmd = ["cc", "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-o", str(tmp), str(source), "-ldl", "-pthread"]
+                proc = run_cmd(cmd, timeout=30)
+                if proc.returncode != 0:
+                    tmp.unlink(missing_ok=True)
+                    return None
+                os.replace(tmp, target)
+                try:
+                    target.chmod(0o755)
+                except OSError:
+                    pass
+            if not target.exists() or not target.is_file():
+                return None
+            return target
+
+    def _path_guard_environment(
+        self,
+        *,
+        base_env: dict[str, str] | None,
+        deny_paths: list[Path] | tuple[Path, ...] | None,
+        allow_paths: list[Path] | tuple[Path, ...] | None,
+    ) -> dict[str, str] | None:
+        deny_prefixes = self._normalized_path_prefixes(deny_paths)
+        if not deny_prefixes:
+            return base_env
+        path_guard_so = self._ensure_path_guard_library()
+        if path_guard_so is None:
+            raise RuntimeError("submission path guard is unavailable")
+        env = dict(os.environ)
+        if base_env:
+            env.update(base_env)
+        env["POLYGONLIKE_PATH_GUARD_DENY_PREFIXES"] = "\n".join(deny_prefixes)
+        allow_prefixes = self._normalized_path_prefixes(allow_paths)
+        if allow_prefixes:
+            env["POLYGONLIKE_PATH_GUARD_ALLOW_PREFIXES"] = "\n".join(allow_prefixes)
+        else:
+            env.pop("POLYGONLIKE_PATH_GUARD_ALLOW_PREFIXES", None)
+        existing_ld_preload = str(env.get("LD_PRELOAD") or "").strip()
+        if existing_ld_preload:
+            env["LD_PRELOAD"] = f"{str(path_guard_so)}:{existing_ld_preload}"
+        else:
+            env["LD_PRELOAD"] = str(path_guard_so)
+        return env
 
     def _collect_diagnostics(self, workspace: Path | None, text: str) -> list[dict]:
         result: list[dict] = []
@@ -126,11 +238,41 @@ class RunService:
         return source
 
     def _validator_style_verdict(self, rc: int) -> str:
-        if rc in {0, 42}:
+        code = int(rc)
+        if code in {0, 42}:
             return "OK"
-        if rc == 43:
+        if code in {1, 2, 7, 43}:
             return "WA"
         return "FAIL"
+
+    def _normalize_time_limit_ms(self, raw: object) -> int:
+        try:
+            value = int(raw)
+        except Exception:
+            value = self.DEFAULT_TIME_LIMIT_MS
+        return max(self.TIME_LIMIT_MIN_MS, min(self.TIME_LIMIT_MAX_MS, value))
+
+    def _effective_run_timeout_ms(self, time_limit_ms: int) -> int:
+        tl = self._normalize_time_limit_ms(time_limit_ms)
+        return max(tl * 2, tl + 1000)
+
+    def _effective_run_timeout_sec(self, run_timeout_ms: int) -> int:
+        timeout_ms = max(1, int(run_timeout_ms))
+        timeout_sec = max(1, (timeout_ms + 999) // 1000)
+        return max(1, min(self.RUN_TIMEOUT_MAX_SEC, timeout_sec))
+
+    def _cap_tle_time_ms(self, time_ms: int, timeout_ms: int) -> int:
+        try:
+            value = max(0, int(time_ms))
+        except Exception:
+            value = 0
+        try:
+            cap = max(1, int(timeout_ms))
+        except Exception:
+            cap = 0
+        if cap > 0 and value > cap:
+            return cap
+        return value
 
     def _load_run_config(self, artifact_root: Path) -> dict[str, object]:
         cache_key = self._artifact_cache_key(artifact_root)
@@ -143,7 +285,12 @@ class RunService:
             "checker_args": [],
             "max_passes": 16,
             "run_jobs": 0,
+            "time_limit_ms": self.DEFAULT_TIME_LIMIT_MS,
+            "run_timeout_ms": self._effective_run_timeout_ms(self.DEFAULT_TIME_LIMIT_MS),
             "run_timeout_sec": 30,
+            "run_memory_mb": self.default_run_memory_mb,
+            "run_process_limit": self.default_run_process_limit,
+            "run_output_kb": self.default_run_output_kb,
         }
         loaded = False
         run_config = artifact_root / "logs" / "run_config.json"
@@ -188,16 +335,32 @@ class RunService:
             run_jobs = max(0, min(16, int(cfg.get("run_jobs", 0))))
         except Exception:
             run_jobs = 0
+        time_limit_ms = self._normalize_time_limit_ms(cfg.get("time_limit_ms", self.DEFAULT_TIME_LIMIT_MS))
+        run_timeout_ms = self._effective_run_timeout_ms(time_limit_ms)
+        run_timeout_sec = self._effective_run_timeout_sec(run_timeout_ms)
         try:
-            run_timeout_sec = max(1, min(300, int(cfg.get("run_timeout_sec", 30))))
+            run_memory_mb = max(16, min(262144, int(cfg.get("run_memory_mb", self.default_run_memory_mb))))
         except Exception:
-            run_timeout_sec = 30
+            run_memory_mb = self.default_run_memory_mb
+        try:
+            run_process_limit = max(1, min(4096, int(cfg.get("run_process_limit", self.default_run_process_limit))))
+        except Exception:
+            run_process_limit = self.default_run_process_limit
+        try:
+            run_output_kb = max(64, min(1048576, int(cfg.get("run_output_kb", self.default_run_output_kb))))
+        except Exception:
+            run_output_kb = self.default_run_output_kb
         resolved_cfg = {
             "checker_mode": checker_mode,
             "checker_args": [str(x) for x in checker_args],
             "max_passes": max_passes,
             "run_jobs": run_jobs,
+            "time_limit_ms": time_limit_ms,
+            "run_timeout_ms": run_timeout_ms,
             "run_timeout_sec": run_timeout_sec,
+            "run_memory_mb": run_memory_mb,
+            "run_process_limit": run_process_limit,
+            "run_output_kb": run_output_kb,
         }
         self._cache_put(self._run_config_cache, cache_key, dict(resolved_cfg))
         return dict(resolved_cfg)
@@ -368,30 +531,6 @@ class RunService:
         matched.sort()
         return matched
 
-    def _safe_matching_files(self, root: Path, pattern: str) -> list[Path]:
-        files: list[Path] = []
-        # Fast path for common suffix-only patterns used by run discovery (for example *.in / *.ans).
-        if (
-            pattern.startswith("*.")
-            and pattern.count("*") == 1
-            and "?" not in pattern
-            and "[" not in pattern
-            and "]" not in pattern
-        ):
-            suffix = pattern[1:]
-            for name in self._safe_top_level_suffix_names(root, suffix):
-                files.append(root / name)
-            return files
-
-        try:
-            root_resolved = root.resolve()
-        except OSError:
-            return []
-        for p in sorted(root.glob(pattern)):
-            if self._is_safe_regular_file(root, p, root_resolved=root_resolved):
-                files.append(p)
-        return files
-
     def _run_interactive_case(
         self,
         interactor_bin: Path,
@@ -401,12 +540,31 @@ class RunService:
         transcript: Path,
         feedback_dir: Path,
         timeout_sec: int = 30,
+        memory_mb: int = 1024,
+        process_limit: int = 64,
+        output_kb: int = 65536,
     ) -> tuple[str, int, int]:
         sub_err_path = transcript.with_name(f"{transcript.stem}.submission.stderr.txt")
         itr_err_path = transcript.with_name(f"{transcript.stem}.interactor.stderr.txt")
+        sub_spec = ExecSpec(
+            command=[str(submission_bin)],
+            cwd=feedback_dir,
+            timeout_sec=timeout_sec,
+            memory_mb=memory_mb,
+            process_limit=process_limit,
+            output_kb=output_kb,
+        )
+        itr_spec = ExecSpec(
+            command=[str(interactor_bin), str(test), str(ans)],
+            cwd=feedback_dir,
+            timeout_sec=timeout_sec,
+            memory_mb=memory_mb,
+            process_limit=process_limit,
+            output_kb=output_kb,
+        )
         with sub_err_path.open("wb") as sub_err_fh, itr_err_path.open("wb") as itr_err_fh:
-            sub = subprocess.Popen(
-                [str(submission_bin)],
+            sub = self.sandbox.popen(
+                sub_spec,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=sub_err_fh,
@@ -415,8 +573,8 @@ class RunService:
             )
             itr_env = dict(os.environ)
             itr_env["FEEDBACK_DIR"] = str(feedback_dir)
-            itr = subprocess.Popen(
-                [str(interactor_bin), str(test), str(ans)],
+            itr = self.sandbox.popen(
+                itr_spec,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=itr_err_fh,
@@ -513,7 +671,7 @@ class RunService:
                 itr_err_fh.flush()
                 elapsed = int((time.monotonic() - start) * 1000)
                 if timed_out:
-                    return "TLE", elapsed, 0
+                    return "TL", elapsed, 0
 
                 if sub.returncode != 0:
                     err = sub_err_path.read_text(encoding="utf-8", errors="replace") if sub_err_path.exists() else ""
@@ -531,8 +689,15 @@ class RunService:
         submission_bin: Path,
         input_file: Path,
         output_file: Path,
+        cwd: Path | None,
         timeout_sec: int,
         time_file: Path,
+        memory_mb: int,
+        process_limit: int,
+        output_kb: int,
+        base_env: dict[str, str] | None = None,
+        deny_paths: list[Path] | tuple[Path, ...] | None = None,
+        allow_paths: list[Path] | tuple[Path, ...] | None = None,
     ) -> tuple[int, int, int]:
         if time_file.exists():
             time_file.unlink()
@@ -541,14 +706,47 @@ class RunService:
         else:
             cmd = [str(submission_bin)]
 
+        exec_env = self._path_guard_environment(
+            base_env=base_env,
+            deny_paths=deny_paths,
+            allow_paths=allow_paths,
+        )
+
         elapsed_ms = timeout_sec * 1000
         returncode = self.RUN_TIMEOUT_SENTINEL
-        try:
-            proc = run_cmd(cmd, stdin_path=input_file, stdout_path=output_file, timeout=timeout_sec)
-            elapsed_ms = proc.elapsed_ms
-            returncode = proc.returncode
-        except subprocess.TimeoutExpired:
-            pass
+        exec_result = self.sandbox.run(
+            ExecSpec(
+                command=cmd,
+                cwd=cwd,
+                timeout_sec=timeout_sec,
+                stdin_path=input_file,
+                stdout_path=output_file,
+                env=exec_env,
+                memory_mb=memory_mb,
+                process_limit=process_limit,
+                output_kb=output_kb,
+            )
+        )
+        elapsed_ms = exec_result.elapsed_ms
+        status = str(exec_result.status or "").strip().lower()
+        if exec_result.timed_out or status == "tle":
+            returncode = self.RUN_TIMEOUT_SENTINEL
+        else:
+            raw_rc = exec_result.returncode
+            if raw_rc is None:
+                returncode = 1
+            else:
+                returncode = int(raw_rc)
+                # /usr/bin/time returns 128+SIGNAL when the wrapped command is terminated by a signal.
+                if cmd and cmd[0] == "/usr/bin/time":
+                    tle_wrapped_codes = {
+                        128 + int(signal.SIGXCPU),
+                        128 + int(signal.SIGKILL),
+                        128 + int(signal.SIGALRM),
+                        128 + int(signal.SIGTERM),
+                    }
+                    if returncode in tle_wrapped_codes:
+                        returncode = self.RUN_TIMEOUT_SENTINEL
         mem_kb = 0
         if time_file.exists():
             raw = time_file.read_text(encoding="utf-8").strip()
@@ -754,6 +952,10 @@ class RunService:
         checker_args: list[str],
         max_passes: int,
         run_timeout_sec: int,
+        run_timeout_ms: int,
+        run_memory_mb: int,
+        run_process_limit: int,
+        run_output_kb: int,
         test: Path,
         ans: Path,
         test_feedback_dir: Path,
@@ -764,6 +966,7 @@ class RunService:
             "test": test.name,
             "passes": [],
             "verdict": "OK",
+            "sandbox_status": "ok",
             "time_ms": 0,
             "memory_kb": 0,
             "feedback_files": [],
@@ -772,23 +975,49 @@ class RunService:
         pass_idx = 1
         total_time = 0
         peak_mem = 0
+        # Submission should not read generated answers directly from build artifacts.
+        guard_deny_paths = [ans.parent]
+        guard_allow_paths = [run_root]
         while True:
             pass_feedback_dir = test_feedback_dir / f"pass{pass_idx}"
             pass_feedback_dir.mkdir(parents=True, exist_ok=True)
             out = run_root / f"{test.stem}.pass{pass_idx}.out"
             time_file = pass_feedback_dir / "time.txt"
-            exec_rc, exec_ms, exec_mem = self._run_pass(sub_bin, current_input, out, run_timeout_sec, time_file)
+            exec_rc, exec_ms, exec_mem = self._run_pass(
+                sub_bin,
+                current_input,
+                out,
+                run_root,
+                run_timeout_sec,
+                time_file,
+                run_memory_mb,
+                run_process_limit,
+                run_output_kb,
+                deny_paths=guard_deny_paths,
+                allow_paths=guard_allow_paths,
+            )
+            # Some resource-limit exits (for example output file size) may return non-zero
+            # after already consuming timeout budget. Treat these as timeout for verdict
+            # consistency when elapsed runtime has crossed run timeout threshold.
+            if exec_rc != self.RUN_TIMEOUT_SENTINEL and run_timeout_ms > 0:
+                if int(exec_ms) >= int(run_timeout_ms):
+                    exec_rc = self.RUN_TIMEOUT_SENTINEL
             total_time += exec_ms
             peak_mem = max(peak_mem, exec_mem)
             if exec_rc == self.RUN_TIMEOUT_SENTINEL:
-                p = {"pass": pass_idx, "verdict": "TLE", "time_ms": exec_ms, "memory_kb": exec_mem}
+                capped_exec_ms = self._cap_tle_time_ms(exec_ms, run_timeout_ms)
+                if capped_exec_ms != exec_ms:
+                    total_time = max(0, total_time - (exec_ms - capped_exec_ms))
+                p = {"pass": pass_idx, "verdict": "TL", "time_ms": capped_exec_ms, "memory_kb": exec_mem}
                 test_result["passes"].append(p)
-                test_result["verdict"] = "TLE"
+                test_result["verdict"] = "TL"
+                test_result["sandbox_status"] = "tle"
                 break
             if exec_rc != 0:
                 p = {"pass": pass_idx, "verdict": "RE", "time_ms": exec_ms, "memory_kb": exec_mem}
                 test_result["passes"].append(p)
                 test_result["verdict"] = "RE"
+                test_result["sandbox_status"] = "re"
                 break
 
             checker_verdict = "OK"
@@ -799,35 +1028,39 @@ class RunService:
                 checker_timed_out = False
                 if checker_mode == "kattis":
                     feedback_arg = str(pass_feedback_dir) + os.sep
-                    try:
-                        check_proc = run_cmd(
-                            [str(checker), str(test), str(ans), feedback_arg, *checker_args],
+                    check_result = self.sandbox.run(
+                        ExecSpec(
+                            command=[str(checker), str(test), str(ans), feedback_arg, *checker_args],
                             stdin_path=out,
-                            timeout=run_timeout_sec,
+                            timeout_sec=run_timeout_sec,
                             cwd=pass_feedback_dir,
                             env=env,
+                            memory_mb=run_memory_mb,
+                            process_limit=run_process_limit,
+                            output_kb=run_output_kb,
                         )
-                        checker_log = check_proc.stdout + check_proc.stderr
-                    except subprocess.TimeoutExpired as exc:
-                        checker_timed_out = True
-                        checker_log = f"checker timed out after {run_timeout_sec}s: {exc}\n"
+                    )
+                    checker_log = (check_result.stdout or "") + (check_result.stderr or "")
+                    checker_timed_out = bool(check_result.timed_out)
                 else:
-                    try:
-                        check_proc = run_cmd(
-                            [str(checker), str(test), str(out), str(ans), *checker_args],
-                            timeout=run_timeout_sec,
+                    check_result = self.sandbox.run(
+                        ExecSpec(
+                            command=[str(checker), str(test), str(out), str(ans), *checker_args],
+                            timeout_sec=run_timeout_sec,
                             cwd=pass_feedback_dir,
                             env=env,
+                            memory_mb=run_memory_mb,
+                            process_limit=run_process_limit,
+                            output_kb=run_output_kb,
                         )
-                        checker_log = check_proc.stdout + check_proc.stderr
-                    except subprocess.TimeoutExpired as exc:
-                        checker_timed_out = True
-                        checker_log = f"checker timed out after {run_timeout_sec}s: {exc}\n"
+                    )
+                    checker_log = (check_result.stdout or "") + (check_result.stderr or "")
+                    checker_timed_out = bool(check_result.timed_out)
                 (pass_feedback_dir / "checker.log").write_text(checker_log, encoding="utf-8")
                 if checker_timed_out:
                     checker_verdict = "FAIL"
                 else:
-                    checker_verdict = self._validator_style_verdict(check_proc.returncode)
+                    checker_verdict = self._validator_style_verdict(int(check_result.returncode or 0))
             else:
                 checker_verdict = "OK" if self._files_equal(ans, out) else "WA"
 
@@ -846,6 +1079,8 @@ class RunService:
             current_input = next_pass
             pass_idx += 1
 
+        if str(test_result.get("verdict") or "").strip().upper().startswith("TL"):
+            total_time = self._cap_tle_time_ms(total_time, run_timeout_ms)
         test_result["time_ms"] = total_time
         test_result["memory_kb"] = peak_mem
         test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, run_root)
@@ -861,10 +1096,79 @@ class RunService:
         upload_content: bytes | None = None,
         upload_filename: str | None = None,
         upload_stream: IO[bytes] | None = None,
+        run_id: str | None = None,
+        selected_tests: list[str] | None = None,
+        invocation_id: str | None = None,
+        invocation_run_ids: list[str] | None = None,
+        expected_behavior: str | None = None,
+        invocation_source: str = "run.execute",
     ) -> str:
         supported_modes = {"pass-fail", "interactive", "multi-pass"}
+        raw_selected_tests: list[str] = []
+        if isinstance(selected_tests, str):
+            raw_selected_tests.append(selected_tests)
+        elif isinstance(selected_tests, list):
+            raw_selected_tests.extend(str(item or "") for item in selected_tests)
+        elif isinstance(selected_tests, tuple):
+            raw_selected_tests.extend(str(item or "") for item in selected_tests)
+        elif selected_tests is not None:
+            try:
+                raw_selected_tests.extend(str(item or "") for item in list(selected_tests))
+            except Exception:
+                raw_selected_tests.append(str(selected_tests or ""))
+        selected_test_names: list[str] = []
+        seen_selected_test_names: set[str] = set()
+        for raw in raw_selected_tests:
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            if not RUN_TEST_NAME_RE.fullmatch(token):
+                raise RuntimeError(f"invalid selected test name: {token}")
+            if token in seen_selected_test_names:
+                continue
+            seen_selected_test_names.add(token)
+            selected_test_names.append(token)
 
-        run_id = f"r-{uuid.uuid4().hex[:12]}"
+        run_id = str(run_id or "").strip() or f"r-{uuid.uuid4().hex[:12]}"
+        safe_invocation_id = str(invocation_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", safe_invocation_id):
+            safe_invocation_id = ""
+        safe_invocation_run_ids: list[str] = []
+        raw_invocation_run_ids = invocation_run_ids or []
+        for raw in raw_invocation_run_ids:
+            token = str(raw or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", token):
+                continue
+            if token in safe_invocation_run_ids:
+                continue
+            safe_invocation_run_ids.append(token)
+        if safe_invocation_id and run_id not in safe_invocation_run_ids:
+            safe_invocation_run_ids.append(run_id)
+        safe_expected_behavior = str(expected_behavior or "").strip().lower()
+        if safe_expected_behavior not in {
+            "accepted",
+            "wrong_answer",
+            "time_limit_exceeded",
+            "runtime_error",
+            "failed",
+            "unknown",
+        }:
+            safe_expected_behavior = "unknown"
+        safe_invocation_source = str(invocation_source or "run.execute").strip() or "run.execute"
+
+        def _attach_invocation_block(summary: dict, *, completed: bool | None = None) -> None:
+            if not safe_invocation_id or not isinstance(summary, dict):
+                return
+            payload: dict[str, object] = {
+                "id": safe_invocation_id,
+                "source": safe_invocation_source,
+                "run_ids": list(safe_invocation_run_ids),
+                "expected_behavior": safe_expected_behavior,
+            }
+            if isinstance(completed, bool):
+                payload["completed"] = completed
+            summary["invocation"] = payload
+
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         artifact_root: Path | None = None
         build_row = self.db.fetch_one("SELECT problem_id,workspace_id,status FROM builds WHERE id=?", [build_id])
@@ -920,6 +1224,20 @@ class RunService:
                 now_iso(),
             ],
         )
+        if safe_invocation_id:
+            initial_summary = {
+                "mode": mode,
+                "source": submission_path or upload_filename or "upload",
+                "selected_tests": selected_test_names,
+                "selected_tests_count": len(selected_test_names),
+                "tests": [],
+                "compile_log": "compile.log",
+                "compile_diagnostics": [],
+                "limits": {},
+                "usage": {},
+            }
+            _attach_invocation_block(initial_summary, completed=False)
+            self.db.execute("UPDATE runs SET summary_json=? WHERE id=?", [self._summary_for_db(initial_summary), run_id])
 
         if not preflight_ok:
             error = preflight_error
@@ -929,10 +1247,16 @@ class RunService:
                 "mode": mode,
                 "source": submission_path or "upload",
                 "tests": [],
+                "selected_tests": selected_test_names,
+                "selected_tests_count": len(selected_test_names),
                 "compile_log": "compile.log",
                 "compile_diagnostics": [],
                 "toolchain_digest": "unknown",
+                "sandbox_backend": self.sandbox.name,
+                "limits": {},
+                "usage": {},
             }
+            _attach_invocation_block(summary, completed=True)
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self._finalize_run(run_id, "failed", summary)
             return run_id
@@ -942,7 +1266,41 @@ class RunService:
         checker_mode = str(run_cfg["checker_mode"])
         checker_args = [str(x) for x in run_cfg["checker_args"]]
         max_passes = int(run_cfg["max_passes"])
+        run_timeout_ms = int(run_cfg.get("run_timeout_ms") or 0)
         run_timeout_sec = int(run_cfg["run_timeout_sec"])
+        run_memory_mb = int(run_cfg["run_memory_mb"])
+        run_process_limit = int(run_cfg["run_process_limit"])
+        run_output_kb = int(run_cfg["run_output_kb"])
+        sandbox_limits = {
+            "cpu_ms": run_timeout_ms,
+            "memory_mb": run_memory_mb,
+            "pids": run_process_limit,
+            "output_kb": run_output_kb,
+        }
+
+        def _persist_running_summary(current_tests: list[dict]) -> None:
+            tests_snapshot = [dict(row) for row in current_tests if isinstance(row, dict)]
+            summary = {
+                "mode": mode,
+                "source": source_label,
+                "selected_tests": selected_test_names,
+                "selected_tests_count": len(selected_test_names),
+                "tests": tests_snapshot,
+                "feedback_dir": "feedback_dir",
+                "compile_diagnostics": compile_diagnostics,
+                "compile_log": "compile.log",
+                "toolchain_digest": toolchain_digest,
+                "run_config": run_cfg,
+                "sandbox_backend": self.sandbox.name,
+                "limits": sandbox_limits,
+                "usage": {
+                    "tests": len(tests_snapshot),
+                    "time_ms_total": sum(int(t.get("time_ms", 0) or 0) for t in tests_snapshot if isinstance(t, dict)),
+                    "memory_kb_peak": max([int(t.get("memory_kb", 0) or 0) for t in tests_snapshot if isinstance(t, dict)] or [0]),
+                },
+            }
+            _attach_invocation_block(summary, completed=False)
+            self.db.execute("UPDATE runs SET summary_json=? WHERE id=?", [self._summary_for_db(summary), run_id])
 
         tests_dir = artifact_root / "tests"
         ans_dir = artifact_root / "ans"
@@ -979,30 +1337,26 @@ class RunService:
             if not has_uploaded_source:
                 if not submission_path:
                     raise RuntimeError("submission_path is required when upload is not provided")
-                sub_src = self._resolve_submission_source(workspace, submission_path)
+                source_in_workspace: Path | None = None
+                with self.workspace_service.workspace_lock(workspace):
+                    source_in_workspace = self._resolve_submission_source(workspace, submission_path)
+                    sub_src = run_root / source_in_workspace.name
+                    shutil.copy2(source_in_workspace, sub_src)
                 source_label = submission_path
-                compile_workspace = workspace
+                compile_workspace = None
 
             include_dirs: list[Path] = []
             include_dir = workspace / "third_party" / "testlib"
             if include_dir.exists():
                 include_dirs.append(include_dir)
 
-            if compile_workspace is not None:
-                with self.workspace_service.workspace_lock(workspace):
-                    ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(
-                        sub_src,
-                        sub_bin,
-                        include_dirs,
-                        path_roots=[compile_workspace],
-                    )
-            else:
-                ok, cout, cerr, toolchain_digest = self.toolchain.compile_cpp(
-                    sub_src,
-                    sub_bin,
-                    include_dirs,
-                    path_roots=[run_root, workspace],
-                )
+            ok, cout, cerr, toolchain_digest = self.toolchain.compile_program(
+                sub_src,
+                sub_bin,
+                include_dirs,
+                path_roots=[run_root, workspace],
+                cxxflags=list(self.SUBMISSION_CPP_CXXFLAGS),
+            )
 
             compile_diagnostics = self._persist_compile_outputs(
                 compile_log_file,
@@ -1017,8 +1371,14 @@ class RunService:
                     "compile_diagnostics": compile_diagnostics,
                     "toolchain_digest": toolchain_digest,
                     "source": source_label,
+                    "selected_tests": selected_test_names,
+                    "selected_tests_count": len(selected_test_names),
                     "run_config": run_cfg,
+                    "sandbox_backend": self.sandbox.name,
+                    "limits": sandbox_limits,
+                    "usage": {},
                 }
+                _attach_invocation_block(summary, completed=True)
                 (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
                 self._finalize_run(run_id, "failed", summary)
                 return run_id
@@ -1026,6 +1386,15 @@ class RunService:
             test_meta = self._load_test_input_meta(artifact_root)
             if not test_meta:
                 raise RuntimeError("selected build has no tests")
+            if selected_test_names:
+                test_meta_by_name = {name: (name, stem) for name, stem in test_meta}
+                missing_tests = [name for name in selected_test_names if name not in test_meta_by_name]
+                if missing_tests:
+                    shown = ", ".join(missing_tests[:6])
+                    if len(missing_tests) > 6:
+                        shown += ", ..."
+                    raise RuntimeError(f"selected tests missing in build: {shown}")
+                test_meta = [test_meta_by_name[name] for name in selected_test_names]
             answer_names = self._load_answer_file_set(artifact_root)
             effective_run_jobs = self._effective_run_jobs(run_cfg.get("run_jobs", 0), len(test_meta))
             run_cfg["run_jobs_effective"] = effective_run_jobs
@@ -1048,6 +1417,7 @@ class RunService:
                         "test": test_name,
                         "passes": [],
                         "verdict": "OK",
+                        "sandbox_status": "ok",
                         "time_ms": 0,
                         "memory_kb": 0,
                         "feedback_files": [],
@@ -1063,14 +1433,24 @@ class RunService:
                         transcript,
                         test_feedback_dir,
                         timeout_sec=run_timeout_sec,
+                        memory_mb=run_memory_mb,
+                        process_limit=run_process_limit,
+                        output_kb=run_output_kb,
                     )
+                    if str(verdict or "").strip().upper().startswith("TL"):
+                        elapsed = self._cap_tle_time_ms(elapsed, run_timeout_ms)
                     test_result["passes"].append({"pass": 1, "verdict": verdict, "time_ms": elapsed, "memory_kb": mem_kb})
                     test_result["verdict"] = verdict
+                    if str(verdict or "").strip().upper().startswith("TL"):
+                        test_result["sandbox_status"] = "tle"
+                    elif verdict == "RE":
+                        test_result["sandbox_status"] = "re"
                     test_result["time_ms"] = elapsed
                     test_result["memory_kb"] = mem_kb
                     test_result["feedback_files"] = self._feedback_key_files(test_feedback_dir, run_root)
                     test_result["transcript"] = str(transcript.relative_to(run_root))
                     verdicts.append(test_result)
+                    _persist_running_summary(verdicts)
             elif mode != "interactive" and effective_run_jobs > 1:
                 for test_name, test_stem in test_meta:
                     ans_name = f"{test_stem}.ans"
@@ -1087,6 +1467,10 @@ class RunService:
                             checker_args,
                             max_passes,
                             run_timeout_sec,
+                            run_timeout_ms,
+                            run_memory_mb,
+                            run_process_limit,
+                            run_output_kb,
                             tests_dir / test_name,
                             ans_dir / f"{test_stem}.ans",
                             feedback_dir / test_stem,
@@ -1098,6 +1482,8 @@ class RunService:
                     for future in as_completed(future_map):
                         idx = future_map[future]
                         parallel_verdicts[idx] = future.result()
+                        current_progress = [row for row in parallel_verdicts if isinstance(row, dict) and row]
+                        _persist_running_summary(current_progress)
                     verdicts.extend(parallel_verdicts)
             else:
                 for test_name, test_stem in test_meta:
@@ -1115,23 +1501,38 @@ class RunService:
                             checker_args,
                             max_passes,
                             run_timeout_sec,
+                            run_timeout_ms,
+                            run_memory_mb,
+                            run_process_limit,
+                            run_output_kb,
                             test,
                             ans,
                             feedback_dir / test_stem,
                             run_root,
                         )
                     )
+                    _persist_running_summary(verdicts)
 
             summary = {
                 "mode": mode,
                 "source": source_label,
+                "selected_tests": selected_test_names,
+                "selected_tests_count": len(selected_test_names),
                 "tests": verdicts,
                 "feedback_dir": "feedback_dir",
                 "compile_diagnostics": compile_diagnostics,
                 "compile_log": "compile.log",
                 "toolchain_digest": toolchain_digest,
                 "run_config": run_cfg,
+                "sandbox_backend": self.sandbox.name,
+                "limits": sandbox_limits,
+                "usage": {
+                    "tests": len(verdicts),
+                    "time_ms_total": sum(int(t.get("time_ms", 0) or 0) for t in verdicts if isinstance(t, dict)),
+                    "memory_kb_peak": max([int(t.get("memory_kb", 0) or 0) for t in verdicts if isinstance(t, dict)] or [0]),
+                },
             }
+            _attach_invocation_block(summary, completed=True)
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self._finalize_run(run_id, "ok", summary)
         except Exception as exc:
@@ -1141,13 +1542,23 @@ class RunService:
                 "error": str(exc),
                 "mode": mode,
                 "source": source_label,
+                "selected_tests": selected_test_names,
+                "selected_tests_count": len(selected_test_names),
                 "tests": verdicts,
                 "feedback_dir": "feedback_dir",
                 "compile_diagnostics": compile_diagnostics,
                 "compile_log": "compile.log",
                 "toolchain_digest": toolchain_digest,
                 "run_config": run_cfg,
+                "sandbox_backend": self.sandbox.name,
+                "limits": sandbox_limits,
+                "usage": {
+                    "tests": len(verdicts),
+                    "time_ms_total": sum(int(t.get("time_ms", 0) or 0) for t in verdicts if isinstance(t, dict)),
+                    "memory_kb_peak": max([int(t.get("memory_kb", 0) or 0) for t in verdicts if isinstance(t, dict)] or [0]),
+                },
             }
+            _attach_invocation_block(summary, completed=True)
             (run_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             self._finalize_run(run_id, "failed", summary)
 

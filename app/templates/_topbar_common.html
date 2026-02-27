@@ -1,0 +1,19 @@
+<div class="brand-row">
+  <div class="brand">
+    <a class="logo" href="/problems/{{ top_user.username }}/problems">not polygon</a>
+    <div class="tagline">Unprofessional way to prepare programming contest problems</div>
+  </div>
+  <div class="top-actions">
+    <span class="session-user">{{ top_user.username }}</span>
+    {% if top_settings_href %}
+    <a href="{{ top_settings_href }}">Settings</a>
+    {% endif %}
+    <form method="post" action="/logout" class="inline-form">
+      <button class="linkish" type="submit">Logout</button>
+    </form>
+  </div>
+</div>
+<nav class="main-menu">
+  <a data-main="problems" class="{{ 'active' if top_active_main == 'problems' else '' }}" href="/problems/{{ top_user.username }}/problems">Problems</a>
+  <a data-main="contests" class="{{ 'active' if top_active_main == 'contests' else '' }}" href="/problems/{{ top_user.username }}/contests">Contests</a>
+</nav>

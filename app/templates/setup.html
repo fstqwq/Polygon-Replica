@@ -1,0 +1,43 @@
+{% extends "auth_base.html" %}
+{% block auth_page_title %}Polygon-Replica Setup{% endblock %}
+{% block auth_title %}System Setup{% endblock %}
+{% block auth_subtitle %}No registered users found. Create the first super administrator account.{% endblock %}
+{% block auth_hint %}
+<p class="muted">Username format: Use lowercased words, separated by dash. Examples: alice, team-7, judge-admin</p>
+{% endblock %}
+
+{% block auth_form %}
+<form id="setup-form" class="form-stack" method="post" action="/setup">
+  <label for="username">Super Admin Username</label>
+  <input id="username" name="username" autofocus />
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="new-password" />
+  <label for="password_confirm">Confirm Password</label>
+  <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" />
+  <label><input type="checkbox" name="confirm_config" value="1" /> I confirm the configuration paths below.</label>
+  <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
+  <input type="hidden" name="password_salt" value="{{ password_salt }}" />
+  <input type="hidden" name="password_iters" value="{{ password_iters }}" />
+  <input type="hidden" name="password_verifier" value="" />
+  <input type="hidden" name="password_proof" value="" />
+  <input type="hidden" name="next" value="{{ next_path }}" />
+  <button class="primary-action" type="submit">Create Super Admin</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Config</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in config_rows %}
+    <tr>
+      <td><code>{{ row.name }}</code></td>
+      <td><code>{{ row.value }}</code></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

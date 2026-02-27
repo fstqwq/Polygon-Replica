@@ -3,61 +3,210 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Polygonlike</title>
+  <title>{% if ctx.problem.name %}{{ ctx.problem.name }} - {% endif %}Polygon-Replica</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <script src="/static/ui.js" defer></script>
+  <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css" />
+  <script src="/static/vendor/codemirror/lib/codemirror.min.js" defer></script>
+  <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js" defer></script>
+  <script src="/static/vendor/codemirror/addon/edit/closebrackets.min.js" defer></script>
+  <script src="/static/vendor/codemirror/mode/clike/clike.min.js" defer></script>
+  <script src="/static/vendor/codemirror/mode/python/python.min.js" defer></script>
+  <script src="/static/vendor/codemirror/mode/stex/stex.min.js" defer></script>
+  <script src="/static/vendor/codemirror/mode/javascript/javascript.min.js" defer></script>
 </head>
 <body>
   <header class="topbar">
-    <div><strong>Problem:</strong> {{ ctx.problem.slug }} | <strong>Workspace:</strong> {{ ctx.user.username }}</div>
-    <div><strong>Branch:</strong> {{ ctx.workspace.branch or "-" }} | <strong>HEAD:</strong> {{ ctx.workspace.head_commit or "-" }}</div>
-    <div>
-      <strong>Dirty:</strong> {{ "yes" if ctx.workspace.dirty else "no" }} |
-      <strong>Recent build:</strong> {{ ctx.latest_build.id if ctx.latest_build else "none" }} {{ ctx.latest_build.status if ctx.latest_build else "" }} |
-      <strong>Recent preview:</strong> {{ ctx.latest_preview.id if ctx.latest_preview else "none" }} {{ ctx.latest_preview.status if ctx.latest_preview else "" }}
-    </div>
-    <form method="post" action="/switch-workspace">
-      <input name="problem" value="{{ ctx.problem.slug }}" />
-      <input name="user" value="{{ ctx.user.username }}" />
-      <input class="page-target" name="page" value="files" />
-      <button type="submit">Switch Workspace</button>
-    </form>
-    <form method="post" action="/switch-branch">
-      <input type="hidden" name="problem" value="{{ ctx.problem.slug }}" />
-      <input type="hidden" name="user" value="{{ ctx.user.username }}" />
-      <input class="page-target" type="hidden" name="page" value="files" />
-      <label>Branch</label>
-      <select name="branch">
-        {% for b in ctx.branches %}
-        <option value="{{ b }}" {% if b == ctx.workspace.branch %}selected{% endif %}>{{ b }}</option>
-        {% endfor %}
-      </select>
-      {% if ctx.branches_truncated %}
-      <em>Showing first {{ ctx.branch_limit }} branches.</em>
+    {% set top_user = ctx.user %}
+    {% set top_settings_href = '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/settings' %}
+    {% set top_active_main = 'problems' %}
+    {% include "_topbar_common.html" %}
+    {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
+    {% set general_nav = nav_status.get('general', {}) %}
+    {% set preview_nav = nav_status.get('preview', {}) %}
+    {% set general_line_class = 'submenu-status-danger' if general_nav.get('danger') else 'submenu-status-warn' if general_nav.get('warn') else '' %}
+    {% set statement_line_class = 'submenu-status-danger' if preview_nav.get('danger') else 'submenu-status-warn' if preview_nav.get('warn') else '' %}
+    {% set verification_status = ctx.verification_status.display if ctx.verification_status is defined else "none" %}
+    {% set verification_mode = ctx.verification_status.mode if ctx.verification_status is defined else verification_status %}
+    {% set verification_error = ctx.verification_status.error if ctx.verification_status is defined else "" %}
+    {% set verification_stale_reason = ctx.verification_status.stale_reason if ctx.verification_status is defined else "" %}
+    {% set verification_tooltip = verification_error if verification_mode == 'failed' else verification_stale_reason if verification_mode == 'stale' else '' %}
+    {% if verification_mode == 'failed' and (not verification_tooltip) %}
+    {% set verification_tooltip = 'verification failed; open Invocations for details' %}
+    {% elif verification_mode == 'stale' and (not verification_tooltip) %}
+    {% set verification_tooltip = 'changed: verification inputs' %}
+    {% endif %}
+    {% set tests_nav = nav_status.get('tests', nav_status.get('build', {})) %}
+    <nav class="problem-submenu">
+      <div class="problem-submenu-item">
+        <a data-page="general" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/general">
+          <span class="submenu-title">Statement</span>
+          <span class="submenu-status submenu-status-stack">
+            <span class="submenu-status-line {{ general_line_class }}">{{ general_nav.get("text", "-") }}</span>
+            <span class="submenu-status-line {{ statement_line_class }}">statement: {{ preview_nav.get("text", "-") }}</span>
+          </span>
+        </a>
+      </div>
+      {% set checker_nav = nav_status.get('checker', {}) %}
+      <div class="problem-submenu-item">
+        <a data-page="checker" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker">
+          <span class="submenu-title">Checker</span>
+          <span class="submenu-status-row">
+            <span
+              class="submenu-status {{ 'submenu-status-danger' if checker_nav.get('danger') else '' }}"
+              {% if checker_nav.get('hint') %}data-tooltip="{{ checker_nav.get('hint') }}" aria-label="checker details"{% endif %}
+            >{{ checker_nav.get("text", "-") }}</span>
+          </span>
+        </a>
+      </div>
+      {% if (ctx.problem_mode if ctx.problem_mode is defined else "pass-fail") != "pass-fail" %}
+      <div class="problem-submenu-item">
+        <a data-page="interactor" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/interactor">
+          <span class="submenu-title">Interactor</span>
+          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('interactor', {}).get('danger') else '' }}">{{ nav_status.get("interactor", {}).get("text", "-") }}</span>
+        </a>
+      </div>
       {% endif %}
-      <button type="submit">Switch Branch</button>
-    </form>
+      <div class="problem-submenu-item">
+        <a data-page="validator" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/validator">
+          <span class="submenu-title">Validator</span>
+          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('validator', {}).get('danger') else '' }}">{{ nav_status.get("validator", {}).get("text", "-") }}</span>
+        </a>
+      </div>
+      <div class="problem-submenu-item">
+        <a data-page="generators" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators">
+          <span class="submenu-title">Generators</span>
+          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('generators', {}).get('danger') else '' }}">{{ nav_status.get("generators", {}).get("text", "-") }}</span>
+        </a>
+      </div>
+      <div class="problem-submenu-item">
+        <a data-page="solutions" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions">
+          <span class="submenu-title">Solution files</span>
+          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('solutions', {}).get('danger') else '' }}">
+            {{ nav_status.get("solutions", {}).get("text", "-") }}
+          </span>
+        </a>
+      </div>
+      <div class="problem-submenu-item">
+        <a data-page="tests" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests">
+          <span class="submenu-title">Tests</span>
+          <span class="submenu-status {{ 'submenu-status-danger' if tests_nav.get('danger') else '' }}">
+            {% if tests_nav.get('has_counts') %}
+            {{ tests_nav.get('total', 0) }} ({% set sample_count = tests_nav.get('sample', 0) | int %}{% if tests_nav.get('sample_zero') %}<span class="submenu-status-danger">no sample</span>{% elif sample_count == 1 %}1 sample{% else %}{{ sample_count }} samples{% endif %})
+            {% else %}
+            {{ tests_nav.get("text", "-") }}
+            {% endif %}
+          </span>
+        </a>
+      </div>
+      <div class="problem-submenu-item problem-submenu-item-run">
+        <div class="problem-submenu-run-head">
+          <a data-page="run" class="problem-submenu-run-title" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">
+            <span class="submenu-title">Invocations</span>
+          </a>
+        </div>
+        <span class="problem-submenu-run-status">
+          <span class="submenu-status {{ 'submenu-status-warn' if verification_mode == 'stale' else '' }}">
+            <span class="status-row-inline">
+              <span class="status-title {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else '' }}">Verification</span>
+              <strong
+                class="status-value {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else '' }}"
+                {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}
+              >{{ verification_status }}</strong>
+            </span>
+            <span class="submenu-status-line verification-start-line">
+              <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/verification/start">
+                <input class="page-target" type="hidden" name="page" value="general" />
+                <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start verification)</a>
+              </form>
+            </span>
+          </span>
+        </span>
+      </div>
+      <div class="problem-submenu-item">
+        <a data-page="export" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export">
+          <span class="submenu-title">Packages</span>
+          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('export', {}).get('danger') else '' }}">{{ nav_status.get("export", {}).get("text", "-") }}</span>
+        </a>
+      </div>
+      <div class="problem-submenu-item">
+        <a data-page="access" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access">
+          <span class="submenu-title">Manage access</span>
+          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('access', nav_status.get('workspace', {})).get('danger') else '' }}">{{ nav_status.get("access", nav_status.get("workspace", {})).get("text", "-") }}</span>
+        </a>
+      </div>
+    </nav>
+    <div class="problem-context-bar">
+      <strong class="problem-context-name">{{ ctx.problem.name }}</strong>
+      <span class="problem-context-slug">#{{ ctx.problem.slug }}</span>
+    </div>
   </header>
-  <nav class="nav">
-    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files">Files</a>
-    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git">Git</a>
-    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/build">Build</a>
-    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview">Preview</a>
-    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Run</a>
-    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export">Export</a>
-  </nav>
-  <main class="container">{% block content %}{% endblock %}</main>
-  <script>
-    (function () {
-      var parts = window.location.pathname.split("/");
-      var page = parts.length >= 5 ? parts[4] : "files";
-      if (page === "artifacts") page = "build";
-      if (page === "runs") page = "run";
-      var allowed = { files: 1, git: 1, build: 1, preview: 1, run: 1, export: 1 };
-      if (!allowed[page]) page = "files";
-      document.querySelectorAll("input.page-target").forEach(function (el) {
-        el.value = page;
-      });
-    })();
-  </script>
+
+  <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}{% if ctx.page_single_column %} single-column{% endif %}">
+    <main class="content-shell">
+      <div class="container">{% block content %}{% endblock %}</div>
+    </main>
+    <aside class="side-panel">
+      <section class="action-card">
+        <h3>Working Copy</h3>
+        {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
+        {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
+        {% set upstream_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
+        {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
+        {% set upstream_rev = ('v' ~ upstream_rev_raw) if upstream_rev_raw is not none else 'missing' %}
+        <div class="workspace-revision{{ ' workspace-revision-alert' if ctx.workspace_revision_alert else '' }}">
+          <div class="workspace-revision-head">
+            {% if ctx.workspace_needs_update %}
+            <span class="workspace-revision-state">update available</span>
+            {% endif %}
+          </div>
+          <p class="workspace-revision-inline">Based on <strong>{{ local_rev }}</strong> / upstream <strong>{{ upstream_rev }}</strong></p>
+        </div>
+        {% if ctx.workspace_needs_update %}
+        <div class="workspace-update-row">
+          <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull">
+            <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
+          </form>
+        </div>
+        {% endif %}
+        <div class="workspace-links">
+          <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/history">View Revision History</a>
+          <span class="workspace-link-sep" aria-hidden="true">/</span>
+          <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?src=workspace">Browse Files</a>
+        </div>
+        <div class="workspace-actions">
+          <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace">Commit Changes</a>
+        </div>
+        {% if ctx.workspace_changes.total > 0 %}
+        <div class="change-badges">
+          {% if ctx.workspace_changes.counts.added %}<span class="change-chip change-added">+{{ ctx.workspace_changes.counts.added }} added</span>{% endif %}
+          {% if ctx.workspace_changes.counts.modified %}<span class="change-chip change-modified">~{{ ctx.workspace_changes.counts.modified }} modified</span>{% endif %}
+          {% if ctx.workspace_changes.counts.deleted %}<span class="change-chip change-deleted">-{{ ctx.workspace_changes.counts.deleted }} deleted</span>{% endif %}
+          {% if ctx.workspace_changes.counts.renamed %}<span class="change-chip change-renamed">R{{ ctx.workspace_changes.counts.renamed }} renamed</span>{% endif %}
+          {% if ctx.workspace_changes.counts.untracked %}<span class="change-chip change-untracked">?{{ ctx.workspace_changes.counts.untracked }} untracked</span>{% endif %}
+          {% if ctx.workspace_changes.counts.conflicted %}<span class="change-chip change-conflicted">!{{ ctx.workspace_changes.counts.conflicted }} conflicted</span>{% endif %}
+          {% if ctx.workspace_changes.counts.typechange %}<span class="change-chip change-typechange">T{{ ctx.workspace_changes.counts.typechange }} type</span>{% endif %}
+          {% if ctx.workspace_changes.counts.other %}<span class="change-chip change-other">{{ ctx.workspace_changes.counts.other }} other</span>{% endif %}
+        </div>
+        <ul class="change-list">
+          {% for row in ctx.workspace_changes.rows %}
+          <li class="change-item change-{{ row.kind }}">
+            <code class="change-code">{{ row.code }}</code>
+            <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ row.link_path }}&src=workspace">{{ row.path }}</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">Working copy clean.</p>
+        {% endif %}
+        {% if not ctx.access.can_write %}
+        <p class="muted">Workspace is read-only.</p>
+        {% endif %}
+      </section>
+    </aside>
+  </div>
+  {% include "_page_profile.html" %}
+
+  <script src="/static/editor_init.js" defer></script>
 </body>
 </html>

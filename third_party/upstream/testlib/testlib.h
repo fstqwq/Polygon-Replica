@@ -189,6 +189,7 @@ const char *latestFeatures[] = {
 #include <fcntl.h>
 #include <functional>
 #include <cstdint>
+#include <sys/stat.h>
 
 #ifdef TESTLIB_THROW_EXIT_EXCEPTION_INSTEAD_OF_EXIT
 #   include <exception>
@@ -233,49 +234,23 @@ const char *latestFeatures[] = {
 #define EOFC (255)
 
 #ifndef OK_EXIT_CODE
-#   ifdef CONTESTER
-#       define OK_EXIT_CODE 0xAC
-#   else
-#       define OK_EXIT_CODE 0
-#   endif
+#   define OK_EXIT_CODE 42
 #endif
 
 #ifndef WA_EXIT_CODE
-#   ifdef EJUDGE
-#       define WA_EXIT_CODE 5
-#   elif defined(CONTESTER)
-#       define WA_EXIT_CODE 0xAB
-#   else
-#       define WA_EXIT_CODE 1
-#   endif
+#   define WA_EXIT_CODE 43
 #endif
 
 #ifndef PE_EXIT_CODE
-#   ifdef EJUDGE
-#       define PE_EXIT_CODE 4
-#   elif defined(CONTESTER)
-#       define PE_EXIT_CODE 0xAA
-#   else
-#       define PE_EXIT_CODE 2
-#   endif
+#   define PE_EXIT_CODE 43
 #endif
 
 #ifndef FAIL_EXIT_CODE
-#   ifdef EJUDGE
-#       define FAIL_EXIT_CODE 6
-#   elif defined(CONTESTER)
-#       define FAIL_EXIT_CODE 0xA3
-#   else
-#       define FAIL_EXIT_CODE 3
-#   endif
+#   define FAIL_EXIT_CODE 3
 #endif
 
 #ifndef DIRT_EXIT_CODE
-#   ifdef EJUDGE
-#       define DIRT_EXIT_CODE 6
-#   else
-#       define DIRT_EXIT_CODE 4
-#   endif
+#   define DIRT_EXIT_CODE 4
 #endif
 
 #ifndef POINTS_EXIT_CODE
@@ -4688,7 +4663,6 @@ void registerInteraction(int argc, char *argv[]) {
         appesMode = false;
     }
 
-#ifndef EJUDGE
     if (argc == 5) {
         resultName = argv[4];
         appesMode = false;
@@ -4703,7 +4677,6 @@ void registerInteraction(int argc, char *argv[]) {
             appesMode = true;
         }
     }
-#endif
 
     inf.init(argv[1], _input);
 
@@ -4840,6 +4813,28 @@ public:
     }
 } checker;
 
+static bool __testlib_pathIsDirectory(const std::string &path) {
+    if (path.empty())
+        return false;
+    struct stat st;
+    if (0 != stat(path.c_str(), &st))
+        return false;
+    return (st.st_mode & S_IFDIR) != 0;
+}
+
+static std::string __testlib_joinPath(const std::string &base, const std::string &leaf) {
+    if (base.empty())
+        return leaf;
+    char last = base[base.size() - 1];
+    if (last == '/' || last == '\\')
+        return base + leaf;
+#ifdef ON_WINDOWS
+    return base + "\\" + leaf;
+#else
+    return base + "/" + leaf;
+#endif
+}
+
 void registerTestlibCmd(int argc, char *argv[]) {
     __testlib_ensuresPreconditions();
     __testlib_set_testset_and_group(argc, argv);
@@ -4870,9 +4865,21 @@ void registerTestlibCmd(int argc, char *argv[]) {
     if (argc > 1 && "--help" == args[1])
         __testlib_help();
 
+    bool icpcCompatMode = (argc >= 4 && __testlib_pathIsDirectory(args[3]));
+    if (icpcCompatMode) {
+        resultName = __testlib_joinPath(args[3], "judgemessage.txt");
+        appesMode = false;
+        inf.init(args[1], _input);
+        ouf.init(stdin, _output);
+        ouf.skipBom();
+        ans.init(args[2], _answer);
+        return;
+    }
+
     if (argc < 4 || argc > 6) {
         quit(_fail, std::string("Program must be run with the following arguments: ") +
                     std::string("[--testset testset] [--group group] <input-file> <output-file> <answer-file> [<report-file> [<-appes>]]") +
+                    std::string(" or <input-file> <answer-file> <feedback-dir> [validator-args ...]") +
                     "\nUse \"--help\" to get help information");
     }
 
@@ -4881,7 +4888,6 @@ void registerTestlibCmd(int argc, char *argv[]) {
         appesMode = false;
     }
 
-#ifndef EJUDGE
     if (argc == 5) {
         resultName = args[4];
         appesMode = false;
@@ -4896,7 +4902,6 @@ void registerTestlibCmd(int argc, char *argv[]) {
             appesMode = true;
         }
     }
-#endif
 
     inf.init(args[1], _input);
     ouf.init(args[2], _output);

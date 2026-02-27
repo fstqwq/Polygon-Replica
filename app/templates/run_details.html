@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Invocation Details</h1>
+<p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">&laquo; Back to invocations</a></p>
+{% include "_flash_message.html" %}
+
+<section>
+  <div class="form-row invocation-detail-actions">
+    {% if rerun_solution_paths %}
+    <form class="inline-form invocation-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
+      {% for p in rerun_solution_paths %}
+      <input type="hidden" name="solution_paths" value="{{ p }}" />
+      {% endfor %}
+      <button class="linkish" type="submit">Rejudge</button>
+    </form>
+    {% else %}
+    <span class="muted">Rejudge unavailable: {{ rerun_unavailable_reason or "no reusable solutions source" }}</span>
+    {% endif %}
+  </div>
+  {% if match_total %}
+  <p class="muted">Expected match: {{ matched_count }}/{{ match_total }}{% if all_matched %} (success){% endif %}</p>
+  {% endif %}
+  {% if detail_columns %}
+  {% set ns = namespace(unexpected_count=0) %}
+  {% for col in detail_columns %}
+    {% if (not col.matched) or col.expected_mismatch %}
+      {% set ns.unexpected_count = ns.unexpected_count + 1 %}
+    {% endif %}
+  {% endfor %}
+  {% if ns.unexpected_count > 0 %}
+  <div class="invocation-expected-notes">
+    {% for col in detail_columns %}
+      {% if (not col.matched) or col.expected_mismatch %}
+      <div class="muted">unexpected {{ col.title }}: {{ col.match_reason or ('expected ' ~ col.expected_short ~ ', got ' ~ (col.got_display or col.got_short)) }}</div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
+
+{% if detail_columns %}
+<section>
+  <p class="muted">Click a test row to expand per-solution details.</p>
+  <div class="invocation-detail-wrap">
+    <table class="invocation-detail-table">
+      <colgroup>
+        <col class="invocation-col-test" />
+        {% for col in detail_columns %}
+        <col class="invocation-col-solution" />
+        {% endfor %}
+      </colgroup>
+      <tr>
+        <th>Test</th>
+        {% for col in detail_columns %}
+        <th class="{{ 'invocation-col-unexpected' if col.expected_mismatch else '' }}">
+          {% if col.source_href %}
+          <a href="{{ col.source_href }}">{{ col.title }}</a>
+          {% else %}
+          {{ col.title }}
+          {% endif %}
+          {% set has_expected = col.expected_short and col.expected_short != '--' %}
+          {% set same_status = has_expected and (not col.expected_mismatch) %}
+          {% if has_expected %}
+          {% set got_status_class = 'ok' if col.expected_short == 'AC' and col.got_short == 'AC' and (not col.expected_mismatch) else 'danger' if col.expected_mismatch else 'muted' %}
+          {% else %}
+          {% set got_status_class = 'ok' if col.got_short == 'AC' else 'muted' %}
+          {% endif %}
+          {% if same_status %}
+          <div class="muted"><span class="{{ got_status_class }}">{{ col.got_display or col.got_short }}</span></div>
+          {% elif has_expected %}
+          <div class="muted">expected {{ col.expected_short }}, got <span class="{{ got_status_class }}">{{ col.got_display or col.got_short }}</span></div>
+          {% else %}
+          <div class="muted"><span class="{{ got_status_class }}">{{ col.got_display or col.got_short }}</span></div>
+          {% endif %}
+        </th>
+        {% endfor %}
+      </tr>
+      {% if detail_rows %}
+      {% for row in detail_rows %}
+      <tr>
+        <td title="{{ row.test_name }}">
+          {% if row.has_detail %}
+          <a class="linkish invocation-test-toggle" href="#{{ row.row_id }}" data-target="{{ row.row_id }}">{{ row.test_name }}</a>
+          {% else %}
+          {{ row.test_name }}
+          {% endif %}
+        </td>
+        {% for cell in row.cells %}
+        <td class="invocation-cell invocation-cell-{{ cell.kind }}">
+          {% if row.has_detail %}
+          <a class="linkish invocation-cell-toggle invocation-cell-link" href="#{{ row.row_id }}" data-target="{{ row.row_id }}"><span class="invocation-cell-code">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="invocation-cell-meta">{{ cell.metrics }}</span>{% endif %}</a>
+          {% else %}
+          <span class="invocation-cell-code">{{ cell.short }}</span>
+          {% if cell.metrics and cell.metrics != '-' %}<span class="invocation-cell-meta">{{ cell.metrics }}</span>{% endif %}
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      <tr id="{{ row.row_id }}" class="invocation-test-detail-row" hidden>
+        <td class="invocation-test-detail-cell" colspan="{{ detail_columns|length + 1 }}">
+          <div class="invocation-test-preview-grid">
+            <div class="invocation-preview-card">
+              <div class="invocation-preview-head">
+                <strong>Input {{ row.test_name }}</strong>
+                {% if row.input_preview.available %}
+                <a href="{{ row.input_preview.download_href }}">download</a>
+                {% endif %}
+              </div>
+              {% if row.input_preview.available %}
+              <pre class="invocation-preview-content{{ ' invocation-empty-text' if row.input_preview.text == '(empty)' else '' }}">{{ row.input_preview.text }}</pre>
+              {% if row.input_preview.truncated %}
+              <p class="muted">Showing first {{ row.input_preview.limit }} bytes.</p>
+              {% endif %}
+              {% else %}
+              <p class="muted">{{ row.input_preview.message }}</p>
+              {% endif %}
+            </div>
+            <div class="invocation-preview-card">
+              <div class="invocation-preview-head">
+                <strong>Answer</strong>
+                {% if row.answer_preview.available %}
+                <a href="{{ row.answer_preview.download_href }}">download</a>
+                {% endif %}
+              </div>
+              {% if row.answer_preview.available %}
+              <pre class="invocation-preview-content{{ ' invocation-empty-text' if row.answer_preview.text == '(empty)' else '' }}">{{ row.answer_preview.text }}</pre>
+              {% if row.answer_preview.truncated %}
+              <p class="muted">Showing first {{ row.answer_preview.limit }} bytes.</p>
+              {% endif %}
+              {% else %}
+              <p class="muted">{{ row.answer_preview.message }}</p>
+              {% endif %}
+            </div>
+          </div>
+          <div class="invocation-test-detail-scroll">
+          <table class="invocation-test-detail-table">
+            <colgroup>
+              <col class="run-col-solution" />
+              <col class="run-col-pass" />
+              <col class="run-col-verdict" />
+              <col class="run-col-time" />
+              <col class="run-col-memory" />
+              <col class="run-col-feedback" />
+              <col class="run-col-output" />
+            </colgroup>
+            <tr>
+              <th class="run-col-solution">Solution</th>
+              <th class="run-col-pass">Pass</th>
+              <th class="run-col-verdict">Verdict</th>
+              <th class="run-col-time">Time</th>
+              <th class="run-col-memory">Memory</th>
+              <th class="run-col-feedback">Feedback</th>
+              <th class="run-col-output">Output</th>
+            </tr>
+            {% for cell in row.cells %}
+            {% set col = detail_columns[loop.index0] %}
+            {% set pass_rows = cell.detail.pass_rows if cell.detail and cell.detail.pass_rows else [] %}
+            {% if pass_rows %}
+            {% for pass_row in pass_rows %}
+            {% set pass_kind = pass_row.kind if pass_row.kind is defined else cell.kind %}
+            {% set verdict_class = 'run-verdict-ok' if pass_kind == 'ok' else 'run-verdict-unexpected' if pass_kind == 'fail' else 'run-verdict-expected' if pass_kind == 'expected-nonac' else 'muted' %}
+            <tr class="{{ 'invocation-pass-row-unexpected' if pass_kind == 'fail' else '' }}">
+              <td class="run-col-solution">{{ col.title }}</td>
+              <td class="run-col-pass">{{ pass_row.pass_label or '-' }}</td>
+              <td class="run-col-verdict {{ verdict_class }}">{{ pass_row.verdict_short or '-' }}</td>
+              <td class="run-col-time">{{ pass_row.time_display or '-' }}</td>
+              <td class="run-col-memory">{{ pass_row.memory_display or '-' }}</td>
+              {% set feedback_text = pass_row.feedback_display or '-' %}
+              <td class="run-col-feedback{{ ' invocation-empty-text' if feedback_text == '(empty)' else '' }}">{{ feedback_text }}</td>
+              <td class="run-col-output">
+                {% if pass_row.output_preview and pass_row.output_preview.available %}
+                <a href="{{ pass_row.output_preview.download_href }}">download</a>
+                <pre class="invocation-preview-content invocation-output-preview{{ ' invocation-empty-text' if pass_row.output_preview.text == '(empty)' else '' }}">{{ pass_row.output_preview.text }}</pre>
+                {% if pass_row.output_preview.truncated %}
+                <div class="muted">Showing first {{ pass_row.output_preview.limit }} bytes.</div>
+                {% endif %}
+                {% else %}
+                <span class="muted">-</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+            {% else %}
+            <tr>
+              <td class="run-col-solution">{{ col.title }}</td>
+              <td class="run-col-pass muted">-</td>
+              <td class="run-col-verdict muted">-</td>
+              <td class="run-col-time muted">-</td>
+              <td class="run-col-memory muted">-</td>
+              <td class="run-col-feedback muted">-</td>
+              <td class="run-col-output muted">-</td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+          </table>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr>
+        <td colspan="{{ detail_columns|length + 1 }}"><span class="muted">No per-test details yet.</span></td>
+      </tr>
+      {% endif %}
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Compile Diagnostics</h2>
+  {% set ns = namespace(has_diag=false) %}
+  {% for col in detail_columns %}
+  {% set entries = col.compile_diagnostics if col.compile_diagnostics else [] %}
+  {% set has_error = (col.error | default('') | trim) %}
+  {% set has_entries = (entries | length) > 0 %}
+  {% if has_error or has_entries %}
+  {% set ns.has_diag = true %}
+  <div class="compile-diagnostics-card">
+    <div class="compile-diagnostics-head">
+      <div>
+        {% if col.source_href %}
+        <a href="{{ col.source_href }}"><strong>{{ col.title }}</strong></a>
+        {% else %}
+        <strong>{{ col.title }}</strong>
+        {% endif %}
+      </div>
+    </div>
+    {% if has_error %}
+    <p class="compile-diagnostics-error">{{ col.error_display or col.error }}</p>
+    {% endif %}
+    {% if has_entries %}
+    {% if col.compile_diagnostics_truncated %}
+    <p class="muted">Showing first {{ col.compile_diagnostics_limit }} diagnostics ({{ col.compile_diagnostics_total }} total).</p>
+    {% endif %}
+    <pre class="compile-diagnostics-log">{% for d in entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
+{% endfor %}</pre>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% if not ns.has_diag %}
+  <p class="muted">No compile diagnostics.</p>
+  {% endif %}
+</section>
+{% else %}
+<section>
+  <p class="muted">No invocation selected. Open <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Invocations</a> and choose one.</p>
+</section>
+{% endif %}
+{% endblock %}

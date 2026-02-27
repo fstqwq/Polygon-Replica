@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Revision History</h1>
+{% include "_flash_message.html" %}
+<section>
+  {% if commits %}
+  <table>
+    <tr><th>Revision</th><th>Message</th><th>Author</th><th>Date</th><th>Commit</th><th>Action</th></tr>
+    {% for c in commits %}
+    <tr>
+      <td><code>{{ ("v" ~ c.version) if c.version else "-" }}</code></td>
+      <td>{{ c.subject }}</td>
+      <td>{{ c.author }}</td>
+      <td>{{ c.date|local_time }}</td>
+      <td><code title="{{ c.commit }}">{{ c.commit[:12] }}</code></td>
+      <td>
+        <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/restore-revision">
+          <input type="hidden" name="revision" value="{{ c.commit }}" />
+          <input type="hidden" name="page" value="history" />
+          <button type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Restore To Working Copy</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">Restore action first updates working copy to latest <code>main</code>, then replaces files with the selected revision as uncommitted changes.</p>
+  {% else %}
+  <p class="muted">No commits yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

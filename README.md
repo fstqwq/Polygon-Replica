@@ -1,286 +1,171 @@
-# Polygonlike Authoring System
+# Polygon-Replica Problem Authoring System
 
-This repository implements a local Polygon-like problem authoring system aligned with `AGENTS.md`:
+本项目是一个本地部署的题目制作系统，目标是用 Git 驱动题目开发、用本地文件系统管理评测产物，并通过 Web UI 完成完整工作流。
 
-- Git-backed per-problem repositories with per-user workspaces
-- Local filesystem artifact store (`tests`, `ans`, `logs`, `statement_preview`, `export`, `manifest.json`)
-- Minimum metadata database schema (`problems`, `users`, `repo_acl`, `workspaces`, `builds`, `previews`, `runs`, `exports`, `audit_log`)
-- Unified compiler layer with cache key `(toolchain_digest, source_hash)` and `testlib.h` include path support
-- TeX preview compilation and log capture
-- Build pipeline (`compile -> generate -> validate -> solve -> persist`) with failed-step metadata
-- Runner page with pass-fail / interactive / multi-pass modes and workspace-or-upload submissions
-- Exporter page for Kattis / DOMjudge / Polygon zips
-  - Kattis and DOMjudge exports now emit format-structured package layouts (problem metadata, statement, test data, submissions, validators)
-  - Polygon exports are slimmed to build outputs and step logs (run replay payloads excluded)
-- Artifact browsing plus directory zip download endpoints for generated outputs
-- Build config supports explicit source overrides and multi-generator inputs (`config/build.json`)
-- Build config also supports runner-facing controls:
-  - `validator_args`
-  - `checker_mode` (`testlib` or `kattis`)
-  - `checker_args`
-  - `max_passes`
-  - `run_timeout_sec`
-- Build source discovery now supports C++ variants (`.cpp`, `.cc`, `.cxx`, `.c++`) with preferred-name resolution (`accepted.*`, etc.)
-- Manual test ingestion now prefers `tests/manual/**/*.in` when present, so sidecar files like `.ans` are not treated as input tests
-- Build compile step now supports bounded parallel target compilation via `config/build.json` `compile_jobs` (`0` = auto)
-- Build validate step now supports bounded parallel validator execution via `config/build.json` `validate_jobs` (`0` = auto)
-- Build solve step now supports bounded parallel accepted-solution execution via `config/build.json` `solve_jobs` (`0` = auto)
-- Runner non-interactive execution (`pass-fail`, `multi-pass`) now supports bounded parallel per-test execution via `config/build.json` `run_jobs` (`0` = auto)
-- Web UI sections: Files, Git, Build, Preview, Run, Export
-- Workspace-level mutation locking and audit log entries
-- Run failure hardening: compilation/setup errors now always finalize run status with `summary.json` and `compile.log`
-- Validator/checker/interactor compatibility: accepts both testlib-style (`0`) and Kattis-style (`42/43`) verdict exit codes
-- Run source safety: workspace submission paths are validated to stay within workspace root
-- Runner workspace submission paths now reject reserved internal files (for example `.git/*`, `.polygonlike.lock`), symlinked submission aliases, and symlinked path components.
-- Workspace file save/new/upload/download routes now reject symlinked path components to prevent alias-based path escapes.
-- Git commit flow now unstages `.polygonlike.lock` before commit, preventing internal workspace lock files from entering repository history.
-- Git commit lock-file exclusion now also covers nested `.polygonlike.lock` paths via glob pathspec filtering.
-- Run preflight hardening: non-existent/non-ready build ids are rejected as failed runs with persisted logs/summary
-- Run preflight now also rejects builds whose artifact directories are missing/corrupted before execution starts
-- Run preflight now canonicalizes build artifact ids/roots and rejects traversal-style build ids before artifact resolution.
-- Run execution now ignores symlinked test inputs and rejects invalid/symlinked checker/interactor/answer artifact paths to prevent out-of-root artifact dereference during judging.
-- Invalid preflight runs are isolated under `run_root/invalid-runs/` rather than creating synthetic build artifact trees
-- Compile cache correctness: cache keys now include recursively discovered local `#include "..."` dependencies (source dir + include dirs), so header-only changes invalidate stale binaries
-- Compile cache keys now use canonical dependency identities (relative to source/include roots) rather than absolute filesystem paths, preserving cache reuse across snapshot directories
-- Compile cache writes are now serialized per cache key with file locking and atomic replace, preventing duplicate/corrupted cache artifacts under concurrent compilation
-- Run summaries now include both configured and effective run worker counts (`run_jobs`, `run_jobs_effective`)
-- Runner now supports configurable per-test runtime limits from build config (`run_timeout_sec`) and records it in run/build metadata.
-- Non-interactive runner timeouts now produce deterministic per-test `TLE` verdicts instead of aborting whole runs on subprocess timeout exceptions.
-- Run fallback judging (when no checker binary is available) now performs chunked file comparison to avoid loading full outputs into memory
-- Export zip hashing now streams file contents (no full-archive memory read during digest computation)
-- Workspace snapshot creation now fast-paths clean workspaces via `git archive` and falls back to full copy for dirty workspaces to preserve uncommitted/untracked files
-- Snapshot materialization now strips symlink entries (for both commit-archive and dirty-workspace paths) to prevent symlink-based host file dereference during build/preview execution.
-- Commit snapshot extraction now uses shell-free `git archive` materialization with safe tar-entry validation (no `bash -lc` pipeline).
-- Preview compilation now reuses cached successful artifacts for identical commit-based preview requests (copying cached PDF/log instead of re-running TeX)
-- Preview compilation now also reuses cached artifacts for clean workspace-HEAD requests when immutable.
-- Preview reuse candidate selection now scans paged history with keyset pagination (`created_at`,`id`) instead of offset paging, preventing stale/poisoned recent rows from starving valid cache hits while keeping deep-history scans efficient.
-- Preview reuse now resolves the problem artifact base once per scan and reuses canonical candidate roots for safe-file checks, avoiding redundant root resolution per candidate row.
-- Build/Preview commit selectors now canonicalize refs (`main`, tags, short SHAs) to immutable commit SHAs before snapshot/cache decisions.
-- Build/Preview invalid commit refs are now persisted as failed records (with error summaries) instead of uncaught service exceptions.
-- Failed commit-ref jobs now preserve the originally requested ref in `source_ref` metadata for clearer audit/provenance.
-- Interactive runner IO broker now captures submission/interactor stderr into run artifacts and hardens pipe forwarding against early-exit/broken-pipe deadlocks.
-- Runner preflight now validates required build artifact directories (`tests/`, `ans/`) and returns explicit not-runnable reasons with deterministic invalid-run isolation.
-- Export generation now enforces successful build status and required artifact presence, and fails explicitly when commit snapshot reconstruction is not possible.
-- Export generation now canonicalizes build artifact ids/roots and rejects traversal-style build ids before reading artifact trees.
-- Kattis/DOMjudge export now requires non-empty build `source_commit` metadata; missing commit provenance is rejected explicitly.
-- Export generation now writes unique per-generation zip filenames (type + build + export id) so repeated exports do not overwrite historical packages.
-- Polygon exports now operate from build artifacts only (no source snapshot dependency), while Kattis/DOMjudge keep strict commit-snapshot enforcement.
-- Kattis/DOMjudge source snapshots are now symlink-sanitized before export assembly, preventing symlinked repository assets from being copied from host paths.
-- Kattis/DOMjudge export source snapshots now resolve commit refs with `rev-parse --verify` before extraction, and use the same shell-free safe archive extraction path.
-- Export copy paths now use symlink-safe file enumeration for both source snapshots and build artifacts, preventing symlinked build inputs from leaking host files into generated archives.
-- Export input-validator fallback now uses symlink-safe file detection and replaces symlinked `validator.cpp` paths before writing defaults, preventing symlink-target overwrite.
-- Export test-data copy now streams safe test discovery and captures sample selection inline, avoiding full test-list materialization for large exports.
-- Export test-data answer lookup now pre-indexes safe `ans/*.ans` files once per export, avoiding repeated per-test answer-path safety checks.
-- Export test/answer top-level suffix discovery now uses deterministic `os.scandir`-based matching (`*.in`/`*.ans`), avoiding `glob` materialization while preserving symlink-safe ordering.
-- Workspace pages and recent-* APIs are now strictly workspace-scoped (build/preview/run/export history no longer leaks entries from other users on the same problem).
-- Export rows now persist `workspace_id` (with startup backfill for legacy rows), and Export page / recent-exports API now use direct workspace-scoped reads from `exports` without joining `builds`.
-- Artifact download/browse/file endpoints now enforce workspace ownership for both build and preview artifact ids.
-- Preview page now ignores foreign-workspace `preview_id` query values to prevent cross-workspace log/PDF detail leaks.
-- Export UI now rejects cross-workspace `build_id` selections before export generation.
-- Runner preflight now rejects cross-workspace `build_id` selections with deterministic failed-run metadata.
-- Manifest API access is now workspace-scoped (`/api/problems/{problem}/workspaces/{user}/builds/{build_id}/manifest`), and the legacy unscoped route requires explicit workspace context.
-- Request-context refresh optimization: `page_ctx` no longer performs redundant workspace status refreshes, and non-UI API/file routes skip branch-list resolution.
-- Workspace context loading now supports optional recent-build/recent-preview skipping, and non-render mutation/API/service paths use this lightweight mode to reduce hot-path DB queries.
-- `page_ctx` now avoids unconditional workspace provisioning on non-refresh requests, with lazy fallback provisioning only for unknown-but-valid users opened directly via URL.
-- Build/Run/Export page queries now project only template-required columns for list/detail rows (instead of broad `SELECT *` payloads), reducing DB row transfer on hot UI views.
-- Run/Export build-selector queries are now bounded to recent workspace builds (200 rows), preventing unbounded dropdown payload growth on long-lived workspaces.
-- Artifact and run-artifact browser pages now cap file listings (`512` entries) and surface truncation indicators, preventing oversized HTML responses on large artifact trees.
-- Artifact and run-artifact browse list assembly now captures capped relative paths directly during traversal (instead of materializing `Path` objects then remapping), reducing temporary allocations on large trees.
-- Artifact descendant traversal now sorts only kept directory/file names after safety filtering (instead of full `os.walk` name lists), reducing browse/download walk overhead on trees with many filtered entries.
-- Files page repository listing now caps rendered entries (`1024`) and surfaces truncation indicators, preventing oversized HTML responses on very large repositories.
-- Workspace repository listing traversal now filters unsafe paths before sorting directory/file names, reducing `Files` page listing overhead on trees with many skipped entries while preserving deterministic ordering and caps.
-- Workspace repository listing now builds capped relative paths directly from traversal prefixes (instead of per-entry `Path.relative_to` objects), reducing listing allocations and fixing stale-directory path emission in capped views.
-- Workspace repository listing now validates each walked directory once (with symlink-pruned child traversal), avoiding per-child path-resolution checks while preserving in-workspace traversal safety.
-- Files page file-content rendering now caps editor payloads (`131072` characters) and marks clipped views read-only with save disabled, preventing oversized editor responses and accidental truncation writes.
-- Git page status/diff rendering now caps output (`512` status lines, `131072` diff characters) and surfaces truncation indicators, preventing oversized Git-page payloads on noisy workspaces.
-- Git page diff collection now streams `git diff` output to a temporary file and reads only a bounded prefix for rendering, preventing full in-memory diff buffering before truncation.
-- Build/Preview log rendering now caps displayed log text (`131072` characters per log) and surfaces truncation indicators, preventing oversized page payloads from very large logs.
-- Run detail rendering now caps displayed per-run test rows and compile diagnostics (`200` each) with truncation indicators, preventing oversized run-detail payloads on large runs.
-- Run detail rendering now also caps per-test feedback-file links (`32` each) with truncation indicators, preventing pathological per-test link payload growth.
-- Run persistence now caps `runs.summary_json` test/diagnostic/feedback lists at write time (with truncation metadata) while preserving full per-test results in run artifact `summary.json`, reducing DB metadata bloat on large runs.
-- Run-page list capping now preserves persisted run-summary truncation metadata when present, so UI indicators still reflect full-result totals from DB-capped summaries.
-- Build detail rendering now caps displayed log-file entries and diagnostics (`200` each), and Preview now caps displayed log-reference entries (`200`), with truncation indicators to keep detail pages bounded on large metadata/log sets.
-- Build persistence now caps `builds.summary_json` diagnostics at write time (with truncation metadata) while preserving full diagnostics in artifact `logs/diagnostics.json`, reducing DB metadata bloat on diagnostic-heavy builds.
-- Build/Run DB summary persistence now also truncates oversized diagnostic message text with persisted message-level metadata, while full diagnostic text remains available in artifact logs/summaries.
-- Build detail log-file discovery now uses bounded-memory selection (`scandir` + capped lexical selection) instead of materializing full sorted log lists, reducing memory pressure on artifacts with very large `logs/` directories.
-- Build/Run detail summary parsing now caps `summary_json` UI decode input (`1048576` characters), returning a bounded fallback error on oversized payloads to prevent expensive decode/render paths from oversized DB blobs.
-- Workspace manifest API parsing now caps `manifest.json` decode input (`2097152` characters), returning a bounded fallback payload on oversized manifests to prevent unbounded decode/response paths.
-- Workspace manifest API now also caps large list fields (`files`: `512`, `steps`: `256`) with truncation metadata, preventing oversized manifest response payloads on large builds.
-- Preview log-reference parsing now correctly matches standard `path.tex:line` entries in `latex.log`, restoring actionable file/line links in Preview.
-- Workspace branch lists are now capped for UI/API rendering (`200` entries) with truncation indicators/metadata, preventing oversized header dropdown and branch API payloads on repos with many branches.
-- UI/API branch-list retrieval now uses a capped git-ref query (`for-each-ref --count limit+1`) on cache misses and a bounded TTL cache for capped results, avoiding repeated full/uncapped branch enumeration when only capped results are needed.
-- `/api/problems` now uses a capped, narrow projection query (`200` rows) instead of unbounded `SELECT *`, preventing oversized problem-list payloads.
-- Build/Run diagnostics now cap rendered diagnostic message text (`4096` characters per entry), preventing oversized diagnostic payloads from bloating detail pages.
-- Workspace bootstrap now supports optional status refresh with safe auto-refresh on newly created workspaces.
-- Workspace provisioning now has a steady-state fast path that skips provisioning-lock acquisition for already-provisioned workspaces, reducing lock contention on normal page/API traffic.
-- Workspace provisioning/status refresh now reuses already-resolved problem/user ids in `ensure_workspace` paths (and returns ensured user rows), reducing redundant metadata queries on hot request flows.
-- Workspace service now caches resolved problem/user metadata rows in-process to cut repeated DB lookups across `ensure_workspace`, context, and status-refresh hot paths.
-- Workspace problem/user metadata caches are now lock-protected and bounded with LRU-style eviction, preventing unbounded process-memory growth across large user/problem sets.
-- Workspace status refresh now derives branch + dirty state from a single `git status --short --branch` call (plus `rev-parse` for commit SHA), reducing per-refresh git subprocess count.
-- Workspace status refresh now prefers `git status --porcelain=2 --branch` to derive branch/head/dirty in one command (with fallback to legacy parsing), further reducing git subprocess overhead.
-- Workspace status refresh now conditionally updates workspace metadata only when branch/head/dirty changed, reducing steady-state SQLite write churn on read-heavy UI/API polling.
-- Workspace context now fetches latest build/preview metadata in one combined query, reducing DB round-trips for header/status rendering paths.
-- Workspace artifact ownership checks now use id-prefix fast paths (`b-`/`p-`) with legacy fallback, reducing DB work on artifact browse/download/file endpoints.
-- Build/Preview workspace-HEAD flows now use a read-only workspace status probe (no DB writes), reducing git/DB work under workspace locks.
-- Preview creation now writes `artifact_path` at row insert time, removing a redundant follow-up preview metadata update.
-- Build/Preview snapshot creation now reuses already-known workspace HEAD/dirty state when available, avoiding duplicate `git status`/`rev-parse` subprocesses on hot build/preview paths.
-- Build finalization now updates `workspaces.recent_build_status` from in-process status tracking, avoiding a redundant post-build `SELECT status FROM builds` query.
-- Build compile-stage logging now streams target entries directly to `logs/compile.log` during compile-result processing, avoiding in-memory accumulation of large compiler logs.
-- Build compile-stage target logging now writes compiler stdout/stderr streams directly and parses diagnostics per stream, avoiding extra per-target merged-output string allocation while preserving empty-output diagnostic collection semantics.
-- Build diagnostics parsing now resolves the snapshot root once per compiler-output chunk (instead of per matched diagnostic line), reducing repeated path-resolution overhead on noisy compile failures.
-- Run submission compile logging now streams compiler stdout/stderr directly to run `compile.log` and parses diagnostics per stream, avoiding an extra merged-log string allocation.
-- Run compile diagnostics parsing now resolves workspace roots once per compiler-output chunk (instead of per matched diagnostic line), reducing repeated path-resolution overhead on noisy compile failures.
-- Build validate/solve stages now stream per-test logs while collecting results, reducing peak memory usage on large test sets.
-- Build generate stage now streams per-generator run entries directly into `generate.log`, avoiding in-memory accumulation on large generator batches.
-- Build manual-test discovery now fast-paths `*.in` lookup before fallback to all files, reducing scan/memory overhead in `tests/manual` trees dominated by sidecar assets.
-- Build manual-test discovery now drops fallback-file accumulation as soon as real `*.in` tests are observed, reducing temporary memory usage in mixed manual-test directories while preserving deterministic fallback behavior when no `*.in` files exist.
-- Build manual-test discovery now uses a single symlink-safe traversal, avoiding duplicate scans and excluding symlinked manual test entries.
-- Build manual-test discovery now classifies each directory pass before writing fallback entries, so directories containing safe `*.in` files avoid unnecessary fallback buffering and per-directory filename sorting.
-- Build manual-test discovery directory pruning now sorts only kept subdirectories (instead of full `os.walk` directory lists), reducing traversal overhead on trees with many filtered entries.
-- Build manual-test discovery now validates `*.in` candidates before full-directory fallback scanning, skipping unnecessary sidecar file safety checks when safe `*.in` tests are present.
-- Build manual-test discovery now validates each walked directory once and builds relative paths from traversal prefixes, avoiding per-file path-resolution and `relative_to` overhead while preserving deterministic fallback semantics.
-- Build C++ source auto-discovery now performs a single deterministic directory pass with symlink-safe in-root filtering, reducing glob/sort overhead and preventing unsafe symlinked source selection.
-- Build C++ source auto-discovery now tracks the lexicographically first safe candidate during that pass (instead of sorting full directory entries), reducing per-directory sorting overhead while preserving deterministic selection.
-- Build C++ source auto-discovery now uses `os.scandir` metadata plus suffix-tuple checks for top-level fallback selection, avoiding per-entry path resolution while preserving deterministic lexicographic selection.
-- Build configured-source resolution now reuses a single resolved snapshot root across generator/validator/checker/interactor/accepted source selection, reducing repeated `snapshot.resolve()` work during build setup.
-- Toolchain dependency scanning now marks out-of-root quoted includes as cache-unsafe and bypasses compile-cache read/write for those compiles, preventing unsafe host-path dependency hashing and stale cache keys.
-- Export source/mode detection now uses single-pass safe top-level file scanning, reducing repeated glob work and ignoring symlinked checker files during multi-pass mode inference.
-- Export safe top-level file iteration now filters entries before sorting names, reducing per-folder sorting overhead when many entries are rejected by symlink/path-safety checks.
-- Export generic top-level file iteration now uses `os.scandir` file metadata filtering (instead of `Path.iterdir` + per-entry path-resolution checks), reducing source-scan overhead while preserving deterministic ordering.
-- Export source fallback selection now tracks per-suffix lexicographic minima during a single `os.scandir` pass, avoiding full top-level source list materialization/sorting.
-- Export mode detection now scans checker sources in bounded chunks for `nextpass.in`, preserving multi-pass inference while avoiding full-file reads for large checker sources.
-- Preview cache reuse now requires symlink-safe in-root regular files for `statement.pdf` and `latex.log`, preventing poisoned symlink preview artifacts from being reused.
-- Preview page detail rendering now resolves `statement.pdf` and `latex.log` through safe artifact-path checks, preventing symlinked/out-of-root preview files from being treated as valid UI artifacts.
-- Workspace file listing now suppresses `.polygonlike.lock` entries in addition to `.git`, preventing lock-file metadata leaks into Files UI navigation.
-- Workspace/provision lock acquisition now rejects symlinked/invalid lock paths (`O_NOFOLLOW` where available), preventing lock-file symlink redirection during mutating operations.
-- Files upload now stages writes through a same-directory temp file and atomically `os.replace`s on success, preventing partial-file corruption on interrupted writes while preserving streaming behavior.
-- Preview compilation now persists source metadata (`source_commit`, `source_ref`) during finalization, removing redundant mid-run preview-row updates while preserving canonical commit/ref recording.
-- Dirty workspace previews now clear `source_commit` metadata and skip commit-key reuse, preventing dirty snapshot outputs from polluting immutable commit preview cache provenance.
-- Git page status now runs `git diff` only when unstaged tracked changes are present; clean, staged-only, and untracked-only states skip the extra diff subprocess.
-- Git status rendering now filters internal lock-file entries (`.polygonlike.lock`) so lock bookkeeping does not pollute Git page status/diff output.
-- Git diff now applies lock-file exclusions at command pathspec level (with reserved-diff fallback filtering), reducing unnecessary diff parsing work when lock files change.
-- Artifact manifest writing now uses a single deterministic streaming directory walk (instead of materializing full `rglob` lists), reducing memory overhead for large build artifacts.
-- Artifact manifest traversal now filters directory/file entries before sorting, reducing per-directory sorting overhead when symlinked entries are present.
-- Artifact manifest traversal now validates each walked directory once and reuses directory-relative prefixes for file entries, reducing per-file path normalization overhead while preserving deterministic ordering and symlink safety.
-- Artifact manifest summary counters (`tests_count`, `ans_count`) are now computed during that same manifest walk, avoiding extra tests/ans directory scans.
-- Added DB indexes for workspace-scoped history queries and preview reuse lookup hot paths.
-- Added direct `workspace_id` latest-row indexes for builds/previews to accelerate workspace header status queries.
-- Branch-list API now degrades safely to current branch on git enumeration errors instead of returning 500.
-- Git branch enumeration now uses a short in-process cache with invalidation on branch switch/create/merge, reducing repeated branch-list subprocess calls on UI/API navigation paths.
-- Git branch enumeration cache is now lock-protected and bounded with LRU-style eviction, preventing unbounded process-memory growth across many workspaces.
-- Run detail links now use workspace-scoped run-artifact endpoints (`/runs/{run_id}/artifacts/...` and `/runs/{run_id}/download-dir`) so replay files work for both valid builds and invalid preflight runs.
-- Artifact and run-artifact browse/zip directory exports now perform symlink-safe walks (no symlink-directory traversal) and skip out-of-root resolved targets to prevent archive-path escape/exfiltration via crafted artifact trees.
-- Artifact/run-artifact zip generation and export directory-copy walks now stream from iterator-based safe traversal (reducing peak memory on large artifact trees).
-- Export safe-descendant traversal now filters directory/file entries before sorting, reducing per-directory sorting overhead when many entries are rejected by symlink/path-safety checks.
-- Export safe-descendant traversal now validates each walked directory once (with symlink-pruned child traversal), avoiding per-child path-resolution checks during export copy walks while preserving in-root safety.
-- Run summaries now expose `feedback_dir` as a stable run-relative path (`feedback_dir`) instead of host-absolute filesystem paths.
-- Run config loading now prefers a small `logs/run_config.json` sidecar (with manifest fallback), lazily backfills that sidecar for manifest-only legacy artifacts, and caches parsed settings in-process (copy-on-read), reducing repeated full-`manifest.json` reads/parses across submissions.
-- Run test-input discovery now caches safe `.in` filename listings per build artifact root (copy-on-read), reducing repeated test-directory scans across submissions.
-- Run test/answer discovery now uses a shared name-only suffix scan helper for run setup hot paths, avoiding temporary `Path` object materialization when only filenames are needed.
-- Run test-input metadata (`name`,`stem`) is now cached per build artifact root (copy-on-read), reducing repeated stem parsing in run execution loops.
-- Run test-input stem extraction now uses a lightweight filename fast path for `*.in` entries (with splitext fallback), avoiding per-test `Path(...)` object construction in run setup.
-- Run test-input/answer/input-meta caches now store immutable tuples and keep list copy-on-read API behavior, reducing redundant cache-write list duplication on hot run setup paths.
-- Run answer-file discovery now caches safe `.ans` filename listings per build artifact root (copy-on-read), reducing repeated answer-directory scans across submissions.
-- Run execution now reuses a cached immutable answer-name set per build artifact root, avoiding repeated per-run list-to-set rematerialization during answer presence checks.
-- Run artifact metadata caches now use bounded, thread-safe LRU-style retention, preventing unbounded process-memory growth across many distinct build artifacts.
-- Run feedback key-file discovery (`judgemessage.txt`, `teammessage.txt`, `nextpass.in`) now validates feedback roots before traversal and uses a single symlink-safe directory walk per test, avoiding unsafe/out-of-root scans.
-- Run feedback key-file discovery now also caps collected key files per test (`256`) to prevent pathological `feedback_files` summary/list growth from deep feedback trees.
-- Run feedback key-file discovery now sorts only matched key-file names per directory (instead of every filename), reducing scan overhead on large feedback trees while keeping deterministic ordering.
-- Run feedback key-file discovery now also avoids per-directory key-name sorting by tracking known key-file presence and emitting a fixed deterministic order, reducing small but frequent scan overhead.
-- Run feedback key-file discovery now validates each walked directory once (with symlink-pruned child traversal), avoiding per-child directory path-resolution checks while preserving in-root traversal safety.
-- Runner safe file matching now uses an `os.scandir` suffix fast path for common non-recursive patterns (`*.in`, `*.ans`), sorting only matched entries (instead of full-directory sorting), reducing run discovery overhead while preserving deterministic ordering and symlink safety.
-- Runner safe file-matching now resolves artifact roots once per scan, reducing repeated path-resolution overhead during test/answer discovery.
-- Workspace/branch switch routes now normalize page targets server-side (`artifacts`→`build`, `runs`→`run`, invalid→`files`), so redirects remain valid even without client-side page-target JS.
-- Build/Run detail pages now handle malformed `summary_json` rows defensively (no 500 on corrupted metadata; fallback error shown in UI).
-- Run artifact endpoints now validate filesystem-relative run-root shape (`<build>/logs/run-<run_id>` under problem artifacts, or `invalid-runs/<run_id>`) independent of DB-provided build-id strings, and reject DB-poisoned path overrides.
-- Build detail log loading now uses canonical artifact roots (`artifacts/<problem>/<build_id>/logs`) instead of DB-provided `artifact_path` values.
-- Workspace manifest API now reads `manifest.json` via canonical safe artifact-path checks, rejecting symlinked/unsafe manifest targets.
-- Artifact/run-artifact file and browse paths now reject symlinked path components (including symlink-directory aliases inside artifact roots), preventing alias-based bypass of safe traversal logic.
-- Preview reuse now loads candidate artifacts from canonical roots (`artifacts/<problem>/<preview_id>`), rejects dotted/traversal-like preview ids, and ignores DB-provided preview `artifact_path` values.
-- Build artifact paths now enforce canonical artifact-id roots, rejecting dotted/traversal-like build ids across artifact browse/file/manifest flows.
-- Canonical artifact-id validation is now shared across main/services (`[A-Za-z0-9_-]+`), and run/export preflight plus run-artifact root checks now reject dotted ids in addition to traversal-style ids.
-- Export preflight now validates required build artifact path types/safety (`manifest.json` as file; `logs/tests/ans` as in-root directories as applicable) and rejects malformed/symlinked required paths before package assembly.
-- Kattis/DOMjudge export source snapshotting now fails closed on workspace metadata/path integrity checks (missing workspace rows, DB path mismatches, missing `.git`), instead of trusting DB `workspaces.path` values.
-- Workspace file listing now performs symlink-safe traversal (no symlink-directory walk; symlinked outside files/dirs are excluded from Files page listing).
-- Workspace context now validates DB workspace-path integrity against expected per-user location and rejects mismatched/missing/non-git workspaces.
-- Workspace context integrity failures are now surfaced as deterministic HTTP 500 responses (not uncaught server exceptions).
-- Workspace provisioning is now protected by a per-user/problem lock to avoid clone/DB-row races during concurrent first-time workspace creation.
-- Problem/user identifiers are now validated before provisioning/status queries to prevent unsafe slug inputs from escaping managed workspace/repo roots.
-- Build/Preview/Run mutate routes now map invalid problem/user identifiers to HTTP 400 instead of uncaught service exceptions.
-- Files operations now reject reserved workspace-internal paths (for example `.git/*` and `.polygonlike.lock`) to prevent UI edits/downloads of git metadata.
-- Files upload/save/new/rename paths now reject directory-target writes and missing-source rename cases with deterministic user-facing errors (no 500s).
-- Files upload endpoint now streams uploads to disk in chunks to avoid buffering whole files in memory.
-- Run execution upload flow now streams uploaded submissions directly to run artifacts instead of buffering entire files in request memory.
-- Run execution now treats zero-byte uploads as explicit submissions (compile-error outcomes) instead of falling back to `submission_path` validation errors.
-- Run execute route now ignores empty upload placeholders (`filename=""`) so multipart form submits still use `submission_path` when no file is selected.
-- Invalid run modes now produce deterministic failed run records with persisted preflight reasons (instead of surfacing uncaught route errors).
-- Build and Preview pages now decode logs with UTF-8 replacement semantics, avoiding 500s on non-UTF8 tool output.
-- Files page now sanitizes `line` query parsing and defaults invalid/non-positive values instead of raising 500.
-- Build generator execution now streams output directly into test files to avoid buffering full generated tests in memory
-- Command execution file redirection now uses binary-safe stdin/stdout piping, preventing non-UTF8 test data corruption in build/run flows.
+核心特性：
+
+- Git 作为题目源码唯一真相源（main-only）
+- 本地产物存储（tests/ans/logs/preview/export）
+- Tests / Invocations / Packages 的一体化流程（执行时按需生成可运行快照）
+- 统一 `native-sandbox` 执行链路（compile/build/run/preview）
+
+详细规范见：
+
+- `AGENTS.md`
+
+## Prerequisites
+
+运行前请安装：
+
+- `git`
+- `g++` / `gcc`
+- `python3`
+- `openjdk` (`javac` + `java`)
+- `tex-live`
+- Linux `cgroups`/`rlimit` 支持
+
+示例（Ubuntu/Debian）：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git build-essential python3 python3-venv openjdk-17-jdk texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended util-linux
+```
+
+推荐直接运行安装脚本（会安装依赖、配置 userns、验证 `bwrap` 并创建 `.venv`）：
+
+```bash
+./scripts/install_host.sh
+```
+
+如果安装后启动仍报 `uid_map: Permission denied`，先检查：
+
+```bash
+sysctl -n kernel.unprivileged_userns_clone user.max_user_namespaces kernel.apparmor_restrict_unprivileged_userns
+```
+
+在 Ubuntu/AppArmor 环境下需要确保 `kernel.apparmor_restrict_unprivileged_userns=0`，否则无特权 `bwrap` 会被阻止。
+
+如果 Statement 预览日志里出现 `I can't find the format file 'pdflatex.fmt'`，先执行：
+
+```bash
+fmtutil -user --byfmt pdflatex
+```
+
+如果你有 root 权限，也可以用系统级修复：
+
+```bash
+sudo fmtutil-sys --byfmt pdflatex
+```
 
 ## Quick Start
 
 ```bash
-python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+source var/polygonlike.env
 ./scripts/bootstrap_demo.sh
 ```
 
-Open: `http://127.0.0.1:8000`
+启动后访问：`https://127.0.0.1:8000`
 
-## Notes
+## Common Commands
 
-- Default host roots follow `AGENTS.md` (`/srv/git`, `/srv/workspaces`, `/srv/runs`, `/var/lib/polygonlike/artifacts`, `/var/cache/polygonlike`).
-- For local dev without root paths, `scripts/bootstrap_demo.sh` maps all roots under `./var/`.
-- Build diagnostics are parsed and linked to Files editor paths and lines.
-- Upstream assets are vendored under `third_party/upstream/`:
-  - `testlib.h` from `MikeMirzayanov/testlib`
-  - Kattis package spec/schemas/examples from `Kattis/problem-package-format`
-- Refresh vendored upstream files with:
-  - `./scripts/sync_upstream_assets.sh`
-- Run local end-to-end validation with:
-  - `.venv/bin/python ./scripts/smoke_test.py`
-  - Covers pass-fail, multi-pass, and interactive run flows (including interactive RE stderr transcript capture), snapshot clean/dirty path behavior, snapshot symlink stripping checks, commit-ref canonicalization, invalid-commit build/preview failure persistence, commit/workspace-head preview artifact reuse (including deep poisoned-history scans and same-timestamp keyset pagination scans), `compile_jobs`/`validate_jobs`/`solve_jobs`/`run_jobs` propagation, `run_timeout_sec` propagation with non-interactive `TLE` verdict handling, validate/solve/run worker effectiveness reporting, compile cache reuse/invalidation checks, manual sidecar answer-file filtering, manual-test symlink filtering checks, build source auto-discovery symlink hardening checks, missing-submission failure handling, invalid-build/missing-artifacts/missing-tests-dir preflight handling, invalid-run-mode preflight failure persistence (service + route paths), failed-build export rejection, missing-source-commit export rejection for Kattis/DOMjudge, repeated-export filename uniqueness, polygon-export snapshot independence, workspace-history isolation across pages/APIs, workspace path-boundary rejection, invalid problem/user identifier rejection in switch/status/build-run/preview-run/run-execute flows, cross-workspace artifact/preview/run/export rejection, workspace-scoped manifest API isolation, run-artifact endpoint coverage (including invalid-preflight runs), build+preview artifact endpoint ownership checks, preview artifact-path persistence checks, symlink-safe artifact zip/browse hardening, symlink-safe workspace file listing checks, workspace lock-file listing suppression checks, workspace-head preview source-metadata persistence checks, dirty-workspace preview source-commit clearing checks, workspace DB-path integrity mismatch checks, concurrent workspace provisioning race checks, missing-workspace-row recovery checks, reserved workspace-path rejection for file CRUD/upload/download (`.git/*`, lock files), directory-target file-op rejection and missing-source rename handling, run-summary feedback path normalization, switch-page normalization robustness, malformed summary-json resilience on build/run pages, strict run-artifact root poisoning rejection checks (including traversal-style build-id poisoning), traversal-style build-id rejection in run/export service preflight, build-page artifact-path poisoning rejection checks, preview-reuse artifact-path/id poisoning rejection checks, preview-reuse symlinked-artifact rejection checks, dotted build-id artifact-root rejection checks (browse/manifest/detail), chunked file-upload binary round-trip checks, streamed run-upload route execution checks (including zero-byte uploads and empty-filename multipart fallbacks), Run/Export build-selector list-cap checks, artifact/run-artifact browse list-cap checks, files-page repository listing cap checks, Git tracked/untracked diff rendering checks, manifest ordering/self-exclusion checks, manifest summary tests/ans count checks, workspace status head/branch consistency checks, read-only workspace status helper checks, unchanged-workspace status-refresh write-elision checks, workspace status `recent_build`/`recent_preview` consistency checks, workspace `recent_build_status` update checks, non-UTF8 build/preview log rendering resilience, files-page invalid-line query resilience, binary non-UTF8 build/run test-data round-trip checks, run input-artifact symlink hardening checks, run feedback-root symlink rejection checks, invalid-run path isolation, request-context refresh optimization safety, branch API resilience, Git branch-list cache invalidation checks, git branch-cache bound/eviction checks, workspace problem/user cache bound/eviction checks, build validate/solve per-test log entry checks, build generate log summary/per-generator entry checks, run config cache copy-safety checks, run test-input cache copy-safety checks, run test-input metadata cache copy-safety checks, run answer-file cache copy-safety checks, run artifact cache bound/eviction checks, run safe-matching suffix fast-path ordering/symlink checks, run feedback key-file discovery ordering/symlink checks, export validator fallback symlink-target protection checks, export low-sort symlink sample-selection checks, export sample/secret answer content checks, testlib checker mode, kattis checker mode, unchanged-build compile-cache reuse checks, compile-cache header-dependency invalidation, external-include compile-cache bypass checks, export mode-detection symlink hardening checks, compile-jobs/validate-jobs/solve-jobs/run-jobs/run-timeout propagation, deterministic non-interactive `TLE` verdict handling, effective validate/solve/run worker reporting (including multi-pass), manual-sidecar answer filtering, C++ `.cc` accepted-source builds, export source symlink hardening assertions, export build-artifact symlink hardening assertions, and export zip structure checks.
-  - Adds dotted-id hardening regressions for preview-reuse candidate roots, run/export preflight build-id validation, and run-artifact root shape validation.
-  - Adds export preflight regressions for invalid required artifact path types (`logs/` and `tests/` accidentally materialized as files).
-  - Adds export source-snapshot regressions for missing workspace metadata and DB workspace-path mismatch rejection.
-  - Adds lock hardening regressions for symlinked workspace lock-path rejection (with file-write no-op verification).
-  - Adds lock hardening regression for upload-route symlinked lock-path rejection (HTTP 400 + no output-file write).
-  - Adds Git-page/status regressions ensuring root and nested lock-file workspace changes are filtered from status and diff output.
-  - Adds git-commit regressions ensuring both root and nested workspace lock files are never staged/committed.
-  - Adds preview-page symlink regressions ensuring symlinked preview `statement.pdf`/`latex.log` are ignored and not rendered.
-  - Adds workspace-manifest API regression ensuring symlinked `manifest.json` artifacts are rejected.
-  - Adds artifact and run-artifact endpoint regressions ensuring symlinked directory path components are rejected for file and browse views.
-  - Adds run submission-path regressions for reserved internal workspace paths, symlinked submission aliases, and symlinked path components.
-  - Adds Files-route regressions ensuring save/new/upload/download reject symlinked workspace path components.
-  - Adds Git-page regressions ensuring status-line and diff-character caps enforce truncation markers/indicators.
-  - Adds Build/Preview page regressions ensuring oversized logs are truncated with UI indicators.
-  - Adds Run-page regressions ensuring oversized `summary.tests` and `summary.compile_diagnostics` lists are truncated with UI indicators.
-  - Adds Build-page regressions ensuring oversized log-file and diagnostics lists are truncated with UI indicators.
-  - Adds Preview-page regressions ensuring oversized log-reference lists are truncated with UI indicators.
-  - Adds Files-header/branches-API regressions ensuring oversized branch lists are truncated with indicators/metadata.
-  - Adds `/api/problems` regressions ensuring capped problem-list payload behavior.
-  - Adds Build/Run diagnostics regressions ensuring oversized diagnostic messages are truncated with inline truncation markers.
-  - Adds Files-page regressions ensuring oversized file-content views are truncated with read-only/disabled-save safeguards.
-  - Adds Build/Run page regressions ensuring oversized `summary_json` payloads return bounded fallback errors instead of unbounded decode paths.
-  - Adds workspace-manifest API regressions ensuring oversized `manifest.json` payloads return bounded fallback metadata instead of unbounded decode paths.
-  - Adds capped-branch cache regressions ensuring cache-hit reuse plus bound/eviction behavior for UI/API branch-list retrieval.
-  - Adds run feedback key-file regressions ensuring deterministic capped discovery behavior for large feedback trees.
-  - Adds Run-page regressions ensuring per-test feedback-file link lists are capped with UI indicators.
-  - Adds run-config sidecar regressions ensuring `logs/run_config.json` is emitted and preferred over manifest generation-params during run-config loading.
-  - Adds run-config sidecar backfill regressions ensuring manifest-only artifacts get sidecar synthesis and subsequent loads prefer the synthesized sidecar.
-  - Adds workspace-manifest API regressions ensuring large `files` lists are capped with truncation metadata.
-  - Adds export-metadata regressions ensuring `exports.workspace_id` persistence and workspace-scoped export query behavior.
-  - Adds export-mode regressions ensuring chunked checker-marker scanning still detects `nextpass.in` across chunk boundaries.
-  - Adds run-summary persistence regressions ensuring DB-capped run summaries expose truncation metadata while artifact `summary.json` preserves full per-test results.
-  - Adds run-page regressions ensuring persisted run-summary truncation metadata remains visible in UI indicators for DB-capped summaries.
-  - Adds build-summary persistence regressions ensuring DB-capped build diagnostics expose truncation metadata while artifact `logs/diagnostics.json` preserves full diagnostic lists.
-  - Adds build/run-summary regressions ensuring DB-persisted oversized diagnostic messages are truncated with message metadata while artifact diagnostics keep full text.
-  - Adds build compile-log regressions ensuring `compile.log` still includes compile-job headers and per-target entries after streamed compile logging changes.
-  - Adds run compile-error regressions ensuring failed uploaded-source runs persist non-empty `compile.log` artifacts after streamed compile logging changes.
-  - Adds run answer-file cache regressions ensuring cached answer-name set parity and bounded eviction behavior.
-  - Adds export suffix-discovery regressions ensuring deterministic safe `.ans` top-level matching and symlink skipping.
-  - Adds build compile-stream helper regressions ensuring empty compile outputs still trigger a single diagnostics collection pass without emitting spurious log text.
-  - Adds manual-test discovery regressions ensuring `*.in` preference and deterministic fallback behavior (with symlink skipping) for no-`*.in` manual directories.
+```bash
+# 启动服务（示例，需 HTTPS 以携带 Secure 会话 Cookie）
+uvicorn app.main:app --reload --ssl-keyfile ./var/tls/dev-localhost.key --ssl-certfile ./var/tls/dev-localhost.crt
+
+# 全量 unittest
+python -m unittest discover -s tests -p 'test_*.py' -v
+
+# 常规回归（语法 + linter + dead code + unittest）
+./scripts/test.sh
+
+# 清理运行期缓存（保留 export/*.zip）
+.venv/bin/python ./scripts/cleanup_runtime_cache.py
+```
+
+`./scripts/test.sh` 当前包含：
+
+- `py_compile`
+- `pyflakes`
+- `vulture`（`--min-confidence 60`）
+- `unittest`
+
+## Workflow Notes
+
+### testlib 维护策略
+
+- `third_party/upstream/testlib/testlib.h` 是单独维护的 ICPC 兼容版本（交付内容的一部分）。
+- 新建/补齐 workspace 时，`third_party/testlib/testlib.h` 从该维护版本拷贝。
+- 维护目标：固定 `42/43` 语义，并直接兼容 ICPC output validator 风格调用（checker 可接收 `input/answer/feedback_dir`）。
+
+### Tests
+
+- Tests 元数据在 `tests/spec.json`，仅包含 `id/kind/sample`。
+- manual 与 gen 负载分别存放于：
+  - `tests/manual/<id>.in`
+  - `tests/generator/<id>.in`
+
+### Invocations
+
+- `run/new` 支持多选 `solutions` 与 `tests`，并支持可选源码上传。
+- 不再支持 custom path。
+- Invocation 详情展示每测试点结果，包含 `ms` 与 `MB`，并支持展开查看输入/答案/输出预览。
+
+### Packages
+
+- 仅支持 ICPC 导出。
+- 导出只基于当前 `HEAD` 的已提交 revision，不使用 working copy。
+- 若当前 revision 缺少 committed build，Generate 会先构建再导出。
+- 导出文件名统一为 `[problemid]-v[revision].zip`。
+- 同一 revision 只保留最后一次导出结果。
+
+## Authentication Note
+
+登录/注册/改密请求不提交明文密码：前端提交 `sha256(csrf_token + password)`，并附带 verifier/proof 供后端校验。
+
+## Sandbox Backend
+
+系统使用单一后端：`native-sandbox`。
+
+- 覆盖 `compile/build/run/preview`
+- 使用 `rlimit + timeout + seccomp`
+- 默认禁网（deny-all）
+
+常用环境变量（示例）：
+
+```bash
+export POLYGONLIKE_SANDBOX_ROOT_SWITCH_TOOL=/usr/bin/bwrap
+export POLYGONLIKE_RUN_MEMORY_MB=1024
+export POLYGONLIKE_RUN_PROCESS_LIMIT=64
+export POLYGONLIKE_RUN_OUTPUT_KB=65536
+export POLYGONLIKE_COMPILE_TIMEOUT_SEC=120
+export POLYGONLIKE_COMPILE_MEMORY_MB=2048
+export POLYGONLIKE_COMPILE_PROCESS_LIMIT=0
+export POLYGONLIKE_COMPILE_OUTPUT_KB=262144
+export POLYGONLIKE_TEX_TIMEOUT_SEC=120
+export POLYGONLIKE_TEX_MEMORY_MB=1024
+export POLYGONLIKE_TEX_PROCESS_LIMIT=64
+export POLYGONLIKE_TEX_OUTPUT_KB=131072
+```
+
+说明：
+
+- `native-sandbox` 固定启用并强制要求 `bwrap` 换根能力；如果主机不支持，服务会直接失败（fail-closed），不会降级到弱隔离。
+
+## Runtime Paths
+
+默认路径：
+
+- bare repos: `/srv/git`
+- workspaces: `/srv/workspaces/<username>/<problem>/`
+- run fallback root: `/srv/runs`（主要用于 `invalid-runs/`）
+- artifacts: `/var/lib/polygonlike/artifacts`
+- cache: `/var/cache/polygonlike`
+
+## Project Layout
+
+- `app/`: 后端服务与模板
+- `scripts/`: 本地启动与测试脚本
+- 根目录文档：`AGENTS.md` / `ASYNC_WORKER_PLAN.md` / `BACKEND_TODO.md` / `PROGRESS.md`
+- `third_party/`: upstream 依赖资源
+- `PROGRESS.md`: 当前里程碑状态

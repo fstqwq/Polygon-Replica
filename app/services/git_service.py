@@ -3,85 +3,15 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-import threading
 from pathlib import Path
-from time import monotonic
 
 from app.services.util import run_cmd
 
 
 class GitService:
-    BRANCH_CACHE_TTL_SEC = 5.0
-    BRANCH_CACHE_MAX_ENTRIES = 256
-    BRANCH_CAPPED_CACHE_MAX_ENTRIES = 512
     STATUS_MAX_LINES = 512
     DIFF_MAX_CHARS = 131072
-
-    def __init__(self) -> None:
-        self._branch_cache: dict[str, tuple[float, list[str]]] = {}
-        self._branch_capped_cache: dict[str, tuple[float, list[str], bool]] = {}
-        self._branch_cache_lock = threading.Lock()
-
-    def _workspace_key(self, workspace: Path) -> str:
-        return str(workspace.resolve())
-
-    def _invalidate_branch_cache(self, workspace: Path) -> None:
-        key = self._workspace_key(workspace)
-        with self._branch_cache_lock:
-            self._branch_cache.pop(key, None)
-            capped_prefix = f"{key}::"
-            stale_keys = [k for k in self._branch_capped_cache if k.startswith(capped_prefix)]
-            for stale in stale_keys:
-                self._branch_capped_cache.pop(stale, None)
-
-    def _branch_cache_get(self, key: str, now: float, force_refresh: bool = False) -> list[str] | None:
-        with self._branch_cache_lock:
-            cached = self._branch_cache.get(key)
-            if force_refresh or cached is None:
-                return None
-            ts, branches = cached
-            if now - ts > self.BRANCH_CACHE_TTL_SEC:
-                self._branch_cache.pop(key, None)
-                return None
-            # Promote on access to keep hot workspaces resident.
-            self._branch_cache.pop(key, None)
-            self._branch_cache[key] = (ts, branches)
-            return list(branches)
-
-    def _branch_cache_put(self, key: str, timestamp: float, branches: list[str]) -> None:
-        with self._branch_cache_lock:
-            self._branch_cache.pop(key, None)
-            self._branch_cache[key] = (timestamp, list(branches))
-            while len(self._branch_cache) > self.BRANCH_CACHE_MAX_ENTRIES:
-                oldest_key = next(iter(self._branch_cache))
-                self._branch_cache.pop(oldest_key, None)
-
-    def _capped_branch_cache_key(self, workspace: Path, limit: int) -> str:
-        return f"{self._workspace_key(workspace)}::{max(1, int(limit))}"
-
-    def _branch_capped_cache_get(
-        self, key: str, now: float, force_refresh: bool = False
-    ) -> tuple[list[str], bool] | None:
-        with self._branch_cache_lock:
-            cached = self._branch_capped_cache.get(key)
-            if force_refresh or cached is None:
-                return None
-            ts, branches, truncated = cached
-            if now - ts > self.BRANCH_CACHE_TTL_SEC:
-                self._branch_capped_cache.pop(key, None)
-                return None
-            # Promote on access to keep hot workspaces resident.
-            self._branch_capped_cache.pop(key, None)
-            self._branch_capped_cache[key] = (ts, branches, truncated)
-            return list(branches), bool(truncated)
-
-    def _branch_capped_cache_put(self, key: str, timestamp: float, branches: list[str], truncated: bool) -> None:
-        with self._branch_cache_lock:
-            self._branch_capped_cache.pop(key, None)
-            self._branch_capped_cache[key] = (timestamp, list(branches), bool(truncated))
-            while len(self._branch_capped_cache) > self.BRANCH_CAPPED_CACHE_MAX_ENTRIES:
-                oldest_key = next(iter(self._branch_capped_cache))
-                self._branch_capped_cache.pop(oldest_key, None)
+    HISTORY_MAX_ITEMS = 300
 
     def _contains_symlink_component(self, root: Path, candidate: Path) -> bool:
         try:
@@ -258,6 +188,8 @@ class GitService:
                     tmp_path.unlink(missing_ok=True)
         else:
             diff_text = ""
+        rebase_active = self._rebase_active(workspace)
+        conflicted_files = self._conflicted_files(workspace) if rebase_active else []
         return {
             "status": status_text,
             "diff": diff_text,
@@ -265,9 +197,140 @@ class GitService:
             "status_line_limit": status_limit,
             "diff_truncated": diff_truncated,
             "diff_char_limit": diff_limit,
+            "rebase_active": rebase_active,
+            "conflicted_files": conflicted_files,
         }
 
+    def _normalize_status_path(self, raw: str) -> str:
+        path = str(raw or "").strip()
+        if path.startswith('"') and path.endswith('"') and len(path) >= 2:
+            path = path[1:-1]
+        return path
+
+    def _status_kind(self, code: str, path: str) -> str:
+        status = str(code or "").strip()
+        if status == "??":
+            return "added"
+        if status == "!!":
+            return "ignored"
+        if "U" in status or status in {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}:
+            return "conflicted"
+        if "R" in status or "C" in status or " -> " in str(path or ""):
+            return "renamed"
+        if "A" in status:
+            return "added"
+        if "D" in status:
+            return "deleted"
+        if "T" in status:
+            return "typechange"
+        if "M" in status:
+            return "modified"
+        return "other"
+
+    def status_change_summary(self, workspace: Path, limit: int | None = None) -> dict:
+        cap: int | None = None
+        if limit is not None:
+            parsed = int(limit)
+            if parsed > 0:
+                cap = parsed
+        proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--untracked-files=all"])
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+
+        counts = {
+            "added": 0,
+            "modified": 0,
+            "deleted": 0,
+            "renamed": 0,
+            "untracked": 0,
+            "conflicted": 0,
+            "typechange": 0,
+            "other": 0,
+        }
+        rows: list[dict] = []
+        total = 0
+        for raw in proc.stdout.splitlines():
+            line = raw.rstrip("\n")
+            if not line or self._is_reserved_status_line(line):
+                continue
+            if len(line) < 3:
+                continue
+            code = line[:2]
+            path_part = line[3:].strip()
+            display_path = self._normalize_status_path(path_part)
+            link_path = display_path
+            if " -> " in display_path:
+                before, after = display_path.split(" -> ", 1)
+                display_path = f"{before} -> {after}"
+                link_path = after
+            kind = self._status_kind(code, display_path)
+            if kind in counts:
+                counts[kind] += 1
+            else:
+                counts["other"] += 1
+            display_code = code
+            if str(code).strip() == "??" and kind == "added":
+                display_code = "A "
+            total += 1
+            if cap is not None and len(rows) >= cap:
+                continue
+            rows.append(
+                {
+                    "code": display_code,
+                    "path": display_path,
+                    "link_path": self._normalize_status_path(link_path),
+                    "kind": kind if kind in counts else "other",
+                }
+            )
+        return {
+            "counts": counts,
+            "rows": rows,
+            "total": total,
+            "truncated": bool(cap is not None and total > cap),
+            "limit": cap,
+        }
+
+    def history(self, workspace: Path, limit: int = 80) -> list[dict]:
+        cap = max(1, min(self.HISTORY_MAX_ITEMS, int(limit)))
+        fmt = "%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1e"
+        proc = run_cmd(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "log",
+                f"-n{cap}",
+                "--date=iso-strict",
+                f"--pretty=format:{fmt}",
+                "--first-parent",
+                "HEAD",
+            ]
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        rows: list[dict] = []
+        for block in proc.stdout.split("\x1e"):
+            row = block.strip()
+            if not row:
+                continue
+            parts = row.split("\x1f")
+            if len(parts) < 5:
+                continue
+            rows.append(
+                {
+                    "commit": parts[0],
+                    "short": parts[1],
+                    "author": parts[2],
+                    "date": parts[3],
+                    "subject": parts[4],
+                }
+            )
+        return rows
+
     def commit(self, workspace: Path, message: str, name: str, email: str) -> str:
+        if self._rebase_active(workspace):
+            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
+        self._assert_on_main(workspace)
         run_cmd(["git", "-C", str(workspace), "config", "user.name", name])
         run_cmd(["git", "-C", str(workspace), "config", "user.email", email])
         run_cmd(["git", "-C", str(workspace), "add", "."])
@@ -290,106 +353,126 @@ class GitService:
         head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
         return head.stdout.strip()
 
+    def rollback_last_commit(self, workspace: Path, expected_head: str = "") -> str:
+        if self._rebase_active(workspace):
+            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
+        self._assert_on_main(workspace)
+        expected = str(expected_head or "").strip()
+        current_head_proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
+        if current_head_proc.returncode != 0:
+            raise RuntimeError(current_head_proc.stderr or current_head_proc.stdout)
+        current_head = current_head_proc.stdout.strip()
+        if expected and current_head != expected:
+            raise RuntimeError("head changed; cannot rollback commit safely")
+        parent_proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD^"])
+        if parent_proc.returncode != 0:
+            raise RuntimeError(parent_proc.stderr or parent_proc.stdout)
+        proc = run_cmd(["git", "-C", str(workspace), "reset", "--mixed", "HEAD^"])
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        new_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
+        if new_head.returncode != 0:
+            raise RuntimeError(new_head.stderr or new_head.stdout)
+        return new_head.stdout.strip()
+
     def push(self, workspace: Path, branch: str) -> str:
-        proc = run_cmd(["git", "-C", str(workspace), "push", "origin", branch])
+        if str(branch or "main") != "main":
+            raise RuntimeError("only main is supported")
+        self._assert_on_main(workspace)
+        proc = run_cmd(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
 
     def pull(self, workspace: Path, branch: str) -> str:
-        proc = run_cmd(["git", "-C", str(workspace), "pull", "origin", branch])
+        if str(branch or "main") != "main":
+            raise RuntimeError("only main is supported")
+        self._assert_on_main(workspace)
+        proc = run_cmd(["git", "-C", str(workspace), "pull", "--rebase", "--autostash", "origin", "main"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
 
-    def switch_branch(self, workspace: Path, branch: str, create: bool = False) -> str:
-        cmd = ["git", "-C", str(workspace), "switch"]
-        if create:
-            cmd += ["-c", branch]
-        else:
-            cmd += [branch]
-        proc = run_cmd(cmd)
+    def _ensure_clean_worktree(self, workspace: Path) -> None:
+        proc = run_cmd(["git", "-C", str(workspace), "status", "--short"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
-        self._invalidate_branch_cache(workspace)
-        return proc.stdout + proc.stderr
+        dirty = [line for line in proc.stdout.splitlines() if line.strip() and not self._is_reserved_status_line(line)]
+        if dirty:
+            raise RuntimeError("working copy has local changes; commit or discard them first")
 
-    def merge(self, workspace: Path, source_branch: str, target_branch: str = "main") -> str:
-        self.switch_branch(workspace, target_branch)
-        proc = run_cmd(["git", "-C", str(workspace), "merge", "--no-ff", source_branch])
-        if proc.returncode != 0:
-            out = proc.stdout + proc.stderr
-            run_cmd(["git", "-C", str(workspace), "merge", "--abort"])
-            raise RuntimeError(out)
-        self._invalidate_branch_cache(workspace)
-        return proc.stdout + proc.stderr
+    def restore_revision_to_working_copy(self, workspace: Path, revision: str) -> str:
+        target = str(revision or "").strip()
+        if not target:
+            raise RuntimeError("revision is required")
+        if self._rebase_active(workspace):
+            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
+        self._assert_on_main(workspace)
+        self._ensure_clean_worktree(workspace)
+        self.pull(workspace, "main")
 
-    def list_branches(self, workspace: Path, force_refresh: bool = False) -> list[str]:
-        key = self._workspace_key(workspace)
-        now = monotonic()
-        cached = self._branch_cache_get(key, now, force_refresh=force_refresh)
-        if cached is not None:
-            return cached
+        resolved = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
+        if resolved.returncode != 0:
+            raise RuntimeError(resolved.stderr or resolved.stdout or "invalid revision")
+        commit = resolved.stdout.strip()
+        if not commit:
+            raise RuntimeError("invalid revision")
 
-        proc = run_cmd(["git", "-C", str(workspace), "branch", "--format", "%(refname:short)"])
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stderr or proc.stdout)
-        branches = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-        self._branch_cache_put(key, now, branches)
-        return list(branches)
+        restore = run_cmd(["git", "-C", str(workspace), "restore", "--source", commit, "--staged", "--worktree", ":/"])
+        if restore.returncode != 0:
+            raise RuntimeError(restore.stderr or restore.stdout or "failed to restore revision")
 
-    def list_branches_capped(
-        self,
-        workspace: Path,
-        current_branch: str,
-        limit: int,
-        force_refresh: bool = False,
-    ) -> tuple[list[str], bool]:
-        cap = max(1, int(limit))
-        key = self._capped_branch_cache_key(workspace, cap)
-        now = monotonic()
-        cached = self._branch_capped_cache_get(key, now, force_refresh=force_refresh)
-
-        def _with_current(values: list[str], truncated: bool) -> tuple[list[str], bool]:
-            selected = list(values)
-            current = str(current_branch or "").strip()
-            if current and current not in selected:
-                if selected:
-                    selected[-1] = current
-                else:
-                    selected = [current]
-                    return selected, False
-            return selected, truncated
-
-        if cached is not None:
-            cached_branches, cached_truncated = cached
-            return _with_current(cached_branches, cached_truncated)
-
-        proc = run_cmd(
+        run_cmd(
             [
                 "git",
                 "-C",
                 str(workspace),
-                "for-each-ref",
-                "--format",
-                "%(refname:short)",
-                "--count",
-                str(cap + 1),
-                "refs/heads",
+                "reset",
+                "--quiet",
+                "--",
+                ".polygonlike.lock",
+                ":(glob)**/.polygonlike.lock",
             ]
         )
+        return commit
+
+    def _current_branch(self, workspace: Path) -> str:
+        proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "--abbrev-ref", "HEAD"])
+        branch = proc.stdout.strip()
+        if proc.returncode != 0 or not branch:
+            raise RuntimeError(proc.stderr or proc.stdout or "unable to resolve branch")
+        return branch
+
+    def _assert_on_main(self, workspace: Path) -> None:
+        branch = self._current_branch(workspace)
+        if branch != "main":
+            raise RuntimeError("only main is supported; update workspace to main")
+
+    def _rebase_active(self, workspace: Path) -> bool:
+        git_dir = workspace / ".git"
+        return (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists()
+
+    def _conflicted_files(self, workspace: Path) -> list[str]:
+        proc = run_cmd(["git", "-C", str(workspace), "diff", "--name-only", "--diff-filter=U"])
+        if proc.returncode != 0:
+            return []
+        return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+    def rebase_continue(self, workspace: Path) -> str:
+        if not self._rebase_active(workspace):
+            raise RuntimeError("no rebase in progress")
+        proc = run_cmd(["git", "-C", str(workspace), "rebase", "--continue"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
-        branches = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-        truncated = len(branches) > cap
-        if truncated:
-            branches = branches[:cap]
-        self._branch_capped_cache_put(key, now, branches, truncated)
-        return _with_current(branches, truncated)
+        return proc.stdout + proc.stderr
 
-    def list_files(self, workspace: Path, rel: str = ".") -> list[str]:
-        files, _ = self.list_files_capped(workspace, rel=rel, limit=None)
-        return files
+    def rebase_abort(self, workspace: Path) -> str:
+        if not self._rebase_active(workspace):
+            raise RuntimeError("no rebase in progress")
+        proc = run_cmd(["git", "-C", str(workspace), "rebase", "--abort"])
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        return proc.stdout + proc.stderr
 
     def list_files_capped(self, workspace: Path, rel: str = ".", limit: int | None = None) -> tuple[list[str], bool]:
         workspace_root = workspace.resolve()
@@ -462,10 +545,6 @@ class GitService:
             paths.sort()
         return paths, truncated
 
-    def read_file(self, workspace: Path, rel_path: str) -> str:
-        p = self._resolve_user_path(workspace, rel_path)
-        return p.read_text(encoding="utf-8")
-
     def read_file_limited(self, workspace: Path, rel_path: str, max_chars: int) -> tuple[str, bool]:
         p = self._resolve_user_path(workspace, rel_path)
         cap = max(1, int(max_chars))
@@ -498,3 +577,55 @@ class GitService:
             raise ValueError("destination is a directory")
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
+
+    def _synthetic_added_diff(self, rel_path: str, content: str, *, truncated: bool) -> str:
+        lines = str(content or "").splitlines()
+        out: list[str] = []
+        out.append(f"diff --git a/{rel_path} b/{rel_path}\n")
+        out.append("new file mode 100644\n")
+        out.append("--- /dev/null\n")
+        out.append(f"+++ b/{rel_path}\n")
+        out.append(f"@@ -0,0 +1,{len(lines)} @@\n")
+        for line in lines:
+            out.append(f"+{line}\n")
+        if truncated:
+            out.append("+... [truncated]\n")
+        return "".join(out)
+
+    def diff_for_path(self, workspace: Path, rel_path: str, max_chars: int | None = None) -> tuple[str, bool]:
+        target = self._resolve_user_path(workspace, rel_path)
+        if target.exists() and target.is_dir():
+            raise ValueError("path is a directory")
+        normalized = str(rel_path or "").strip()
+        if not normalized:
+            raise ValueError("path is required")
+
+        pieces: list[str] = []
+
+        unstaged = run_cmd(["git", "-C", str(workspace), "diff", "--", normalized])
+        if unstaged.returncode != 0:
+            raise RuntimeError(unstaged.stderr or unstaged.stdout)
+        if unstaged.stdout:
+            pieces.append(unstaged.stdout)
+
+        staged = run_cmd(["git", "-C", str(workspace), "diff", "--cached", "--", normalized])
+        if staged.returncode != 0:
+            raise RuntimeError(staged.stderr or staged.stdout)
+        if staged.stdout:
+            pieces.append(staged.stdout)
+
+        status = run_cmd(["git", "-C", str(workspace), "status", "--short", "--untracked-files=all", "--", normalized])
+        if status.returncode != 0:
+            raise RuntimeError(status.stderr or status.stdout)
+
+        has_untracked = any((line.startswith("??") for line in status.stdout.splitlines()))
+        if has_untracked and target.exists() and target.is_file():
+            cap = self.DIFF_MAX_CHARS if max_chars is None else max(1, int(max_chars))
+            # Reserve a small budget for synthetic headers so text truncation remains predictable.
+            body_cap = max(1, cap - 256)
+            text, truncated = self._read_text_prefix(target, body_cap)
+            pieces.append(self._synthetic_added_diff(normalized, text, truncated=truncated))
+
+        combined = self._filter_reserved_diff("".join(pieces))
+        cap = self.DIFF_MAX_CHARS if max_chars is None else max(1, int(max_chars))
+        return self._truncate_text(combined, cap)

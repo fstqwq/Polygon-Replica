@@ -1,35 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Export</h1>
-<p>{{ message }}</p>
-<form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/create">
-  <label>Build</label>
-  <select name="build_id">
-    {% for b in builds %}
-    <option value="{{ b.id }}">{{ b.id }} ({{ b.status }})</option>
+<h1 class="page-title">Packages</h1>
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>Generate</h2>
+  <p class="muted">{{ build_note }}</p>
+  <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/create">
+    <label>Revision</label>
+    <strong class="{{ 'danger' if generate_revision_display == 'missing' else '' }}">{{ generate_revision_display }}</strong>
+    <input type="hidden" name="export_type" value="icpc" />
+    <button class="primary-action" type="submit">Generate</button>
+  </form>
+</section>
+<section>
+  <h2>Generated Exports</h2>
+  <table>
+    <tr><th>Type</th><th>File</th><th>Revision</th><th>Size</th><th>Time</th><th>Download</th></tr>
+    {% for e in exports %}
+    <tr>
+      <td>{% if e.export_type == "icpc" %}ICPC{% else %}{{ e.export_type }}{% endif %}</td>
+      <td>{{ e.display_filename }}</td>
+      <td>{{ e.revision_display }}</td>
+      <td>{{ e.size_bytes }}</td>
+      <td>{{ e.created_at|local_time }}</td>
+      <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ e.build_id }}/export/{{ e.filename }}">zip</a></td>
+    </tr>
     {% endfor %}
-  </select>
-  <select name="export_type">
-    <option value="kattis">Kattis</option>
-    <option value="domjudge">DOMjudge legacy-icpc</option>
-    <option value="polygon-standard">Polygon standard</option>
-    <option value="polygon-full">Polygon full</option>
-  </select>
-  <button type="submit">Generate Zip</button>
-</form>
-<h2>Generated Exports</h2>
-<table>
-  <tr><th>Type</th><th>File</th><th>Size</th><th>SHA256</th><th>Commit</th><th>Time</th><th>Download</th></tr>
-  {% for e in exports %}
-  <tr>
-    <td>{{ e.export_type }}</td>
-    <td>{{ e.filename }}</td>
-    <td>{{ e.size_bytes }}</td>
-    <td><code>{{ e.sha256 }}</code></td>
-    <td><code>{{ e.source_commit }}</code></td>
-    <td>{{ e.created_at }}</td>
-    <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ e.build_id }}/export/{{ e.filename }}">zip</a></td>
-  </tr>
-  {% endfor %}
-</table>
+  </table>
+</section>
 {% endblock %}

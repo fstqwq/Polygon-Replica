@@ -1,0 +1,8 @@
+<footer class="page-profile" role="contentinfo" aria-label="page profile">
+  <div class="page-profile-inner">
+    <strong class="page-profile-title">Profile</strong>
+    <span>Backend render: <strong id="profile-backend-render" data-backend-render-ms="{{ backend_render_ms if backend_render_ms is not none else '' }}">{% if backend_render_ms is not none %}{{ backend_render_ms }} ms{% else %}n/a{% endif %}</strong></span>
+    <span>TTFB: <strong id="profile-ttfb">n/a</strong></span>
+    <span>Estimated network: <strong id="profile-network-estimate">n/a</strong></span>
+  </div>
+</footer>

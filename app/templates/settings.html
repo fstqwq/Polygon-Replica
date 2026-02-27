@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Settings</h1>
+{% include "_flash_message.html" %}
+<div class="grid">
+  <section>
+    <h2>Account</h2>
+    <p><strong>User:</strong> <code>{{ ctx.user.username }}</code></p>
+    <p><strong>Role on this problem:</strong> {{ ctx.access.role }}</p>
+    <h3>Change Password</h3>
+    <form id="settings-password-form" class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/settings/password">
+      <label for="current_password">Current Password</label>
+      <input id="current_password" name="current_password" type="password" autocomplete="current-password" />
+      <label for="new_password">New Password</label>
+      <input id="new_password" name="new_password" type="password" autocomplete="new-password" />
+      <label for="new_password_confirm">Confirm New Password</label>
+      <input id="new_password_confirm" name="new_password_confirm" type="password" autocomplete="new-password" />
+      <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
+      <input type="hidden" name="current_password_salt" value="{{ current_password_salt }}" />
+      <input type="hidden" name="current_password_iters" value="{{ current_password_iters }}" />
+      <input type="hidden" name="current_password_proof" value="" />
+      <input type="hidden" name="new_password_salt" value="{{ new_password_salt }}" />
+      <input type="hidden" name="new_password_iters" value="{{ new_password_iters }}" />
+      <input type="hidden" name="new_password_verifier" value="" />
+      <input type="hidden" name="new_password_proof" value="" />
+      <button type="submit">Update Password</button>
+    </form>
+    <form method="post" action="/logout">
+      <button type="submit">Logout</button>
+    </form>
+  </section>
+  <section>
+    <h2>Open Problem</h2>
+    <form class="form-row" method="post" action="/switch-workspace">
+      <label for="problem">Problem</label>
+      <input id="problem" name="problem" value="{{ ctx.problem.slug }}" list="problem-list" />
+      <input type="hidden" name="page" value="general" />
+      <button class="primary-action" type="submit">Open</button>
+      <datalist id="problem-list">
+        {% for p in problems %}
+        <option value="{{ p.slug }}">{{ p.name }}</option>
+        {% endfor %}
+      </datalist>
+    </form>
+    <p class="muted">Problem id format: Use lowercased words, separated by dash. Examples: books, minimal-spanning-tree, stamps-3</p>
+    <p class="muted">Workspace user is fixed to your login identity.</p>
+  </section>
+  {% if is_system_admin %}
+  <section>
+    <h2>System Admin Panel</h2>
+    <p class="muted">Edit runtime config with defaults from <code>app/main_constants.py</code>. Changes are persisted and applied on service startup.</p>
+    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/settings/system-config">
+      <label for="config_json">System Config JSON</label>
+      <textarea id="config_json" name="config_json" rows="16">{{ admin_config_json }}</textarea>
+      <button type="submit">Save System Config</button>
+    </form>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/settings/system-config/reset">
+      <button type="submit">Reset To Defaults</button>
+    </form>
+    <table>
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Current</th>
+          <th>Default</th>
+          <th>Range</th>
+          <th>State</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in admin_config_rows %}
+        <tr>
+          <td><code>{{ row.key }}</code></td>
+          <td><code>{{ row.current_display }}</code></td>
+          <td><code>{{ row.default_display }}</code></td>
+          <td class="muted">
+            {% if row.min is not none or row.max is not none %}
+            {% if row.min is not none %}{{ row.min }}{% else %}-{% endif %} .. {% if row.max is not none %}{{ row.max }}{% else %}-{% endif %}
+            {% else %}
+            -
+            {% endif %}
+          </td>
+          <td>
+            {% if row.changed %}
+            <span class="danger">override</span>
+            {% else %}
+            <span class="muted">default</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

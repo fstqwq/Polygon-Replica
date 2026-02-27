@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import os
+import shutil
 import sqlite3
 import threading
 import uuid
@@ -11,14 +12,42 @@ from pathlib import Path
 import re
 
 from app.db import DB, now_iso
+from app.runtime_values import RuntimeValues, build_runtime_values
 from app.settings import Settings
+from app.services.statement_template import seed_statement_sources
 from app.services.util import copytree, ensure_dir, extract_git_archive, remove_symlinks, run_cmd
+
+PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
+USERNAME_RULE_MESSAGE: str = "invalid username"
+APP_PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+APP_USER_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _apply_runtime_values(values: RuntimeValues) -> None:
+    global PROBLEM_ID_RULE_MESSAGE
+    global USERNAME_RULE_MESSAGE
+    global APP_PROBLEM_IDENT_RE
+    global APP_USER_IDENT_RE
+    PROBLEM_ID_RULE_MESSAGE = str(values.PROBLEM_ID_RULE_MESSAGE)
+    USERNAME_RULE_MESSAGE = str(values.USERNAME_RULE_MESSAGE)
+    APP_PROBLEM_IDENT_RE = values.PROBLEM_IDENT_RE
+    APP_USER_IDENT_RE = values.USER_IDENT_RE
+
+
+def configure_runtime_values(values: RuntimeValues) -> None:
+    _apply_runtime_values(values)
+
+
+_apply_runtime_values(build_runtime_values())
 
 
 class WorkspaceService:
     IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    PROBLEM_IDENT_RE = APP_PROBLEM_IDENT_RE
+    USER_IDENT_RE = APP_USER_IDENT_RE
     PROBLEM_CACHE_MAX_ENTRIES = 512
     USER_CACHE_MAX_ENTRIES = 2048
+    REPO_ROLES = {"owner", "write", "read"}
 
     def __init__(self, db: DB, settings: Settings):
         self.db = db
@@ -47,6 +76,14 @@ class WorkspaceService:
 
     def _validate_identifier(self, value: str, label: str) -> str:
         ident = str(value or "").strip()
+        if label == "problem":
+            if len(ident) > 64 or not self.PROBLEM_IDENT_RE.fullmatch(ident):
+                raise ValueError(PROBLEM_ID_RULE_MESSAGE)
+            return ident
+        if label == "user":
+            if len(ident) > 64 or not self.USER_IDENT_RE.fullmatch(ident):
+                raise ValueError(USERNAME_RULE_MESSAGE)
+            return ident
         if not self.IDENT_RE.fullmatch(ident):
             raise ValueError(f"invalid {label}")
         return ident
@@ -78,6 +115,23 @@ class WorkspaceService:
         if row is not None:
             self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
 
+    def set_problem_name(self, slug: str, name: str) -> dict:
+        safe_slug = self._validate_identifier(slug, "problem")
+        safe_name = str(name or "").strip()
+        if not safe_name:
+            raise ValueError("problem name is required")
+        row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [safe_slug])
+        if row is None:
+            raise ValueError(f"Unknown problem: {safe_slug}")
+        if str(row["name"] or "") != safe_name:
+            self.db.execute("UPDATE problems SET name=? WHERE id=?", [safe_name, int(row["id"])])
+            refreshed = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [safe_slug])
+            if refreshed is not None:
+                row = refreshed
+        row_dict = dict(row)
+        self._cache_put(self._problem_cache, safe_slug, row_dict, self.PROBLEM_CACHE_MAX_ENTRIES)
+        return row_dict
+
     def ensure_user(self, username: str):
         username = self._validate_identifier(username, "user")
         cached = self._cache_get(self._user_cache, username)
@@ -95,6 +149,25 @@ class WorkspaceService:
         row_dict = dict(row)
         self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
         return row_dict
+
+    def _normalize_repo_role(self, role: str) -> str:
+        safe_role = str(role or "").strip().lower()
+        if safe_role not in self.REPO_ROLES:
+            raise ValueError("invalid repo role")
+        return safe_role
+
+    def grant_repo_access(self, problem: str, username: str, role: str) -> None:
+        p = self._problem_row(problem)
+        u = self.ensure_user(username)
+        safe_role = self._normalize_repo_role(role)
+        self.db.execute(
+            """
+            INSERT INTO repo_acl(problem_id,user_id,role,created_at)
+            VALUES(?,?,?,?)
+            ON CONFLICT(problem_id,user_id) DO UPDATE SET role=excluded.role
+            """,
+            [p["id"], u["id"], safe_role, now_iso()],
+        )
 
     def _problem_row(self, slug: str):
         slug = self._validate_identifier(slug, "problem")
@@ -152,17 +225,25 @@ class WorkspaceService:
         u = self.ensure_user(username)
         p = self._problem_row(problem)
 
-        workspace = self.settings.workspace_root / str(u["id"]) / problem
+        username_key = str(u["username"])
+        workspace = self.settings.workspace_root / username_key / problem
         bare = self.settings.bare_root / p["repo_name"]
         ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
 
         # Steady-state fast path: avoid provisioning lock when workspace and DB row already exist.
         if ws_row is not None and workspace.exists() and (workspace / ".git").is_dir():
             if refresh_status:
-                self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
+                with self.workspace_lock(workspace):
+                    self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
             return workspace
 
         with self._workspace_provision_lock(workspace.parent, problem):
+            if workspace.exists():
+                git_dir = workspace / ".git"
+                if not git_dir.exists() or not git_dir.is_dir():
+                    if workspace.is_symlink():
+                        raise RuntimeError("workspace path is invalid")
+                    shutil.rmtree(workspace, ignore_errors=False)
             workspace_created = False
             if not workspace.exists():
                 ensure_dir(workspace.parent)
@@ -171,6 +252,7 @@ class WorkspaceService:
                     raise RuntimeError("workspace clone failed")
                 self._seed_problem_repo(workspace)
                 workspace_created = True
+            self._ensure_main_checkout(workspace)
 
             ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
             ws_row_created = False
@@ -183,10 +265,21 @@ class WorkspaceService:
                     ws_row_created = True
                 except sqlite3.IntegrityError:
                     ws_row_created = False
+            else:
+                self.db.execute(
+                    "UPDATE workspaces SET path=?, updated_at=? WHERE problem_id=? AND user_id=? AND path IS NOT ?",
+                    [str(workspace), now_iso(), p["id"], u["id"], str(workspace)],
+                )
 
             if refresh_status or workspace_created or ws_row_created:
                 self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
         return workspace
+
+    def _ensure_main_checkout(self, workspace: Path) -> None:
+        has_main = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "main"]).returncode == 0
+        if not has_main:
+            return
+        run_cmd(["git", "-C", str(workspace), "switch", "--quiet", "main"])
 
     def _seed_problem_repo(self, workspace: Path) -> None:
         required_dirs = [
@@ -198,10 +291,12 @@ class WorkspaceService:
             "generators",
             "solutions",
             "tests/manual",
+            "tests/generator",
             "third_party/testlib",
         ]
         for d in required_dirs:
             (workspace / d).mkdir(parents=True, exist_ok=True)
+        seed_statement_sources(workspace)
         readme = workspace / "README.problem.md"
         if not readme.exists():
             readme.write_text("# Problem repository\n", encoding="utf-8")
@@ -293,12 +388,6 @@ class WorkspaceService:
             break
         return branch, head, dirty
 
-    def refresh_workspace_status(self, problem: str, username: str) -> dict[str, str | int | None]:
-        p = self._problem_row(problem)
-        u = self._user_row(username)
-        workspace = Path(self.settings.workspace_root / str(u["id"]) / problem)
-        return self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
-
     def workspace_context(self, problem: str, username: str, include_recent: bool = True) -> dict:
         p = self._problem_row(problem)
         u = self._user_row(username)
@@ -309,7 +398,7 @@ class WorkspaceService:
         if ws is None:
             raise RuntimeError(f"workspace not available for {problem}/{username}")
         ws_path = Path(str(ws["path"] or "")).resolve()
-        expected_root = (self.settings.workspace_root / str(u["id"]) / problem).resolve()
+        expected_root = (self.settings.workspace_root / str(u["username"]) / problem).resolve()
         if ws_path != expected_root:
             raise RuntimeError(f"workspace path mismatch for {problem}/{username}")
         if not ws_path.exists() or not ws_path.is_dir():
@@ -371,9 +460,6 @@ class WorkspaceService:
     def _workspace_dirty(self, workspace: Path) -> bool:
         proc = run_cmd(["git", "-C", str(workspace), "status", "--porcelain"])
         return self._is_status_dirty(proc.stdout)
-
-    def workspace_is_dirty(self, workspace: Path) -> bool:
-        return self._workspace_dirty(workspace)
 
     def _is_status_dirty(self, status_output: str) -> bool:
         for raw in status_output.splitlines():

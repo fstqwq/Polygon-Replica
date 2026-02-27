@@ -1,0 +1,29 @@
+{% extends "auth_base.html" %}
+{% block auth_page_title %}Polygon-Replica Register{% endblock %}
+{% block auth_title %}Create Account{% endblock %}
+{% block auth_subtitle %}Register with username and password (minimum 8 characters).{% endblock %}
+{% block auth_hint %}
+<p class="muted">Username format: Use lowercased words, separated by dash. Examples: alice, team-7, judge-admin</p>
+{% endblock %}
+
+{% block auth_form %}
+<form id="register-form" class="form-stack" method="post" action="/register">
+  <label for="username">Username</label>
+  <input id="username" name="username" autofocus />
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="new-password" />
+  <label for="password_confirm">Confirm Password</label>
+  <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" />
+  <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
+  <input type="hidden" name="password_salt" value="{{ password_salt }}" />
+  <input type="hidden" name="password_iters" value="{{ password_iters }}" />
+  <input type="hidden" name="password_verifier" value="" />
+  <input type="hidden" name="password_proof" value="" />
+  <input type="hidden" name="next" value="{{ next_path }}" />
+  <button class="primary-action" type="submit">Register</button>
+</form>
+{% endblock %}
+
+{% block auth_footer %}
+<p class="muted">Already have an account? <a href="/login{% if next_path %}?next={{ next_path | urlencode }}{% endif %}">Sign in</a></p>
+{% endblock %}

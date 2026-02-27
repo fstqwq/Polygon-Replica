@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Working Copy</h1>
+{% include "_flash_message.html" %}
+
+<div class="grid">
+  <section>
+    <h2>Main Working Copy</h2>
+    {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
+    {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
+    {% set upstream_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
+    {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
+    {% set upstream_rev = ('v' ~ upstream_rev_raw) if upstream_rev_raw is not none else 'missing' %}
+    <p class="workspace-revision-inline">Based on <strong>{{ local_rev }}</strong> / upstream <strong>{{ upstream_rev }}</strong></p>
+    {% if change_rows %}
+    <div class="change-badges">
+      {% if ctx.workspace_changes.counts.added %}<span class="change-chip change-added">+{{ ctx.workspace_changes.counts.added }} added</span>{% endif %}
+      {% if ctx.workspace_changes.counts.modified %}<span class="change-chip change-modified">~{{ ctx.workspace_changes.counts.modified }} modified</span>{% endif %}
+      {% if ctx.workspace_changes.counts.deleted %}<span class="change-chip change-deleted">-{{ ctx.workspace_changes.counts.deleted }} deleted</span>{% endif %}
+      {% if ctx.workspace_changes.counts.renamed %}<span class="change-chip change-renamed">R{{ ctx.workspace_changes.counts.renamed }} renamed</span>{% endif %}
+      {% if ctx.workspace_changes.counts.untracked %}<span class="change-chip change-untracked">?{{ ctx.workspace_changes.counts.untracked }} untracked</span>{% endif %}
+      {% if ctx.workspace_changes.counts.conflicted %}<span class="change-chip change-conflicted">!{{ ctx.workspace_changes.counts.conflicted }} conflicted</span>{% endif %}
+      {% if ctx.workspace_changes.counts.typechange %}<span class="change-chip change-typechange">T{{ ctx.workspace_changes.counts.typechange }} type</span>{% endif %}
+      {% if ctx.workspace_changes.counts.other %}<span class="change-chip change-other">{{ ctx.workspace_changes.counts.other }} other</span>{% endif %}
+    </div>
+    {% else %}
+    <p class="muted">Working copy clean.</p>
+    {% endif %}
+
+    <h2>Commit</h2>
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/commit">
+      <input name="message" />
+      <button type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Commit and Publish</button>
+    </form>
+
+    <div class="form-row">
+      {% if ctx.workspace_needs_update %}
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull"><button class="text-nowrap" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button></form>
+      {% endif %}
+    </div>
+
+    {% if status.rebase_active %}
+    <h2>Rebase In Progress</h2>
+    <p class="muted">Resolve conflicted files, then continue or abort the rebase.</p>
+    <div class="form-row">
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/rebase/continue"><button type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Continue Rebase</button></form>
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/rebase/abort"><button type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Abort Rebase</button></form>
+    </div>
+    {% if status.conflicted_files %}
+    <ul class="files">
+      {% for p in status.conflicted_files %}
+      <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ p }}&src=workspace">{{ p }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Diff</h2>
+    {% if change_rows %}
+    <div class="workspace-diff-files">
+      {% for row in change_rows %}
+      {% set active = (row.link_path == selected_path) %}
+      <a class="workspace-diff-file workspace-diff-file-{{ row.kind }} {{ 'active' if active else '' }}" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace?path={{ row.link_path }}">
+        <code class="change-code">{{ row.code }}</code>
+        <span>{{ row.path }}</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% if selected_path %}
+    <p class="muted">Selected: <code>{{ selected_path }}</code></p>
+    {% endif %}
+    {% else %}
+    <p class="muted">No local changes.</p>
+    {% endif %}
+    {% if selected_diff_truncated %}
+    <p><em>Showing first {{ status.diff_char_limit }} diff characters.</em></p>
+    {% endif %}
+    {% if selected_diff_lines %}
+    <pre class="workspace-diff-view">{% for row in selected_diff_lines %}<span class="workspace-diff-line workspace-diff-line-{{ row.kind }}">{{ row.text }}</span>{% endfor %}</pre>
+    {% elif selected_path %}
+    <p class="muted">No textual diff for selected file.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

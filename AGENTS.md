@@ -2,340 +2,141 @@
 
 ## Purpose
 
-This repository defines a Polygon-like problem authoring system with Git as the single source of truth, local filesystem storage for build outputs, support for `testlib.h`, and TeX statement compilation with preview. The system includes a web UI that exposes the core workflow end-to-end.
+This repository implements a local Polygon-like problem authoring system.
 
-## Upstream References
+Current engineering baseline:
 
-The system uses these upstream references as canonical sources for required assets and format behavior:
+- Git is the single source of truth for problem sources.
+- Derived artifacts stay on local filesystem (not in Git).
+- Web UI is the primary workflow entry (Problems/Contests -> Problem submenu).
+- No legacy/backward-compat compatibility target for removed routes/data shapes.
 
-- `testlib`: https://github.com/MikeMirzayanov/testlib
-- `Kattis Problem Package Format`: https://github.com/Kattis/problem-package-format
+## Canonical Upstreams
 
-Operational policy:
+- testlib: <https://github.com/MikeMirzayanov/testlib>
+- ICPC Problem Package Format: <https://github.com/icpc/problem-package-format>
+- Polygon behavior reference: <https://polygon.codeforces.com/>
 
-- `third_party/testlib/testlib.h` in seeded problem repositories must be sourced from upstream `testlib`.
-- Export/format behavior, schemas, and regression examples for Kattis packaging should be derived from upstream `problem-package-format` spec/examples.
-- When required files/tests are missing locally, obtain or refresh them from these upstream repositories.
+Policy in this repository:
 
-## Progress Tracking
+- `third_party/upstream/testlib/testlib.h` is a maintained ICPC-package-compatible variant used by this project.
+- Workspace-seeded `third_party/testlib/testlib.h` is copied from that maintained upstream directory.
+- Export behavior and conformance expectations follow upstream problem-package-format.
 
-- Current implementation status is tracked in `PROGRESS.md`.
-- Keep `PROGRESS.md` updated whenever milestone status or validation state changes.
+## Documentation Layout
 
-## System Overview
+Markdown docs are kept at repository root:
 
-### Core Concepts
+- `AGENTS.md`
+- `ASYNC_WORKER_PLAN.md`
+- `BACKEND_TODO.md`
+- `PROGRESS.md`
 
-- **Problem Repository (Git, per problem)**: Stores all editable source files (statements, generators, validators, checkers, interactors, solutions, configs).
-- **Bare Repository (central)**: Canonical Git remote for each problem.
-- **User Workspace (per user, per problem)**: A server-side working copy used for editing, committing, pushing/pulling, and merging.
-- **Ephemeral Run Directory (per job)**: Immutable snapshot of a selected commit/workspace state used for builds/runs.
-- **Artifacts Store (local filesystem)**: Stores derived outputs (tests/ans/logs/export zips/preview PDFs) indexed by `build_id`.
-- **Database (metadata only)**: Tracks problems, users, ACL, workspaces, builds, runs, exports, and audit logs.
+Do not place active design/ops markdown under `docs/`.
 
-### Directory Layout (Host)
+## Runtime Model
 
-- Bare repos: `/srv/git/<problem>.git`
-- User workspaces: `/srv/workspaces/<uid>/<problem>/`
-- Job workdirs: `/srv/runs/<run_id>/`
-- Artifacts: `/var/lib/polygonlike/artifacts/<problem>/<build_id>/...`
-- Caches: `/var/cache/polygonlike/...`
+Core objects:
 
-### Web UI Navigation (Required)
+- bare repository (`/srv/git/<problem>.git`)
+- per-user workspace (`/srv/workspaces/<user>/<problem>/`)
+- artifact root (`/var/lib/polygonlike/artifacts/<problem>/<build_id>/`)
+- run fallback root (`/srv/runs/invalid-runs/<run_id>/`)
+- metadata DB (`problems/users/repo_acl/workspaces/builds/runs/exports/audit_log/...`)
 
-The web UI must expose the following sections within a problem workspace:
+The DB stores metadata; large files/logs/tests/answers/packages stay on filesystem.
 
+## UI and Navigation Baseline
+
+Top-level main menu:
+
+- Problems
+- Contests
+
+Problem submenu (current implementation):
+
+- General info
+- Statement
 - Files
-- Git
-- Build
-- Preview
-- Run
-- Export
+- Generators
+- Checker
+- Validator
+- Interactor
+- Tests
+- Solution files
+- Invocations
+- Packages
+- Manage access
 
-The UI must display, at all times:
+Cross-page behavior:
 
-- Current problem
-- Current workspace (user)
-- Current branch and HEAD commit
-- Uncommitted changes indicator
-- Recent build/preview status
+- Show current problem/workspace/revision/dirty state in problem context.
+- Timestamps are shown in local time.
+- Raw commit hash should not be shown in normal UI views (commit/history contexts excepted).
 
-## Problem Repository Specification
+## Repository Structure (Problem)
 
-Each problem repository must follow this minimal structure:
+Required versioned source layout:
 
-- `statement/` (TeX statement sources and assets)
-- `config/` (problem configuration and build configuration)
-- `validators/` (input validator sources)
-- `checkers/` (output checker sources)
-- `interactors/` (interactor sources for interactive problems)
-- `generators/` (test generators)
-- `solutions/` (reference solutions; must include accepted solution)
-- `tests/manual/` (handwritten tests; may include sample tests)
-- `third_party/testlib/testlib.h` (fixed `testlib.h` copy)
+- `statement/`
+- `config/`
+- `validators/`
+- `checkers/`
+- `interactors/`
+- `generators/`
+- `solutions/`
+- `tests/spec.json`
+- `tests/manual/<test_id>.in`
+- `tests/generator/<test_id>.in`
+- `third_party/testlib/testlib.h`
 
-All of the above are versioned in Git. No derived artifacts are stored in the repository.
+Tests model currently used:
 
-## Database Schema (Minimum)
+- `tests/spec.json` stores metadata only (`id`, `kind`, `sample`)
+- payload lives in `tests/manual/*.in` or `tests/generator/*.in`
 
-The system must maintain at least these logical tables (implementation may differ):
+## Build / Invocation / Export Rules (Current)
 
-- `problems`
-- `users`
-- `repo_acl`
-- `workspaces`
-- `builds`
-- `runs`
-- `exports`
-- `audit_log`
+- Editing tests does not require explicit build.
+- Opening Tests page must not auto-build.
+- Invocation execution triggers background runnable snapshot resolution when needed.
+- Run/verification/export are queued as async jobs (worker queue).
+- Preview compile is currently synchronous.
+- Export is ICPC-only and bound to committed `HEAD` revision (not dirty working copy).
 
-The database stores metadata only. Large files are stored on the local filesystem under the artifacts directory.
+Checker/validator/interactor state today:
 
-## Artifacts Specification (Local Filesystem)
+- Checker supports standard checker metadata mode (`std::*`) and repository mode switch.
+- Validator/interactor are currently repository-source workflow only.
 
-Artifacts are written per build under:
+## Sandbox and Security Baseline
 
-`/var/lib/polygonlike/artifacts/<problem>/<build_id>/`
+- Single execution backend: `native-sandbox`.
+- Root switch via `bwrap` is fail-closed at startup (if probe fails, service startup fails).
+- Same-origin enforcement for state-changing requests.
+- Session + flash cookies are `HttpOnly` with secure policy from runtime config.
+- Workspace mutating operations are serialized by workspace-level locks.
 
-Required subpaths:
+## Local Dev and Validation
 
-- `manifest.json`
-- `tests/`
-- `ans/`
-- `logs/`
-- `statement_preview/`
-- `export/`
+Before tests:
 
-`manifest.json` must include:
+```bash
+source .venv/bin/activate
+```
 
-- source identifier: commit SHA (and branch/ref if applicable)
-- toolchain identifier/digest
-- seed and generation parameters
-- file listing with sha256 and sizes
-- summary statistics (counts, sizes)
-- step list with status and log locations
+Primary regression command:
 
-## Compilation and Toolchain Rules
+```bash
+./scripts/test.sh
+```
 
-### testlib.h
+It runs: `py_compile`, `pyflakes`, `vulture`, `unittest`.
 
-- `testlib.h` must be read from `third_party/testlib/testlib.h` inside the repository.
-- Validator, checker, and interactor builds must support `#include "testlib.h"` by adding the repository `third_party/testlib/` include path.
+## Update Rule
 
-### Unified Compiler Configuration
+When behavior changes, update these files in the same PR:
 
-A single toolchain configuration must apply to:
-
-- generators
-- validators
-- checkers
-- interactors
-- solutions
-
-The system must support deterministic compilation with caching:
-
-- Cache key includes `(toolchain_digest, source_hash)`.
-- Cache may store final executables and/or intermediate objects.
-
-UI requirements:
-
-- Build/Run pages must surface compiler diagnostics.
-- Error entries must link to source file path and line number and open the file in the Files editor.
-
-## TeX Statement Compilation and Preview
-
-### Inputs
-
-- `statement/*.tex` plus assets under `statement/` (and subdirectories such as `figures/`).
-
-### Outputs
-
-Under `artifacts/<problem>/<build_id>/statement_preview/`:
-
-- `statement.pdf`
-
-Under `artifacts/<problem>/<build_id>/logs/`:
-
-- `latex.log`
-
-### Behavior
-
-- TeX compilation must be triggered from the UI Preview page for either:
-  - workspace HEAD, or
-  - a specified commit
-- The PDF must be viewable in the UI, and `latex.log` must be displayed.
-- Log entries must allow navigation to the referenced file and line within the repository.
-
-## Build Pipeline (tests/ans generation)
-
-A build is identified by `build_id` and binds to a specific source state (commit SHA, or workspace snapshot).
-
-### Build Steps (Required)
-
-1. Compile:
-   - generator
-   - validator
-   - checker
-   - accepted solution
-2. Generate `tests/`:
-   - include `tests/manual/`
-   - generate additional tests using generators per repository configuration
-3. Validate inputs:
-   - run the validator for each test
-4. Generate `ans/`:
-   - run accepted solution over each test to produce corresponding answer
-5. Persist:
-   - write `manifest.json`
-   - write per-step logs and per-test failure details
-
-UI requirements (Build page):
-
-- Trigger build for workspace HEAD or a specific commit.
-- Show step list (compile/generate/validate/solve) and per-step logs.
-- On failure, identify the step and the failing test id.
-- Provide browse/download access to `tests/` and `ans/` for a `build_id`.
-
-## Runner (Execution Engine)
-
-The runner executes submissions against a selected `build_id`.
-
-### Supported Modes
-
-- pass-fail
-- interactive
-- multi-pass (driven by `feedback_dir/nextpass.in`)
-
-### Required Outputs per Run
-
-- Verdict per test case
-- Resource usage per test case (and per pass where applicable)
-- `feedback_dir` snapshot
-- Interactive transcript where applicable
-
-UI requirements (Run page):
-
-- Select `build_id` and submission source (from workspace or upload).
-- Execute and display results per test case.
-- Provide transcript view/download for interactive.
-- Provide browse/view for key feedback files (e.g., `judgemessage.txt`, `teammessage.txt`).
-
-## Exporters (DOMjudge / Kattis / Polygon)
-
-For a given `build_id`, the system must generate downloadable zip packages.
-
-### Required Export Types
-
-- Kattis problem package format zip
-- DOMjudge legacy-icpc zip
-- Polygon zip:
-  - standard
-  - full (includes `tests/` and `ans/`)
-
-### Storage
-
-Export zips are written under:
-
-`artifacts/<problem>/<build_id>/export/`
-
-UI requirements (Export page):
-
-- Trigger export generation for a selected `build_id`.
-- List available export zips with:
-  - filename
-  - size
-  - sha256
-  - generation time
-  - source commit SHA
-
-## Web UI Requirements (Cross-cutting)
-
-Across all pages:
-
-- Always show current problem, workspace, branch, HEAD commit, and dirty state.
-- Provide a consistent way to switch:
-  - workspace
-  - branch
-  - commit (where applicable)
-- Ensure all operations that mutate workspace state are serialized with workspace-level locking.
-
-## Milestone Plan
-
-### Milestone 0: Engineering Skeleton + UI Skeleton
-
-- Define repository structure and host directory layout.
-- Initialize database schema (minimum tables).
-- Implement web UI routing and workspace selection.
-- Implement read-only APIs for problems/workspaces/branches/status/recent builds.
-
-**Done when**: A user can open a problem workspace in the browser and see correct Git status and navigation.
-
-### Milestone 1: Git Workflow (per-user working copy) + Web Editing
-
-- Create bare repo per problem and initialize `main`.
-- Create user workspace clones under `/srv/workspaces/<uid>/<problem>/`.
-- Implement file operations in workspace:
-  - browse, edit, create, delete, rename, upload, download
-- Implement Git operations in workspace:
-  - status/diff, commit, push, pull, branch create/switch, merge into `main` with conflict reporting
-- UI: Files and Git pages implement the above.
-
-**Done when**: Multiple users can edit and commit in isolated workspaces, push to bare, and merge into `main` via UI with conflict visibility.
-
-### Milestone 2: Local Artifacts Store + Build Records + UI Visibility
-
-- Implement artifacts directory structure per `build_id`.
-- Persist build metadata and write `manifest.json`.
-- UI: Build list and build detail views (status, summary, log index).
-
-**Done when**: A build creates artifacts on disk and the UI can list and inspect build metadata.
-
-### Milestone 3: `testlib.h` Support + Unified Toolchain + UI Diagnostics
-
-- Enforce `third_party/testlib/testlib.h` include.
-- Implement unified compilation rules and compile caching.
-- UI: Present compiler diagnostics and link to file/line in editor.
-
-**Done when**: testlib-based validator/checker/interactor compile and run; compile cache is reused.
-
-### Milestone 4: TeX Preview + UI Preview Page
-
-- Implement TeX compilation to `statement.pdf` and store logs.
-- UI: Trigger preview; render PDF; display log with navigation to source.
-
-**Done when**: TeX sources can be iterated and previewed from the UI with actionable error output.
-
-### Milestone 5: Build Pipeline (tests/ans) + UI Build Panel
-
-- Implement compile → generate → validate → solve pipeline.
-- Store outputs under `tests/` and `ans/`, with step logs and per-test failure details.
-- UI: Trigger build; inspect step logs; browse/download generated data.
-
-**Done when**: A repository state can be built into a complete test set with answers and debuggable logs.
-
-### Milestone 6: Runner (pass-fail / interactive / multi-pass) + UI Run/Replay
-
-- Implement runner supporting:
-  - pass-fail sequential validator invocation
-  - interactive concurrent IO broker with transcript
-  - multi-pass controlled by `feedback_dir/nextpass.in`
-- Persist run results and artifacts.
-- UI: Trigger runs; display verdicts and resources; view transcript and feedback files.
-
-**Done when**: All supported modes execute end-to-end and results are viewable and replayable in the UI.
-
-### Milestone 7: Exporters + UI Export Page
-
-- Implement zip exporters:
-  - Kattis
-  - DOMjudge legacy-icpc
-  - Polygon standard and full
-- Store exports under `export/` with hashes.
-- UI: Generate and download export packages with provenance.
-
-**Done when**: A `build_id` can be exported to all formats and downloaded from the UI.
-
-## Non-goals
-
-- Storing derived artifacts in Git.
-- Requiring external object storage for artifacts.
-- Defining optional feature sets beyond the specified milestones.
+- `AGENTS.md` (contract/baseline)
+- `BACKEND_TODO.md` (remaining technical debt)
+- `PROGRESS.md` (milestone/progress checkpoint)

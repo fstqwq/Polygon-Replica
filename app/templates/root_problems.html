@@ -1,0 +1,50 @@
+{% extends "root_base.html" %}
+{% block content %}
+<h1 class="page-title">Problems</h1>
+
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>My Problems</h2>
+  {% if entries %}
+  <table>
+    <tr>
+      <th>Problem</th>
+      <th>Role</th>
+      <th>Workspace</th>
+      <th>Revision</th>
+      <th>Updated</th>
+      <th>Open</th>
+    </tr>
+    {% for row in entries %}
+    <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
+      <td><code>{{ row.slug }}</code> - {{ row.name }}</td>
+      <td>{{ row.role }}</td>
+      <td>{{ row.branch if row.has_workspace else "-" }}</td>
+      <td><span class="{{ 'revision-alert' if row.revision_highlight else '' }}">{{ row.revision_display }}</span></td>
+      <td>{{ row.updated_at | local_time if row.updated_at else "-" }}</td>
+      <td><a href="/problems/{{ row.slug }}/{{ user.username }}/general">Open</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No participating problems found.</p>
+  {% endif %}
+  <p class="muted">Showing up to {{ entries_limit }} problems.</p>
+</section>
+
+<section>
+  <h2>Open/Create By Slug</h2>
+  <form class="form-row" method="post" action="/switch-workspace">
+    <label for="problem">Problem</label>
+    <input id="problem" name="problem" value="" list="problem-list" />
+    <input type="hidden" name="page" value="general" />
+    <button class="primary-action" type="submit">Open</button>
+    <datalist id="problem-list">
+      {% for row in entries %}
+      <option value="{{ row.slug }}">{{ row.name }}</option>
+      {% endfor %}
+    </datalist>
+  </form>
+</section>
+{% endblock %}

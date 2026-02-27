@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_component_forms.html" import create_template_form, source_editor_form %}
+{% block content %}
+<h1 class="page-title">Validator</h1>
+{% include "_flash_message.html" %}
+<section>
+    <h2>Validator Editor</h2>
+    <p><strong>{{ "File path" if validator_status.repo_source_exists else "New file" }}:</strong> <code>{{ repo_source }}</code></p>
+    {% if validator_status.repo_source_exists %}
+    {{ source_editor_form(
+      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/validator/save-source",
+      repo_source,
+      repo_content,
+      repo_content_truncated,
+      content_char_limit,
+      "Save Validator Source",
+      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/validator/create-template",
+      "Create Validator Template"
+    ) }}
+    {% else %}
+    {{ create_template_form(
+      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/validator/create-template",
+      "Create Validator Template",
+      repo_source
+    ) }}
+    {% endif %}
+</section>
+{% endblock %}

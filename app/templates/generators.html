@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% from "_component_forms.html" import source_editor_form %}
+{% block content %}
+<h1 class="page-title">Generators</h1>
+{% include "_flash_message.html" %}
+
+<div class="grid">
+  <section>
+    <h2>Generators List</h2>
+    <table>
+      <tr><th>Path</th><th>Used in Build</th><th>Status</th><th>Open</th></tr>
+      {% for row in source_rows %}
+      <tr>
+        <td><code>{{ row.path }}</code></td>
+        <td>{{ "used" if row.configured else "unused" }}</td>
+        <td>{{ "ready" if row.exists else "missing" }}</td>
+        <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators?path={{ row.path }}">edit</a></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% if source_rows_truncated %}
+    <p class="muted">Showing first configured/cpp entries only.</p>
+    {% endif %}
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators/create-template">
+      <label for="generator-create-path">Create template</label>
+      <input id="generator-create-path" name="path" placeholder="{{ create_template_path_default }}" />
+      <button type="submit">Create Generator Template</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Generator Editor</h2>
+    <p><strong>{{ "File path" if selected_exists else "New file" }}:</strong> <code>{{ selected_source }}</code></p>
+    {% if selected_exists %}
+    {{ source_editor_form(
+      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/generators/save-source",
+      selected_source,
+      repo_content,
+      repo_content_truncated,
+      content_char_limit,
+      "Save Generator Source"
+    ) }}
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

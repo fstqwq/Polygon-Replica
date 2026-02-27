@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Run Solutions</h1>
+<p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">&laquo; Back to invocations</a></p>
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>Execute</h2>
+  <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
+    <div class="run-execute-grid">
+      <div class="form-row form-row-column">
+        <label for="solution-paths">Solutions</label>
+        <div class="solution-pick-actions">
+          <button id="solution-select-all" class="linkish" type="button">Select all</button>
+          <button id="solution-select-clear" class="linkish" type="button">Clear</button>
+        </div>
+        <div id="solution-paths" class="solution-pick-list">
+          {% if solution_options %}
+            {% for row in solution_options %}
+            <label class="solution-pick-item">
+              <input type="checkbox" name="solution_paths" value="{{ row.path }}" {% if row.path in selected_solution_paths %}checked{% endif %} />
+              <span class="solution-pick-main">{{ row.label }}</span>
+            </label>
+            {% endfor %}
+          {% else %}
+          <p class="muted">No solution files found in <code>solutions/</code>.</p>
+          {% endif %}
+        </div>
+      </div>
+      <div class="form-row form-row-column">
+        <label for="test-names">Tests</label>
+        <div class="solution-pick-actions">
+          <button id="test-select-all" class="linkish" type="button">Select all</button>
+          <button id="test-select-clear" class="linkish" type="button">Clear</button>
+        </div>
+        <div id="test-names" class="solution-pick-list">
+          {% if test_options %}
+            {% for row in test_options %}
+            <label class="solution-pick-item">
+              <input type="checkbox" name="test_names" value="{{ row.name }}" {% if row.name in selected_test_names %}checked{% endif %} />
+              <span class="solution-pick-main">{{ row.label }}</span>
+            </label>
+            {% endfor %}
+          {% else %}
+          <p class="muted">No tests list available yet.</p>
+          {% endif %}
+        </div>
+        {% if test_options_source %}
+        <p class="muted">Tests source: <code>{{ test_options_source }}</code></p>
+        {% endif %}
+      </div>
+    </div>
+    <div class="form-row">
+      <label for="submission-upload">Upload source (optional)</label>
+      <input id="submission-upload" type="file" name="submission_upload" />
+    </div>
+    <div class="form-row">
+      <button class="primary-action" type="submit">Execute</button>
+    </div>
+  </form>
+  {% if solution_options_truncated %}
+  <p class="muted">Showing first available solutions only.</p>
+  {% endif %}
+  {% if test_options_truncated %}
+  <p class="muted">Showing first available tests only.</p>
+  {% endif %}
+  <p class="muted solution-pick-help">Select one or more solutions. Select tests only when you need partial runs; leave tests empty to run all tests.</p>
+</section>
+{% endblock %}

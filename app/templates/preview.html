@@ -1,37 +1,132 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Preview</h1>
-<form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run">
-  <input name="commit" placeholder="optional commit SHA" />
-  <button type="submit">Compile TeX</button>
-</form>
-<h2>Recent Previews</h2>
-<ul>
-  {% for p in previews %}
-  <li><a href="?preview_id={{ p.id }}">{{ p.id }}</a> {{ p.status }} {{ p.created_at }}</li>
-  {% endfor %}
-</ul>
+{% set ns = namespace(latest=None) %}
+{% set preview_nav = ctx.nav_status.get('preview', {}) if ctx.nav_status is defined else {} %}
+{% set preview_is_stale = preview_nav.get('text') == 'stale' %}
 {% if preview_id %}
-<p>Preview build: {{ preview_id }}</p>
-<p>PDF present: {{ "yes" if pdf_exists else "no" }}</p>
-{% if pdf_exists %}
-<iframe class="pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf"></iframe>
-{% endif %}
-{% if log_refs %}
-<h2>Log References</h2>
-{% if log_refs_truncated %}
-<p><em>Showing first {{ log_refs_limit }} references ({{ log_refs_total }} total).</em></p>
-{% endif %}
-<ul>
-  {% for r in log_refs %}
-  <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
+  {% for p in previews %}
+    {% if p.id == preview_id %}
+      {% set ns.latest = p %}
+    {% endif %}
   {% endfor %}
-</ul>
 {% endif %}
-<h2>latex.log</h2>
-{% if log_truncated %}
-<p><em>Showing first {{ log_char_limit }} characters.</em></p>
+{% if ns.latest is none and previews %}
+  {% set ns.latest = previews[0] %}
 {% endif %}
-<pre>{{ log }}</pre>
-{% endif %}
+<h1 class="page-title">Statement</h1>
+{% include "_flash_message.html" %}
+
+<div class="grid">
+  <section>
+    <h2>General Info</h2>
+    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/general/save">
+      <div class="form-row">
+        <label for="general-problem-name">Problem title</label>
+        <input
+          id="general-problem-name"
+          name="problem_name"
+          maxlength="{{ problem_name_max_len }}"
+          value="{{ ctx.problem.name }}"
+        />
+      </div>
+      <div class="form-row">
+        <label for="time-limit">Time limit (ms)</label>
+        <input id="time-limit" type="text" inputmode="numeric" name="time_limit_ms" value="{{ ctx.general_cfg.time_limit_ms }}" />
+      </div>
+      <div class="form-row">
+        <label for="memory-limit">Memory limit (MB)</label>
+        <input id="memory-limit" type="text" inputmode="numeric" name="memory_limit_mb" value="{{ ctx.general_cfg.memory_limit_mb }}" />
+      </div>
+      <div class="form-row">
+        <label for="problem-mode">Mode</label>
+        <select id="problem-mode" name="mode">
+          {% for mode_value in problem_mode_values %}
+          <option value="{{ mode_value }}" {% if mode_value == ctx.general_cfg.mode %}selected{% endif %}>{{ mode_value }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-row">
+        <button type="submit">Save General Info</button>
+      </div>
+    </form>
+
+    <h2>Statement Content</h2>
+    <p class="muted">
+      Main content file: <code>{{ statement_content_path }}</code>.
+      Template and style are edited in Files:
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ statement_template_path }}&src=preview{% if preview_id %}&sid={{ preview_id }}{% endif %}">template</a>,
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ statement_style_path }}&src=preview{% if preview_id %}&sid={{ preview_id }}{% endif %}">olmpy.sty</a>.
+    </p>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/save">
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <label>Content (<code>{{ statement_content_path }}</code>)</label>
+      <textarea
+        name="content_tex"
+        rows="12"
+        data-code-editor="1"
+        data-code-path="{{ statement_content_path }}"
+        data-code-height="460"
+      >{{ content_tex }}</textarea>
+      {% if content_truncated %}
+      <p><em>Content text is truncated in editor (showing first {{ editor_char_limit }} chars).</em></p>
+      {% endif %}
+      <button type="submit">Save Statement</button>
+    </form>
+  </section>
+  <section>
+    <h2>Preview Output</h2>
+    {% if not (preview_id and pdf_exists) %}
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run">
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <button class="primary-action" type="submit">Compile Statement</button>
+    </form>
+    {% endif %}
+    {% if preview_id %}
+    {% if pdf_exists %}
+    {% if preview_is_stale %}
+    <p class="muted">
+      PDF is ready, but statement is stale (sources have changed).
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+    </p>
+    {% else %}
+    <p class="muted">
+      PDF is ready.
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+    </p>
+    {% endif %}
+    <iframe class="pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf"></iframe>
+    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run">
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <button class="primary-action" type="submit">Recompile Statement</button>
+    </form>
+    {% else %}
+    <p class="muted">Latest preview has no PDF output.</p>
+    {% endif %}
+    {% if log_refs %}
+    <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
+      <summary>Log References ({{ log_refs_total }})</summary>
+      {% if log_refs_truncated %}
+      <p><em>Showing first {{ log_refs_limit }} references ({{ log_refs_total }} total).</em></p>
+      {% endif %}
+      <ul>
+        {% for r in log_refs %}
+        <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ r.file }}&line={{ r.line }}&src=preview&sid={{ preview_id }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {% if log %}
+    <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
+      <summary>latex.log</summary>
+      {% if log_truncated %}
+      <p><em>Showing first {{ log_char_limit }} characters.</em></p>
+      {% endif %}
+      <pre class="preview-log">{{ log }}</pre>
+    </details>
+    {% endif %}
+    {% else %}
+    <p class="muted">Compile Statement to generate preview PDF and latex.log.</p>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

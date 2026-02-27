@@ -1,0 +1,24 @@
+{% macro source_editor_form(action, path, content, content_truncated, content_char_limit, save_label, extra_action='', extra_label='') -%}
+<form class="form-stack component-source-form" method="post" action="{{ action }}">
+  <input type="hidden" name="path" value="{{ path }}" />
+  <textarea name="content" data-code-editor="1" data-code-path="{{ path }}" data-code-height="420">{{ content }}</textarea>
+  {% if content_truncated %}
+  <p class="muted">Showing first {{ content_char_limit }} characters.</p>
+  {% endif %}
+  <div class="form-row component-editor-actions">
+    <button type="submit">{{ save_label }}</button>
+    {% if extra_action and extra_label %}
+    <button type="submit" formaction="{{ extra_action }}" formmethod="post" formnovalidate>{{ extra_label }}</button>
+    {% endif %}
+  </div>
+</form>
+{%- endmacro %}
+
+{% macro create_template_form(action, button_label, path='') -%}
+<form class="form-row component-create-form" method="post" action="{{ action }}">
+  {% if path %}
+  <input type="hidden" name="path" value="{{ path }}" />
+  {% endif %}
+  <button type="submit">{{ button_label }}</button>
+</form>
+{%- endmacro %}

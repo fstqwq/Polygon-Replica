@@ -1,93 +1,50 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Run</h1>
-<form method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
-  <label>Build</label>
-  <select name="build_id">
-    {% for b in builds %}
-    <option value="{{ b.id }}">{{ b.id }} ({{ b.status }})</option>
-    {% endfor %}
-  </select>
-  <input name="submission_path" placeholder="workspace path (e.g. solutions/main.cpp)" />
-  <label>or upload</label>
-  <input type="file" name="submission_upload" />
-  <select name="mode">
-    <option value="pass-fail">pass-fail</option>
-    <option value="interactive">interactive</option>
-    <option value="multi-pass">multi-pass</option>
-  </select>
-  <button type="submit">Execute</button>
-</form>
-<div class="grid">
-  <section>
-    <h2>Recent Runs</h2>
-    <ul>
-      {% for r in runs %}
-      <li><a href="?run_id={{ r.id }}">{{ r.id }}</a> {{ r.mode }} {{ r.status }}</li>
-      {% endfor %}
-    </ul>
-  </section>
-  <section>
-    <h2>Run Detail</h2>
-    {% if detail %}
-    <p><strong>ID:</strong> {{ detail.id }} <strong>Status:</strong> {{ detail.status }} <strong>Mode:</strong> {{ detail.mode }}</p>
-    {% if summary and summary.tests %}
-    {% if summary.tests_truncated %}
-    <p><em>Showing first {{ summary.tests_limit }} tests ({{ summary.tests_total }} total).</em></p>
-    {% endif %}
-    <table>
-      <tr><th>Test</th><th>Verdict</th><th>Time (ms)</th><th>Passes</th><th>Artifacts</th></tr>
-      {% for t in summary.tests %}
-      <tr>
-        <td>{{ t.test }}</td>
-        <td>{{ t.verdict }}</td>
-        <td>{{ t.time_ms }}</td>
-        <td><pre>{{ t.passes }}</pre></td>
-        <td>
-          {% if t.transcript %}
-          <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/runs/{{ detail.id }}/artifacts/{{ t.transcript }}">transcript</a><br />
-          {% endif %}
-          {% for ff in t.feedback_files %}
-          <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/runs/{{ detail.id }}/artifacts/{{ ff }}">{{ ff }}</a><br />
-          {% endfor %}
-          {% if t.feedback_files_truncated %}
-          <em>Showing first {{ t.feedback_files_limit }} feedback files ({{ t.feedback_files_total }} total).</em><br />
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-    <p>
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/runs/{{ detail.id }}/browse?rel=feedback_dir">feedback_dir/</a> |
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/runs/{{ detail.id }}/download-dir?rel=feedback_dir">feedback_dir.zip</a>
-    </p>
-    {% else %}
-    <pre>{{ summary }}</pre>
-    {% endif %}
-    {% if summary and summary.compile_diagnostics %}
-    <h3>Compile Diagnostics</h3>
-    {% if summary.compile_diagnostics_truncated %}
-    <p><em>Showing first {{ summary.compile_diagnostics_limit }} diagnostics ({{ summary.compile_diagnostics_total }} total).</em></p>
-    {% endif %}
-    <ul>
-      {% for d in summary.compile_diagnostics %}
-      <li>
-        [{{ d.level }}]
-        {% if d.can_link %}
-        <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ d.file }}&line={{ d.line }}">{{ d.file }}:{{ d.line }}:{{ d.column }}</a>
-        {% else %}
-        {{ d.file }}:{{ d.line }}:{{ d.column }}
-        {% endif %}
-        {{ d.message }}
-      </li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-    {% if summary and summary.compile_log %}
-    <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/runs/{{ detail.id }}/artifacts/{{ summary.compile_log }}">compile.log</a></p>
-    {% endif %}
-    <p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/runs/{{ detail.id }}/artifacts/summary.json">summary.json</a></p>
-    {% endif %}
-  </section>
+<div class="page-title-inline">
+  <h1 class="page-title">Invocations</h1>
+  <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Start customized run</a>
 </div>
+{% include "_flash_message.html" %}
+{% if runs %}
+<table class="invocation-list-table">
+  <tr>
+    <th>Run time</th>
+    <th>Solutions</th>
+    <th>Tests</th>
+    <th>Status</th>
+    <th>Actions</th>
+  </tr>
+  {% for r in runs %}
+  <tr class="{{ 'invocation-row-failed' if r.is_failed else '' }}">
+    <td>
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?invocation_id={{ r.id }}">{{ r.created_at | local_time }}</a>
+    </td>
+    <td>
+      {{ r.source_display }}
+      <div class="muted">{{ r.matched_count }}/{{ r.run_count }} expected</div>
+    </td>
+    <td>{{ r.tests_label }}</td>
+    <td>
+      {% if r.status == "ok" %}
+      <span class="ok">{{ r.status_upper }}</span>
+      {% elif r.is_failed %}
+      <span class="danger">{{ r.status_upper }}</span>
+      {% else %}
+      <span>{{ r.status_upper }}</span>
+      {% endif %}
+    </td>
+    <td class="invocation-actions">
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?invocation_id={{ r.id }}">View</a>
+      {% if r.rerun_solution_paths %}
+      <a class="invocation-inline-action" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?{{ r.rerun_solution_query }}">Rejudge</a>
+      {% else %}
+      <span class="muted">Rejudge unavailable: {{ r.rerun_unavailable_reason or "no reusable solutions source" }}</span>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No invocation yet. Start one from <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Run solutions</a>.</p>
+{% endif %}
 {% endblock %}
