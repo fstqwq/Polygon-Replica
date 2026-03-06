@@ -11,6 +11,7 @@ from pathlib import Path
 
 _TESTSUITE_BASE = Path("./var")
 _TESTSUITE_ROOT = _TESTSUITE_BASE / f"testsuite-{uuid.uuid4().hex[:8]}"
+_DEFAULT_TESTSUITE_STALE_TTL_SEC = 3600.0
 
 
 def _rmtree_retry(path: Path, attempts: int = 3, delay_sec: float = 0.1) -> None:
@@ -23,10 +24,23 @@ def _rmtree_retry(path: Path, attempts: int = 3, delay_sec: float = 0.1) -> None
     shutil.rmtree(target, ignore_errors=True)
 
 
+def _testsuite_stale_ttl_sec() -> float:
+    raw = str(os.environ.get("POLYGONLIKE_TESTSUITE_STALE_TTL_SEC", "")).strip()
+    if not raw:
+        return _DEFAULT_TESTSUITE_STALE_TTL_SEC
+    try:
+        value = float(raw)
+    except Exception:
+        return _DEFAULT_TESTSUITE_STALE_TTL_SEC
+    return max(0.0, value)
+
+
 def _cleanup_stale_testsuite_roots(exclude: Path | None = None) -> None:
     base = _TESTSUITE_BASE
     if not base.exists():
         return
+    ttl_sec = _testsuite_stale_ttl_sec()
+    now = time.time()
     exclude_resolved = exclude.resolve() if exclude is not None else None
     for path in base.glob("testsuite-*"):
         if not path.is_dir():
@@ -37,6 +51,12 @@ def _cleanup_stale_testsuite_roots(exclude: Path | None = None) -> None:
                     continue
             except Exception:
                 pass
+        try:
+            age_sec = now - float(path.stat().st_mtime)
+        except Exception:
+            age_sec = 0.0
+        if age_sec < ttl_sec:
+            continue
         _rmtree_retry(path)
 
 
@@ -66,7 +86,35 @@ def ensure_local_env() -> None:
 ensure_local_env()
 
 from app.impl.config import config  # noqa: E402
-from app.impl.workspace import _wait_for_export_workers, _wait_for_preview_workers, _wait_for_run_execute_workers, _wait_for_verification_workers  # noqa: E402
+
+
+def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float = 300.0) -> None:
+    deadline = time.monotonic() + max(0.0, float(timeout_sec))
+    while True:
+        lock = getattr(config, lock_attr)
+        with lock:
+            workers = [w for w in getattr(config, workers_attr) if w.is_alive()]
+            current = getattr(config, workers_attr)
+            current.clear()
+            current.update(workers)
+        if not workers:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        config.worker_queue_service.wait_for_futures(workers, timeout_sec=min(0.2, remaining))
+
+
+def _wait_for_run_execute_workers(timeout_sec: float = 300.0) -> None:
+    _wait_for_worker_group("run_execute_lock", "run_execute_workers", timeout_sec=timeout_sec)
+
+
+def _wait_for_verification_workers(timeout_sec: float = 300.0) -> None:
+    _wait_for_worker_group("verification_lock", "verification_workers", timeout_sec=timeout_sec)
+
+
+def _wait_for_export_workers(timeout_sec: float = 300.0) -> None:
+    _wait_for_worker_group("export_lock", "export_workers", timeout_sec=timeout_sec)
 
 build_service = config.build_service
 db = config.db
@@ -87,10 +135,6 @@ class SmokeBase(unittest.TestCase):
         except Exception:
             pass
         try:
-            _wait_for_preview_workers(timeout_sec=10.0)
-        except Exception:
-            pass
-        try:
             _wait_for_export_workers(timeout_sec=10.0)
         except Exception:
             pass
@@ -102,11 +146,13 @@ class SmokeBase(unittest.TestCase):
         self.addCleanup(_cleanup_testsuite_root)
         db.init()
         self.test_id = uuid.uuid4().hex[:8]
-        self.problem = self.random_id("sample")
         self.user = self.random_id("alice")
+        self.problem = f"{self.user}/{self.random_id('sample')}"
+        self.default_user = "alice"
+        self.default_problem = "alice/sample"
 
         self._seed_workspace(self.problem, self.user, "Sample Problem")
-        self._seed_workspace("sample", "alice", "Sample Problem")
+        self._seed_workspace(self.default_problem, self.default_user, "Sample Problem")
 
     def _seed_workspace(self, problem: str, user: str, problem_name: str) -> Path:
         workspace_service.ensure_problem(problem, problem_name)
@@ -114,6 +160,7 @@ class SmokeBase(unittest.TestCase):
         workspace_service.grant_repo_access(problem, user, "owner")
         for rel in [
             "statement",
+            "statement-sections/english",
             "config",
             "validators",
             "checkers",
@@ -122,9 +169,43 @@ class SmokeBase(unittest.TestCase):
             "solutions",
             "tests/manual",
             "tests/generator",
+            "tests/answers",
             "third_party/testlib",
         ]:
             (ws / rel).mkdir(parents=True, exist_ok=True)
+        statement_template = ws / "statement/statements.ftl"
+        if not statement_template.exists():
+            statement_template.write_text(
+                "\\documentclass{article}\n"
+                "\\usepackage{olymp}\n"
+                "\\begin{document}\n"
+                "\\input{rendered/english/problem.tex}\n"
+                "\\end{document}\n",
+                encoding="utf-8",
+            )
+        statement_problem = ws / "statement/problem.tex"
+        if not statement_problem.exists():
+            statement_problem.write_text(
+                "\\begin{problem}{${problem.name}}{}{${problem.inputFile}}{${problem.outputFile}}{${problem.timeLimit}}\n"
+                "${problem.legend}\n"
+                "\\InputFile\n${problem.input}\n"
+                "\\OutputFile\n${problem.output}\n"
+                "\\end{problem}\n",
+                encoding="utf-8",
+            )
+        statement_style = ws / "statement/olymp.sty"
+        if not statement_style.exists():
+            statement_style.write_text("% minimal olymp style for tests\n", encoding="utf-8")
+        for rel, content in {
+            "statement-sections/english/name.tex": "Sample Problem\n",
+            "statement-sections/english/legend.tex": "Legend.\n",
+            "statement-sections/english/input.tex": "Input.\n",
+            "statement-sections/english/output.tex": "Output.\n",
+            "statement-sections/english/notes.tex": "",
+        }.items():
+            path = ws / rel
+            if not path.exists():
+                path.write_text(content, encoding="utf-8")
         testlib = ws / "third_party/testlib/testlib.h"
         if not testlib.exists():
             testlib.write_text("// testlib placeholder\n", encoding="utf-8")
@@ -134,11 +215,11 @@ class SmokeBase(unittest.TestCase):
         return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
     def _artifact_root(self, artifact_id: str) -> Path:
-        problem = str(getattr(self, "problem", "sample"))
+        problem = str(getattr(self, "problem", "alice/sample"))
         return Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / artifact_id
 
     def _workspace_path(self) -> Path:
-        problem = str(getattr(self, "problem", "sample"))
+        problem = str(getattr(self, "problem", "alice/sample"))
         user = str(getattr(self, "user", "alice"))
         ctx = workspace_service.workspace_context(problem, user, include_recent=False)
         return Path(str(ctx["workspace"]["path"]))

@@ -19,11 +19,11 @@ from app.services.util import copytree, ensure_dir, extract_git_archive, remove_
 
 PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
 USERNAME_RULE_MESSAGE: str = "invalid username"
-APP_PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+APP_PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$")
 APP_USER_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
-def _apply_runtime_values(values: RuntimeValues) -> None:
+def apply_runtime_values(values: RuntimeValues) -> None:
     global PROBLEM_ID_RULE_MESSAGE
     global USERNAME_RULE_MESSAGE
     global APP_PROBLEM_IDENT_RE
@@ -33,12 +33,7 @@ def _apply_runtime_values(values: RuntimeValues) -> None:
     APP_PROBLEM_IDENT_RE = values.PROBLEM_IDENT_RE
     APP_USER_IDENT_RE = values.USER_IDENT_RE
 
-
-def configure_runtime_values(values: RuntimeValues) -> None:
-    _apply_runtime_values(values)
-
-
-_apply_runtime_values(build_runtime_values())
+apply_runtime_values(build_runtime_values())
 
 
 class WorkspaceService:
@@ -74,10 +69,14 @@ class WorkspaceService:
                 oldest_key = next(iter(cache))
                 cache.pop(oldest_key, None)
 
+    def _cache_evict(self, cache: dict[str, dict], key: str) -> None:
+        with self._cache_lock:
+            cache.pop(key, None)
+
     def _validate_identifier(self, value: str, label: str) -> str:
         ident = str(value or "").strip()
         if label == "problem":
-            if len(ident) > 64 or not self.PROBLEM_IDENT_RE.fullmatch(ident):
+            if len(ident) > 129 or not self.PROBLEM_IDENT_RE.fullmatch(ident):
                 raise ValueError(PROBLEM_ID_RULE_MESSAGE)
             return ident
         if label == "user":
@@ -104,6 +103,7 @@ class WorkspaceService:
         repo_name = f"{slug}.git"
         bare = self.settings.bare_root / repo_name
         if not bare.exists():
+            ensure_dir(bare.parent)
             run_cmd(["git", "init", "--bare", str(bare)])
         row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
         if row is None:
@@ -136,7 +136,17 @@ class WorkspaceService:
         username = self._validate_identifier(username, "user")
         cached = self._cache_get(self._user_cache, username)
         if cached is not None:
-            return cached
+            try:
+                cached_id = int(cached.get("id") or 0)
+            except Exception:
+                cached_id = 0
+            if cached_id > 0:
+                row = self.db.fetch_one("SELECT * FROM users WHERE id=? AND username=?", [cached_id, username])
+                if row is not None:
+                    row_dict = dict(row)
+                    self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
+                    return row_dict
+            self._cache_evict(self._user_cache, username)
         row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
         if row is None:
             self.db.execute(
@@ -173,7 +183,17 @@ class WorkspaceService:
         slug = self._validate_identifier(slug, "problem")
         cached = self._cache_get(self._problem_cache, slug)
         if cached is not None:
-            return cached
+            try:
+                cached_id = int(cached.get("id") or 0)
+            except Exception:
+                cached_id = 0
+            if cached_id > 0:
+                row = self.db.fetch_one("SELECT * FROM problems WHERE id=? AND slug=?", [cached_id, slug])
+                if row is not None:
+                    row_dict = dict(row)
+                    self._cache_put(self._problem_cache, slug, row_dict, self.PROBLEM_CACHE_MAX_ENTRIES)
+                    return row_dict
+            self._cache_evict(self._problem_cache, slug)
         row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
         if row is None:
             raise ValueError(f"Unknown problem: {slug}")
@@ -183,20 +203,16 @@ class WorkspaceService:
 
     def _user_row(self, username: str):
         username = self._validate_identifier(username, "user")
-        cached = self._cache_get(self._user_cache, username)
-        if cached is not None:
-            return cached
-        row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
+        row = self.ensure_user(username)
         if row is None:
             raise ValueError(f"Unknown user: {username}")
-        row_dict = dict(row)
-        self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
-        return row_dict
+        return row
 
     @contextmanager
     def _workspace_provision_lock(self, workspace_parent: Path, problem: str):
         ensure_dir(workspace_parent)
-        lock_path = workspace_parent / f".{problem}.provision.lock"
+        lock_key = uuid.uuid5(uuid.NAMESPACE_URL, f"workspace:{problem}").hex
+        lock_path = workspace_parent / f".{lock_key}.provision.lock"
         with self._exclusive_lock_file(lock_path, "workspace provision"):
             yield
 
@@ -244,42 +260,51 @@ class WorkspaceService:
                     if workspace.is_symlink():
                         raise RuntimeError("workspace path is invalid")
                     shutil.rmtree(workspace, ignore_errors=False)
-            workspace_created = False
             if not workspace.exists():
                 ensure_dir(workspace.parent)
                 run_cmd(["git", "clone", str(bare), str(workspace)])
                 if not (workspace / ".git").exists():
                     raise RuntimeError("workspace clone failed")
+                self._ensure_main_checkout(workspace)
                 self._seed_problem_repo(workspace)
-                workspace_created = True
             self._ensure_main_checkout(workspace)
 
             ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
-            ws_row_created = False
             if ws_row is None:
                 try:
                     self.db.execute(
                         "INSERT INTO workspaces(problem_id,user_id,path,updated_at) VALUES(?,?,?,?)",
                         [p["id"], u["id"], str(workspace), now_iso()],
                     )
-                    ws_row_created = True
                 except sqlite3.IntegrityError:
-                    ws_row_created = False
+                    pass
             else:
                 self.db.execute(
                     "UPDATE workspaces SET path=?, updated_at=? WHERE problem_id=? AND user_id=? AND path IS NOT ?",
                     [str(workspace), now_iso(), p["id"], u["id"], str(workspace)],
                 )
 
-            if refresh_status or workspace_created or ws_row_created:
+            if refresh_status:
                 self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
         return workspace
 
     def _ensure_main_checkout(self, workspace: Path) -> None:
-        has_main = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "main"]).returncode == 0
-        if not has_main:
+        has_local_main = run_cmd(
+            ["git", "-C", str(workspace), "show-ref", "--verify", "--quiet", "refs/heads/main"]
+        ).returncode == 0
+        if has_local_main:
+            run_cmd(["git", "-C", str(workspace), "switch", "--quiet", "main"])
             return
-        run_cmd(["git", "-C", str(workspace), "switch", "--quiet", "main"])
+
+        has_origin_main = run_cmd(
+            ["git", "-C", str(workspace), "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"]
+        ).returncode == 0
+        if has_origin_main:
+            run_cmd(["git", "-C", str(workspace), "switch", "--quiet", "-c", "main", "--track", "origin/main"])
+            return
+
+        # Keep empty repositories on unborn main branch.
+        run_cmd(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
     def _seed_problem_repo(self, workspace: Path) -> None:
         required_dirs = [
@@ -297,9 +322,6 @@ class WorkspaceService:
         for d in required_dirs:
             (workspace / d).mkdir(parents=True, exist_ok=True)
         seed_statement_sources(workspace)
-        readme = workspace / "README.problem.md"
-        if not readme.exists():
-            readme.write_text("# Problem repository\n", encoding="utf-8")
         testlib = workspace / "third_party/testlib/testlib.h"
         if not testlib.exists():
             source = (Path(__file__).resolve().parents[2] / "third_party/upstream/testlib/testlib.h")
@@ -307,13 +329,10 @@ class WorkspaceService:
                 testlib.write_bytes(source.read_bytes())
             else:
                 testlib.write_text("// place fixed testlib.h copy here\n", encoding="utf-8")
-        if not run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0:
-            run_cmd(["git", "-C", str(workspace), "config", "user.email", "system@polygonlike.local"])
-            run_cmd(["git", "-C", str(workspace), "config", "user.name", "Polygonlike System"])
-            run_cmd(["git", "-C", str(workspace), "add", "."])
-            run_cmd(["git", "-C", str(workspace), "commit", "-m", "Initialize problem repository"])
-            run_cmd(["git", "-C", str(workspace), "branch", "-M", "main"])
-            run_cmd(["git", "-C", str(workspace), "push", "origin", "main"])
+        has_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
+        if not has_head:
+            # Keep newly-created repositories at v0 without an automatic initial commit.
+            run_cmd(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
         status = self.read_workspace_status(workspace)
@@ -443,6 +462,221 @@ class WorkspaceService:
             "workspace": dict(ws),
             "latest_build": latest_build,
             "latest_preview": latest_preview,
+        }
+
+    def _workspace_expected_path(self, username: str, problem: str) -> Path:
+        return (self.settings.workspace_root / str(username) / str(problem)).resolve()
+
+    @staticmethod
+    def _assert_safe_delete_target(path: Path, root: Path, *, label: str) -> Path:
+        target = path.resolve()
+        root_resolved = root.resolve()
+        if str(root_resolved) in {"", "/"}:
+            raise RuntimeError(f"{label} root is unsafe: {root_resolved}")
+        if target == root_resolved:
+            raise RuntimeError(f"{label} target resolves to root: {target}")
+        if root_resolved not in target.parents:
+            raise RuntimeError(f"{label} target escapes root: {target}")
+        return target
+
+    @staticmethod
+    def _is_active_status(raw: object) -> bool:
+        status = str(raw or "").strip().lower()
+        if not status:
+            return False
+        return status not in {"ok", "failed", "error", "done", "completed", "cancelled"}
+
+    def delete_workspace(self, problem: str, username: str) -> dict[str, object]:
+        safe_problem = self._validate_identifier(problem, "problem")
+        safe_user = self._validate_identifier(username, "user")
+        p = self._problem_row(safe_problem)
+        u = self._user_row(safe_user)
+        ws_row = self.db.fetch_one(
+            "SELECT id,path FROM workspaces WHERE problem_id=? AND user_id=?",
+            [int(p["id"]), int(u["id"])],
+        )
+        expected = self._workspace_expected_path(str(u["username"]), safe_problem)
+        workspace_id = int(ws_row["id"]) if ws_row is not None else 0
+        workspace_path = expected
+        if ws_row is not None:
+            row_path = Path(str(ws_row["path"] or "")).resolve()
+            if row_path != expected:
+                raise RuntimeError(f"workspace path mismatch for {safe_problem}/{safe_user}")
+            workspace_path = row_path
+        if workspace_id > 0:
+            active_build = self.db.fetch_one(
+                "SELECT id,status FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+                [workspace_id],
+            )
+            if active_build is not None and self._is_active_status(active_build["status"]):
+                raise ValueError("workspace has active build jobs")
+            active_preview = self.db.fetch_one(
+                "SELECT id,status FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+                [workspace_id],
+            )
+            if active_preview is not None and self._is_active_status(active_preview["status"]):
+                raise ValueError("workspace has active preview jobs")
+            active_run = self.db.fetch_one(
+                "SELECT id,status FROM runs WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+                [workspace_id],
+            )
+            if active_run is not None and self._is_active_status(active_run["status"]):
+                raise ValueError("workspace has active invocation jobs")
+
+        workspace_path = self._assert_safe_delete_target(
+            workspace_path,
+            self.settings.workspace_root,
+            label="workspace path",
+        )
+
+        removed = False
+        with self._workspace_provision_lock(workspace_path.parent, safe_problem):
+            if workspace_path.exists():
+                if workspace_path.is_symlink():
+                    raise RuntimeError("workspace path is invalid")
+                shutil.rmtree(workspace_path, ignore_errors=False)
+                removed = True
+            if workspace_id > 0:
+                self.db.execute(
+                    "UPDATE workspaces SET path=?, branch=NULL, head_commit=NULL, dirty=0, updated_at=? WHERE id=?",
+                    [str(workspace_path), now_iso(), workspace_id],
+                )
+        return {
+            "problem": safe_problem,
+            "username": safe_user,
+            "workspace_path": str(workspace_path),
+            "removed": bool(removed),
+            "workspace_row_reset": bool(workspace_id > 0),
+        }
+
+    def delete_problem(self, problem: str) -> dict[str, object]:
+        safe_problem = self._validate_identifier(problem, "problem")
+        p = self._problem_row(safe_problem)
+        problem_id = int(p["id"])
+        repo_name = str(p["repo_name"] or "").strip()
+        repo_name_path = Path(repo_name)
+        expected_repo_name = f"{safe_problem}.git"
+        if (
+            (not repo_name)
+            or repo_name in {".", ".."}
+            or repo_name_path.is_absolute()
+            or ("\\" in repo_name)
+            or (repo_name != expected_repo_name)
+        ):
+            raise RuntimeError("problem repository name is unsafe")
+
+        active_rows = self.db.fetch_all(
+            """
+            SELECT kind,id,status FROM (
+                SELECT 'build' AS kind,id,status,created_at FROM builds WHERE problem_id=?
+                UNION ALL
+                SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
+                UNION ALL
+                SELECT 'run' AS kind,id,status,created_at FROM runs WHERE problem_id=?
+            )
+            ORDER BY created_at DESC
+            LIMIT 64
+            """,
+            [problem_id, problem_id, problem_id],
+        )
+        for row in active_rows:
+            if self._is_active_status(row["status"]):
+                kind = str(row["kind"] or "").strip() or "job"
+                raise ValueError(f"cannot delete problem while {kind} jobs are active")
+
+        workspace_rows = self.db.fetch_all(
+            """
+            SELECT w.id,w.path,u.username
+            FROM workspaces w
+            JOIN users u ON u.id=w.user_id
+            WHERE w.problem_id=?
+            ORDER BY u.username ASC
+            """,
+            [problem_id],
+        )
+        workspace_paths: list[Path] = []
+        for row in workspace_rows:
+            username = str(row["username"] or "").strip()
+            expected = self._workspace_expected_path(username, safe_problem)
+            row_path = Path(str(row["path"] or "")).resolve()
+            if row_path != expected:
+                raise RuntimeError(f"workspace path mismatch for {safe_problem}/{username}")
+            self._assert_safe_delete_target(
+                row_path,
+                self.settings.workspace_root,
+                label=f"workspace path for {safe_problem}/{username}",
+            )
+            workspace_paths.append(row_path)
+
+        artifact_root = self._assert_safe_delete_target(
+            (self.settings.artifacts_root / safe_problem).resolve(),
+            self.settings.artifacts_root,
+            label=f"artifact root for {safe_problem}",
+        )
+        bare_repo_path = self._assert_safe_delete_target(
+            (self.settings.bare_root / repo_name).resolve(),
+            self.settings.bare_root,
+            label=f"bare repo path for {safe_problem}",
+        )
+
+        def _tx(conn: sqlite3.Connection) -> list[str]:
+            run_rows = conn.execute("SELECT id FROM runs WHERE problem_id=?", [problem_id]).fetchall()
+            collected_run_ids = [str(row["id"] or "").strip() for row in run_rows if row is not None]
+            conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM exports WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM runs WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM previews WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM builds WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM workspaces WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM audit_log WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM problems WHERE id=?", [problem_id])
+            return collected_run_ids
+
+        run_ids: list[str] = list(self.db.write_transaction(_tx))
+        try:
+            from app.impl.config import config as _cfg
+
+            _cfg.judgehost_task_service.forget_problem_tasks(safe_problem)
+            _cfg.judgehost_task_service.forget_domjudge_runs(run_ids)
+        except Exception:
+            pass
+
+        fs_warnings: list[str] = []
+        for ws_path in workspace_paths:
+            try:
+                with self._workspace_provision_lock(ws_path.parent, safe_problem):
+                    if ws_path.exists():
+                        if ws_path.is_symlink():
+                            fs_warnings.append(f"workspace path is symlink: {ws_path}")
+                            continue
+                        shutil.rmtree(ws_path, ignore_errors=False)
+            except Exception as exc:
+                fs_warnings.append(f"workspace cleanup failed ({ws_path}): {exc}")
+        try:
+            if bare_repo_path.exists():
+                if bare_repo_path.is_symlink():
+                    fs_warnings.append(f"bare repo path is symlink: {bare_repo_path}")
+                else:
+                    shutil.rmtree(bare_repo_path, ignore_errors=False)
+        except Exception as exc:
+            fs_warnings.append(f"bare repo cleanup failed ({bare_repo_path}): {exc}")
+        try:
+            if artifact_root.exists():
+                if artifact_root.is_symlink():
+                    fs_warnings.append(f"artifact root is symlink: {artifact_root}")
+                else:
+                    shutil.rmtree(artifact_root, ignore_errors=False)
+        except Exception as exc:
+            fs_warnings.append(f"artifact cleanup failed ({artifact_root}): {exc}")
+
+        with self._cache_lock:
+            self._problem_cache.pop(safe_problem, None)
+        return {
+            "problem": safe_problem,
+            "problem_id": problem_id,
+            "workspace_count": len(workspace_paths),
+            "fs_warnings": fs_warnings,
         }
 
     def _extract_commit_snapshot(self, workspace: Path, commit: str, snap: Path) -> None:

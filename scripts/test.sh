@@ -9,7 +9,15 @@ if [[ -f ".venv/bin/activate" ]]; then
   source .venv/bin/activate
 fi
 
-mapfile -t PY_FILES < <(rg --files app tests scripts | rg '\.py$')
+# Keep stale testsuite cleanup conservative under concurrent runs.
+: "${POLYGONLIKE_TESTSUITE_STALE_TTL_SEC:=3600}"
+export POLYGONLIKE_TESTSUITE_STALE_TTL_SEC
+
+if command -v rg >/dev/null 2>&1; then
+  mapfile -t PY_FILES < <(rg --files app tests scripts | rg '\.py$')
+else
+  mapfile -t PY_FILES < <(find app tests scripts -type f -name '*.py' -print)
+fi
 
 if [[ ${#PY_FILES[@]} -eq 0 ]]; then
   echo "No python files under app/ tests/ or scripts/."

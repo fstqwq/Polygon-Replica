@@ -53,6 +53,19 @@ router.add_api_route(
 )
 
 router.add_api_route(
+    "/sudo",
+    handlers.sudo_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+
+router.add_api_route(
+    "/sudo",
+    handlers.sudo_submit,
+    methods=["POST"],
+)
+
+router.add_api_route(
     "/logout",
     handlers.logout,
     methods=["POST"],
@@ -66,21 +79,50 @@ router.add_api_route(
 )
 
 router.add_api_route(
-    "/problems/{user}/problems",
+    "/problems",
     handlers.problems_root_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
+router.add_api_route(
+    "/problems/import/slug-hint",
+    handlers.problems_root_import_slug_hint,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/import",
+    handlers.problems_root_import,
+    methods=["POST"],
+)
 
 router.add_api_route(
-    "/problems/{user}/contests",
+    "/contests",
     handlers.contests_root_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 
 router.add_api_route(
-    "/problems/{user}/contests/create",
+    "/contests/create",
     handlers.contests_root_create,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/import",
+    handlers.contests_root_import,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/import/review",
+    handlers.contests_root_import_review,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+
+router.add_api_route(
+    "/contests/import/confirm",
+    handlers.contests_root_import_confirm,
     methods=["POST"],
 )

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-title-inline">
-  <h1 class="page-title">Invocations</h1>
-  <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Start customized run</a>
+  <h1 class="page-title">Verifications</h1>
+  <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Start customized verification</a>
 </div>
 {% include "_flash_message.html" %}
 {% if runs %}
@@ -21,7 +21,14 @@
     </td>
     <td>
       {{ r.source_display }}
+      {% if r.is_main_correct_run %}
+      <span class="run-kind-chip run-kind-chip-main-correct">Main correct solution run</span>
+      {% endif %}
+      {% if r.has_running %}
+      <div class="muted">{{ r.matched_completed_count }}/{{ r.completed_count }} completed matched{% if r.completed_count != r.run_count %} ({{ r.run_count }} total){% endif %}</div>
+      {% else %}
       <div class="muted">{{ r.matched_count }}/{{ r.run_count }} expected</div>
+      {% endif %}
     </td>
     <td>{{ r.tests_label }}</td>
     <td>
@@ -35,16 +42,20 @@
     </td>
     <td class="invocation-actions">
       <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?invocation_id={{ r.id }}">View</a>
+      {% if r.has_running %}
+      <form class="inline-form invocation-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/cancel">
+        <input type="hidden" name="invocation_id" value="{{ r.id }}" />
+        <a href="#" class="linkish danger" data-submit-form="1">Cancel</a>
+      </form>
+      {% endif %}
       {% if r.rerun_solution_paths %}
-      <a class="invocation-inline-action" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?{{ r.rerun_solution_query }}">Rejudge</a>
-      {% else %}
-      <span class="muted">Rejudge unavailable: {{ r.rerun_unavailable_reason or "no reusable solutions source" }}</span>
+      <a class="invocation-inline-action linkish" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_invocation_id={{ r.id }}&force_recompile=1">Rejudge</a>
       {% endif %}
     </td>
   </tr>
   {% endfor %}
 </table>
 {% else %}
-<p class="muted">No invocation yet. Start one from <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Run solutions</a>.</p>
+<p class="muted">No verification yet. Start one from <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Run solutions</a>.</p>
 {% endif %}
 {% endblock %}

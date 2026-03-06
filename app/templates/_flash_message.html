@@ -1,3 +1,18 @@
 {% if message %}
-<p class="flash flash-floating-center" data-autohide="1">{{ message }}</p>
+{% set flash_mode = flash_presenter if flash_presenter is defined else 'topbar' %}
+{% set flash_level = message_level if message_level is defined else 'info' %}
+{% set flash_event_id_value = message_event_id if message_event_id is defined else '' %}
+{% set flash_ts_value = message_ts if message_ts is defined else '' %}
+{% if flash_mode == 'inline' %}
+<p class="flash flash-inline">{{ message }}</p>
+{% else %}
+<div
+  class="top-event-payload"
+  data-top-event="1"
+  data-event-id="{{ flash_event_id_value }}"
+  data-level="{{ flash_level }}"
+  data-ts="{{ flash_ts_value }}"
+  data-dismissible="1"
+>{{ message }}</div>
+{% endif %}
 {% endif %}

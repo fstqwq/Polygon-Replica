@@ -1,0 +1,34 @@
+{% extends "contest_base.html" %}
+{% block content %}
+<h1 class="page-title">Contest Properties</h1>
+
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>General</h2>
+  <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/properties/save">
+    <div class="form-row">
+      <label for="contest-title">Title</label>
+      <input id="contest-title" name="title" value="{{ ctx.contest.title }}" />
+    </div>
+    <div class="form-row">
+      <label for="contest-location">Location</label>
+      <input id="contest-location" name="location" value="{{ location }}" />
+    </div>
+    <div class="form-row">
+      <label for="contest-date">Date</label>
+      <input id="contest-date" name="date_text" value="{{ date_text }}" placeholder="2026-02-28" />
+    </div>
+    <div class="form-row">
+      <label for="contest-source-mode">Statement Source Mode</label>
+      <select id="contest-source-mode" name="source_mode">
+        <option value="latest_committed" {% if source_mode == "latest_committed" %}selected{% endif %}>latest_committed</option>
+        <option value="built_packages" {% if source_mode == "built_packages" %}selected{% endif %}>built_packages</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <button type="submit">Save Contest Properties</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

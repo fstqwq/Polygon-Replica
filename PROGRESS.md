@@ -1,69 +1,26 @@
-# PROGRESS
+﻿# PROGRESS
 
-Last updated: 2026-02-27
+Last updated: 2026-03-06
 
-## Code-Verified Status
+This file is a compact, code-verified status snapshot.
 
-1. Top-level `Problems / Contests` navigation is implemented.
-Evidence: `app/routes/root_auth_routes.py:69`, `app/routes/root_auth_routes.py:76`, `app/templates/_topbar_common.html:17`, `app/templates/_topbar_common.html:18`.
+## Current Baseline
 
-2. Problem editing pages/routes exist for general/files/generators/checker/validator/interactor/tests/solutions.
-Evidence: `app/routes/problem_editor_routes.py:10`, `app/routes/problem_editor_routes.py:22`, `app/routes/problem_editor_routes.py:38`, `app/routes/problem_editor_routes.py:70`, `app/routes/problem_editor_routes.py:86`, `app/routes/problem_editor_routes.py:102`, `app/routes/problem_editor_routes.py:107`, `app/routes/build_preview_routes.py:11`.
+1. Owner-scoped model and routes are in production use (`<owner>/<slug>`).
+2. Authoring workflow is end-to-end (statement/files/generators/checker/validator/interactor/tests/solutions/verifications/packages).
+3. Async worker queue is used for run/verification/export/contest jobs.
+4. Invocation backend abstraction is live (`auto`, `local-sandbox`, `domjudge-judgehost`).
+5. Judgehost integration is operational with `/api/v4/*` API surface.
+6. Security baseline is active (sandbox fail-closed startup, sudo-protected destructive actions).
+7. Build cache key uses schema `v3` with generation/toolchain digests; same-key build join behavior is active.
+8. Statement/verification stale checks use quick-fp signatures (`size + mtime_ns`) instead of file-content streaming hash.
 
-3. Invocation list/new/details/execute pages are wired.
-Evidence: `app/routes/run_export_routes.py:11`, `app/routes/run_export_routes.py:17`, `app/routes/run_export_routes.py:23`, `app/routes/run_export_routes.py:29`.
+## Known Major Risks
 
-4. Invocation execute supports multi-solution + selected tests.
-Evidence: `app/templates/run_execute.html:18`, `app/templates/run_execute.html:43`, `app/impl/run_export.py:123`, `app/impl/run_export.py:160`, `app/impl/run_export.py:231`.
+1. Sandbox hardening depth (mount/seccomp/cgroup) is incomplete.
+2. Cross-job cancellation/restart semantics are not fully unified.
+3. Judgehost performance on very large test sets still needs tuning.
 
-5. Package export entry exists and is ICPC-only by code.
-Evidence: `app/routes/run_export_routes.py:34`, `app/routes/run_export_routes.py:40`, `app/impl/run_export.py:306`, `app/impl/run_export.py:307`.
+## Active Backlog
 
-6. Tests are managed by `tests/spec.json` + payload directories (`tests/manual`, `tests/generator`).
-Evidence: `app/services/tests_spec.py:35`, `app/services/tests_spec.py:36`, `app/services/tests_spec.py:37`, `app/services/tests_spec.py:78`, `app/services/tests_spec.py:83`.
-
-7. Tests editing is decoupled from explicit build trigger (`build_run` is intentionally disabled).
-Evidence: `app/impl/build_preview.py:435`, `app/impl/build_preview.py:438`.
-
-8. Async queue usage is confirmed for `run batch`, `verification`, `export`.
-Evidence: `app/impl/workspace.py`, `app/services/worker_queue_service.py`.
-
-9. `preview.run` route is currently synchronous (does not enqueue).
-Evidence: `app/impl/build_preview.py:572`, `app/impl/build_preview.py:591`.
-
-10. Preview async worker helper exists but is not used by `preview_run` route.
-Evidence: `app/impl/workspace.py:2896`, `app/impl/workspace.py:2922`.
-
-11. Sandbox backend is fixed to `native-sandbox`; startup is fail-closed when root switch probe fails.
-Evidence: `app/services/sandbox/factory.py`, `app/services/sandbox/native_backend.py`, `app/impl/config.py`.
-
-12. Linux host installer script exists and performs dependency install + userns + bwrap probe.
-Evidence: `scripts/install_host.sh`.
-
-13. Runtime constants now flow through runtime config mapping (no large hand-written alias block in handlers).
-Evidence: `app/runtime_values.py`, `app/impl/config.py`.
-
-14. UI test modules use explicit imports from `tests.ui_support` (no star-import).
-Evidence: `tests/test_ui_auth.py`, `tests/test_ui_components.py`, `tests/test_ui_preview_export.py`, `tests/test_ui_run.py`, `tests/test_ui_workspace.py`.
-
-## Code-Verified Gaps (Still Open)
-
-1. Preview path remains synchronous and still blocks request until compile finishes.
-Evidence: `app/impl/build_preview.py`.
-
-2. Worker queue durability/backpressure are not yet implemented in current service (in-memory queue/history).
-Evidence: `app/services/worker_queue_service.py`.
-
-3. Sandbox hardening depth remains limited (mount/seccomp/cgroup still pending hardening iterations).
-Evidence baseline: `app/services/sandbox/native_backend.py` current policy scope.
-
-## Validation Command
-
-1. Canonical local regression command:
-`source .venv/bin/activate && ./scripts/test.sh`
-
-## Notes
-
-1. This file is now restricted to claims that can be traced to current repository code.
-2. Subjective progress statements are intentionally removed.
-3. Latest full local regression (`./scripts/test.sh`) passed on this revision.
+Active implementation backlog is maintained in `BACKEND_TODO.md`.

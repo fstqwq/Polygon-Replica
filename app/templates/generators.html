@@ -8,13 +8,12 @@
   <section>
     <h2>Generators List</h2>
     <table>
-      <tr><th>Path</th><th>Used in Build</th><th>Status</th><th>Open</th></tr>
+      <tr><th>Path</th><th>Used in Build</th><th>Status</th></tr>
       {% for row in source_rows %}
       <tr>
-        <td><code>{{ row.path }}</code></td>
+        <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators?path={{ row.path }}"><code>{{ row.path }}</code></a></td>
         <td>{{ "used" if row.configured else "unused" }}</td>
         <td>{{ "ready" if row.exists else "missing" }}</td>
-        <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators?path={{ row.path }}">edit</a></td>
       </tr>
       {% endfor %}
     </table>

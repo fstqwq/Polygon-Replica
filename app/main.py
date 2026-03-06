@@ -11,6 +11,8 @@ from app.impl.auth import (
     startup as app_startup,
 )
 from app.routes.build_preview_routes import router as build_preview_router
+from app.routes.judgehost_routes import router as judgehost_router
+from app.routes.contest_routes import router as contest_router
 from app.routes.problem_editor_routes import router as problem_editor_router
 from app.routes.root_auth_routes import router as root_auth_router
 from app.routes.run_export_routes import router as run_export_router
@@ -41,7 +43,9 @@ async def auth_middleware(request: Request, call_next):
 
 
 app.include_router(root_auth_router)
+app.include_router(contest_router)
 app.include_router(problem_editor_router)
 app.include_router(build_preview_router)
 app.include_router(run_export_router)
+app.include_router(judgehost_router)
 __all__ = ["app"]

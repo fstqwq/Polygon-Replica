@@ -13,7 +13,7 @@
       <button type="submit">Add Solution</button>
     </form>
     {% if entries_truncated %}
-    <p class="muted">Showing first {{ entries_limit }} solutions.</p>
+    <p class="muted">Showing first {{ entries_limit }} {% if entries_limit == 1 %}solution{% else %}solutions{% endif %}.</p>
     {% endif %}
     <table class="solutions-table">
       <colgroup>
@@ -37,7 +37,7 @@
           {% set row_tag_class = "tag-select-accepted" %}
           {% elif row.expected_behavior_effective == "wrong_answer" %}
           {% set row_tag_class = "tag-select-wrong-answer" %}
-          {% elif row.expected_behavior_effective == "time_limit_exceeded" %}
+          {% elif row.expected_behavior_effective == "time_limit_exceeded" or row.expected_behavior_effective == "tle_or_correct" %}
           {% set row_tag_class = "tag-select-time-limit-exceeded" %}
           {% elif row.expected_behavior_effective == "run_time_error" %}
           {% set row_tag_class = "tag-select-run-time-error" %}
@@ -62,7 +62,7 @@
             <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
             <a href="#" class="linkish solutions-submit-link" data-submit-form="1">Rename</a>
           </form>
-          <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}?">
+          <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}? This cannot be undone; uncommitted changes will be lost.">
             <input type="hidden" name="source_path" value="{{ row.source_path }}" />
             <a href="#" class="linkish solutions-submit-link" data-submit-form="1">Delete</a>
           </form>

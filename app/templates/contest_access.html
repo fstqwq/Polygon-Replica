@@ -1,0 +1,60 @@
+{% extends "contest_base.html" %}
+{% block content %}
+<h1 class="page-title">Contest Access</h1>
+
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>Members</h2>
+  {% if entries %}
+  <table>
+    <tr>
+      <th>User</th>
+      <th>Role</th>
+      <th>Added</th>
+      {% if ctx.access.can_manage %}<th>Actions</th>{% endif %}
+    </tr>
+    {% for row in entries %}
+    <tr>
+      <td>{{ row.username }}</td>
+      <td>{{ row.role }}</td>
+      <td>{{ row.created_at | local_time }}</td>
+      {% if ctx.access.can_manage %}
+      <td>
+        {% if row.username != ctx.user.username or owner_count > 1 %}
+        <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/access/revoke" class="inline-form">
+          <input type="hidden" name="target_user" value="{{ row.username }}" />
+          <button type="submit" onclick="return confirm('Revoke access for {{ row.username }}? uncommitted changes will be lost.');">Revoke</button>
+        </form>
+        {% else %}
+        <span class="muted">last owner</span>
+        {% endif %}
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No members found.</p>
+  {% endif %}
+</section>
+
+{% if ctx.access.can_manage %}
+<section>
+  <h2>Grant / Update</h2>
+  <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/access/grant">
+    <label for="contest-target-user">User</label>
+    <input id="contest-target-user" name="target_user" />
+    <label for="contest-target-role">Role</label>
+    <select id="contest-target-role" name="role">
+      <option value="read">read</option>
+      <option value="write">write</option>
+      <option value="owner">owner</option>
+    </select>
+    <button type="submit">Grant / Update</button>
+  </form>
+</section>
+{% else %}
+<p class="muted">Owner role is required for access management.</p>
+{% endif %}
+{% endblock %}

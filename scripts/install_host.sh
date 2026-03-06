@@ -38,7 +38,10 @@ echo "[1/5] Installing system dependencies..."
   texlive-latex-base \
   texlive-latex-recommended \
   texlive-latex-extra \
+  texlive-science \
+  texlive-lang-cyrillic \
   texlive-fonts-recommended \
+  cm-super \
   util-linux \
   bubblewrap \
   libseccomp2
@@ -127,6 +130,58 @@ pdflatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmp
   fi
 fi
 echo "  pdflatex probe passed."
+
+echo "  Probing TeX T2A encoding support (t2aenc.def)..."
+if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  if ! sudo -u "$RUNTIME_USER" /bin/sh -lc '
+tmpd="$(mktemp -d)"
+cat >"$tmpd/main.tex" <<EOF
+\documentclass{article}
+\usepackage[T2A]{fontenc}
+\begin{document}
+ok
+\end{document}
+EOF
+pdflatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1
+'; then
+    echo "TeX T2A probe failed for user: $RUNTIME_USER." >&2
+    echo "Install: texlive-lang-cyrillic" >&2
+    exit 1
+  fi
+else
+  if ! /bin/sh -lc '
+tmpd="$(mktemp -d)"
+cat >"$tmpd/main.tex" <<EOF
+\documentclass{article}
+\usepackage[T2A]{fontenc}
+\begin{document}
+ok
+\end{document}
+EOF
+pdflatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1
+'; then
+    echo "TeX T2A probe failed." >&2
+    echo "Install: texlive-lang-cyrillic" >&2
+    exit 1
+  fi
+fi
+echo "  TeX T2A probe passed."
+
+echo "  Probing TeX T2A vector font support (cm-super)..."
+if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  if ! sudo -u "$RUNTIME_USER" /bin/sh -lc 'kpsewhich sfrm1095.pfb >/dev/null 2>&1'; then
+    echo "TeX vector font probe failed for user: $RUNTIME_USER." >&2
+    echo "Install: cm-super (and run updmap-sys)" >&2
+    exit 1
+  fi
+else
+  if ! /bin/sh -lc 'kpsewhich sfrm1095.pfb >/dev/null 2>&1'; then
+    echo "TeX vector font probe failed." >&2
+    echo "Install: cm-super (and run updmap-sys)" >&2
+    exit 1
+  fi
+fi
+echo "  TeX vector font probe passed."
 
 echo "[4/5] Creating Python virtualenv and installing requirements..."
 python3 -m venv .venv

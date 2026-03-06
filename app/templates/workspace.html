@@ -2,6 +2,29 @@
 {% block content %}
 <h1 class="page-title">Working Copy</h1>
 {% include "_flash_message.html" %}
+{% set nav = ctx.nav_status if ctx.nav_status is defined else {} %}
+{% set readiness_items = [
+  {'label': 'Statement', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/statement', 'meta': nav.get('preview', {}).get('text', '-'), 'danger': nav.get('preview', {}).get('danger', False), 'warn': nav.get('preview', {}).get('warn', False)},
+  {'label': 'Judge Pipeline', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/run/new', 'meta': nav.get('pipeline', {}).get('text', '-'), 'danger': nav.get('pipeline', {}).get('danger', False), 'warn': nav.get('pipeline', {}).get('warn', False)},
+  {'label': 'Checker', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/checker', 'meta': nav.get('checker', {}).get('text', '-'), 'danger': nav.get('checker', {}).get('danger', False), 'warn': nav.get('checker', {}).get('warn', False)},
+  {'label': 'Validator', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/validator', 'meta': nav.get('validator', {}).get('text', '-'), 'danger': nav.get('validator', {}).get('danger', False), 'warn': nav.get('validator', {}).get('warn', False)},
+  {'label': 'Tests', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/tests', 'meta': nav.get('tests', {}).get('text', '-'), 'danger': nav.get('tests', {}).get('danger', False), 'warn': nav.get('tests', {}).get('warn', False)},
+  {'label': 'Solutions', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/solutions', 'meta': nav.get('solutions', {}).get('text', '-'), 'danger': nav.get('solutions', {}).get('danger', False), 'warn': nav.get('solutions', {}).get('warn', False)},
+  {'label': 'Packages', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/export', 'meta': nav.get('export', {}).get('text', '-'), 'danger': nav.get('export', {}).get('danger', False), 'warn': nav.get('export', {}).get('warn', False)}
+] %}
+
+<section class="readiness-overview">
+  <h2>Problem Readiness</h2>
+  <p class="muted">Statement preview status is tracked separately from judge pipeline runnable status.</p>
+  <div class="readiness-grid">
+    {% for item in readiness_items %}
+    <a class="readiness-card" href="{{ item.href }}">
+      <span class="readiness-label">{{ item.label }}</span>
+      <span class="readiness-state {{ 'submenu-status-warn' if (item.danger or item.warn) else '' }}">{{ item.meta }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
 
 <div class="grid">
   <section>
@@ -53,6 +76,44 @@
       {% endfor %}
     </ul>
     {% endif %}
+    {% endif %}
+
+    {% if ctx.access.can_write or ctx.access.can_manage %}
+    {% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/workspace?sudo_popup_done=1' %}
+    <details class="danger-zone">
+      <summary>Danger Zone</summary>
+      <div class="danger-zone-body">
+        <p class="muted">Destructive operations require short-lived sudo proof. If sudo is missing, clicking delete opens a password popup first.</p>
+        {% if ctx.access.can_write %}
+        <form
+          class="danger-zone-delete"
+          method="post"
+          action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace/delete"
+          data-confirm-message="Delete current working copy for {{ ctx.problem.slug }}? Local uncommitted changes will be lost."
+          data-sudo-gated="1"
+          data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
+          data-sudo-url="/sudo?next={{ sudo_popup_next | urlencode }}"
+        >
+          <button type="submit">Delete Working Copy</button>
+        </form>
+        {% endif %}
+        {% if ctx.access.can_manage %}
+        <form
+          class="form-stack danger-zone-delete"
+          method="post"
+          action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/problem/delete"
+          data-confirm-message="Delete problem {{ ctx.problem.slug }} permanently? Repository, workspaces and artifacts will be removed; uncommitted changes will be lost."
+          data-sudo-gated="1"
+          data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
+          data-sudo-url="/sudo?next={{ sudo_popup_next | urlencode }}"
+        >
+          <label for="confirm_problem">Type problem slug to confirm delete</label>
+          <input id="confirm_problem" name="confirm_problem" placeholder="{{ ctx.problem.slug }}" />
+          <button type="submit">Delete Problem</button>
+        </form>
+        {% endif %}
+      </div>
+    </details>
     {% endif %}
   </section>
 

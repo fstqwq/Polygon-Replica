@@ -1,5 +1,6 @@
 (function () {
   "use strict";
+  var cachedFlashMessageText = "";
 
   function onReady(fn) {
     if (document.readyState === "loading") {
@@ -61,6 +62,218 @@
     return false;
   }
 
+  function generateStrongToken32() {
+    if (!window.crypto || typeof window.crypto.getRandomValues !== "function" || typeof window.btoa !== "function") {
+      throw new Error("secure random unavailable");
+    }
+    var bytes = new Uint8Array(24);
+    window.crypto.getRandomValues(bytes);
+    var binary = "";
+    for (var i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    var token = window
+      .btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+    if (token.length !== 32) {
+      throw new Error("invalid token length");
+    }
+    return token;
+  }
+
+  function initSettingsTokenGenerators() {
+    var buttons = document.querySelectorAll("button[data-token-generate='1']");
+    if (!buttons.length) return;
+    buttons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        var targetId = String(button.getAttribute("data-token-target") || "").trim();
+        if (!targetId) return;
+        var target = document.getElementById(targetId);
+        if (!target) return;
+        try {
+          target.value = generateStrongToken32();
+        } catch (_err) {
+          window.alert("WebCrypto secure random is required for token generation.");
+          return;
+        }
+        target.dispatchEvent(
+          new Event("input", {
+            bubbles: true,
+          })
+        );
+        target.dispatchEvent(
+          new Event("change", {
+            bubbles: true,
+          })
+        );
+        if (typeof target.focus === "function") target.focus();
+        if (typeof target.select === "function") target.select();
+      });
+    });
+  }
+
+  function initSettingsJudgehostRunnerControls() {
+    var judgehostToggle = document.querySelector("[data-judgehost-enable-toggle='1']");
+    var judgehostAuthBlock = document.querySelector("[data-judgehost-auth-block='1']");
+
+    function syncJudgehostAuthVisibility() {
+      if (!judgehostToggle || !judgehostAuthBlock) return;
+      var enabled = !!judgehostToggle.checked;
+      judgehostAuthBlock.hidden = !enabled;
+      judgehostAuthBlock.setAttribute("aria-hidden", enabled ? "false" : "true");
+    }
+
+    if (judgehostToggle && judgehostAuthBlock) {
+      syncJudgehostAuthVisibility();
+      judgehostToggle.addEventListener("change", syncJudgehostAuthVisibility);
+    }
+
+    var cpuidInput = document.querySelector("[data-gen-script-cpuids='1']");
+    var baseurlInput = document.querySelector("[data-gen-script-baseurl='1']");
+    var sudoInput = document.querySelector("[data-gen-script-sudo='1']");
+    var output = document.querySelector("[data-gen-script-output='1']");
+    if (!cpuidInput || !baseurlInput || !output) return;
+
+    var usernameInput = document.querySelector("[data-judgehost-api-username='1']");
+    var tokenInput = document.querySelector("[data-judgehost-api-token='1']");
+    var popupOpener = document.querySelector("[data-popup-open='judgehost-gen-script-popup']");
+
+    function safeText(raw, fallback) {
+      var text = String(raw || "").trim();
+      if (!text || text === "-" || text === "***") return String(fallback || "").trim();
+      return text;
+    }
+
+    function normalizeBaseurl(raw) {
+      var text = safeText(raw, "http://host.docker.internal:8001/");
+      if (!text) {
+        return "http://host.docker.internal:8001/";
+      }
+      if (!/\/$/.test(text)) {
+        text += "/";
+      }
+      return text;
+    }
+
+    function parseCpuIds(raw) {
+      var text = String(raw || "").trim();
+      var fallback = [2, 4, 6, 8];
+      if (!text) return fallback;
+      var tokens = text.split(/[\s,;|]+/);
+      var ids = [];
+      var seen = {};
+      tokens.forEach(function (token) {
+        var part = String(token || "").trim();
+        if (!part) return;
+        var num = Number(part);
+        if (!Number.isFinite(num)) return;
+        var safe = Math.floor(num);
+        if (safe < 1 || safe > 1024) return;
+        var key = String(safe);
+        if (seen[key]) return;
+        seen[key] = true;
+        ids.push(safe);
+      });
+      return ids.length ? ids : fallback;
+    }
+
+    function renderJudgehostGenScript() {
+      var cpuIds = parseCpuIds(cpuidInput.value);
+      var baseurl = normalizeBaseurl(baseurlInput.value);
+      var username = safeText(usernameInput ? usernameInput.value : "", "judgehost");
+      var password = safeText(tokenInput ? tokenInput.value : "", "REPLACE_WITH_JUDGEHOST_API_TOKEN");
+      var commandPrefix = sudoInput && sudoInput.checked ? "sudo " : "";
+      var lines = [];
+      cpuIds.forEach(function (daemonId) {
+        lines.push(
+          commandPrefix +
+            "docker run -it --privileged --cgroupns=host --storage-opt size=10G -v /sys/fs/cgroup:/sys/fs/cgroup:rw --add-host=host.docker.internal:host-gateway --name judgehost-" +
+            String(daemonId) +
+            " --hostname judgedaemon-" +
+            String(daemonId) +
+            " -e DAEMON_ID=" +
+            String(daemonId) +
+            " -e CONTAINER_TIMEZONE=Asia/Shanghai -e DOMSERVER_BASEURL=" +
+            baseurl +
+            " -e JUDGEDAEMON_USERNAME=" +
+            username +
+            " -e JUDGEDAEMON_PASSWORD=" +
+            password +
+            " domjudge/judgehost:latest"
+        );
+      });
+      output.value = lines.join("\n");
+    }
+
+    cpuidInput.addEventListener("input", renderJudgehostGenScript);
+    cpuidInput.addEventListener("change", renderJudgehostGenScript);
+    baseurlInput.addEventListener("input", renderJudgehostGenScript);
+    baseurlInput.addEventListener("change", renderJudgehostGenScript);
+    if (sudoInput) {
+      sudoInput.addEventListener("change", renderJudgehostGenScript);
+    }
+    if (usernameInput) {
+      usernameInput.addEventListener("input", renderJudgehostGenScript);
+      usernameInput.addEventListener("change", renderJudgehostGenScript);
+    }
+    if (tokenInput) {
+      tokenInput.addEventListener("input", renderJudgehostGenScript);
+      tokenInput.addEventListener("change", renderJudgehostGenScript);
+    }
+    if (popupOpener) {
+      popupOpener.addEventListener("click", function () {
+        window.setTimeout(renderJudgehostGenScript, 0);
+      });
+    }
+    renderJudgehostGenScript();
+  }
+
+  function initSettingsJudgehostTableFilter() {
+    var filterInput = document.querySelector("[data-judgehost-filter-input='1']");
+    var table = document.querySelector("[data-judgehost-table='1']");
+    if (!filterInput || !table) return;
+
+    function applyFilter() {
+      var needle = String(filterInput.value || "").trim().toLowerCase();
+      var rows = table.querySelectorAll("[data-judgehost-row='1']");
+      rows.forEach(function (row) {
+        var hostname = String(row.getAttribute("data-judgehost-hostname") || "").toLowerCase();
+        var status = String(row.getAttribute("data-judgehost-status") || "").toLowerCase();
+        var enabled = String(row.getAttribute("data-judgehost-enabled") || "").toLowerCase();
+        var text = [hostname, status, enabled].join(" ");
+        row.hidden = !!needle && text.indexOf(needle) < 0;
+      });
+    }
+
+    filterInput.addEventListener("input", applyFilter);
+    filterInput.addEventListener("change", applyFilter);
+    applyFilter();
+  }
+
+  function initSettingsJudgehostToggles() {
+    var forms = document.querySelectorAll("form[data-judgehost-toggle-form='1']");
+    if (!forms.length) return;
+    forms.forEach(function (form) {
+      var toggle = form.querySelector("input[data-judgehost-toggle='1']");
+      var action = form.querySelector("input[name='action']");
+      if (!toggle || !action) return;
+
+      toggle.addEventListener("change", function () {
+        var enabling = !!toggle.checked;
+        action.value = enabling ? "enable" : "disable";
+        // Skip confirmation on enable; keep confirmation on disable.
+        form.dataset.confirmApproved = enabling ? "1" : "0";
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+        } else {
+          form.submit();
+        }
+      });
+    });
+  }
+
   function setSubmitting(button, baseLabel, loadingLabel, loading) {
     if (!button) return;
     button.disabled = !!loading;
@@ -71,27 +284,20 @@
     var pageLinks = document.querySelectorAll("a[data-page]");
     if (!pageLinks.length) return;
 
-    var parts = window.location.pathname.split("/");
-    var page = parts.length >= 5 ? parts[4] : "general";
+    var parts = window.location.pathname
+      .split("/")
+      .map(function (item) {
+        return String(item || "").trim();
+      })
+      .filter(function (item) {
+        return item.length > 0;
+      });
+    var page = "statement";
+    var rawPageToken = "";
     var qp = new URLSearchParams(window.location.search);
 
-    if (page === "artifacts") page = "tests";
-    if (page === "runs") page = "run";
-    if (page === "git" || page === "history") page = "workspace";
-    if (page === "build") page = "tests";
-    if (page === "preview") page = "general";
-
-    if (page === "files") {
-      var selectedPath = qp.get("path") || "";
-      if (selectedPath.indexOf("checkers/") === 0) page = "checker";
-      else if (selectedPath.indexOf("interactors/") === 0) page = "interactor";
-      else if (selectedPath.indexOf("validators/") === 0) page = "validator";
-      else if (selectedPath.indexOf("solutions/") === 0) page = "solutions";
-      else if (selectedPath === "generators" || selectedPath.indexOf("generators/") === 0) page = "generators";
-    }
-
     var allowed = {
-      general: 1,
+      statement: 1,
       files: 1,
       generators: 1,
       checker: 1,
@@ -105,13 +311,63 @@
       export: 1,
       settings: 1,
     };
-    if (!allowed[page]) page = "general";
 
-    document.querySelectorAll("a[data-main]").forEach(function (el) {
-      if (el.getAttribute("data-main") === "problems") {
-        el.classList.add("active");
+    if (window.location.pathname.indexOf("/problems/") === 0) {
+      for (var idx = parts.length - 1; idx >= 0; idx -= 1) {
+        var token = parts[idx];
+        var prev = idx > 0 ? parts[idx - 1] : "";
+        if ((token === "details" || token === "test-fragment") && prev === "run") {
+          rawPageToken = "run";
+          break;
+        }
+        if (token === "preview") {
+          rawPageToken = "preview";
+          break;
+        }
+        if (token === "git" || token === "history") {
+          rawPageToken = "workspace";
+          break;
+        }
+        if (token === "artifacts") {
+          rawPageToken = "tests";
+          break;
+        }
+        if (token === "runs") {
+          rawPageToken = "run";
+          break;
+        }
+        if (allowed[token]) {
+          rawPageToken = token;
+          break;
+        }
       }
-    });
+    }
+    if (!rawPageToken) rawPageToken = "statement";
+    page = rawPageToken;
+
+    if (page === "artifacts") page = "tests";
+    if (page === "runs") page = "run";
+    if (page === "git" || page === "history") page = "workspace";
+    if (page === "preview") page = "statement";
+
+    if (page === "files") {
+      var selectedPath = qp.get("path") || "";
+      if (selectedPath.indexOf("checkers/") === 0) page = "checker";
+      else if (selectedPath.indexOf("interactors/") === 0) page = "interactor";
+      else if (selectedPath.indexOf("validators/") === 0) page = "validator";
+      else if (selectedPath.indexOf("solutions/") === 0) page = "solutions";
+      else if (selectedPath === "generators" || selectedPath.indexOf("generators/") === 0) page = "generators";
+    }
+
+    if (!allowed[page]) page = "statement";
+
+    if (window.location.pathname.indexOf("/problems/") === 0) {
+      document.querySelectorAll("a[data-main]").forEach(function (el) {
+        if (el.getAttribute("data-main") === "problems") {
+          el.classList.add("active");
+        }
+      });
+    }
     pageLinks.forEach(function (el) {
       if (el.getAttribute("data-page") === page) {
         el.classList.add("active");
@@ -123,22 +379,150 @@
         item.classList.add("active");
       }
     });
+    var targetPage = allowed[page] ? page : "statement";
+    if (rawPageToken === "preview") {
+      targetPage = "preview";
+    }
     document.querySelectorAll("input.page-target").forEach(function (el) {
-      el.value = allowed[page] ? page : "general";
+      el.value = targetPage;
     });
   }
 
-  function initFlashAutohide() {
-    var toasts = document.querySelectorAll(".flash-floating-center[data-autohide='1']");
-    if (!toasts.length) return;
-    window.setTimeout(function () {
-      toasts.forEach(function (el) {
-        el.classList.add("flash-hide");
-        window.setTimeout(function () {
-          el.style.display = "none";
-        }, 280);
+  function removeNode(node) {
+    if (!node || !node.parentNode) return;
+    node.parentNode.removeChild(node);
+  }
+
+  function readFlashMessageText() {
+    if (cachedFlashMessageText) {
+      return cachedFlashMessageText;
+    }
+    var payload = document.querySelector("[data-top-event='1']");
+    var text = String(payload ? payload.textContent || "" : "").trim();
+    if (text) {
+      cachedFlashMessageText = text;
+      return text;
+    }
+    var inline = document.querySelector(".flash-inline");
+    text = String(inline ? inline.textContent || "" : "").trim();
+    if (text) {
+      cachedFlashMessageText = text;
+    }
+    return text;
+  }
+
+  function normalizeTopEventLevel(raw) {
+    var level = String(raw || "").trim().toLowerCase();
+    if (level === "success" || level === "warning" || level === "error") {
+      return level;
+    }
+    return "info";
+  }
+
+  function normalizeTopEventText(raw) {
+    var text = String(raw || "").trim();
+    if (!text) return "";
+    text = text.replace(/\bok\b/gi, "OK");
+    if (/^[a-z]/.test(text)) {
+      text = text.charAt(0).toUpperCase() + text.slice(1);
+    }
+    return text;
+  }
+
+  function loadTopEventSeenMap() {
+    try {
+      var raw = window.sessionStorage ? window.sessionStorage.getItem("polygonlike.top_event_seen.v1") : "";
+      if (!raw) return {};
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      return parsed;
+    } catch (_err) {
+      return {};
+    }
+  }
+
+  function saveTopEventSeenMap(map) {
+    try {
+      if (!window.sessionStorage) return;
+      var pairs = Object.keys(map || {}).map(function (eventId) {
+        return {
+          id: eventId,
+          ts: Number((map && map[eventId]) || 0),
+        };
       });
-    }, 5200);
+      pairs.sort(function (a, b) {
+        return b.ts - a.ts;
+      });
+      var trimmed = {};
+      pairs.slice(0, 128).forEach(function (item) {
+        if (!item.id) return;
+        trimmed[item.id] = Number.isFinite(item.ts) ? item.ts : Date.now();
+      });
+      window.sessionStorage.setItem("polygonlike.top_event_seen.v1", JSON.stringify(trimmed));
+    } catch (_err) {
+      // ignore storage write failures
+    }
+  }
+
+  function initTopEventNotice() {
+    var payloads = Array.prototype.slice.call(document.querySelectorAll("[data-top-event='1']"));
+    if (!payloads.length) return;
+    var host = document.getElementById("top-event-slot");
+    if (!host) {
+      payloads.forEach(removeNode);
+      return;
+    }
+
+    var payload = payloads[0];
+    var text = normalizeTopEventText(payload.textContent);
+    if (!text) {
+      payloads.forEach(removeNode);
+      return;
+    }
+    cachedFlashMessageText = text;
+    var eventId = String(payload.getAttribute("data-event-id") || "").trim();
+    if (!eventId) {
+      eventId = text.toLowerCase();
+    }
+    var seenMap = loadTopEventSeenMap();
+    if (eventId && Object.prototype.hasOwnProperty.call(seenMap, eventId)) {
+      payloads.forEach(removeNode);
+      return;
+    }
+    if (eventId) {
+      seenMap[eventId] = Date.now();
+      saveTopEventSeenMap(seenMap);
+    }
+
+    var level = normalizeTopEventLevel(payload.getAttribute("data-level"));
+    var dismissible = String(payload.getAttribute("data-dismissible") || "1").trim() !== "0";
+    host.textContent = "";
+    var notice = document.createElement("div");
+    notice.className = "top-event-notice top-event-" + level;
+    notice.setAttribute("role", level === "error" ? "alert" : "status");
+    if (eventId) {
+      notice.setAttribute("data-event-id", eventId);
+    }
+
+    var textEl = document.createElement("span");
+    textEl.className = "top-event-text";
+    textEl.textContent = text;
+    notice.appendChild(textEl);
+
+    if (dismissible) {
+      var dismissBtn = document.createElement("button");
+      dismissBtn.type = "button";
+      dismissBtn.className = "top-event-dismiss";
+      dismissBtn.setAttribute("aria-label", "Dismiss notification");
+      dismissBtn.textContent = "Dismiss";
+      dismissBtn.addEventListener("click", function () {
+        removeNode(notice);
+      });
+      notice.appendChild(dismissBtn);
+    }
+
+    host.appendChild(notice);
+    payloads.forEach(removeNode);
   }
 
   function initDataTooltips() {
@@ -261,9 +645,8 @@
 
   function initNetworkEstimateProfile() {
     var backendSlot = document.getElementById("profile-backend-render");
-    var ttfbSlot = document.getElementById("profile-ttfb");
     var networkSlot = document.getElementById("profile-network-estimate");
-    if (!backendSlot && !ttfbSlot && !networkSlot) return;
+    if (!backendSlot && !networkSlot) return;
 
     function formatMs(value) {
       if (!Number.isFinite(value) || value < 0) return "n/a";
@@ -302,7 +685,6 @@
         networkMs = Math.max(0, ttfbMs - backendMs);
       }
       if (backendSlot) backendSlot.textContent = formatMs(backendMs);
-      if (ttfbSlot) ttfbSlot.textContent = formatMs(ttfbMs);
       if (networkSlot) networkSlot.textContent = formatMs(networkMs);
     }
 
@@ -311,20 +693,228 @@
   }
 
   function initRunDetailsToggle() {
-    var toggles = document.querySelectorAll(".invocation-test-toggle[data-target], .invocation-cell-toggle[data-target]");
+    var table = document.querySelector(".invocation-detail-table");
+    if (!table) return;
+    var toggles = table.querySelectorAll(".invocation-test-toggle[data-test-name], .invocation-cell-toggle[data-test-name]");
     if (!toggles.length) return;
+    var popupTitle = document.getElementById("run-test-detail-popup-title");
+    var popupContent = document.getElementById("run-test-detail-popup-content");
+    if (!popupTitle || !popupContent) return;
+    var detailFetchBase = String(table.getAttribute("data-run-details-fragment") || "").trim();
+    var invocationId = String(table.getAttribute("data-invocation-id") || "").trim();
+    var runIds = String(table.getAttribute("data-run-ids") || "")
+      .split(",")
+      .map(function (item) {
+        return String(item || "").trim();
+      })
+      .filter(function (item) {
+        return item.length > 0;
+      });
 
-    function toggleById(targetId) {
-      if (!targetId) return;
-      var row = document.getElementById(targetId);
-      if (!row) return;
-      row.hidden = !row.hidden;
+    function detailUrlForTest(testName) {
+      var safeTest = String(testName || "").trim();
+      if (!detailFetchBase || !safeTest) return "";
+      var params = new URLSearchParams();
+      params.set("test", safeTest);
+      if (invocationId) {
+        params.set("invocation_id", invocationId);
+      } else {
+        runIds.forEach(function (runId) {
+          params.append("run_id", runId);
+        });
+      }
+      var query = params.toString();
+      if (!query) return "";
+      return detailFetchBase + (detailFetchBase.indexOf("?") >= 0 ? "&" : "?") + query;
+    }
+
+    function renderLoading(message) {
+      popupContent.innerHTML = "";
+      var tip = document.createElement("p");
+      tip.className = "muted invocation-detail-loading";
+      tip.textContent = String(message || "Loading details...");
+      popupContent.appendChild(tip);
+    }
+
+    var detailHtmlCache = Object.create(null);
+    var detailLoading = Object.create(null);
+    var activeTestName = "";
+    var activeRunId = "";
+
+    function renderFilteredHtml(testName, runId) {
+      var safeTestName = String(testName || "").trim();
+      var safeRunId = String(runId || "").trim();
+      var fullHtml = String(detailHtmlCache[safeTestName] || "");
+      if (!fullHtml) {
+        renderLoading("No detail context.");
+        return;
+      }
+      if (!safeRunId) {
+        popupContent.innerHTML = fullHtml;
+        return;
+      }
+      var wrapper = document.createElement("div");
+      wrapper.innerHTML = fullHtml;
+      var solutionList = wrapper.querySelector(".invocation-solution-list");
+      if (!solutionList) {
+        popupContent.innerHTML = fullHtml;
+        return;
+      }
+      var cards = Array.prototype.slice.call(solutionList.querySelectorAll(".invocation-solution-card[data-run-id]"));
+      var matchedCard = null;
+      cards.forEach(function (card) {
+        if (String(card.getAttribute("data-run-id") || "").trim() === safeRunId) {
+          matchedCard = card;
+        }
+      });
+      if (!matchedCard) {
+        var first = cards.length ? cards[0] : null;
+        if (first) {
+          matchedCard = first;
+        }
+      }
+      if (matchedCard) {
+        cards.forEach(function (card) {
+          if (card !== matchedCard && card.parentNode) {
+            card.parentNode.removeChild(card);
+          }
+        });
+      }
+      popupContent.innerHTML = wrapper.innerHTML;
+    }
+
+    function ensureLoaded(testName, runId) {
+      var safeTestName = String(testName || "").trim();
+      if (!safeTestName) {
+        renderLoading("No detail context.");
+        return;
+      }
+      var safeRunId = String(runId || "").trim();
+      if (detailHtmlCache[safeTestName]) {
+        renderFilteredHtml(safeTestName, safeRunId);
+        return;
+      }
+      if (detailLoading[safeTestName]) {
+        renderLoading("Loading details...");
+        return;
+      }
+      var detailUrl = detailUrlForTest(safeTestName);
+      if (!detailUrl) {
+        renderLoading("No detail context.");
+        return;
+      }
+      detailLoading[safeTestName] = true;
+      renderLoading("Loading details...");
+      fetch(detailUrl, {
+        credentials: "same-origin",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("detail fetch failed");
+          return resp.text();
+        })
+        .then(function (html) {
+          detailHtmlCache[safeTestName] = String(html || "");
+          if (activeTestName === safeTestName) {
+            renderFilteredHtml(safeTestName, activeRunId);
+          }
+        })
+        .catch(function () {
+          if (activeTestName === safeTestName) {
+            renderLoading("Failed to load details.");
+          }
+        })
+        .finally(function () {
+          delete detailLoading[safeTestName];
+        });
     }
 
     toggles.forEach(function (el) {
       el.addEventListener("click", function (ev) {
         ev.preventDefault();
-        toggleById(el.getAttribute("data-target"));
+        var testName = String(el.getAttribute("data-test-name") || "").trim();
+        var runId = String(el.getAttribute("data-run-id") || "").trim();
+        var solutionTitle = String(el.getAttribute("data-solution-title") || "").trim();
+        activeTestName = testName;
+        activeRunId = runId;
+        if (testName && solutionTitle) {
+          popupTitle.textContent = "Test " + testName + " - " + solutionTitle;
+        } else if (testName) {
+          popupTitle.textContent = "Test Details: " + testName;
+        } else {
+          popupTitle.textContent = "Test Details";
+        }
+        ensureLoaded(testName, runId);
+      });
+    });
+  }
+
+  function initLifecycleTabs() {
+    var groups = document.querySelectorAll("[data-lifecycle-tabs='1']");
+    if (!groups.length) return;
+
+    groups.forEach(function (group) {
+      var buttons = Array.prototype.slice.call(group.querySelectorAll("[data-lifecycle-tab-button]"));
+      var panels = Array.prototype.slice.call(group.querySelectorAll("[data-lifecycle-tab-panel]"));
+      if (!buttons.length || !panels.length) return;
+
+      function activate(tabId, focusButton) {
+        var token = String(tabId || "").trim();
+        if (!token) return;
+        buttons.forEach(function (button) {
+          var active = String(button.getAttribute("data-lifecycle-tab-button") || "") === token;
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-selected", active ? "true" : "false");
+          button.setAttribute("tabindex", active ? "0" : "-1");
+          if (active && focusButton) {
+            try {
+              button.focus({ preventScroll: true });
+            } catch (_err) {
+              button.focus();
+            }
+          }
+        });
+        panels.forEach(function (panel) {
+          var active = String(panel.getAttribute("data-lifecycle-tab-panel") || "") === token;
+          panel.classList.toggle("is-hidden", !active);
+          panel.hidden = !active;
+        });
+      }
+
+      var initial = buttons.find(function (button) {
+        return button.classList.contains("is-active");
+      });
+      if (!initial) {
+        initial = buttons[0];
+      }
+      if (initial) {
+        activate(initial.getAttribute("data-lifecycle-tab-button"), false);
+      }
+
+      buttons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          activate(button.getAttribute("data-lifecycle-tab-button"), false);
+        });
+      });
+
+      group.addEventListener("keydown", function (ev) {
+        var target = ev.target;
+        if (!target || !target.hasAttribute("data-lifecycle-tab-button")) return;
+        var key = String(ev.key || "");
+        if (key !== "ArrowUp" && key !== "ArrowDown" && key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") {
+          return;
+        }
+        ev.preventDefault();
+        var currentIndex = buttons.indexOf(target);
+        if (currentIndex < 0) return;
+        var nextIndex = currentIndex;
+        if (key === "Home") nextIndex = 0;
+        else if (key === "End") nextIndex = buttons.length - 1;
+        else if (key === "ArrowUp" || key === "ArrowLeft") nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+        else nextIndex = (currentIndex + 1) % buttons.length;
+        var next = buttons[nextIndex];
+        if (!next) return;
+        activate(next.getAttribute("data-lifecycle-tab-button"), true);
       });
     });
   }
@@ -343,12 +933,14 @@
       var allBtn = document.getElementById(allBtnId);
       var clearBtn = document.getElementById(clearBtnId);
       if (allBtn) {
-        allBtn.addEventListener("click", function () {
+        allBtn.addEventListener("click", function (ev) {
+          ev.preventDefault();
           setChecked(true);
         });
       }
       if (clearBtn) {
-        clearBtn.addEventListener("click", function () {
+        clearBtn.addEventListener("click", function (ev) {
+          ev.preventDefault();
           setChecked(false);
         });
       }
@@ -397,13 +989,318 @@
     });
   }
 
+  function ensureConfirmDialogParts() {
+    var overlay = document.getElementById("ui-confirm-overlay");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "ui-confirm-overlay";
+      overlay.className = "ui-confirm-overlay";
+      overlay.hidden = true;
+      overlay.innerHTML =
+        '<div class="ui-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="ui-confirm-title">' +
+        '<h3 id="ui-confirm-title">Please Confirm</h3>' +
+        '<p id="ui-confirm-message" class="ui-confirm-message"></p>' +
+        '<div class="ui-confirm-actions">' +
+        '<button type="button" class="ui-confirm-cancel">Cancel</button>' +
+        '<button type="button" class="ui-confirm-ok">Confirm</button>' +
+        "</div>" +
+        "</div>";
+      document.body.appendChild(overlay);
+    }
+    return {
+      overlay: overlay,
+      message: overlay.querySelector("#ui-confirm-message"),
+      cancelBtn: overlay.querySelector(".ui-confirm-cancel"),
+      okBtn: overlay.querySelector(".ui-confirm-ok"),
+    };
+  }
+
+  function initTestsEditorAutoFocusNewest() {
+    if (window.location.pathname.indexOf("/tests") < 0) return;
+    var rows = document.querySelectorAll(".tests-editor-item");
+    if (!rows.length) return;
+
+    function focusRow(row, behavior) {
+      if (!row) return;
+      row.classList.add("tests-editor-item-new-focus");
+      if (!row.hasAttribute("tabindex")) {
+        row.setAttribute("tabindex", "-1");
+      }
+      try {
+        row.focus({ preventScroll: true });
+      } catch (_err) {
+        row.focus();
+      }
+      row.scrollIntoView({ block: "center", behavior: behavior || "smooth" });
+    }
+
+    var query = new URLSearchParams(window.location.search);
+    var focusRaw = String(query.get("focus") || "").trim();
+    if (/^\d+$/.test(focusRaw)) {
+      var focusIndex = Number(focusRaw);
+      if (Number.isFinite(focusIndex) && focusIndex > 0) {
+        var targeted = document.getElementById("test-row-" + String(focusIndex));
+        if (targeted) {
+          focusRow(targeted, "smooth");
+          query.delete("focus");
+          if (window.history && typeof window.history.replaceState === "function") {
+            var cleanQuery = query.toString();
+            var cleanUrl = window.location.pathname + (cleanQuery ? "?" + cleanQuery : "") + window.location.hash;
+            window.history.replaceState(null, "", cleanUrl);
+          }
+          return;
+        }
+      }
+    }
+
+    var text = readFlashMessageText().toLowerCase();
+    if (text.indexOf("test added") < 0 && text.indexOf("tests added") < 0) return;
+    focusRow(rows[rows.length - 1], "smooth");
+  }
+
+  function showConfirmDialog(messageText) {
+    var parts = ensureConfirmDialogParts();
+    var overlay = parts.overlay;
+    var messageEl = parts.message;
+    var cancelBtn = parts.cancelBtn;
+    var okBtn = parts.okBtn;
+
+    return new Promise(function (resolve) {
+      var settled = false;
+
+      function cleanup() {
+        overlay.hidden = true;
+        document.body.classList.remove("confirm-open");
+        overlay.removeEventListener("click", onOverlayClick);
+        cancelBtn.removeEventListener("click", onCancel);
+        okBtn.removeEventListener("click", onConfirm);
+        document.removeEventListener("keydown", onKeydown, true);
+      }
+
+      function finish(result) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(!!result);
+      }
+
+      function onOverlayClick(ev) {
+        if (ev.target === overlay) {
+          ev.preventDefault();
+          finish(false);
+        }
+      }
+
+      function onCancel(ev) {
+        ev.preventDefault();
+        finish(false);
+      }
+
+      function onConfirm(ev) {
+        ev.preventDefault();
+        finish(true);
+      }
+
+      function onKeydown(ev) {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          finish(false);
+        }
+      }
+
+      messageEl.textContent = String(messageText || "Are you sure?").trim();
+      overlay.hidden = false;
+      document.body.classList.add("confirm-open");
+      overlay.addEventListener("click", onOverlayClick);
+      cancelBtn.addEventListener("click", onCancel);
+      okBtn.addEventListener("click", onConfirm);
+      document.addEventListener("keydown", onKeydown, true);
+      window.setTimeout(function () {
+        cancelBtn.focus();
+      }, 0);
+    });
+  }
+
+  function initPopupDialogs() {
+    var openers = Array.prototype.slice.call(document.querySelectorAll("[data-popup-open]"));
+    if (!openers.length) return;
+
+    var activeOverlay = null;
+    var activeTrigger = null;
+
+    function isPopupOverlay(node) {
+      return !!(node && node.classList && node.classList.contains("ui-popup-overlay"));
+    }
+
+    function getOverlayById(id) {
+      var token = String(id || "").trim();
+      if (!token) return null;
+      var found = document.getElementById(token);
+      return isPopupOverlay(found) ? found : null;
+    }
+
+    function firstFocusableIn(overlay) {
+      if (!overlay) return null;
+      var selector =
+        ".ui-popup-content input:not([type='hidden']), .ui-popup-content select, .ui-popup-content textarea, .ui-popup-content button, .ui-popup-content a[href], .ui-popup-header button, .ui-popup-header a[href]";
+      var candidate = overlay.querySelector(selector);
+      if (candidate && typeof candidate.focus === "function") return candidate;
+      var fallback = overlay.querySelector("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+      return fallback && typeof fallback.focus === "function" ? fallback : null;
+    }
+
+    function syncPopupBodyClass() {
+      var opened = document.querySelector(".ui-popup-overlay[data-popup-overlay='1']:not([hidden])");
+      if (opened) {
+        document.body.classList.add("popup-open");
+      } else {
+        document.body.classList.remove("popup-open");
+      }
+    }
+
+    function closeOverlay(overlay, restoreFocus) {
+      if (!isPopupOverlay(overlay)) return;
+      overlay.hidden = true;
+      if (activeOverlay === overlay) {
+        activeOverlay = null;
+      }
+      syncPopupBodyClass();
+      if (restoreFocus && activeTrigger && typeof activeTrigger.focus === "function") {
+        activeTrigger.focus();
+      }
+      if (restoreFocus) {
+        activeTrigger = null;
+      }
+    }
+
+    function openOverlay(overlay, trigger) {
+      if (!isPopupOverlay(overlay)) return;
+      if (activeOverlay && activeOverlay !== overlay) {
+        closeOverlay(activeOverlay, false);
+      }
+      activeOverlay = overlay;
+      activeTrigger = trigger || null;
+      overlay.hidden = false;
+      syncPopupBodyClass();
+      window.setTimeout(function () {
+        var target = firstFocusableIn(overlay);
+        if (target) {
+          target.focus();
+        }
+      }, 0);
+    }
+
+    openers.forEach(function (opener) {
+      opener.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        var overlay = getOverlayById(opener.getAttribute("data-popup-open"));
+        if (!overlay) return;
+        openOverlay(overlay, opener);
+      });
+    });
+
+    document.querySelectorAll("[data-popup-close]").forEach(function (closer) {
+      closer.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        var overlay = closer.closest(".ui-popup-overlay");
+        closeOverlay(overlay, true);
+      });
+    });
+
+    document.querySelectorAll(".ui-popup-overlay[data-popup-overlay='1']").forEach(function (overlay) {
+      overlay.addEventListener("click", function (ev) {
+        if (ev.target === overlay) {
+          ev.preventDefault();
+          closeOverlay(overlay, true);
+        }
+      });
+    });
+
+    document.addEventListener(
+      "keydown",
+      function (ev) {
+        if (ev.key !== "Escape") return;
+        if (!activeOverlay || activeOverlay.hidden) return;
+        ev.preventDefault();
+        closeOverlay(activeOverlay, true);
+      },
+      true
+    );
+  }
+
   function initConfirmForms() {
     document.querySelectorAll("form[data-confirm-message]").forEach(function (form) {
       form.addEventListener("submit", function (ev) {
-        var msg = String(form.dataset.confirmMessage || "Are you sure?").trim();
-        if (!window.confirm(msg)) {
-          ev.preventDefault();
+        if (form.dataset.confirmApproved === "1") {
+          form.dataset.confirmApproved = "0";
+          return;
         }
+        ev.preventDefault();
+        var msg = String(form.dataset.confirmMessage || "Are you sure?").trim();
+        showConfirmDialog(msg).then(function (ok) {
+          if (!ok) return;
+          form.dataset.confirmApproved = "1";
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+          } else {
+            form.submit();
+          }
+        });
+      });
+    });
+  }
+
+  function initSudoPopupBridge() {
+    var query = new URLSearchParams(window.location.search);
+    if (query.get("sudo_popup_done") !== "1") return;
+    if (!window.opener || window.opener.closed) return;
+    try {
+      window.opener.postMessage({ type: "polygonlike:sudo-enabled" }, window.location.origin);
+    } catch (_err) {
+      return;
+    }
+    window.setTimeout(function () {
+      window.close();
+    }, 0);
+  }
+
+  function initSudoGatedForms() {
+    var forms = Array.prototype.slice.call(document.querySelectorAll("form[data-sudo-gated='1']"));
+    if (!forms.length) return;
+
+    function markSudoGranted() {
+      forms.forEach(function (form) {
+        form.dataset.sudoRequired = "0";
+      });
+    }
+
+    window.addEventListener("message", function (ev) {
+      if (!ev || ev.origin !== window.location.origin) return;
+      if (!ev.data || ev.data.type !== "polygonlike:sudo-enabled") return;
+      markSudoGranted();
+    });
+
+    forms.forEach(function (form) {
+      form.addEventListener("submit", function (ev) {
+        if (String(form.dataset.sudoRequired || "0") !== "1") return;
+        var sudoUrl = String(form.dataset.sudoUrl || "").trim();
+        if (!sudoUrl) return;
+        ev.preventDefault();
+        var popup = null;
+        try {
+          popup = window.open(
+            sudoUrl,
+            "polygonlike-sudo",
+            "popup=yes,width=540,height=720,resizable=yes,scrollbars=yes"
+          );
+        } catch (_err) {
+          popup = null;
+        }
+        if (popup && typeof popup.focus === "function") {
+          popup.focus();
+          return;
+        }
+        window.location.assign(sudoUrl);
       });
     });
   }
@@ -487,6 +1384,19 @@
         showError("save failed: network error");
       }
       setSubmitting(submitBtn, baseLabel, "Saving...", false);
+    });
+  }
+
+  function initPreviewCompileAsync() {
+    document.querySelectorAll("form[data-preview-compile-form='1']").forEach(function (form) {
+      form.addEventListener("submit", function () {
+        var btn =
+          form.querySelector("button[data-preview-compile-button='1']") ||
+          form.querySelector("button[type='submit']");
+        if (!btn || btn.disabled) return;
+        var baseLabel = String(btn.textContent || "Compile Statement").trim() || "Compile Statement";
+        setSubmitting(btn, baseLabel, "Compiling...", true);
+      });
     });
   }
 
@@ -673,20 +1583,260 @@
     });
   }
 
+  function initSudoProofForm() {
+    var form = document.getElementById("sudo-form");
+    if (!form) return;
+
+    form.addEventListener("submit", function (ev) {
+      if (form.dataset.passwordPrepared === "1") return;
+      ev.preventDefault();
+      if (!requireWebCrypto()) return;
+
+      (async function () {
+        var passwordEl = form.querySelector("input[name='password']");
+        var csrfEl = form.querySelector("input[name='csrf_token']");
+        var saltEl = form.querySelector("input[name='password_salt']");
+        var itersEl = form.querySelector("input[name='password_iters']");
+        var proofEl = form.querySelector("input[name='password_proof']");
+        if (!passwordEl || !csrfEl || !saltEl || !itersEl || !proofEl) {
+          form.dataset.passwordPrepared = "1";
+          form.submit();
+          return;
+        }
+
+        var password = String(passwordEl.value || "");
+        var csrfToken = String(csrfEl.value || "").trim();
+        var salt = String(saltEl.value || "").trim().toLowerCase();
+        var iters = Number(itersEl.value || 0);
+        if (!password || !csrfToken) {
+          form.dataset.passwordPrepared = "1";
+          form.submit();
+          return;
+        }
+        if (!/^[0-9a-f]{32}$/.test(salt) || !Number.isFinite(iters) || iters <= 0) {
+          window.alert("Invalid password metadata.");
+          return;
+        }
+
+        var verifier = await pbkdf2Hex(password, salt, Math.floor(iters));
+        proofEl.value = await sha256Hex(csrfToken + verifier);
+        passwordEl.value = await sha256Hex(csrfToken + password);
+        form.dataset.passwordPrepared = "1";
+        form.submit();
+      })().catch(function () {
+        window.alert("Failed to prepare password proof.");
+      });
+    });
+  }
+
+  function slugifyImportProblemId(raw) {
+    var token = String(raw || "").trim().toLowerCase();
+    if (!token) return "";
+    token = token.replace(/[^a-z0-9]+/g, "-");
+    token = token.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+    if (token.length > 64) {
+      token = token.slice(0, 64).replace(/-+$/g, "");
+    }
+    return token;
+  }
+
+  function importPackageFilename(fileInput) {
+    if (!fileInput) return "";
+    if (fileInput.files && fileInput.files.length > 0 && fileInput.files[0] && fileInput.files[0].name) {
+      return String(fileInput.files[0].name || "").trim();
+    }
+    var raw = String(fileInput.value || "").trim();
+    if (!raw) return "";
+    return raw.split(/[/\\]/).pop();
+  }
+
+  function initPolygonImportSlugSuggest() {
+    var form = document.getElementById("polygon-import-form");
+    if (!form) return;
+    var slugInput = document.getElementById("polygon-import-slug");
+    var fileInput = document.getElementById("polygon-import-package");
+    var hint = document.getElementById("polygon-import-slug-hint");
+    var hintUrl = String(form.getAttribute("data-slug-hint-url") || "").trim();
+    if (!slugInput || !fileInput || !hint || !hintUrl) return;
+
+    var requestSeq = 0;
+    var userTouchedSlug = false;
+
+    function setHint(text, level) {
+      hint.textContent = String(text || "").trim();
+      hint.classList.remove("muted");
+      hint.classList.remove("ok");
+      hint.classList.remove("danger");
+      if (level === "ok") hint.classList.add("ok");
+      else if (level === "danger") hint.classList.add("danger");
+      else hint.classList.add("muted");
+    }
+
+    function localFallbackBase(filename) {
+      var raw = String(filename || "").trim();
+      if (!raw) return "imported-problem";
+      var stem = raw.replace(/\.[^.]*$/, "");
+      stem = stem.replace(/-\d+\$linux$/i, "");
+      if (!stem) {
+        stem = raw.replace(/\.[^.]*$/, "");
+      }
+      var slug = slugifyImportProblemId(stem);
+      return slug || "imported-problem";
+    }
+
+    function applyLocalFallback(allowAutofill) {
+      var filename = importPackageFilename(fileInput);
+      var requested = String(slugInput.value || "").trim();
+      if (requested) {
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(requested)) {
+          slugInput.setCustomValidity("invalid problem id. Use lowercased words separated by dash.");
+          setHint("Slug format is invalid.", "danger");
+          return;
+        }
+        slugInput.setCustomValidity("");
+        setHint("Slug availability will be checked on import.", "muted");
+        return;
+      }
+      var suggested = localFallbackBase(filename);
+      if (allowAutofill && !userTouchedSlug) {
+        slugInput.value = suggested;
+      }
+      slugInput.setCustomValidity("");
+      if (filename) {
+        setHint("Suggested slug: " + suggested, "muted");
+      } else {
+        setHint("Slug can be customized. Selecting a package will auto-suggest an available slug.", "muted");
+      }
+    }
+
+    async function refreshHint(allowAutofill) {
+      var filename = importPackageFilename(fileInput);
+      var requested = String(slugInput.value || "").trim();
+      if (!filename && !requested) {
+        slugInput.setCustomValidity("");
+        setHint("Slug can be customized. Selecting a package will auto-suggest an available slug.", "muted");
+        return;
+      }
+
+      var seq = ++requestSeq;
+      try {
+        var params = new URLSearchParams();
+        if (filename) params.set("filename", filename);
+        if (requested) params.set("requested_slug", requested);
+        var url = hintUrl + (hintUrl.indexOf("?") >= 0 ? "&" : "?") + params.toString();
+        var resp = await fetch(url, {
+          credentials: "same-origin",
+          headers: {
+            "X-Requested-With": "fetch",
+            Accept: "application/json",
+          },
+        });
+        if (!resp.ok) {
+          throw new Error("slug hint request failed");
+        }
+        var payload = await resp.json();
+        if (seq !== requestSeq) return;
+
+        var valid = !!(payload && payload.valid);
+        var exists = !!(payload && payload.exists);
+        var suggested = String((payload && payload.suggested) || "").trim();
+
+        if (!requested && suggested && allowAutofill && !userTouchedSlug) {
+          slugInput.value = suggested;
+        }
+
+        if (!valid) {
+          var invalidMsg = String((payload && payload.message) || "invalid problem id");
+          slugInput.setCustomValidity(invalidMsg);
+          setHint(invalidMsg, "danger");
+          return;
+        }
+
+        if (requested && exists) {
+          var conflictMsg = String((payload && payload.message) || "problem already exists");
+          slugInput.setCustomValidity(conflictMsg);
+          if (suggested && suggested !== requested) {
+            setHint(conflictMsg + ". Suggested available slug: " + suggested, "danger");
+          } else {
+            setHint(conflictMsg, "danger");
+          }
+          return;
+        }
+
+        slugInput.setCustomValidity("");
+        if (requested) {
+          setHint("Slug is available.", "ok");
+          return;
+        }
+        if (suggested) {
+          if (exists) {
+            setHint("Suggested slug: " + suggested + " (auto-adjusted to avoid duplicates).", "muted");
+          } else {
+            setHint("Suggested slug: " + suggested, "muted");
+          }
+        } else {
+          setHint("Slug can be customized. Selecting a package will auto-suggest an available slug.", "muted");
+        }
+      } catch (_err) {
+        if (seq !== requestSeq) return;
+        applyLocalFallback(allowAutofill);
+      }
+    }
+
+    fileInput.addEventListener("change", function () {
+      if (!String(slugInput.value || "").trim()) {
+        userTouchedSlug = false;
+      }
+      refreshHint(true);
+    });
+
+    slugInput.addEventListener("input", function () {
+      userTouchedSlug = String(slugInput.value || "").trim().length > 0;
+      refreshHint(false);
+    });
+
+    form.addEventListener("submit", function (ev) {
+      if (!String(slugInput.value || "").trim()) {
+        userTouchedSlug = false;
+        applyLocalFallback(true);
+      }
+      if (typeof slugInput.checkValidity === "function" && !slugInput.checkValidity()) {
+        ev.preventDefault();
+        if (typeof slugInput.reportValidity === "function") {
+          slugInput.reportValidity();
+        }
+      }
+    });
+
+    refreshHint(true);
+  }
+
   onReady(function () {
+    initSudoPopupBridge();
     initNavActiveState();
-    initFlashAutohide();
+    initTopEventNotice();
     initDataTooltips();
     initNetworkEstimateProfile();
     initRunDetailsToggle();
+    initLifecycleTabs();
     initRunExecuteSelectors();
+    initTestsEditorAutoFocusNewest();
     initTagSelects();
+    initPopupDialogs();
     initConfirmForms();
+    initSudoGatedForms();
     initSubmitLinks();
+    initPreviewCompileAsync();
     initSolutionEditorAsyncSave();
     initLoginProofForm();
     initRegisterLikeProofForm("register-form");
     initRegisterLikeProofForm("setup-form");
     initSettingsPasswordProofForm();
+    initSudoProofForm();
+    initPolygonImportSlugSuggest();
+    initSettingsTokenGenerators();
+    initSettingsJudgehostRunnerControls();
+    initSettingsJudgehostTableFilter();
+    initSettingsJudgehostToggles();
   });
 })();

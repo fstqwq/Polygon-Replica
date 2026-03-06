@@ -307,6 +307,18 @@ class GitService:
             ]
         )
         if proc.returncode != 0:
+            detail = proc.stderr or proc.stdout or ""
+            detail_lower = str(detail).strip().lower()
+            # Empty repositories stay at v0 (unborn main): treat history as empty.
+            if (
+                "does not have any commits yet" in detail_lower
+                or "bad revision 'head'" in detail_lower
+                or (
+                    "ambiguous argument 'head'" in detail_lower
+                    and "unknown revision or path not in the working tree" in detail_lower
+                )
+            ):
+                return []
             raise RuntimeError(proc.stderr or proc.stdout)
         rows: list[dict] = []
         for block in proc.stdout.split("\x1e"):
@@ -351,7 +363,12 @@ class GitService:
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
-        return head.stdout.strip()
+        if head.returncode != 0:
+            raise RuntimeError(head.stderr or head.stdout or "unable to resolve committed head")
+        resolved_head = head.stdout.strip()
+        if not resolved_head:
+            raise RuntimeError("unable to resolve committed head")
+        return resolved_head
 
     def rollback_last_commit(self, workspace: Path, expected_head: str = "") -> str:
         if self._rebase_active(workspace):
@@ -393,13 +410,13 @@ class GitService:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
 
-    def _ensure_clean_worktree(self, workspace: Path) -> None:
-        proc = run_cmd(["git", "-C", str(workspace), "status", "--short"])
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stderr or proc.stdout)
-        dirty = [line for line in proc.stdout.splitlines() if line.strip() and not self._is_reserved_status_line(line)]
-        if dirty:
-            raise RuntimeError("working copy has local changes; commit or discard them first")
+    def _discard_local_changes(self, workspace: Path) -> None:
+        reset = run_cmd(["git", "-C", str(workspace), "reset", "--hard", "HEAD"])
+        if reset.returncode != 0:
+            raise RuntimeError(reset.stderr or reset.stdout or "failed to discard local changes")
+        clean = run_cmd(["git", "-C", str(workspace), "clean", "-fd"])
+        if clean.returncode != 0:
+            raise RuntimeError(clean.stderr or clean.stdout or "failed to clean untracked files")
 
     def restore_revision_to_working_copy(self, workspace: Path, revision: str) -> str:
         target = str(revision or "").strip()
@@ -408,7 +425,7 @@ class GitService:
         if self._rebase_active(workspace):
             raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
         self._assert_on_main(workspace)
-        self._ensure_clean_worktree(workspace)
+        self._discard_local_changes(workspace)
         self.pull(workspace, "main")
 
         resolved = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
@@ -439,9 +456,17 @@ class GitService:
     def _current_branch(self, workspace: Path) -> str:
         proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "--abbrev-ref", "HEAD"])
         branch = proc.stdout.strip()
-        if proc.returncode != 0 or not branch:
-            raise RuntimeError(proc.stderr or proc.stdout or "unable to resolve branch")
-        return branch
+        if proc.returncode == 0 and branch and branch != "HEAD":
+            return branch
+
+        # For unborn branches (v0), rev-parse fails; resolve symbolic HEAD instead.
+        symbolic = run_cmd(["git", "-C", str(workspace), "symbolic-ref", "--quiet", "--short", "HEAD"])
+        symbolic_branch = symbolic.stdout.strip()
+        if symbolic.returncode == 0 and symbolic_branch:
+            return symbolic_branch
+
+        detail = proc.stderr or proc.stdout or symbolic.stderr or symbolic.stdout or "unable to resolve branch"
+        raise RuntimeError(detail)
 
     def _assert_on_main(self, workspace: Path) -> None:
         branch = self._current_branch(workspace)
@@ -629,3 +654,34 @@ class GitService:
         combined = self._filter_reserved_diff("".join(pieces))
         cap = self.DIFF_MAX_CHARS if max_chars is None else max(1, int(max_chars))
         return self._truncate_text(combined, cap)
+
+    def diff_for_revision(self, workspace: Path, revision: str, max_chars: int | None = None) -> tuple[str, bool]:
+        target = str(revision or "").strip()
+        if not target:
+            raise ValueError("revision is required")
+        resolved = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
+        if resolved.returncode != 0:
+            raise RuntimeError(resolved.stderr or resolved.stdout or "invalid revision")
+        commit = resolved.stdout.strip()
+        if not commit:
+            raise RuntimeError("invalid revision")
+        show = run_cmd(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "show",
+                "--pretty=format:",
+                "--no-color",
+                commit,
+                "--",
+                ".",
+                ":(exclude).polygonlike.lock",
+                ":(exclude)**/.polygonlike.lock",
+            ]
+        )
+        if show.returncode != 0:
+            raise RuntimeError(show.stderr or show.stdout or "failed to read revision diff")
+        filtered = self._filter_reserved_diff(show.stdout or "")
+        cap = self.DIFF_MAX_CHARS if max_chars is None else max(1, int(max_chars))
+        return self._truncate_text(filtered, cap)

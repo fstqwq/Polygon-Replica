@@ -1,26 +1,39 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
+import threading
 
 from app import main_constants as default_main_constants
 
 
 class RuntimeValues:
     def __init__(self, values: Mapping[str, object]) -> None:
-        self._values = MappingProxyType(dict(values))
+        self._lock = threading.RLock()
+        self._values: dict[str, object] = dict(values)
+
+    def replace(self, values: Mapping[str, object]) -> None:
+        with self._lock:
+            self._values = dict(values)
+
+    def to_dict(self) -> dict[str, object]:
+        with self._lock:
+            return dict(self._values)
 
     def get(self, key: str, default: object | None = None) -> object:
-        return self._values.get(str(key or "").strip(), default)
+        token = str(key or "").strip()
+        with self._lock:
+            return self._values.get(token, default)
 
     def __contains__(self, key: object) -> bool:
-        return str(key or "").strip() in self._values
+        token = str(key or "").strip()
+        with self._lock:
+            return token in self._values
 
     def __getattr__(self, name: str) -> object:
-        try:
-            return self._values[name]
-        except KeyError as exc:
-            raise AttributeError(name) from exc
+        with self._lock:
+            if name in self._values:
+                return self._values[name]
+        raise AttributeError(name)
 
 
 def _default_value_map() -> dict[str, object]:

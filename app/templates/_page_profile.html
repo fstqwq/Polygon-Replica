@@ -1,8 +1,17 @@
 <footer class="page-profile" role="contentinfo" aria-label="page profile">
   <div class="page-profile-inner">
-    <strong class="page-profile-title">Profile</strong>
-    <span>Backend render: <strong id="profile-backend-render" data-backend-render-ms="{{ backend_render_ms if backend_render_ms is not none else '' }}">{% if backend_render_ms is not none %}{{ backend_render_ms }} ms{% else %}n/a{% endif %}</strong></span>
-    <span>TTFB: <strong id="profile-ttfb">n/a</strong></span>
-    <span>Estimated network: <strong id="profile-network-estimate">n/a</strong></span>
+    <div class="page-profile-row page-profile-row-primary">
+      <strong class="page-profile-title">Profile</strong>
+      <span>Backend render: <strong id="profile-backend-render" data-backend-render-ms="{{ backend_render_ms if backend_render_ms is not none else '' }}">{% if backend_render_ms is not none %}{{ backend_render_ms }} ms{% else %}n/a{% endif %}</strong></span>
+      <span>Estimated network overhead: <strong id="profile-network-estimate">n/a</strong></span>
+    </div>
+    <div class="page-profile-row page-profile-row-secondary">
+      <span>Linux distro: <strong id="profile-linux-distro" class="page-profile-detail" title="{{ runtime_linux_distro }}">{{ runtime_linux_distro }}</strong></span>
+      <span hidden aria-hidden="true"><strong id="profile-sandbox-backend" class="page-profile-detail" title="{{ runtime_sandbox_backend }}">{{ runtime_sandbox_backend }}</strong> <strong id="profile-sandbox-backend-count">{{ runtime_sandbox_backend_count }}</strong></span>
+      <span>Native backend: <strong id="profile-cpu-info" class="page-profile-detail" title="{{ runtime_cpu_info }}">{{ runtime_cpu_info }}</strong></span>
+    </div>
+    <div class="page-profile-row page-profile-row-tertiary">
+      <span>Judgehost backend: <strong id="profile-judgehost-backend-summary" class="page-profile-detail{% if runtime_judgehost_backend_danger == '1' %} danger{% endif %}" title="{{ runtime_judgehost_backend_summary }}">{{ runtime_judgehost_backend_summary }}</strong></span>
+    </div>
   </div>
 </footer>

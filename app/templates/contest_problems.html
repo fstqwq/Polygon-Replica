@@ -1,0 +1,134 @@
+{% extends "contest_base.html" %}
+{% block content %}
+<h1 class="page-title">Contest Problems</h1>
+
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>Add Problems</h2>
+  <form class="form-row" method="get" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems">
+    <label for="contest-problem-search">Search</label>
+    <input id="contest-problem-search" name="q" value="{{ query }}" placeholder="slug or title" />
+    <button type="submit">Filter</button>
+  </form>
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/add">
+    <input type="hidden" name="q" value="{{ query }}" />
+    {% if available_rows %}
+    <table>
+      <tr>
+        <th>Select</th>
+        <th>Problem</th>
+        <th>Your role</th>
+      </tr>
+      {% for row in available_rows %}
+      <tr>
+        <td><input type="checkbox" name="problem_slugs" value="{{ row.problem_slug }}" /></td>
+        <td><code>{{ row.problem_slug }}</code> - {{ row.problem_name }}</td>
+        <td>{{ row.role }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button type="submit">Add Selected</button>
+    {% else %}
+    <p class="muted">No available problems matched the current filter.</p>
+    {% endif %}
+  </form>
+</section>
+
+<section>
+  <h2>Reorder / Remove</h2>
+  {% if problem_rows %}
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">
+    <table>
+      <tr>
+        <th>Select</th>
+        <th>Idx</th>
+        <th>Problem</th>
+        <th>TL/ML</th>
+        <th>Revision</th>
+      </tr>
+      {% for row in problem_rows %}
+      <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
+        <td><input type="checkbox" name="selected_problem_ids" value="{{ row.problem_id }}" /></td>
+        <td>
+          <input type="hidden" name="contest_problem_ids" value="{{ row.contest_problem_id }}" />
+          <input name="contest_problem_indices" value="{{ row.idx }}" maxlength="16" />
+        </td>
+        <td><code>{{ row.problem_slug }}</code> - {{ row.problem_name }}</td>
+        <td>{{ row.time_limit_ms }}ms / {{ row.memory_limit_mb }}MB</td>
+        <td><span class="{{ 'revision-alert' if row.revision_warn else '' }}">{{ row.revision_display }}</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="form-row">
+      <button type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">Save Index Order</button>
+      <button type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/renumber">Renumber A,B,C...</button>
+      <button type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="muted">No problems in contest.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Change Names And TL/ML (Commit Required)</h2>
+  <p class="muted">Each selected problem applies source updates and creates one commit with message: <code>contest {{ ctx.contest.slug }}: bulk update name/TL/ML</code>.</p>
+  {% if problem_rows %}
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/change-general">
+    <table>
+      <tr>
+        <th>Select</th>
+        <th>Problem</th>
+        <th>Title</th>
+        <th>TL (ms)</th>
+        <th>ML (MB)</th>
+        <th>Writable</th>
+      </tr>
+      {% for row in problem_rows %}
+      <tr>
+        <td><input type="checkbox" name="selected_problem_ids" value="{{ row.problem_id }}" /></td>
+        <td>
+          <code>{{ row.problem_slug }}</code>
+          <input type="hidden" name="problem_ids" value="{{ row.problem_id }}" />
+        </td>
+        <td><input name="problem_names" value="{{ row.problem_name }}" /></td>
+        <td><input name="time_limit_ms_values" value="{{ row.time_limit_ms }}" inputmode="numeric" /></td>
+        <td><input name="memory_limit_mb_values" value="{{ row.memory_limit_mb }}" inputmode="numeric" /></td>
+        <td>{{ "yes" if row.can_problem_write else "no" }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="form-row">
+      <button class="primary-action" type="submit">Apply To Selected</button>
+      {% if latest_job and latest_job.job_type == "change-general" %}
+      <button type="submit" name="retry_job_id" value="{{ latest_job.id }}">Retry Failed From Last Job</button>
+      {% endif %}
+    </div>
+  </form>
+  {% endif %}
+</section>
+
+{% if latest_job and latest_job.job_type == "change-general" and latest_job.summary and latest_job.summary.get("results") %}
+<section>
+  <h2>Last Change Report</h2>
+  <p><strong>Job:</strong> <code>{{ latest_job.id }}</code> / {{ latest_job.status | status_label }}</p>
+  <table>
+    <tr>
+      <th>Problem</th>
+      <th>Status</th>
+      <th>Commit</th>
+      <th>Error</th>
+    </tr>
+    {% for row in latest_job.summary.get("results") %}
+    <tr>
+      <td><code>{{ row.get("problem_slug", "-") }}</code></td>
+      <td>{{ row.get("status", "-") | status_label }}</td>
+      <td><code>{{ row.get("commit_id", "") }}</code></td>
+      <td>{{ row.get("error", "") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endblock %}

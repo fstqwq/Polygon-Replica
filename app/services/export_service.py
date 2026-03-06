@@ -8,8 +8,10 @@ import uuid
 from pathlib import Path
 
 from app.db import DB, now_iso
+from app.services.hashing import sha256_file
 from app.services.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
-from app.services.util import extract_git_archive, is_canonical_artifact_id, remove_symlinks, run_cmd, sha256_file
+from app.services.statement_template import render_statement_main
+from app.services.util import extract_git_archive, remove_symlinks, run_cmd
 
 
 class ExportService:
@@ -27,24 +29,26 @@ class ExportService:
     MODE_DETECT_READ_CHUNK = 65536
     STANDARD_CHECKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     STANDARD_CHECKER_ROOT = (Path(__file__).resolve().parents[2] / "third_party" / "upstream" / "testlib" / "checkers").resolve()
+    STATEMENT_PDF_TIMEOUT_SEC = 60
+    STATEMENT_PDF_PASSES = 2
 
     def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path):
         self.db = db
         self.artifacts_root = artifacts_root
         self.workspace_root = workspace_root
 
-    def _canonical_build_root(self, problem: str, build_id: str) -> Path:
-        aid = str(build_id or "")
-        if not is_canonical_artifact_id(aid):
-            raise ValueError("invalid build artifact id")
-        base = (self.artifacts_root / problem).resolve()
-        root = (base / aid).resolve()
+    def _canonical_build_root(self, build_ref: str) -> Path:
+        token = str(build_ref or "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{64}", token) is None:
+            raise ValueError("invalid build_ref")
+        base = (self.artifacts_root / "objects" / token[:2]).resolve()
+        root = (base / token).resolve()
         try:
             rel = root.relative_to(base)
         except ValueError as exc:
-            raise ValueError("invalid build artifact id") from exc
-        if len(rel.parts) != 1 or rel.parts[0] != aid:
-            raise ValueError("invalid build artifact id")
+            raise ValueError("invalid build_ref") from exc
+        if len(rel.parts) != 1 or rel.parts[0] != token:
+            raise ValueError("invalid build_ref")
         return root
 
     def _yaml_quote(self, value: str) -> str:
@@ -53,6 +57,11 @@ class ExportService:
     def _package_root_name(self, slug: str) -> str:
         out = "".join(ch.lower() for ch in slug if ch.isalnum())
         return out or "problem"
+
+    def _archive_filename_slug(self, slug: str) -> str:
+        token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(slug or "").strip())
+        token = token.strip("-.")
+        return token or "problem"
 
     def _is_safe_regular_file(self, root: Path, p: Path, root_resolved: Path | None = None) -> bool:
         if p.is_symlink() or not p.exists() or not p.is_file():
@@ -248,6 +257,8 @@ class ExportService:
         normalized = normalize_expected_behavior(expected_behavior)
         if normalized in self.KATTIS_SUBMISSION_DIRS:
             return normalized
+        if normalized in {"tle_or_correct", "tle_or_re"}:
+            return "time_limit_exceeded"
         return None
 
     def _ensure_unique_file_path(self, parent: Path, filename: str) -> Path:
@@ -487,7 +498,6 @@ class ExportService:
     def _cleanup_previous_revision_exports(
         self,
         *,
-        problem_slug: str,
         problem_id: int,
         workspace_id: int | None,
         export_type: str,
@@ -498,7 +508,7 @@ class ExportService:
             return
         rows = self.db.fetch_all(
             """
-            SELECT id,build_id,filename
+            SELECT id,build_id,build_ref,filename
             FROM exports
             WHERE problem_id=? AND workspace_id=? AND export_type=? AND source_commit=? AND id<>?
             ORDER BY created_at DESC
@@ -507,11 +517,11 @@ class ExportService:
         )
         for row in rows:
             old_id = str(row["id"] or "").strip()
-            old_build_id = str(row["build_id"] or "").strip()
+            old_build_ref = str(row["build_ref"] or "").strip().lower()
             old_filename = str(row["filename"] or "").strip()
-            if old_build_id and old_filename:
+            if old_build_ref and old_filename:
                 try:
-                    old_build_root = self._canonical_build_root(problem_slug, old_build_id)
+                    old_build_root = self._canonical_build_root(old_build_ref)
                     old_file = (old_build_root / "export" / old_filename).resolve()
                     export_root = (old_build_root / "export").resolve()
                     if export_root in old_file.parents and old_file.exists() and old_file.is_file():
@@ -524,22 +534,51 @@ class ExportService:
                 except Exception:
                     pass
 
-    def _copy_statement(self, snapshot: Path | None, build_root: Path, dst_statement: Path) -> None:
+    def _try_compile_statement_pdf(self, statement_root: Path, dst_statement: Path) -> bool:
+        tex = statement_root / "main.tex"
+        if not tex.exists() or not tex.is_file() or tex.is_symlink():
+            return False
+        try:
+            for _ in range(max(1, int(self.STATEMENT_PDF_PASSES))):
+                proc = run_cmd(
+                    [
+                        "pdflatex",
+                        "-interaction=nonstopmode",
+                        "-halt-on-error",
+                        str(tex.name),
+                    ],
+                    cwd=tex.parent,
+                    timeout=self.STATEMENT_PDF_TIMEOUT_SEC,
+                )
+                if proc.returncode != 0:
+                    return False
+            generated_pdf = tex.parent / "main.pdf"
+            if not generated_pdf.exists() or not generated_pdf.is_file() or generated_pdf.is_symlink():
+                return False
+            dst_statement.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(generated_pdf, dst_statement / "problem.en.pdf")
+            return True
+        except Exception:
+            return False
+
+    def _copy_statement(self, snapshot: Path | None, build_root: Path, dst_statement: Path, problem_name: str) -> None:
+        compiled_pdf = False
         if snapshot is not None:
+            # Render statement sources on demand in snapshot only.
+            render_statement_main(snapshot / "statement", problem_title=str(problem_name or "").strip())
             self._copy_dir_contents(snapshot / "statement", dst_statement)
+            compiled_pdf = self._try_compile_statement_pdf(snapshot / "statement", dst_statement)
 
         has_problem_statement = any(dst_statement.glob("problem.*.tex")) or any(dst_statement.glob("problem.*.pdf"))
         if not has_problem_statement:
             main_tex = dst_statement / "main.tex"
-            main_pdf = dst_statement / "main.pdf"
             if main_tex.exists():
                 shutil.copy2(main_tex, dst_statement / "problem.en.tex")
                 has_problem_statement = True
-            elif main_pdf.exists():
-                shutil.copy2(main_pdf, dst_statement / "problem.en.pdf")
-                has_problem_statement = True
+        if compiled_pdf:
+            has_problem_statement = True
 
-        if not has_problem_statement:
+        if snapshot is None and not has_problem_statement:
             preview_pdf = build_root / "statement_preview" / "statement.pdf"
             if preview_pdf.exists():
                 dst_statement.mkdir(parents=True, exist_ok=True)
@@ -615,7 +654,6 @@ class ExportService:
         for folder in self.KATTIS_SUBMISSION_DIRS:
             (submissions_dir / folder).mkdir(parents=True, exist_ok=True)
 
-        copied_any = False
         if snapshot is not None:
             upstream_root = snapshot / "submissions"
             for src in self._iter_safe_descendant_files(upstream_root):
@@ -633,7 +671,6 @@ class ExportService:
                     dst = dst / part
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
-                copied_any = True
 
         if snapshot is not None:
             solutions_dir = snapshot / "solutions"
@@ -646,7 +683,6 @@ class ExportService:
                 dst_dir.mkdir(parents=True, exist_ok=True)
                 dst = self._ensure_unique_file_path(dst_dir, src.name)
                 shutil.copy2(src, dst)
-                copied_any = True
 
         accepted = submissions_dir / "accepted"
         has_accepted = next(self._iter_safe_descendant_files(accepted), None) is not None
@@ -656,19 +692,8 @@ class ExportService:
                 dst = self._ensure_unique_file_path(accepted, src.name)
                 shutil.copy2(src, dst)
                 has_accepted = True
-                copied_any = True
 
         if not has_accepted:
-            (accepted / "accepted.cpp").write_text(
-                "#include <bits/stdc++.h>\n"
-                "int main(){return 0;}\n",
-                encoding="utf-8",
-            )
-            copied_any = True
-
-        if not copied_any:
-            # Fallback should be unreachable because accepted placeholder is always written,
-            # but keep an explicit guard for future edits.
             (accepted / "accepted.cpp").write_text(
                 "#include <bits/stdc++.h>\n"
                 "int main(){return 0;}\n",
@@ -765,7 +790,7 @@ class ExportService:
         mode: str,
     ) -> None:
         self._write_kattis_problem_yaml(package_root, problem_name, source_commit, mode)
-        self._copy_statement(snapshot, build_root, package_root / "statement")
+        self._copy_statement(snapshot, build_root, package_root / "statement", problem_name)
         self._copy_test_data(build_root, package_root / "data")
         self._populate_submissions(snapshot, package_root / "submissions")
         self._populate_input_validators(snapshot, package_root / "input_validators")
@@ -782,7 +807,7 @@ class ExportService:
             raise ValueError(f"unknown problem: {problem}")
 
         build_row = self.db.fetch_one(
-            "SELECT problem_id,workspace_id,source_commit,status FROM builds WHERE id=?",
+            "SELECT problem_id,workspace_id,source_commit,status,build_ref FROM builds WHERE id=?",
             [build_id],
         )
         if build_row is None:
@@ -794,8 +819,11 @@ class ExportService:
         source_commit = str(build_row["source_commit"] or "").strip()
         if resolved_export_type == "icpc" and not source_commit:
             raise ValueError(f"build source_commit missing: {build_id}")
+        build_ref = str(build_row["build_ref"] or "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{64}", build_ref) is None:
+            raise ValueError(f"build_ref missing or invalid: {build_id}")
 
-        build_root = self._canonical_build_root(problem, build_id)
+        build_root = self._canonical_build_root(build_ref)
         if not build_root.exists():
             raise ValueError(f"unknown build artifacts: {build_id}")
         required_paths: list[tuple[str, str]] = [("manifest.json", "file"), ("logs", "dir")]
@@ -843,7 +871,7 @@ class ExportService:
                     mode=mode,
                 )
 
-            preferred_filename = f"{problem_row['slug']}-{revision_token}.zip"
+            preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"
             archive_target = export_dir / preferred_filename
             archive_prefix = archive_target.with_suffix("")
             archive = shutil.make_archive(
@@ -856,11 +884,12 @@ class ExportService:
             digest = sha256_file(out)
 
             self.db.execute(
-                "INSERT INTO exports(id,problem_id,build_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO exports(id,problem_id,build_id,build_ref,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     export_id,
                     problem_row["id"],
                     build_id,
+                    build_ref,
                     build_row["workspace_id"],
                     resolved_export_type,
                     out.name,
@@ -871,7 +900,6 @@ class ExportService:
                 ],
             )
             self._cleanup_previous_revision_exports(
-                problem_slug=str(problem_row["slug"]),
                 problem_id=int(problem_row["id"]),
                 workspace_id=build_row["workspace_id"],
                 export_type=resolved_export_type,

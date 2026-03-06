@@ -18,6 +18,44 @@ _BOOL_FALSE = {"0", "false", "no", "off", "n"}
 
 
 class SystemConfigService:
+    _CATEGORY_ORDER = (
+        "Judging",
+        "Queue",
+        "Judgehost",
+        "Toolchain",
+        "Limits",
+        "UI",
+        "Security",
+        "Auth",
+        "Misc",
+    )
+    _CATEGORY_PREFIXES: tuple[tuple[str, str], ...] = (
+        ("WORKER_QUEUE_", "Queue"),
+        ("INVOCATION_", "Judging"),
+        ("JUDGEHOST_", "Judgehost"),
+        ("TOOLCHAIN_", "Toolchain"),
+        ("BUILD_", "Judging"),
+        ("RUN_", "Judging"),
+        ("RUNTIME_CACHE_", "Limits"),
+        ("IMPLICIT_BUILD_", "Judging"),
+        ("GENERAL_", "Limits"),
+        ("TESTS_SPEC_", "Limits"),
+        ("SANDBOX_", "Security"),
+        ("WORKSPACE_FILE_", "UI"),
+        ("UI_", "UI"),
+        ("PREVIEW_", "UI"),
+        ("STATEMENT_", "UI"),
+        ("SUMMARY_JSON_", "UI"),
+        ("SOLUTION_", "UI"),
+        ("WORKSPACE_HISTORY_", "UI"),
+        ("AUTH_", "Auth"),
+        ("FLASH_", "Auth"),
+        ("PASSWORD_", "Security"),
+        ("LOGIN_RATE_", "Security"),
+        ("CONTEST_", "Limits"),
+        ("PROBLEM_", "Limits"),
+    )
+
     def __init__(self, db: DB):
         self.db = db
         self._lock = threading.Lock()
@@ -46,55 +84,179 @@ class SystemConfigService:
         with self._lock:
             return dict(self._effective_values)
 
-    def ui_rows(self) -> list[dict[str, object]]:
+    def ui_sections(self) -> list[dict[str, object]]:
         with self._lock:
             effective = dict(self._effective_values)
-        rows: list[dict[str, object]] = []
+        buckets: dict[str, list[dict[str, object]]] = {}
         for key, spec in self._admin_specs.items():
-            default_value = self._admin_defaults[key]
-            current_value = effective.get(key, default_value)
+            row = self._config_row(key, spec, effective)
+            category = str(row.get("category") or "Misc")
+            buckets.setdefault(category, []).append(row)
+        sections: list[dict[str, object]] = []
+        for category, rows in sorted(
+            buckets.items(),
+            key=lambda item: (
+                self._category_index(item[0]),
+                str(item[0]).lower(),
+            ),
+        ):
+            rows.sort(key=lambda row: str(row.get("key") or ""))
+            changed_count = sum((1 for row in rows if bool(row.get("changed"))))
+            sections.append(
+                {
+                    "category": category,
+                    "slug": self.category_slug(category),
+                    "rows": rows,
+                    "count": len(rows),
+                    "changed_count": changed_count,
+                }
+            )
+        return sections
+
+    def section_by_slug(self, slug: str) -> dict[str, object] | None:
+        safe_slug = self.category_slug(slug)
+        for section in self.ui_sections():
+            if str(section.get("slug") or "") == safe_slug:
+                return section
+        return None
+
+    @staticmethod
+    def category_slug(category: str) -> str:
+        token = str(category or "").strip().lower()
+        if not token:
+            return "misc"
+        parts: list[str] = []
+        current = []
+        for ch in token:
+            if ch.isalnum():
+                current.append(ch)
+                continue
+            if current:
+                parts.append("".join(current))
+                current = []
+        if current:
+            parts.append("".join(current))
+        if not parts:
+            return "misc"
+        return "-".join(parts)
+
+    def validate_patch(self, payload: dict[str, object]) -> dict[str, object]:
+        if not isinstance(payload, dict):
+            raise ValueError("system config payload must be a JSON object")
+        with self._lock:
+            before = dict(self._effective_values)
+        normalized: dict[str, object] = {}
+        for payload_key, raw_value in payload.items():
+            key_text = str(payload_key or "").strip()
+            if key_text not in self._admin_specs:
+                raise ValueError(f"unknown system config key: {key_text}")
+            normalized[key_text] = self._normalize_value(key_text, raw_value)
+        after = dict(before)
+        after.update(normalized)
+        diff_rows = self._diff_rows(before, after)
+        return {
+            "normalized": normalized,
+            "diff": diff_rows,
+            "changed": len(diff_rows),
+            "before": before,
+            "after": after,
+        }
+
+    def apply_patch(self, payload: dict[str, object], actor_user_id: int) -> dict[str, object]:
+        preview = self.validate_patch(payload)
+        after = dict(preview["after"]) if isinstance(preview.get("after"), dict) else {}
+        self._persist_overrides(after, actor_user_id)
+        effective = self.refresh()
+        diff_rows = self._diff_rows(
+            dict(preview.get("before") or {}),
+            dict(effective),
+        )
+        return {
+            "changed": len(diff_rows),
+            "diff": diff_rows,
+            "effective": effective,
+        }
+
+    def reset(self) -> dict[str, object]:
+        def _tx(conn) -> None:
+            conn.execute("DELETE FROM system_config")
+
+        self.db.write_transaction(_tx)
+        return self.refresh()
+
+    def _category_for_key(self, key: str, spec: dict[str, object]) -> str:
+        explicit = str(spec.get("category") or "").strip()
+        if explicit:
+            return explicit
+        token = str(key or "").strip().upper()
+        for prefix, category in self._CATEGORY_PREFIXES:
+            if token.startswith(prefix):
+                return category
+        return "Misc"
+
+    def _category_index(self, category: str) -> int:
+        token = str(category or "").strip()
+        if token in self._CATEGORY_ORDER:
+            return self._CATEGORY_ORDER.index(token)
+        return len(self._CATEGORY_ORDER) + 1
+
+    def _config_row(self, key: str, spec: dict[str, object], effective: dict[str, object]) -> dict[str, object]:
+        default_value = self._admin_defaults[key]
+        current_value = effective.get(key, default_value)
+        kind = str(spec.get("type") or "str")
+        restart_required = bool(spec.get("restart_required", False))
+        impact = str(spec.get("impact") or ("restart" if restart_required else "runtime"))
+        choices_raw = spec.get("choices")
+        choices: list[str] = []
+        if isinstance(choices_raw, (list, tuple, set)):
+            choices = [str(item) for item in choices_raw]
+        return {
+            "key": key,
+            "type": kind,
+            "category": self._category_for_key(key, spec),
+            "description": str(spec.get("description") or ""),
+            "min": spec.get("min"),
+            "max": spec.get("max"),
+            "unit": str(spec.get("unit") or ""),
+            "restart_required": restart_required,
+            "impact": impact,
+            "choices": choices,
+            "default_value": default_value,
+            "current_value": current_value,
+            "default_display": self._display_value(default_value),
+            "current_display": self._display_value(current_value),
+            "changed": current_value != default_value,
+            "input_name": f"config_{key}",
+        }
+
+    def _diff_rows(self, before: dict[str, object], after: dict[str, object]) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for key in self._admin_specs:
+            prev = before.get(key, self._admin_defaults[key])
+            nxt = after.get(key, self._admin_defaults[key])
+            if prev == nxt:
+                continue
+            spec = self._admin_specs.get(key) or {}
             rows.append(
                 {
                     "key": key,
+                    "category": self._category_for_key(key, spec),
                     "type": str(spec.get("type") or "str"),
-                    "description": str(spec.get("description") or ""),
-                    "min": spec.get("min"),
-                    "max": spec.get("max"),
-                    "default_value": default_value,
-                    "current_value": current_value,
-                    "default_display": self._display_value(default_value),
-                    "current_display": self._display_value(current_value),
-                    "changed": current_value != default_value,
+                    "restart_required": bool(spec.get("restart_required", False)),
+                    "impact": str(spec.get("impact") or ("restart" if bool(spec.get("restart_required", False)) else "runtime")),
+                    "before": prev,
+                    "after": nxt,
+                    "before_display": self._display_value(prev),
+                    "after_display": self._display_value(nxt),
                 }
             )
         return rows
 
-    def update_from_payload(self, payload: dict[str, object], actor_user_id: int) -> dict[str, object]:
-        normalized: dict[str, object] = {}
-        if not isinstance(payload, dict):
-            raise ValueError("system config payload must be a JSON object")
-        for payload_key in payload:
-            key_text = str(payload_key or "").strip()
-            if key_text not in self._admin_specs:
-                raise ValueError(f"unknown system config key: {key_text}")
-        for key in self._admin_specs:
-            if key in payload:
-                normalized[key] = self._normalize_value(key, payload[key])
-            else:
-                normalized[key] = self._effective_values.get(key, self._admin_defaults[key])
-        self._persist_overrides(normalized, actor_user_id)
-        return self.refresh()
-
-    def reset(self) -> dict[str, object]:
-        with self.db.conn() as conn:
-            conn.execute("DELETE FROM system_config")
-            conn.commit()
-        return self.refresh()
-
     def _persist_overrides(self, values: dict[str, object], actor_user_id: int) -> None:
         safe_actor_user_id = int(actor_user_id)
         when = now_iso()
-        with self.db.conn() as conn:
+
+        def _tx(conn) -> None:
             for key in self._admin_specs:
                 value = values[key]
                 default = self._admin_defaults[key]
@@ -118,7 +280,8 @@ class SystemConfigService:
                 ),
                 list(self._admin_specs.keys()),
             )
-            conn.commit()
+
+        self.db.write_transaction(_tx)
 
     def _load_overrides_locked(self) -> dict[str, object]:
         rows = self.db.fetch_all("SELECT key, value_json FROM system_config ORDER BY key ASC")
@@ -155,7 +318,7 @@ class SystemConfigService:
         elif kind == "bool":
             value = self._normalize_bool(raw_value, key)
         elif kind == "str":
-            value = self._normalize_str(raw_value)
+            value = self._normalize_str(raw_value, key, spec)
         else:
             raise ValueError(f"unsupported config type for {key}: {kind}")
 
@@ -216,8 +379,24 @@ class SystemConfigService:
             return False
         raise ValueError(f"{key} must be a boolean (true/false)")
 
-    def _normalize_str(self, raw_value: object) -> str:
-        return str(raw_value if raw_value is not None else "")
+    def _normalize_str(self, raw_value: object, key: str, spec: dict[str, object]) -> str:
+        value = str(raw_value if raw_value is not None else "")
+        ascii_mode = str(spec.get("ascii") or "printable").strip().lower()
+        if ascii_mode in {"none", "off", "false", "0"}:
+            return value
+        if ascii_mode == "visible":
+            min_code = 0x21
+            max_code = 0x7E
+            hint = "visible ASCII characters (0x21-0x7E)"
+        else:
+            min_code = 0x20
+            max_code = 0x7E
+            hint = "printable ASCII characters (0x20-0x7E)"
+        for ch in value:
+            code = ord(ch)
+            if code < min_code or code > max_code:
+                raise ValueError(f"{key} must contain only {hint}")
+        return value
 
     def _display_value(self, value: object) -> str:
         if isinstance(value, bool):

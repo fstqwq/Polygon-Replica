@@ -1,25 +1,50 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
-import os
 import re
 import shutil
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from starlette.requests import Request
 
 from tests.common import SmokeBase, testsuite_root
 from app.impl.config import config
-from app.impl.root_auth import auth_password_meta, login_page, register_submit
-from app.impl.run_export import artifact_file
+from app.impl.problem_editor import (
+    checker_set_standard,
+    files_create_template,
+    files_delete,
+    files_download,
+    files_new,
+    files_rename,
+    files_save,
+    files_upload,
+    generator_create_template,
+    interactor_create_template,
+    interactor_save_source,
+    solutions_create_template,
+    solutions_delete,
+    solutions_rename,
+    solutions_save_source,
+    solutions_set_tag,
+    validator_create_template,
+    validator_save_source,
+)
+from app.impl.root_auth import auth_password_meta, login_page
+from app.impl.run_export import artifact_file, run_artifact_file, run_execute
+from tests.ui_support import _register_with_password_proof
 
 build_service = config.build_service
 db = config.db
 run_service = config.run_service
 toolchain_service = config.toolchain_service
 workspace_service = config.workspace_service
+
+FLASH_COOKIE_NAME = config.constants.FLASH_COOKIE_NAME
 
 
 def _request(
@@ -57,7 +82,93 @@ def _extract_hidden_input_value(html: str, name: str) -> str:
     return match.group(1)
 
 
+def _response_set_cookie_headers(response) -> list[str]:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return []
+    values: list[str] = []
+    try:
+        values = [str(item or "") for item in headers.getlist("set-cookie")]
+    except Exception:
+        values = []
+    if values:
+        return values
+    raw_headers = list(getattr(response, "raw_headers", []) or [])
+    for key, value in raw_headers:
+        if bytes(key).lower() == b"set-cookie":
+            values.append(bytes(value).decode("latin-1", errors="ignore"))
+    if values:
+        return values
+    single = str(headers.get("set-cookie", "") or "")
+    return [single] if single else []
+
+
+def _extract_cookie_value(set_cookie: str | list[str], cookie_name: str) -> str:
+    prefix = f"{cookie_name}="
+    headers = [str(item or "") for item in set_cookie] if isinstance(set_cookie, list) else [str(set_cookie or "")]
+    for header in headers:
+        first = str(header).split(";", 1)[0].strip()
+        if first.startswith(prefix):
+            return first[len(prefix) :]
+    return ""
+
+
+def _flash_messages_from_response(response) -> list[str]:
+    token = _extract_cookie_value(_response_set_cookie_headers(response), FLASH_COOKIE_NAME)
+    if not token:
+        return []
+    try:
+        padded = token + ("=" * ((4 - (len(token) % 4)) % 4))
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        payload = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    result: list[str] = []
+    for item in payload:
+        text = str(item or "").strip()
+        if text:
+            result.append(text)
+    return result
+
+
 class TestSecurity(SmokeBase):
+    class _FakeUpload:
+        def __init__(self, data: bytes):
+            self._buf = data
+            self._offset = 0
+
+        async def read(self, size: int = -1) -> bytes:
+            if size is None or size < 0:
+                size = len(self._buf) - self._offset
+            if self._offset >= len(self._buf):
+                return b""
+            end = min(len(self._buf), self._offset + int(size))
+            chunk = self._buf[self._offset : end]
+            self._offset = end
+            return chunk
+
+        async def close(self) -> None:
+            return None
+
+    def _first_flash_message(self, response) -> str:
+        messages = _flash_messages_from_response(response)
+        self.assertTrue(messages)
+        return str(messages[0] or "")
+
+    def _fixture_build_root(self, *, problem: str, workspace_id: int, build_id: str) -> tuple[str, Path]:
+        build_ref = config.fs_manager.compute_build_ref(
+            {
+                "suite": "security",
+                "problem": str(problem or "").strip(),
+                "workspace_id": int(workspace_id),
+                "build_id": str(build_id or "").strip(),
+            }
+        )
+        artifact_root = config.fs_manager.ensure_build_layout(build_ref).root.resolve()
+        return build_ref, artifact_root
+
     def _prepare_guarded_flag_build(self, problem: str, user: str, flag_text: str) -> tuple[Path, str, Path, Path]:
         if shutil.which("g++") is None:
             self.skipTest("g++ is required for checker compile")
@@ -71,11 +182,7 @@ class TestSecurity(SmokeBase):
         workspace_id = int(ctx["workspace"]["id"])
 
         build_id = f"b-sec-flag-{uuid.uuid4().hex[:8]}"
-        artifact_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        (artifact_root / "tests").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "bin").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
+        build_ref, artifact_root = self._fixture_build_root(problem=problem, workspace_id=workspace_id, build_id=build_id)
         (artifact_root / "tests" / "001.in").write_text("0\n", encoding="utf-8")
         ans_path = artifact_root / "ans" / "001.ans"
         ans_path.write_text(flag_text + "\n", encoding="utf-8")
@@ -108,11 +215,12 @@ class TestSecurity(SmokeBase):
 
         db.execute(
             """
-            INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 build_id,
+                build_ref,
                 problem_id,
                 workspace_id,
                 "",
@@ -137,7 +245,7 @@ class TestSecurity(SmokeBase):
         if require_java and (shutil.which("javac") is None or shutil.which("java") is None):
             self.skipTest("javac/java is not available")
 
-        problem = f"sec-escape-{language}-{uuid.uuid4().hex[:8]}"
+        problem = f"alice/sec-escape-{language}-{uuid.uuid4().hex[:8]}"
         flag_text = f"FLAG{{secret-{uuid.uuid4().hex[:8]}}}"
         ws, build_id, _artifact_root, ans_path = self._prepare_guarded_flag_build(problem, self.user, flag_text)
         source_path = ws / source_rel
@@ -165,13 +273,7 @@ class TestSecurity(SmokeBase):
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:
         username = f"secsql-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
-        registered = register_submit(
-            request=_post_request("/register"),
-            username=username,
-            password=password,
-            password_confirm=password,
-            next="/",
-        )
+        registered = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(registered.status_code, 303)
 
         row = db.fetch_one("SELECT password_salt FROM users WHERE username=?", [username])
@@ -195,24 +297,29 @@ class TestSecurity(SmokeBase):
         self.assertNotEqual(injected_salt, real_salt)
 
     def test_artifact_download_denies_cross_workspace_access(self) -> None:
-        workspace_service.grant_repo_access("sample", "bob", "owner")
-        workspace_service.ensure_workspace("sample", "bob")
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        workspace_service.ensure_workspace("alice/sample", "bob")
 
-        alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
         build_id = f"b-sec-artifact-{uuid.uuid4().hex[:8]}"
-        artifact_root = self._artifact_root(build_id)
+        build_ref, artifact_root = self._fixture_build_root(
+            problem="alice/sample",
+            workspace_id=alice_workspace_id,
+            build_id=build_id,
+        )
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db.execute(
             """
-            INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 build_id,
+                build_ref,
                 problem_id,
                 alice_workspace_id,
                 "",
@@ -226,26 +333,31 @@ class TestSecurity(SmokeBase):
         )
 
         with self.assertRaises(HTTPException) as denied:
-            artifact_file("sample", "bob", build_id, "logs/compile.log")
+            artifact_file("alice/sample", "bob", build_id, "logs/compile.log")
         self.assertEqual(denied.exception.status_code, 404)
         self.assertIn("workspace", str(denied.exception.detail))
 
     def test_artifact_download_rejects_path_traversal(self) -> None:
-        alice_ctx = workspace_service.workspace_context("sample", "alice", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
         build_id = f"b-sec-path-{uuid.uuid4().hex[:8]}"
-        artifact_root = self._artifact_root(build_id)
+        build_ref, artifact_root = self._fixture_build_root(
+            problem="alice/sample",
+            workspace_id=alice_workspace_id,
+            build_id=build_id,
+        )
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db.execute(
             """
-            INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 build_id,
+                build_ref,
                 problem_id,
                 alice_workspace_id,
                 "",
@@ -259,12 +371,12 @@ class TestSecurity(SmokeBase):
         )
 
         with self.assertRaises(HTTPException) as denied:
-            artifact_file("sample", "alice", build_id, "../outside.txt")
+            artifact_file("alice/sample", "alice", build_id, "../outside.txt")
         self.assertEqual(denied.exception.status_code, 400)
         self.assertIn("invalid artifact path", str(denied.exception.detail))
 
     def test_tests_spec_gen_command_shell_tokens_do_not_escape(self) -> None:
-        problem = f"secgen-{uuid.uuid4().hex[:8]}"
+        problem = f"alice/secgen-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem, "Security Generator")
         workspace_service.grant_repo_access(problem, self.user, "owner")
         ws = Path(workspace_service.ensure_workspace(problem, self.user))
@@ -421,3 +533,413 @@ int main() {
                 "}}\n"
             ),
         )
+
+    def test_files_save_rejects_path_traversal_escape(self) -> None:
+        marker = testsuite_root() / f"files-save-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker.unlink(missing_ok=True)
+        resp = files_save(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+            content="pwned\n",
+        )
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("invalid path", messages[0].lower())
+        self.assertFalse(marker.exists())
+
+    def test_files_upload_rejects_path_traversal_escape(self) -> None:
+        marker = testsuite_root() / f"files-upload-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker.unlink(missing_ok=True)
+        upload = self._FakeUpload(b"owned\n")
+        with self.assertRaises(HTTPException) as denied:
+            asyncio.run(
+                files_upload(
+                    problem="alice/sample",
+                    user="alice",
+                    path="../../" + marker.name,
+                    upload=upload,
+                )
+            )
+        self.assertEqual(denied.exception.status_code, 400)
+        self.assertIn("invalid path", str(denied.exception.detail).lower())
+        self.assertFalse(marker.exists())
+
+    def test_files_new_rejects_path_traversal_escape(self) -> None:
+        marker = testsuite_root() / f"files-new-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker.unlink(missing_ok=True)
+        resp = files_new(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("invalid path", self._first_flash_message(resp).lower())
+        self.assertFalse(marker.exists())
+
+    def test_files_create_template_rejects_path_traversal_escape(self) -> None:
+        marker = testsuite_root() / f"files-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = files_create_template(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+            kind="checker",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("template is only available", self._first_flash_message(resp).lower())
+        self.assertFalse(marker.exists())
+
+    def test_files_delete_rejects_path_traversal_escape(self) -> None:
+        marker = testsuite_root() / f"files-delete-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker.unlink(missing_ok=True)
+        resp = files_delete(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("invalid path", self._first_flash_message(resp).lower())
+        self.assertFalse(marker.exists())
+
+    def test_files_rename_rejects_destination_path_traversal(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        old_rel = f"notes/security-rename-{uuid.uuid4().hex[:8]}.txt"
+        old_abs = ws / old_rel
+        old_abs.parent.mkdir(parents=True, exist_ok=True)
+        old_abs.write_text("keep\n", encoding="utf-8")
+
+        marker = testsuite_root() / f"files-rename-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker.unlink(missing_ok=True)
+        resp = files_rename(
+            problem="alice/sample",
+            user="alice",
+            old_path=old_rel,
+            new_path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("invalid path", messages[0].lower())
+        self.assertTrue(old_abs.exists())
+        self.assertFalse(marker.exists())
+
+    def test_files_download_rejects_symlink_escape(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        outside = testsuite_root() / f"symlink-outside-{uuid.uuid4().hex[:8]}.txt"
+        outside.write_text("top-secret\n", encoding="utf-8")
+        leak_rel = f"notes/leak-{uuid.uuid4().hex[:8]}.txt"
+        leak_abs = ws / leak_rel
+        leak_abs.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            leak_abs.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink is not supported in this environment")
+        with self.assertRaises(HTTPException) as denied:
+            files_download("alice/sample", "alice", leak_rel)
+        self.assertEqual(denied.exception.status_code, 400)
+        self.assertIn("invalid path", str(denied.exception.detail).lower())
+
+    def test_files_download_rejects_path_traversal_escape(self) -> None:
+        with self.assertRaises(HTTPException) as denied:
+            files_download("alice/sample", "alice", "../../outside.txt")
+        self.assertEqual(denied.exception.status_code, 400)
+        self.assertIn("invalid path", str(denied.exception.detail).lower())
+
+    def test_generator_create_template_path_traversal_stays_in_workspace(self) -> None:
+        marker = testsuite_root() / f"generator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = generator_create_template(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(marker.exists())
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertTrue((ws / "generators" / "generator.cpp").exists())
+
+    def test_validator_create_template_path_traversal_stays_in_workspace(self) -> None:
+        marker = testsuite_root() / f"validator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = validator_create_template(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(marker.exists())
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertTrue((ws / "validators" / "validator.cpp").exists())
+
+    def test_validator_save_source_path_traversal_stays_in_workspace(self) -> None:
+        marker = testsuite_root() / f"validator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        content = "int main(){return 0;}\n"
+        resp = validator_save_source(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+            content=content,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(marker.exists())
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        target = ws / "validators" / "validator.cpp"
+        self.assertTrue(target.exists())
+        self.assertEqual(target.read_text(encoding="utf-8"), content)
+
+    def test_interactor_create_template_path_traversal_stays_in_workspace(self) -> None:
+        marker = testsuite_root() / f"interactor-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = interactor_create_template(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(marker.exists())
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertTrue((ws / "interactors" / "interactor.cpp").exists())
+
+    def test_interactor_save_source_path_traversal_stays_in_workspace(self) -> None:
+        marker = testsuite_root() / f"interactor-save-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        content = "int main(){return 0;}\n"
+        resp = interactor_save_source(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+            content=content,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(marker.exists())
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        target = ws / "interactors" / "interactor.cpp"
+        self.assertTrue(target.exists())
+        self.assertEqual(target.read_text(encoding="utf-8"), content)
+
+    def test_solutions_create_template_path_traversal_stays_in_workspace(self) -> None:
+        marker = testsuite_root() / f"solution-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = solutions_create_template(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(marker.exists())
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertTrue((ws / "solutions" / "accepted.cpp").exists())
+        self.assertTrue((ws / "solutions" / "accepted.cpp.desc").exists())
+
+    def test_solutions_save_source_rejects_path_traversal_escape(self) -> None:
+        marker = testsuite_root() / f"solution-save-escape-{uuid.uuid4().hex[:8]}.py"
+        marker.unlink(missing_ok=True)
+        resp = solutions_save_source(
+            request=_post_request("/problems/alice/sample/alice/solutions/editor"),
+            problem="alice/sample",
+            user="alice",
+            source_path="../../" + marker.name,
+            content="print(0)\n",
+            expected_behavior="accepted",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertTrue(self._first_flash_message(resp).strip())
+        self.assertFalse(marker.exists())
+
+    def test_solutions_set_tag_rejects_path_traversal_escape(self) -> None:
+        marker = testsuite_root() / f"solution-tag-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = solutions_set_tag(
+            problem="alice/sample",
+            user="alice",
+            source_path="../../" + marker.name,
+            expected_behavior="accepted",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertTrue(self._first_flash_message(resp).strip())
+        self.assertFalse(marker.exists())
+
+    def test_solutions_rename_rejects_destination_path_traversal(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        old_rel = "solutions/rename-old.cpp"
+        old_abs = ws / old_rel
+        old_abs.parent.mkdir(parents=True, exist_ok=True)
+        old_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        marker = testsuite_root() / f"solution-rename-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = solutions_rename(
+            problem="alice/sample",
+            user="alice",
+            old_path=old_rel,
+            new_path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertTrue(self._first_flash_message(resp).strip())
+        self.assertTrue(old_abs.exists())
+        self.assertFalse(marker.exists())
+
+    def test_solutions_delete_rejects_path_traversal_escape(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        keep_rel = "solutions/keep.cpp"
+        keep_abs = ws / keep_rel
+        keep_abs.parent.mkdir(parents=True, exist_ok=True)
+        keep_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        marker = testsuite_root() / f"solution-delete-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        resp = solutions_delete(
+            problem="alice/sample",
+            user="alice",
+            source_path="../../" + marker.name,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertTrue(self._first_flash_message(resp).strip())
+        self.assertTrue(keep_abs.exists())
+        self.assertFalse(marker.exists())
+
+    def _insert_invalid_run_root_row(self, run_id: str, root: Path, *, problem: str = "alice/sample", user: str = "alice") -> None:
+        ctx = workspace_service.workspace_context(problem, user, include_recent=False)
+        db.execute(
+            """
+            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                run_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "pending",
+                "pass-fail",
+                "ok",
+                "{}",
+                str(root),
+                "2026-02-28T00:00:00Z",
+                "2026-02-28T00:00:01Z",
+            ],
+        )
+
+    def test_run_artifact_file_rejects_path_traversal(self) -> None:
+        run_id = f"r-sec-run-{uuid.uuid4().hex[:8]}"
+        run_root = config.fs_manager.prepare_run_root(run_id).resolve()
+        (run_root / "stdout.txt").write_text("ok\n", encoding="utf-8")
+        self._insert_invalid_run_root_row(run_id, run_root)
+        with self.assertRaises(HTTPException) as denied:
+            run_artifact_file("alice/sample", "alice", run_id, "../outside.txt")
+        self.assertEqual(denied.exception.status_code, 400)
+        self.assertIn("invalid run artifact path", str(denied.exception.detail).lower())
+
+    def test_run_artifact_file_rejects_symlink_escape(self) -> None:
+        run_id = f"r-sec-link-{uuid.uuid4().hex[:8]}"
+        run_root = config.fs_manager.prepare_run_root(run_id).resolve()
+        outside = testsuite_root() / f"run-leak-{uuid.uuid4().hex[:8]}.txt"
+        outside.write_text("outside\n", encoding="utf-8")
+        leak = run_root / "leak.txt"
+        try:
+            leak.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink is not supported in this environment")
+        self._insert_invalid_run_root_row(run_id, run_root)
+        with self.assertRaises(HTTPException) as denied:
+            run_artifact_file("alice/sample", "alice", run_id, "leak.txt")
+        self.assertEqual(denied.exception.status_code, 404)
+        self.assertIn("run artifact file not found", str(denied.exception.detail).lower())
+
+    def test_run_artifact_file_blocks_compile_log_download(self) -> None:
+        run_id = f"r-sec-ce-{uuid.uuid4().hex[:8]}"
+        run_root = config.fs_manager.prepare_run_root(run_id).resolve()
+        (run_root / "compile.log").write_text("compile error\n", encoding="utf-8")
+        self._insert_invalid_run_root_row(run_id, run_root)
+        with self.assertRaises(HTTPException) as denied:
+            run_artifact_file("alice/sample", "alice", run_id, "compile.log")
+        self.assertEqual(denied.exception.status_code, 403)
+        self.assertIn("compile.log download is disabled", str(denied.exception.detail).lower())
+
+    def test_artifact_file_rejects_symlink_escape(self) -> None:
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(alice_ctx["problem"]["id"])
+        alice_workspace_id = int(alice_ctx["workspace"]["id"])
+
+        build_id = f"b-sec-symlink-{uuid.uuid4().hex[:8]}"
+        build_ref, artifact_root = self._fixture_build_root(
+            problem="alice/sample",
+            workspace_id=alice_workspace_id,
+            build_id=build_id,
+        )
+        (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
+        outside = testsuite_root() / f"artifact-leak-{uuid.uuid4().hex[:8]}.txt"
+        outside.write_text("outside\n", encoding="utf-8")
+        leak = artifact_root / "logs" / "leak.log"
+        try:
+            leak.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink is not supported in this environment")
+        db.execute(
+            """
+            INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                build_id,
+                build_ref,
+                problem_id,
+                alice_workspace_id,
+                "",
+                "main",
+                "ok",
+                "{}",
+                str(artifact_root),
+                "2026-02-28T00:00:00Z",
+                "2026-02-28T00:00:01Z",
+            ],
+        )
+        with self.assertRaises(HTTPException) as denied:
+            artifact_file("alice/sample", "alice", build_id, "logs/leak.log")
+        self.assertEqual(denied.exception.status_code, 404)
+        self.assertIn("artifact file not found", str(denied.exception.detail).lower())
+
+    def test_run_execute_sanitizes_path_traversal_solution_paths_before_queue(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_start_run_execute_batch(*args, **kwargs):
+            captured["targets"] = list(kwargs.get("targets") or [])
+            return True
+
+        with patch("app.impl.run_export._start_run_execute_batch", side_effect=_fake_start_run_execute_batch):
+            resp = run_execute(
+                problem="alice/sample",
+                user="alice",
+                build_id="",
+                solution_paths=["../../escape.cpp"],
+                test_names=[],
+                submission_upload=None,
+            )
+        self.assertEqual(resp.status_code, 303)
+        location = str(resp.headers.get("location", "") or "")
+        self.assertIn("/problems/alice/sample/alice/run/details?invocation_id=", location)
+        targets = captured.get("targets")
+        self.assertIsInstance(targets, list)
+        self.assertTrue(targets)
+        for row in targets:
+            self.assertIsInstance(row, dict)
+            submission_path = str(row.get("submission_path") or "")
+            self.assertNotIn("..", submission_path)
+            self.assertFalse(submission_path.startswith("/"))
+            self.assertFalse(submission_path.startswith("\\"))
+
+    def test_checker_set_standard_rejects_escape_name(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        cfg = ws / "config" / "build.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(json.dumps({"checker_standard": "std::wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
+        resp = checker_set_standard(problem="alice/sample", user="alice", checker_name="../../evil")
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("invalid standard checker name", messages[0].lower())
+        payload = json.loads(cfg.read_text(encoding="utf-8"))
+        self.assertEqual(str(payload.get("checker_standard") or ""), "std::wcmp.cpp")
+

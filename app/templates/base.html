@@ -1,11 +1,11 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% if ctx.problem.name %}{{ ctx.problem.name }} - {% endif %}Polygon-Replica</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <script src="/static/ui.js" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260307-2" />
+  <script src="/static/ui.js?v=20260305-1" defer></script>
   <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css" />
   <script src="/static/vendor/codemirror/lib/codemirror.min.js" defer></script>
   <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js" defer></script>
@@ -15,10 +15,11 @@
   <script src="/static/vendor/codemirror/mode/stex/stex.min.js" defer></script>
   <script src="/static/vendor/codemirror/mode/javascript/javascript.min.js" defer></script>
 </head>
-<body>
+<body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}">
+  {% set flash_presenter = 'topbar' %}
   <header class="topbar">
     {% set top_user = ctx.user %}
-    {% set top_settings_href = '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/settings' %}
+    {% set top_settings_href = '/problems/' ~ ctx.user.username ~ '/settings' %}
     {% set top_active_main = 'problems' %}
     {% include "_topbar_common.html" %}
     {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
@@ -32,14 +33,25 @@
     {% set verification_stale_reason = ctx.verification_status.stale_reason if ctx.verification_status is defined else "" %}
     {% set verification_tooltip = verification_error if verification_mode == 'failed' else verification_stale_reason if verification_mode == 'stale' else '' %}
     {% if verification_mode == 'failed' and (not verification_tooltip) %}
-    {% set verification_tooltip = 'verification failed; open Invocations for details' %}
+    {% set verification_tooltip = 'verification failed; open Verifications for details' %}
     {% elif verification_mode == 'stale' and (not verification_tooltip) %}
     {% set verification_tooltip = 'changed: verification inputs' %}
     {% endif %}
-    {% set tests_nav = nav_status.get('tests', nav_status.get('build', {})) %}
+    {% set tests_nav = nav_status.get('tests', {}) %}
+    {% set verification_page_target = namespace(value='statement') %}
+    {% if request is defined and request.url is defined %}
+    {% set current_path = request.url.path | default('') %}
+    {% set current_parts = current_path.split('/') %}
+    {% set page_candidates = ['statement', 'files', 'generators', 'checker', 'interactor', 'validator', 'solutions', 'tests', 'preview', 'run', 'export', 'access', 'history', 'workspace', 'settings'] %}
+    {% for part in current_parts | reverse %}
+    {% if verification_page_target.value == 'statement' and part in page_candidates %}
+    {% set verification_page_target.value = part %}
+    {% endif %}
+    {% endfor %}
+    {% endif %}
     <nav class="problem-submenu">
       <div class="problem-submenu-item">
-        <a data-page="general" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/general">
+        <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement">
           <span class="submenu-title">Statement</span>
           <span class="submenu-status submenu-status-stack">
             <span class="submenu-status-line {{ general_line_class }}">{{ general_nav.get("text", "-") }}</span>
@@ -102,7 +114,7 @@
       <div class="problem-submenu-item problem-submenu-item-run">
         <div class="problem-submenu-run-head">
           <a data-page="run" class="problem-submenu-run-title" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">
-            <span class="submenu-title">Invocations</span>
+            <span class="submenu-title">Verifications</span>
           </a>
         </div>
         <span class="problem-submenu-run-status">
@@ -116,7 +128,7 @@
             </span>
             <span class="submenu-status-line verification-start-line">
               <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/verification/start">
-                <input class="page-target" type="hidden" name="page" value="general" />
+                <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
                 <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start verification)</a>
               </form>
             </span>
@@ -210,3 +222,4 @@
   <script src="/static/editor_init.js" defer></script>
 </body>
 </html>
+

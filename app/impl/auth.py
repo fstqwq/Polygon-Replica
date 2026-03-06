@@ -1,33 +1,470 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import base64
-import hashlib
-import hmac
 import json
+import platform
+import re
 import secrets
+import shutil
 import sqlite3
 import time
 import warnings
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 from app.impl.config import config
 from app.db import now_iso
+from app.services.hashing import hmac_sha256_hex, sha256_hex_bytes, sha256_hex_text
 
 _C = config.constants
+_RUNTIME_PROFILE_CACHE: dict[str, str] | None = None
+_RUNTIME_PROFILE_MAX_LEN = 160
+_RUNTIME_BACKEND_CACHE: dict[str, str] | None = None
+_RUNTIME_BACKEND_CACHE_TS = 0.0
+_RUNTIME_BACKEND_CACHE_TTL_SEC = 2.0
 
-def _startup_cleanup_runtime_cache() -> None:
+
+def _sanitize_runtime_profile_value(raw: object, default: str = "n/a") -> str:
+    text = " ".join(str(raw or "").split()).strip()
+    if not text:
+        return default
+    if len(text) > _RUNTIME_PROFILE_MAX_LEN:
+        return text[: _RUNTIME_PROFILE_MAX_LEN - 3].rstrip() + "..."
+    return text
+
+
+def _read_linux_distro_label() -> str:
     try:
-        config.runtime_cache_service.cleanup_cache(force=True)
+        with open("/etc/os-release", "r", encoding="utf-8", errors="replace") as fh:
+            values: dict[str, str] = {}
+            for line in fh:
+                raw = str(line or "").strip()
+                if not raw or "=" not in raw or raw.startswith("#"):
+                    continue
+                key, value = raw.split("=", 1)
+                values[str(key or "").strip()] = str(value or "").strip().strip('"').strip("'")
+    except Exception:
+        values = {}
+    return str(values.get("PRETTY_NAME") or values.get("NAME") or "").strip()
+
+
+def _parse_cpu_frequency_ghz(raw: object) -> float | None:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return None
+    match_ghz = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*ghz", text)
+    if match_ghz is not None:
+        try:
+            value = float(match_ghz.group(1))
+            if value > 0:
+                return value
+        except Exception:
+            return None
+    match_mhz = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*mhz", text)
+    if match_mhz is not None:
+        try:
+            value = float(match_mhz.group(1)) / 1000.0
+            if value > 0:
+                return value
+        except Exception:
+            return None
+    try:
+        numeric = float(text)
+    except Exception:
+        return None
+    if numeric > 100:
+        return numeric / 1000.0
+    if numeric > 0:
+        return numeric
+    return None
+
+
+def _format_cpu_label(label: str, freq_ghz: float | None) -> str:
+    text = " ".join(str(label or "").split()).strip()
+    if not text:
+        return ""
+    if freq_ghz is None:
+        freq_ghz = _parse_cpu_frequency_ghz(text)
+    if freq_ghz is None or freq_ghz <= 0:
+        return text
+    suffix = f" @{freq_ghz:.2f}GHz"
+    if re.search(r"@\s*[0-9]+(?:\.[0-9]+)?\s*ghz", text, flags=re.IGNORECASE):
+        return re.sub(r"@\s*[0-9]+(?:\.[0-9]+)?\s*ghz", suffix, text, count=1, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*[0-9]+(?:\.[0-9]+)?\s*ghz\b", "", text, flags=re.IGNORECASE).strip()
+    if not cleaned:
+        cleaned = text
+    return f"{cleaned}{suffix}"
+
+
+def _read_cpu_info_details() -> tuple[str, float | None]:
+    try:
+        primary = ""
+        secondary = ""
+        freq_ghz: float | None = None
+        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                text = str(line or "")
+                if ":" not in text:
+                    continue
+                key, value = text.split(":", 1)
+                k = str(key or "").strip().lower()
+                cleaned = str(value or "").strip()
+                if not cleaned:
+                    continue
+                if k in {"model name", "cpu model", "hardware"}:
+                    if (not primary) and (not re.fullmatch(r"\d+", cleaned)):
+                        primary = cleaned
+                    continue
+                if k == "processor" and (not secondary) and (not re.fullmatch(r"\d+", cleaned)):
+                    secondary = cleaned
+                    continue
+                if (k in {"cpu mhz", "clock"}) and (freq_ghz is None):
+                    freq_ghz = _parse_cpu_frequency_ghz(cleaned)
+        if primary:
+            return (primary, freq_ghz)
+        if secondary:
+            return (secondary, freq_ghz)
+    except Exception:
+        pass
+    return ("", None)
+
+
+def _runtime_footer_profile() -> dict[str, str]:
+    global _RUNTIME_PROFILE_CACHE
+    if isinstance(_RUNTIME_PROFILE_CACHE, dict):
+        return dict(_RUNTIME_PROFILE_CACHE)
+    distro = _read_linux_distro_label()
+    if not distro:
+        distro = f"{platform.system()} {platform.release()}".strip()
+    cpu_name, cpu_ghz = _read_cpu_info_details()
+    if not cpu_name:
+        cpu_name = str(platform.processor() or platform.machine() or "").strip()
+    cpu = _format_cpu_label(cpu_name, cpu_ghz)
+    profile = {
+        "runtime_linux_distro": _sanitize_runtime_profile_value(distro),
+        "runtime_cpu_info": _sanitize_runtime_profile_value(cpu),
+    }
+    _RUNTIME_PROFILE_CACHE = dict(profile)
+    return profile
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _runtime_backend_profile() -> dict[str, str]:
+    global _RUNTIME_BACKEND_CACHE, _RUNTIME_BACKEND_CACHE_TS
+    now = time.monotonic()
+    if (
+        isinstance(_RUNTIME_BACKEND_CACHE, dict)
+        and (now - float(_RUNTIME_BACKEND_CACHE_TS)) <= _RUNTIME_BACKEND_CACHE_TTL_SEC
+    ):
+        return dict(_RUNTIME_BACKEND_CACHE)
+    sandbox_name = _sanitize_runtime_profile_value(getattr(config.sandbox_backend, "name", ""), "n/a")
+    sandbox_count = "1" if sandbox_name != "n/a" else "0"
+    judgehost_enabled = False
+    hosts_online = 0
+    hosts_total = 0
+    queued = 0
+    leased = 0
+    completed = 0
+    failed = 0
+    try:
+        status = config.judgehost_task_service.status()
+        if isinstance(status, dict):
+            judgehost_enabled = bool(status.get("enabled"))
+            hosts_online = _safe_int(status.get("hosts_online"), 0)
+            hosts_total = _safe_int(status.get("hosts_total"), 0)
+            queue = status.get("queue")
+            if isinstance(queue, dict):
+                queued = _safe_int(queue.get("queued"), 0)
+                leased = _safe_int(queue.get("leased"), 0)
+                completed = _safe_int(queue.get("completed"), 0)
+                failed = _safe_int(queue.get("failed"), 0)
+    except Exception:
+        pass
+    hosts_online = max(0, int(hosts_online))
+    hosts_total = max(0, int(hosts_total))
+    queued = max(0, int(queued))
+    leased = max(0, int(leased))
+    completed = max(0, int(completed))
+    failed = max(0, int(failed))
+    if judgehost_enabled:
+        judgehost_summary = (
+            f"online {hosts_online}/{hosts_total}; "
+            f"queued={queued}; leased={leased}; completed={completed}; failed={failed}"
+        )
+    else:
+        judgehost_summary = "disabled"
+    judgehost_danger = (not judgehost_enabled) or (hosts_online <= 0)
+    profile = {
+        "runtime_sandbox_backend": sandbox_name,
+        "runtime_sandbox_backend_count": sandbox_count,
+        "runtime_judgehost_backend_summary": _sanitize_runtime_profile_value(judgehost_summary),
+        "runtime_judgehost_backend_danger": "1" if judgehost_danger else "0",
+        "runtime_judgehost_enabled": "1" if judgehost_enabled else "0",
+        "runtime_judgehost_hosts_online": str(hosts_online),
+        "runtime_judgehost_hosts_total": str(hosts_total),
+    }
+    _RUNTIME_BACKEND_CACHE = dict(profile)
+    _RUNTIME_BACKEND_CACHE_TS = now
+    return profile
+
+def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str) -> None:
+    safe_table = str(table_name or "").strip()
+    if safe_table not in {"builds", "previews", "runs", "contest_jobs"}:
+        return
+    try:
+        rows = config.db.fetch_all(
+            f"SELECT id,summary_json FROM {safe_table} WHERE status IN ('running','queued','pending')"
+        )
     except Exception as exc:
-        warnings.warn(f'startup runtime cache cleanup failed: {exc}', RuntimeWarning)
+        warnings.warn(f"startup {safe_table} inflight scan failed: {exc}", RuntimeWarning)
+        return
+    for row in rows:
+        row_id = str(row["id"] or "").strip()
+        if not row_id:
+            continue
+        summary_obj: dict[str, object] = {}
+        try:
+            parsed = json.loads(str(row["summary_json"] or "").strip() or "{}")
+            if isinstance(parsed, dict):
+                summary_obj = dict(parsed)
+        except Exception:
+            summary_obj = {}
+        summary_obj["cancelled"] = True
+        summary_obj["cancel_reason"] = reason
+        if not str(summary_obj.get("error") or "").strip():
+            summary_obj["error"] = reason
+        try:
+            config.db.execute(
+                f"""
+                UPDATE {safe_table}
+                SET status='failed', summary_json=?, finished_at=COALESCE(finished_at, ?)
+                WHERE id=?
+                """,
+                [json.dumps(summary_obj), now_text, row_id],
+            )
+        except Exception as exc:
+            warnings.warn(f"startup {safe_table} inflight cancel failed for {row_id}: {exc}", RuntimeWarning)
+
+
+def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
+    run_ids: list[str] = []
+    service = getattr(config, "judgehost_task_service", None)
+    if service is not None:
+        try:
+            run_ids = list(service.startup_cancel_inflight_tasks(reason=reason))
+        except Exception as exc:
+            warnings.warn(f"startup judgehost inflight scan failed: {exc}", RuntimeWarning)
+    if service is not None:
+        try:
+            service.cancel_all_domjudge_inflight()
+        except Exception as exc:
+            warnings.warn(f"startup judgehost job/case cancel failed: {exc}", RuntimeWarning)
+    if not run_ids:
+        return
+    placeholders = ",".join(("?" for _ in run_ids))
+    try:
+        run_rows = config.db.fetch_all(
+            f"SELECT id,summary_json,status FROM runs WHERE id IN ({placeholders})",
+            [*run_ids],
+        )
+    except Exception as exc:
+        warnings.warn(f"startup judgehost run scan failed: {exc}", RuntimeWarning)
+        return
+    for run_row in run_rows:
+        run_id = str(run_row["id"] or "").strip()
+        if not run_id:
+            continue
+        status = str(run_row["status"] or "").strip().lower()
+        if status not in {"running", "queued", "pending"}:
+            continue
+        summary_obj: dict[str, object] = {}
+        try:
+            parsed = json.loads(str(run_row["summary_json"] or "").strip() or "{}")
+            if isinstance(parsed, dict):
+                summary_obj = dict(parsed)
+        except Exception:
+            summary_obj = {}
+        summary_obj["cancelled"] = True
+        summary_obj["cancel_reason"] = reason
+        if not str(summary_obj.get("error") or "").strip():
+            summary_obj["error"] = reason
+        try:
+            config.db.execute(
+                """
+                UPDATE runs
+                SET status='failed', summary_json=?, finished_at=COALESCE(finished_at, ?)
+                WHERE id=?
+                """,
+                [json.dumps(summary_obj), now_text, run_id],
+            )
+        except Exception as exc:
+            warnings.warn(f"startup run cancel failed for {run_id}: {exc}", RuntimeWarning)
+
+
+def _startup_normalize_run_token(raw: object) -> str:
+    token = str(raw or "").strip()
+    if not token:
+        return ""
+    token = token.split("?", 1)[0].split("#", 1)[0].strip()
+    if not token:
+        return ""
+    if "/" in token:
+        token = token.rsplit("/", 1)[-1].strip()
+    return token
+
+
+def _startup_collect_invocation_run_ids(details: dict[str, object]) -> list[str]:
+    values: list[str] = []
+    primary = _startup_normalize_run_token(details.get("run_id"))
+    if primary:
+        values.append(primary)
+    raw_run_ids = details.get("run_ids")
+    if isinstance(raw_run_ids, list):
+        for raw in raw_run_ids:
+            token = _startup_normalize_run_token(raw)
+            if token:
+                values.append(token)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for token in values:
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+    return deduped
+
+
+def _startup_cancel_audit_inflight(reason: str, *, now_text: str) -> None:
+    try:
+        rows = config.db.fetch_all(
+            """
+            SELECT id,actor_user_id,problem_id,action,details_json
+            FROM audit_log
+            WHERE action IN ('run.execute', 'verification.start', 'run.cancel')
+            ORDER BY created_at DESC, id DESC
+            """
+        )
+    except Exception as exc:
+        warnings.warn(f"startup audit inflight scan failed: {exc}", RuntimeWarning)
+        return
+    seen: set[tuple[int, int, str]] = set()
+    pending_cancel_rows: list[tuple[int | None, int | None, dict[str, object]]] = []
+    for row in rows:
+        details: dict[str, object] = {}
+        try:
+            parsed = json.loads(str(row["details_json"] or "").strip() or "{}")
+            if isinstance(parsed, dict):
+                details = dict(parsed)
+        except Exception:
+            details = {}
+        invocation_id = _startup_normalize_run_token(details.get("invocation_id"))
+        if not invocation_id:
+            continue
+        try:
+            actor_user_id = int(row["actor_user_id"]) if row["actor_user_id"] is not None else None
+        except Exception:
+            actor_user_id = None
+        try:
+            problem_id = int(row["problem_id"]) if row["problem_id"] is not None else None
+        except Exception:
+            problem_id = None
+        scope_key = (int(problem_id or -1), int(actor_user_id or -1), invocation_id)
+        if scope_key in seen:
+            continue
+        seen.add(scope_key)
+        action_token = str(row["action"] or "").strip().lower()
+        if action_token == "run.cancel":
+            continue
+        status_token = str(details.get("status") or "").strip().lower()
+        if status_token not in {"running", "queued", "pending"}:
+            continue
+        invocation_run_ids = _startup_collect_invocation_run_ids(details)
+        cancel_details: dict[str, object] = {
+            "invocation_id": invocation_id,
+            "run_ids": invocation_run_ids,
+            "run_count": len(invocation_run_ids),
+            "cancelled_runs": 0,
+            "cancelled_tasks": 0,
+            "cancelled_builds": 0,
+            "reason": reason,
+        }
+        pending_cancel_rows.append((actor_user_id, problem_id, cancel_details))
+    for actor_user_id, problem_id, cancel_details in pending_cancel_rows:
+        try:
+            config.db.execute(
+                """
+                INSERT INTO audit_log(actor_user_id, problem_id, action, details_json, created_at)
+                VALUES(?, ?, 'run.cancel', ?, ?)
+                """,
+                [
+                    actor_user_id,
+                    problem_id,
+                    json.dumps(cancel_details),
+                    now_text,
+                ],
+            )
+        except Exception as exc:
+            invocation_id = str(cancel_details.get("invocation_id") or "").strip()
+            warnings.warn(f"startup audit inflight cancel failed for {invocation_id}: {exc}", RuntimeWarning)
+
+
+def _startup_clear_all_caches() -> None:
+    try:
+        config.async_task_cache_service.clear_all()
+    except Exception as exc:
+        warnings.warn(f"startup async cache clear failed: {exc}", RuntimeWarning)
+    try:
+        config.judge_fs_index_service.clear_all()
+    except Exception as exc:
+        warnings.warn(f"startup judge fs index clear failed: {exc}", RuntimeWarning)
+    testcase_cache_root = (config.settings.cache_root / "judgehost-domjudge-testcases").resolve()
+    try:
+        if testcase_cache_root.exists() and testcase_cache_root.is_dir() and (not testcase_cache_root.is_symlink()):
+            shutil.rmtree(testcase_cache_root, ignore_errors=True)
+    except Exception as exc:
+        warnings.warn(f"startup testcase cache clear failed: {exc}", RuntimeWarning)
+    try:
+        testcase_cache_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        config.judgehost_task_service.clear_testcase_registry()
+    except Exception as exc:
+        warnings.warn(f"startup testcase registry reset failed: {exc}", RuntimeWarning)
+    durable_log_raw = str(_C.WORKER_QUEUE_DURABLE_LOG or "").strip()
+    durable_log = (config.settings.cache_root / "worker-queue-events.jsonl").resolve()
+    if durable_log_raw:
+        durable_log = Path(durable_log_raw).expanduser().resolve()
+    try:
+        durable_log.unlink(missing_ok=True)
+    except Exception as exc:
+        warnings.warn(f"startup worker queue durable log clear failed: {exc}", RuntimeWarning)
+
+
+def _startup_reset_runtime_state() -> None:
+    now_text = now_iso()
+    cancel_reason = "cancelled on service startup"
+    _startup_cancel_summary_rows("builds", cancel_reason, now_text=now_text)
+    _startup_cancel_summary_rows("previews", cancel_reason, now_text=now_text)
+    _startup_cancel_summary_rows("runs", cancel_reason, now_text=now_text)
+    _startup_cancel_summary_rows("contest_jobs", cancel_reason, now_text=now_text)
+    _startup_cancel_judgehost_inflight(cancel_reason, now_text=now_text)
+    _startup_cancel_audit_inflight(cancel_reason, now_text=now_text)
+    _startup_clear_all_caches()
 
 
 def startup() -> None:
     config.db.init()
-    config.invocation_backend_service.refresh_from_env()
+    _startup_reset_runtime_state()
+    config.invocation_backend_service.refresh()
     config.worker_queue_service.start()
-    _startup_cleanup_runtime_cache()
 
 
 def shutdown() -> None:
@@ -71,14 +508,90 @@ def _format_local_time(raw: object) -> str:
         return parsed.strftime('%Y-%m-%d %H:%M:%S')
 config.templates.env.filters['local_time'] = _format_local_time
 
+_STATUS_LABEL_MAP: dict[str, str] = {
+    'ok': 'OK',
+    'success': 'SUCCESS',
+    'failed': 'FAILED',
+    'error': 'ERROR',
+    'running': 'RUNNING',
+    'queued': 'QUEUED',
+    'pending': 'PENDING',
+    'stale': 'STALE',
+    'missing': 'MISSING',
+    'invalid': 'INVALID',
+    'none': 'NONE',
+    'ready': 'READY',
+    'not_ready': 'NOT READY',
+    'online': 'ONLINE',
+    'offline': 'OFFLINE',
+    'ac': 'AC',
+    'wa': 'WA',
+    'pe': 'PE',
+    're': 'RE',
+    'tle': 'TLE',
+    'mle': 'MLE',
+    'ce': 'CE',
+    'se': 'SE',
+}
+
+def _format_status_label(raw: object) -> str:
+    text = str(raw or '').strip()
+    if not text:
+        return '-'
+    normalized = re.sub(r'[\s\-]+', '_', text.lower()).strip('_')
+    if not normalized:
+        return '-'
+    mapped = _STATUS_LABEL_MAP.get(normalized)
+    if mapped:
+        return mapped
+    tokens = [tok for tok in re.split(r'[_\s\-]+', normalized) if tok]
+    if not tokens:
+        return text
+    words: list[str] = []
+    for token in tokens:
+        if token in _STATUS_LABEL_MAP:
+            words.append(_STATUS_LABEL_MAP[token])
+        elif len(token) <= 3 and token.isalpha():
+            words.append(token.upper())
+        else:
+            words.append(token.capitalize())
+    return ' '.join(words)
+config.templates.env.filters['status_label'] = _format_status_label
+
 def _normalize_flash_message(raw: object) -> str:
     text = str(raw or '').replace('\r\n', '\n').replace('\r', '\n').strip()
     if not text:
         return ''
-    text = ' '.join((part for part in text.split('\n') if part.strip()))
+    # Preserve line breaks for compiler/runtime diagnostics while normalizing spacing per line.
+    lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
+    lines = [line for line in lines if line]
+    text = '\n'.join(lines).strip()
+    # Keep wording stable, but normalize ending punctuation for consistent notice style.
+    if text and text[-1] not in '.!?':
+        if re.search(r'[A-Za-z0-9\)]$', text):
+            text += '.'
     if len(text) > _C.FLASH_MESSAGE_MAX_LEN:
         text = text[:_C.FLASH_MESSAGE_MAX_LEN].rstrip()
     return text
+
+def _flash_message_level(raw: object) -> str:
+    text = str(raw or '').strip().lower()
+    if not text:
+        return 'info'
+    if any((token in text for token in {'error', 'failed', 'invalid', 'denied', 'rejected'})):
+        return 'error'
+    if any((token in text for token in {'warning', 'stale', 'already running', 'already exists'})):
+        return 'warning'
+    if any((token in text for token in {'saved', 'created', 'updated', 'queued', 'running', 'ok', 'done', 'success'})):
+        return 'success'
+    return 'info'
+
+def _flash_message_event_id(message: str, *, scope: str = '') -> str:
+    normalized = _normalize_flash_message(message)
+    if not normalized:
+        return ''
+    payload = f'{str(scope or "").strip()}|{normalized}'.encode('utf-8')
+    return sha256_hex_bytes(payload)[:16]
 
 def _decode_flash_queue(raw_cookie: str) -> list[str]:
     token = str(raw_cookie or '').strip()
@@ -123,25 +636,22 @@ def _set_flash_cookie(response, queue: list[str]) -> None:
         return
     response.set_cookie(_C.FLASH_COOKIE_NAME, encoded, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.FLASH_COOKIE_MAX_AGE, path='/')
 
-def _extract_message_from_redirect_target(target: str) -> tuple[str, str]:
+def _sanitize_redirect_target(target: str) -> str:
     url = str(target or '').strip() or '/'
     parsed = urlparse(url)
     if not parsed.query:
-        return (url, '')
+        return url
     kept: list[tuple[str, str]] = []
-    message = ''
     for key, value in parse_qsl(parsed.query, keep_blank_values=True):
         if key == 'message':
-            if not message:
-                message = _normalize_flash_message(value)
             continue
         kept.append((key, value))
     cleaned = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(kept, doseq=True), parsed.fragment))
     if parsed.scheme or parsed.netloc:
-        return (cleaned or url, message)
+        return cleaned or url
     if not cleaned:
-        return (url, message)
-    return (cleaned, message)
+        return url
+    return cleaned
 
 def _apply_security_headers(response) -> None:
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
@@ -150,7 +660,7 @@ def _apply_security_headers(response) -> None:
     response.headers.setdefault('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'")
 
 def _redirect_response(url: str, status_code: int=303, message: str='') -> RedirectResponse:
-    target, _ = _extract_message_from_redirect_target(url)
+    target = _sanitize_redirect_target(url)
     response = RedirectResponse(target, status_code=status_code)
     safe_message = _normalize_flash_message(message)
     if safe_message:
@@ -160,6 +670,32 @@ def _redirect_response(url: str, status_code: int=303, message: str='') -> Redir
 
 def _template_response(request: Request, template_name: str, context: dict | None=None):
     payload = dict(context or {})
+    runtime_profile = _runtime_footer_profile()
+    runtime_backend = _runtime_backend_profile()
+    if "runtime_linux_distro" not in payload:
+        payload["runtime_linux_distro"] = runtime_profile.get("runtime_linux_distro", "n/a")
+    if "runtime_cpu_info" not in payload:
+        payload["runtime_cpu_info"] = runtime_profile.get("runtime_cpu_info", "n/a")
+    if "runtime_sandbox_backend" not in payload:
+        payload["runtime_sandbox_backend"] = runtime_backend.get("runtime_sandbox_backend", "n/a")
+    if "runtime_sandbox_backend_count" not in payload:
+        payload["runtime_sandbox_backend_count"] = runtime_backend.get("runtime_sandbox_backend_count", "0")
+    if "runtime_judgehost_backend_summary" not in payload:
+        payload["runtime_judgehost_backend_summary"] = runtime_backend.get(
+            "runtime_judgehost_backend_summary",
+            "disabled",
+        )
+    if "runtime_judgehost_backend_danger" not in payload:
+        payload["runtime_judgehost_backend_danger"] = runtime_backend.get(
+            "runtime_judgehost_backend_danger",
+            "1",
+        )
+    if "runtime_judgehost_enabled" not in payload:
+        payload["runtime_judgehost_enabled"] = runtime_backend.get("runtime_judgehost_enabled", "0")
+    if "runtime_judgehost_hosts_online" not in payload:
+        payload["runtime_judgehost_hosts_online"] = runtime_backend.get("runtime_judgehost_hosts_online", "0")
+    if "runtime_judgehost_hosts_total" not in payload:
+        payload["runtime_judgehost_hosts_total"] = runtime_backend.get("runtime_judgehost_hosts_total", "0")
     backend_render_ms: int | None = None
     started = getattr(request.state, 'request_started_at', None)
     if isinstance(started, (int, float)):
@@ -172,7 +708,12 @@ def _template_response(request: Request, template_name: str, context: dict | Non
     queue = _decode_flash_queue(raw_cookie)
     fallback_message = _normalize_flash_message(payload.get('message', ''))
     message = queue[0] if queue else fallback_message
+    message_ts = int(time.time() * 1000)
     payload['message'] = message
+    payload['message_level'] = _flash_message_level(message)
+    payload['message_source'] = str(template_name or '').strip()
+    payload['message_event_id'] = _flash_message_event_id(message, scope=f"{payload['message_source']}:{message_ts}")
+    payload['message_ts'] = message_ts
     response = config.templates.TemplateResponse(request, template_name, payload)
     if queue:
         _set_flash_cookie(response, queue[1:])
@@ -180,11 +721,6 @@ def _template_response(request: Request, template_name: str, context: dict | Non
         _set_flash_cookie(response, [])
     _apply_security_headers(response)
     return response
-
-def _password_hash(password: str, salt_hex: str, iterations: int) -> str:
-    salt = bytes.fromhex(salt_hex)
-    digest = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, int(iterations))
-    return digest.hex()
 
 def _normalize_password_salt_hex(value: str) -> str:
     raw = str(value or '').strip().lower()
@@ -209,7 +745,7 @@ def _normalize_password_iters(value: object) -> int:
 
 def _password_form_csrf_signature(scope: str, issued_at: int, nonce: str) -> str:
     payload = f'{scope}|{issued_at}|{nonce}'.encode('utf-8')
-    return hmac.new(config.password_form_csrf_secret, payload, hashlib.sha256).hexdigest()
+    return hmac_sha256_hex(config.password_form_csrf_secret, payload)
 
 def _issue_password_form_csrf_token(scope: str) -> str:
     safe_scope = str(scope or '').strip().lower()
@@ -245,12 +781,12 @@ def _verify_password_form_csrf_token(token: str, scope: str) -> bool:
 def _password_proof_from_verifier(csrf_token: str, verifier_hex: str) -> str:
     safe_csrf = str(csrf_token or '').strip()
     safe_verifier = _normalize_password_verifier_hex(verifier_hex)
-    digest = hashlib.sha256(f'{safe_csrf}{safe_verifier}'.encode('utf-8')).hexdigest()
+    digest = sha256_hex_text(f'{safe_csrf}{safe_verifier}')
     return digest
 
 def _dummy_password_salt_hex(username: str) -> str:
     safe_user = str(username or '').strip().lower()
-    digest = hmac.new(config.password_form_csrf_secret, f'dummy-meta|{safe_user}'.encode('utf-8'), hashlib.sha256).hexdigest()
+    digest = hmac_sha256_hex(config.password_form_csrf_secret, f'dummy-meta|{safe_user}'.encode('utf-8'))
     return digest[:32]
 
 def _password_meta_for_username(username: str) -> tuple[str, int]:
@@ -266,14 +802,6 @@ def _password_meta_for_username(username: str) -> tuple[str, int]:
     if _C.HEX_64_RE.fullmatch(verifier) and _C.HEX_32_RE.fullmatch(salt_hex) and (iterations > 0):
         return (salt_hex, iterations)
     return (_dummy_password_salt_hex(username), int(_C.PASSWORD_HASH_ITERS))
-
-def _validate_password(password: str) -> str:
-    raw = str(password or '')
-    if len(raw) < _C.PASSWORD_MIN_LEN:
-        raise ValueError(f'password must be at least {_C.PASSWORD_MIN_LEN} characters')
-    if len(raw) > _C.PASSWORD_MAX_LEN:
-        raise ValueError(f'password must be at most {_C.PASSWORD_MAX_LEN} characters')
-    return raw
 
 def _lookup_user_auth(username: str):
     safe = str(username or '').strip()
@@ -305,19 +833,14 @@ def _set_user_password_verifier(user_id: int, verifier_hex: str, salt_hex: str, 
     safe_iters = _normalize_password_iters(iterations)
     config.db.execute('UPDATE users SET password_hash=?,password_salt=?,password_iters=?,password_updated_at=? WHERE id=?', [safe_verifier, safe_salt, safe_iters, now_iso(), int(user_id)])
 
-def _set_user_password(user_id: int, password: str) -> None:
-    safe_password = _validate_password(password)
-    salt_hex = secrets.token_hex(16)
-    digest = _password_hash(safe_password, salt_hex, _C.PASSWORD_HASH_ITERS)
-    _set_user_password_verifier(int(user_id), digest, salt_hex, int(_C.PASSWORD_HASH_ITERS))
-
 def _create_user_with_password_verifier(username: str, verifier_hex: str, salt_hex: str, iterations: int) -> int:
     safe_user = _normalize_username_required(username)
     safe_verifier = _normalize_password_verifier_hex(verifier_hex)
     safe_salt = _normalize_password_salt_hex(salt_hex)
     safe_iters = _normalize_password_iters(iterations)
     now = now_iso()
-    with config.db.conn() as conn:
+
+    def _tx(conn: sqlite3.Connection) -> int:
         has_registered_user = conn.execute("SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1").fetchone() is not None
         admin_candidates = [0] if has_registered_user else [1, 0]
         inserted = False
@@ -338,14 +861,9 @@ def _create_user_with_password_verifier(username: str, verifier_hex: str, salt_h
         row = conn.execute('SELECT id FROM users WHERE username=?', [safe_user]).fetchone()
         if row is None:
             raise RuntimeError('failed to create user')
-        conn.commit()
         return int(row['id'])
 
-def _create_user_with_password(username: str, password: str) -> int:
-    safe_password = _validate_password(password)
-    salt_hex = secrets.token_hex(16)
-    digest = _password_hash(safe_password, salt_hex, _C.PASSWORD_HASH_ITERS)
-    return _create_user_with_password_verifier(username, digest, salt_hex, int(_C.PASSWORD_HASH_ITERS))
+    return int(config.db.write_transaction(_tx))
 
 def _bootstrap_super_admin_with_password_verifier(username: str, verifier_hex: str, salt_hex: str, iterations: int) -> int:
     safe_user = _normalize_username_required(username)
@@ -353,7 +871,8 @@ def _bootstrap_super_admin_with_password_verifier(username: str, verifier_hex: s
     safe_salt = _normalize_password_salt_hex(salt_hex)
     safe_iters = _normalize_password_iters(iterations)
     now = now_iso()
-    with config.db.conn() as conn:
+
+    def _tx(conn: sqlite3.Connection) -> int:
         has_registered_user = conn.execute("SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1").fetchone() is not None
         if has_registered_user:
             raise ValueError('setup already completed')
@@ -391,35 +910,16 @@ def _bootstrap_super_admin_with_password_verifier(username: str, verifier_hex: s
             )
         user_id = int(existing['id'])
         conn.execute("UPDATE users SET is_system_admin=0 WHERE id<>?", [user_id])
-        conn.commit()
         return user_id
 
-def _bootstrap_super_admin_with_password(username: str, password: str) -> int:
-    safe_password = _validate_password(password)
-    salt_hex = secrets.token_hex(16)
-    digest = _password_hash(safe_password, salt_hex, _C.PASSWORD_HASH_ITERS)
-    return _bootstrap_super_admin_with_password_verifier(username, digest, salt_hex, int(_C.PASSWORD_HASH_ITERS))
-
-def _verify_user_password(user_row, password: str) -> bool:
-    if user_row is None:
-        return False
-    expected = str(user_row['password_hash'] or '')
-    salt_hex = str(user_row['password_salt'] or '')
-    iterations = int(user_row['password_iters'] or 0)
-    if not expected or not salt_hex or iterations <= 0:
-        return False
-    try:
-        actual = _password_hash(str(password or ''), salt_hex, iterations)
-    except Exception:
-        return False
-    return secrets.compare_digest(expected, actual)
+    return int(config.db.write_transaction(_tx))
 
 def _create_session_for_user(user_id: int) -> str:
     uid = int(user_id)
     expires = (_utc_now() + timedelta(seconds=_C.AUTH_COOKIE_MAX_AGE)).isoformat()
     for _ in range(4):
         token = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+        token_hash = sha256_hex_text(token)
         sid = f's-{secrets.token_hex(12)}'
         try:
             config.db.execute('INSERT INTO auth_sessions(id,user_id,token_hash,created_at,expires_at,revoked_at) VALUES(?,?,?,?,?,NULL)', [sid, uid, token_hash, now_iso(), expires])
@@ -428,18 +928,48 @@ def _create_session_for_user(user_id: int) -> str:
             continue
     raise RuntimeError('failed to create auth session')
 
+def _create_sudo_session_for_user(user_id: int, scope: str) -> str:
+    uid = int(user_id)
+    safe_scope = str(scope or '').strip().lower()
+    if not safe_scope:
+        raise ValueError('invalid sudo scope')
+    expires = (_utc_now() + timedelta(seconds=int(_C.SUDO_COOKIE_MAX_AGE))).isoformat()
+    for _ in range(4):
+        token = secrets.token_urlsafe(32)
+        token_hash = sha256_hex_text(token)
+        sid = f'sudo-{secrets.token_hex(12)}'
+        try:
+            config.db.execute(
+                'INSERT INTO sudo_sessions(id,user_id,scope,token_hash,created_at,expires_at,revoked_at) VALUES(?,?,?,?,?,?,NULL)',
+                [sid, uid, safe_scope, token_hash, now_iso(), expires],
+            )
+            return token
+        except sqlite3.IntegrityError:
+            continue
+    raise RuntimeError('failed to create sudo session')
+
 def _revoke_session_token(token: str) -> None:
     raw = str(token or '').strip()
     if not raw or not _C.SESSION_TOKEN_RE.fullmatch(raw):
         return
-    token_hash = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+    token_hash = sha256_hex_text(raw)
     config.db.execute('UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL', [now_iso(), token_hash])
+
+def _revoke_sudo_session_token(token: str) -> None:
+    raw = str(token or '').strip()
+    if not raw or not _C.SESSION_TOKEN_RE.fullmatch(raw):
+        return
+    token_hash = sha256_hex_text(raw)
+    config.db.execute('UPDATE sudo_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL', [now_iso(), token_hash])
+
+def _revoke_sudo_sessions_for_user(user_id: int) -> None:
+    config.db.execute('UPDATE sudo_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL', [now_iso(), int(user_id)])
 
 def _session_identity(request: Request) -> dict | None:
     raw = str(request.cookies.get(_C.AUTH_COOKIE_NAME, '')).strip()
     if not raw or not _C.SESSION_TOKEN_RE.fullmatch(raw):
         return None
-    token_hash = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+    token_hash = sha256_hex_text(raw)
     row = config.db.fetch_one('\n        SELECT s.id AS session_id,s.user_id,s.expires_at,u.username\n        FROM auth_sessions s\n        JOIN users u ON u.id=s.user_id\n        WHERE s.token_hash=? AND s.revoked_at IS NULL\n        ', [token_hash])
     if row is None:
         return None
@@ -448,6 +978,36 @@ def _session_identity(request: Request) -> dict | None:
         _revoke_session_token(raw)
         return None
     return {'session_id': row['session_id'], 'user_id': int(row['user_id']), 'username': str(row['username']), 'token': raw}
+
+def _sudo_identity(request: Request, scope: str) -> dict | None:
+    safe_scope = str(scope or '').strip().lower()
+    if not safe_scope:
+        return None
+    raw = str(request.cookies.get(_C.SUDO_COOKIE_NAME, '')).strip()
+    if not raw or not _C.SESSION_TOKEN_RE.fullmatch(raw):
+        return None
+    token_hash = sha256_hex_text(raw)
+    row = config.db.fetch_one(
+        '\n        SELECT s.id AS sudo_session_id,s.user_id,s.scope,s.expires_at\n        FROM sudo_sessions s\n        WHERE s.token_hash=? AND s.revoked_at IS NULL\n        ',
+        [token_hash],
+    )
+    if row is None:
+        return None
+    row_scope = str(row['scope'] or '').strip().lower()
+    if row_scope != safe_scope:
+        _revoke_sudo_session_token(raw)
+        return None
+    expires_at = _parse_iso_utc(str(row['expires_at'] or ''))
+    if expires_at is None or expires_at <= _utc_now():
+        _revoke_sudo_session_token(raw)
+        return None
+    return {'sudo_session_id': str(row['sudo_session_id']), 'user_id': int(row['user_id']), 'scope': row_scope, 'token': raw}
+
+def _has_sudo_session(request: Request, *, user_id: int, scope: str) -> bool:
+    identity = _sudo_identity(request, scope)
+    if identity is None:
+        return False
+    return int(identity['user_id']) == int(user_id)
 
 def _session_user(request: Request) -> str:
     identity = _session_identity(request)
@@ -559,7 +1119,15 @@ async def auth_middleware(request: Request, call_next):
         response = await call_next(request)
         _apply_security_headers(response)
         return response
-    protected = path == '/' or path.startswith('/problems/') or path.startswith('/switch-') or (path == '/logout')
+    protected = (
+        path == '/'
+        or path in {'/problems', '/contests'}
+        or path.startswith('/problems/')
+        or path.startswith('/contests/')
+        or path.startswith('/switch-')
+        or path.startswith('/sudo')
+        or (path == '/logout')
+    )
     if not protected:
         response = await call_next(request)
         _apply_security_headers(response)
@@ -570,12 +1138,15 @@ async def auth_middleware(request: Request, call_next):
         _apply_security_headers(response)
         return response
     _enforce_same_origin_state_change(request)
-    tm = _C.TOPLEVEL_USER_PATH_RE.match(path)
-    if tm:
-        if tm.group('user') != user:
-            section = tm.group('section')
-            rest = tm.group('rest') or ''
-            target = f'/problems/{user}/{section}{rest}'
+    if _C.ROOT_PROBLEMS_PATH_RE.fullmatch(path) or _C.ROOT_CONTESTS_PATH_RE.fullmatch(path):
+        response = await call_next(request)
+        _apply_security_headers(response)
+        return response
+    sm = _C.SETTINGS_USER_PATH_RE.match(path)
+    if sm:
+        if sm.group('user') != user:
+            rest = sm.group('rest') or ''
+            target = f'/problems/{user}/settings{rest}'
             if request.url.query:
                 target += f'?{request.url.query}'
             return _redirect_response(target, status_code=303)
@@ -585,10 +1156,18 @@ async def auth_middleware(request: Request, call_next):
     pm = _C.PROBLEM_USER_PATH_RE.match(path)
     if pm and pm.group('user') != user:
         rest = pm.group('rest') or ''
-        target = f'/problems/{pm.group('problem')}/{user}{rest}'
+        target = f"/problems/{pm.group('problem')}/{user}{rest}"
+        if request.url.query:
+            target += f'?{request.url.query}'
+        return _redirect_response(target, status_code=303)
+    cm = _C.CONTEST_USER_PATH_RE.match(path)
+    if cm and cm.group('user') != user:
+        rest = cm.group('rest') or ''
+        target = f"/contests/{cm.group('contest')}/{user}{rest}"
         if request.url.query:
             target += f'?{request.url.query}'
         return _redirect_response(target, status_code=303)
     response = await call_next(request)
     _apply_security_headers(response)
     return response
+

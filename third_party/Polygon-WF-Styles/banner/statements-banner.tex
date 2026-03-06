@@ -1,0 +1,41 @@
+\documentclass[border=5pt]{standalone}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{times}
+\usepackage[T1]{fontenc}
+\usepackage{tikz}
+\usetikzlibrary{positioning, calc}
+
+\definecolor{icpcBlue}{HTML}{4A81BF}
+\definecolor{icpcRed}{HTML}{A82B22}
+\definecolor{icpcSep}{HTML}{6BA3D6}
+
+\begin{document}
+
+\begin{tikzpicture}
+
+    \node[inner sep=0pt] (logo) {\includegraphics[height=2cm]{icpc.pdf}};
+
+    \node[right=0.6cm of logo, anchor=west, inner sep=0pt] (textblock) {
+        \begin{minipage}{11.4cm}
+            \setlength{\baselineskip}{1.2em}
+            
+            {\color{icpcBlue}\fontsize{10}{16}\textsf{ICPC International Collegiate Programming Contest}}
+            \vspace{0.5em}
+
+            {\color{icpcBlue}\bfseries\fontsize{20}{48}\textsf{The 2025 ICPC World Finals}}~
+            {\color{icpcRed}\bfseries\fontsize{20}{48}\textsf{Baku}}
+            \vspace{0.3em}
+            
+            {\color{icpcRed}\fontsize{10}{16}\textsf{31 January -- 2 February 2026}}
+            ~%
+            {\color{icpcBlue}\fontsize{10}{16}\textsf{//}}
+            ~%
+            {\color{icpcBlue}\fontsize{10}{16}\textsf{hosted by
+            \textbf{ADA University}}}
+        \end{minipage}
+    };
+
+\end{tikzpicture}
+
+\end{document}

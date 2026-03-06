@@ -13,13 +13,16 @@
       repo_content,
       repo_content_truncated,
       content_char_limit,
-      "Save Interactor Source"
+      "Save Interactor Source",
+      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/interactor/create-template",
+      "Create Interactor Template"
     ) }}
-    {% endif %}
+    {% else %}
     {{ create_template_form(
       "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/interactor/create-template",
       "Create Interactor Template",
       repo_source
     ) }}
+    {% endif %}
 </section>
 {% endblock %}

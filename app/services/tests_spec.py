@@ -10,27 +10,28 @@ TESTS_SPEC_VERSION: int = 2
 TESTS_SPEC_MAX_ITEMS: int = 4096
 TESTS_SPEC_MANUAL_MAX_CHARS: int = 262144
 TESTS_SPEC_GEN_COMMAND_MAX_CHARS: int = 1024
+TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS: int = 262144
+TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS: int = 262144
 TESTS_SPEC_ID_RE = None
 
 
-def _apply_runtime_values(values: RuntimeValues) -> None:
+def apply_runtime_values(values: RuntimeValues) -> None:
     global TESTS_SPEC_VERSION
     global TESTS_SPEC_MAX_ITEMS
     global TESTS_SPEC_MANUAL_MAX_CHARS
     global TESTS_SPEC_GEN_COMMAND_MAX_CHARS
+    global TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS
+    global TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS
     global TESTS_SPEC_ID_RE
     TESTS_SPEC_VERSION = int(values.TESTS_SPEC_VERSION)
     TESTS_SPEC_MAX_ITEMS = int(values.TESTS_SPEC_MAX_ITEMS)
     TESTS_SPEC_MANUAL_MAX_CHARS = int(values.TESTS_SPEC_MANUAL_MAX_CHARS)
     TESTS_SPEC_GEN_COMMAND_MAX_CHARS = int(values.TESTS_SPEC_GEN_COMMAND_MAX_CHARS)
+    TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS = int(values.get("TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS", 262144))
+    TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS = int(values.get("TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS", 262144))
     TESTS_SPEC_ID_RE = values.TESTS_SPEC_ID_RE
 
-
-def configure_runtime_values(values: RuntimeValues) -> None:
-    _apply_runtime_values(values)
-
-
-_apply_runtime_values(build_runtime_values())
+apply_runtime_values(build_runtime_values())
 
 TESTS_SPEC_REL = Path("tests/spec.json")
 TESTS_SPEC_MANUAL_DIR_REL = Path("tests/manual")
@@ -126,13 +127,43 @@ def _normalize_sample_flag(raw: object) -> bool:
     return text in {"1", "true", "yes", "on"}
 
 
+def _normalize_sample_output_validate_flag(raw: object) -> bool:
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw or "").strip().lower()
+    if not text:
+        return True
+    return text in {"1", "true", "yes", "on"}
+
+
+def normalize_sample_input(raw: object) -> str:
+    value = _normalize_newlines(str(raw or ""))
+    if len(value) > TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS:
+        raise ValueError("sample input is too long")
+    return value
+
+
+def normalize_sample_output(raw: object) -> str:
+    value = _normalize_newlines(str(raw or ""))
+    if len(value) > TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS:
+        raise ValueError("sample output is too long")
+    return value
+
+
 def normalize_tests_spec_entry(raw: object, *, index: int = 0) -> dict:
     if not isinstance(raw, dict):
         raise ValueError(f"tests[{index}] must be an object")
-    kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+    kind = str(raw.get("kind") or "").strip().lower()
     if kind not in {"manual", "gen"}:
         raise ValueError(f"tests[{index}] kind must be manual or gen")
     sample = _normalize_sample_flag(raw.get("sample", False))
+    sample_input = normalize_sample_input(raw.get("sample_input", ""))
+    sample_output = normalize_sample_output(raw.get("sample_output", ""))
+    sample_output_validate = _normalize_sample_output_validate_flag(
+        raw.get("sample_output_validate", True)
+    )
     raw_id = str(raw.get("id") or "").strip()
     if not raw_id:
         raise ValueError(f"tests[{index}] id is required")
@@ -140,6 +171,9 @@ def normalize_tests_spec_entry(raw: object, *, index: int = 0) -> dict:
         "id": normalize_test_id(raw_id),
         "kind": kind,
         "sample": sample,
+        "sample_input": sample_input,
+        "sample_output": sample_output,
+        "sample_output_validate": sample_output_validate,
     }
 
 
@@ -196,16 +230,40 @@ def dumps_tests_spec(entries: list[dict]) -> str:
     normalized = normalize_tests_spec_entries(entries)
     dumped_tests: list[dict] = []
     for idx, row in enumerate(normalized, start=1):
-        dumped_tests.append(
-            normalize_tests_spec_entry(
-                {
-                    "id": row.get("id"),
-                    "kind": row.get("kind"),
-                    "sample": row.get("sample", False),
-                },
-                index=idx,
-            )
+        row_payload: dict[str, object] = {
+            "id": row.get("id"),
+            "kind": row.get("kind"),
+            "sample": row.get("sample", False),
+        }
+        sample_input = normalize_sample_input(row.get("sample_input", ""))
+        sample_output = normalize_sample_output(row.get("sample_output", ""))
+        sample_output_validate = _normalize_sample_output_validate_flag(
+            row.get("sample_output_validate", True)
         )
+        if sample_input:
+            row_payload["sample_input"] = sample_input
+        if sample_output:
+            row_payload["sample_output"] = sample_output
+        if not sample_output_validate:
+            row_payload["sample_output_validate"] = False
+        normalized_row = normalize_tests_spec_entry(row_payload, index=idx)
+        dumped_row: dict[str, object] = {
+            "id": normalized_row["id"],
+            "kind": normalized_row["kind"],
+            "sample": bool(normalized_row.get("sample")),
+        }
+        normalized_sample_input = str(normalized_row.get("sample_input") or "")
+        normalized_sample_output = str(normalized_row.get("sample_output") or "")
+        normalized_sample_validate = _normalize_sample_output_validate_flag(
+            normalized_row.get("sample_output_validate", True)
+        )
+        if normalized_sample_input:
+            dumped_row["sample_input"] = normalized_sample_input
+        if normalized_sample_output:
+            dumped_row["sample_output"] = normalized_sample_output
+        if not normalized_sample_validate:
+            dumped_row["sample_output_validate"] = False
+        dumped_tests.append(dumped_row)
     payload = {
         "version": TESTS_SPEC_VERSION,
         "tests": dumped_tests,

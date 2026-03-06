@@ -1,6 +1,12 @@
 {% extends "root_base.html" %}
 {% block content %}
-<h1 class="page-title">Contests</h1>
+<div class="page-title-inline root-page-title-inline">
+  <h1 class="page-title">Contests</h1>
+  <div class="root-title-links" aria-label="Contests actions">
+    <a class="linkish" href="#contest-create-popup" data-popup-open="contest-create-popup">Create Contest</a>
+    <a class="linkish" href="#contest-import-popup" data-popup-open="contest-import-popup">Import Polygon Contest Package</a>
+  </div>
+</div>
 
 {% include "_flash_message.html" %}
 
@@ -16,7 +22,7 @@
     </tr>
     {% for row in entries %}
     <tr class="{% if row.has_dirty %}table-row-dirty{% endif %}">
-      <td><code>{{ row.slug }}</code> - {{ row.title }}</td>
+      <td><a href="/contests/{{ row.slug }}/{{ user.username }}/overview">{{ row.title }}</a> - <code>{{ row.slug }}</code></td>
       <td>{{ row.role }}</td>
       <td>
         {{ row.problem_count }}
@@ -31,23 +37,52 @@
   {% else %}
   <p class="muted">No contests yet.</p>
   {% endif %}
-  <p class="muted">Showing up to {{ entries_limit }} contests.</p>
+  <p class="muted">Showing up to {{ entries_limit }} {% if entries_limit == 1 %}contest{% else %}contests{% endif %}.</p>
 </section>
 
-<section>
-  <h2>Create Contest</h2>
-  <form class="form-stack" method="post" action="/problems/{{ user.username }}/contests/create">
-    <div class="form-row">
-      <label for="contest-slug">Slug</label>
-      <input id="contest-slug" name="contest_slug" />
+<div id="contest-create-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
+  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="contest-create-popup-title">
+    <div class="ui-popup-header">
+      <h3 id="contest-create-popup-title">Create Contest</h3>
+      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
     </div>
-    <div class="form-row">
-      <label for="contest-title">Title</label>
-      <input id="contest-title" name="contest_title" />
+    <div class="ui-popup-content">
+      <form class="form-stack" method="post" action="/contests/create">
+        <div class="form-row">
+          <label for="contest-slug">Slug</label>
+          <input id="contest-slug" name="contest_slug" />
+        </div>
+        <div class="form-row">
+          <label for="contest-title">Title</label>
+          <input id="contest-title" name="contest_title" />
+        </div>
+        <div class="form-row">
+          <button type="submit">Create Contest</button>
+        </div>
+      </form>
     </div>
-    <div class="form-row">
-      <button type="submit">Create Contest</button>
+  </div>
+</div>
+
+<div id="contest-import-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
+  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="contest-import-popup-title">
+    <div class="ui-popup-header">
+      <h3 id="contest-import-popup-title">Import Polygon Contest Package</h3>
+      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
     </div>
-  </form>
-</section>
+    <div class="ui-popup-content">
+      <p class="muted">Upload a Polygon contest package zip. The importer will parse package contents first, then open a review page where you can adjust contest slug, contest title, and each imported problem slug before final import.</p>
+      <p class="muted">For Polygon standard (Windows) packages, test inputs/answers are normalized to LF during import.</p>
+      <form class="form-stack" method="post" enctype="multipart/form-data" action="/contests/import">
+        <div class="form-row">
+          <label for="contest-import-package">Package (.zip)</label>
+          <input id="contest-import-package" type="file" name="package_upload" accept=".zip,application/zip" required />
+        </div>
+        <div class="form-row">
+          <button type="submit">Upload &amp; Parse</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 {% endblock %}

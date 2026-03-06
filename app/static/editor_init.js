@@ -19,6 +19,13 @@
     LOCAL_BASE + "/mode/javascript/javascript.min.js",
   ];
 
+  function readWrapEnabled(el) {
+    if (!el) return false;
+    var raw = String(el.getAttribute("data-code-wrap") || "").trim().toLowerCase();
+    if (!raw) return false;
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  }
+
   function pathToMode(path) {
     var raw = String(path || "").trim().toLowerCase();
     if (!raw) return null;
@@ -103,11 +110,11 @@
       var el = targets[i];
       if (!el || el.dataset.editorReady === "1") continue;
       var mode = pathToMode(el.getAttribute("data-code-path"));
-      if (!mode) continue;
+      var wrapEnabled = readWrapEnabled(el);
       var cm = window.CodeMirror.fromTextArea(el, {
         mode: mode,
         lineNumbers: true,
-        lineWrapping: false,
+        lineWrapping: wrapEnabled,
         tabSize: 4,
         indentUnit: 4,
         matchBrackets: true,
@@ -144,9 +151,5 @@
     .then(function () {
       initEditors();
     })
-    .catch(function (err) {
-      if (window.console && typeof window.console.warn === "function") {
-        window.console.warn("[editor] fallback to textarea:", err && err.message ? err.message : err);
-      }
-    });
+    .catch(function () {});
 })();

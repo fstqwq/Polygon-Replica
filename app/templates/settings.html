@@ -1,14 +1,14 @@
-{% extends "base.html" %}
+{% extends "root_base.html" %}
 {% block content %}
 <h1 class="page-title">Settings</h1>
 {% include "_flash_message.html" %}
-<div class="grid">
-  <section>
+<div class="grid settings-grid">
+  <section class="settings-account-panel">
     <h2>Account</h2>
-    <p><strong>User:</strong> <code>{{ ctx.user.username }}</code></p>
-    <p><strong>Role on this problem:</strong> {{ ctx.access.role }}</p>
+    <p><strong>User:</strong> <code>{{ user.username }}</code></p>
+    <p class="muted">Account settings are global and not tied to a specific problem workspace.</p>
     <h3>Change Password</h3>
-    <form id="settings-password-form" class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/settings/password">
+    <form id="settings-password-form" class="form-stack" method="post" action="/problems/{{ user.username }}/settings/password">
       <label for="current_password">Current Password</label>
       <input id="current_password" name="current_password" type="password" autocomplete="current-password" />
       <label for="new_password">New Password</label>
@@ -25,72 +25,264 @@
       <input type="hidden" name="new_password_proof" value="" />
       <button type="submit">Update Password</button>
     </form>
-    <form method="post" action="/logout">
-      <button type="submit">Logout</button>
-    </form>
-  </section>
-  <section>
-    <h2>Open Problem</h2>
-    <form class="form-row" method="post" action="/switch-workspace">
-      <label for="problem">Problem</label>
-      <input id="problem" name="problem" value="{{ ctx.problem.slug }}" list="problem-list" />
-      <input type="hidden" name="page" value="general" />
-      <button class="primary-action" type="submit">Open</button>
-      <datalist id="problem-list">
-        {% for p in problems %}
-        <option value="{{ p.slug }}">{{ p.name }}</option>
-        {% endfor %}
-      </datalist>
-    </form>
-    <p class="muted">Problem id format: Use lowercased words, separated by dash. Examples: books, minimal-spanning-tree, stamps-3</p>
-    <p class="muted">Workspace user is fixed to your login identity.</p>
   </section>
   {% if is_system_admin %}
-  <section>
+  <section class="settings-admin-panel">
     <h2>System Admin Panel</h2>
-    <p class="muted">Edit runtime config with defaults from <code>app/main_constants.py</code>. Changes are persisted and applied on service startup.</p>
-    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/settings/system-config">
-      <label for="config_json">System Config JSON</label>
-      <textarea id="config_json" name="config_json" rows="16">{{ admin_config_json }}</textarea>
-      <button type="submit">Save System Config</button>
-    </form>
-    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/settings/system-config/reset">
-      <button type="submit">Reset To Defaults</button>
-    </form>
-    <table>
+    <p class="muted">Edit runtime config with defaults from <code>app/main_constants.py</code>. Runtime keys apply immediately; restart-marked keys apply after service restart.</p>
+    <p class="muted">Worker queue snapshot JSON: <a href="/problems/{{ user.username }}/settings/worker-queue" target="_blank" rel="noopener">open endpoint</a></p>
+    <p class="muted">Judgehost snapshot JSON: <a href="/problems/{{ user.username }}/settings/judgehost" target="_blank" rel="noopener">open endpoint</a></p>
+    {% set jh = judgehost_status if judgehost_status else {} %}
+    {% set jh_queue = jh.get('queue', {}) %}
+    {% set jh_hosts = jh.get('hosts', []) %}
+    {% set ib = invocation_backend_status if invocation_backend_status else {} %}
+    {% set ib_rows = ib.get('available', []) %}
+    {% set runtime_controls = admin_runtime_controls if admin_runtime_controls else {} %}
+    {% set invocation_row = runtime_controls.get('INVOCATION_BACKEND', {}) %}
+    {% set invocation_choices = invocation_row.get('choices', []) %}
+    {% set current_invocation = invocation_row.get('current_display', ib.get('configured', 'auto')) %}
+    {% set judgehost_enable_row = runtime_controls.get('JUDGEHOST_ENABLE', {}) %}
+    {% set judgehost_token_row = runtime_controls.get('JUDGEHOST_API_TOKEN', {}) %}
+    {% set judgehost_user_row = runtime_controls.get('JUDGEHOST_API_USERNAME', {}) %}
+    <section class="info-card settings-runtime-card">
+      <div class="settings-card-head">
+        <h3>Invocation Runner</h3>
+      </div>
+      <p class="muted">
+        configured=<code>{{ ib.get('configured', 'auto') }}</code>,
+        active=<code>{{ ib.get('active', 'local-sandbox') }}</code>,
+        judgehost online={{ jh.get('hosts_online', 0) }}/{{ jh.get('hosts_total', 0) }},
+        queue q={{ jh_queue.get('queued', 0) }} l={{ jh_queue.get('leased', 0) }} c={{ jh_queue.get('completed', 0) }} f={{ jh_queue.get('failed', 0) }}
+      </p>
+      <form class="form-stack" method="post" action="/problems/{{ user.username }}/settings/runtime-backend">
+        <label for="invocation_backend">INVOCATION_BACKEND</label>
+        {% if invocation_choices %}
+        <select id="invocation_backend" name="invocation_backend">
+          {% for choice in invocation_choices %}
+          <option value="{{ choice }}" {% if current_invocation == choice %}selected{% endif %}>{{ choice }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input id="invocation_backend" type="text" name="invocation_backend" value="{{ current_invocation }}" />
+        {% endif %}
+        <p class="muted">{{ invocation_row.get('description', 'Invocation execution backend.') }}</p>
+
+        <div class="form-row settings-judgehost-enable-row">
+          <label for="judgehost_enable_toggle">JUDGEHOST_ENABLE</label>
+          <div class="settings-inline-toggle">
+            <input type="hidden" name="judgehost_enable" value="0" />
+            <input
+              id="judgehost_enable_toggle"
+              type="checkbox"
+              name="judgehost_enable"
+              value="1"
+              data-judgehost-enable-toggle="1"
+              {% if judgehost_enable_row.get('current_value') %}checked{% endif %}
+            />
+          </div>
+        </div>
+        <p class="muted">{{ judgehost_enable_row.get('description', 'Enable judgehost queue APIs.') }}</p>
+
+        <div class="settings-judgehost-auth-block" data-judgehost-auth-block="1" {% if not judgehost_enable_row.get('current_value') %}hidden{% endif %}>
+          <div class="settings-inline-fields">
+            <div class="form-field-stack">
+              <label for="judgehost_api_username">JUDGEHOST_API_USERNAME</label>
+              <input
+                id="judgehost_api_username"
+                type="text"
+                name="judgehost_api_username"
+                value="{{ judgehost_user_row.get('current_display', '') }}"
+                data-judgehost-api-username="1"
+              />
+              <p class="muted">{{ judgehost_user_row.get('description', 'Basic-auth username for judgehost API.') }}</p>
+            </div>
+            <div class="form-field-stack">
+              <label for="judgehost_api_token">JUDGEHOST_API_TOKEN</label>
+              <div class="form-input-with-action">
+                <input
+                  id="judgehost_api_token"
+                  type="text"
+                  name="judgehost_api_token"
+                  value="{{ judgehost_token_row.get('current_display', '') }}"
+                  autocomplete="off"
+                  spellcheck="false"
+                  data-judgehost-api-token="1"
+                />
+                <button type="button" data-token-generate="1" data-token-target="judgehost_api_token">Generate</button>
+              </div>
+              <p class="muted">{{ judgehost_token_row.get('description', 'Bearer token for judgehost API authentication.') }}</p>
+            </div>
+          </div>
+        </div>
+        <div class="form-row form-row-actions settings-runtime-actions">
+          <button type="submit">Save Invocation/Judgehost Runtime</button>
+          <a class="linkish" href="#judgehost-gen-script-popup" data-popup-open="judgehost-gen-script-popup">Spawn Script</a>
+        </div>
+      </form>
+
+      {% if ib_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th>Backend</th>
+            <th>Ready</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in ib_rows %}
+          <tr>
+            <td><code>{{ row.get('name', '') }}</code></td>
+            <td>{% if row.get('ready') %}<span class="ok">{{ 'ready' | status_label }}</span>{% else %}<span class="danger">{{ 'not ready' | status_label }}</span>{% endif %}</td>
+            <td class="muted">{{ row.get('detail', '') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+
+    <div id="judgehost-gen-script-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
+      <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="judgehost-gen-script-popup-title">
+        <div class="ui-popup-header">
+          <h2 id="judgehost-gen-script-popup-title" class="ui-popup-title">Generate Judgehost Script</h2>
+          <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
+        </div>
+        <div class="ui-popup-content">
+          <div class="form-row">
+            <label for="judgehost_gen_script_cpuids">CPU IDs</label>
+            <input
+              id="judgehost_gen_script_cpuids"
+              type="text"
+              value="2,4,6,8"
+              spellcheck="false"
+              data-gen-script-cpuids="1"
+            />
+            <p class="muted">Comma-separated IDs used as judgehost suffix / DAEMON_ID (for example: 2,4,6,8). See your cpuid using <code>cat /proc/cpuinfo</code>.</p>
+          </div>
+          <div class="form-row">
+            <label for="judgehost_gen_script_baseurl">DOMSERVER_BASEURL</label>
+            <input
+              id="judgehost_gen_script_baseurl"
+              type="text"
+              value="http://host.docker.internal:8001/"
+              spellcheck="false"
+              data-gen-script-baseurl="1"
+            />
+          </div>
+          <div class="form-row settings-judgehost-enable-row">
+            <label for="judgehost_gen_script_use_sudo">Use sudo</label>
+            <div class="settings-inline-toggle">
+              <input id="judgehost_gen_script_use_sudo" type="checkbox" data-gen-script-sudo="1" />
+            </div>
+          </div>
+          <p class="muted">JUDGEDAEMON_USERNAME / JUDGEDAEMON_PASSWORD use current values in the Invocation Runner form.</p>
+          <div class="form-row form-row-column">
+            <label for="judgehost_gen_script_output">Commands</label>
+            <textarea id="judgehost_gen_script_output" rows="10" readonly spellcheck="false" data-gen-script-output="1"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h3>Judgehost Status</h3>
+    <p class="muted">
+      enabled=<code>{{ 'true' if jh.get('enabled') else 'false' }}</code>,
+      auth=<code>{{ 'configured' if jh.get('auth_configured') else 'missing' }}</code>,
+      online={{ jh.get('hosts_online', 0) }}/{{ jh.get('hosts_total', 0) }},
+      queue q={{ jh_queue.get('queued', 0) }} l={{ jh_queue.get('leased', 0) }} c={{ jh_queue.get('completed', 0) }} f={{ jh_queue.get('failed', 0) }}
+    </p>
+    <div class="form-row settings-judgehost-toolbar">
+      <input
+        type="text"
+        placeholder="filter table"
+        data-judgehost-filter-input="1"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </div>
+    {% if jh_hosts %}
+    <table class="settings-judgehost-table" data-judgehost-table="1">
       <thead>
         <tr>
-          <th>Key</th>
-          <th>Current</th>
-          <th>Default</th>
-          <th>Range</th>
+          <th>ID</th>
+          <th>Hostname</th>
+          <th>Enabled</th>
           <th>State</th>
+          <th>Load (5m/15m/1h/5h)</th>
+          <th>Last Judging</th>
+          <th>Action</th>
         </tr>
       </thead>
       <tbody>
-        {% for row in admin_config_rows %}
-        <tr>
-          <td><code>{{ row.key }}</code></td>
-          <td><code>{{ row.current_display }}</code></td>
-          <td><code>{{ row.default_display }}</code></td>
-          <td class="muted">
-            {% if row.min is not none or row.max is not none %}
-            {% if row.min is not none %}{{ row.min }}{% else %}-{% endif %} .. {% if row.max is not none %}{{ row.max }}{% else %}-{% endif %}
+        {% for row in jh_hosts %}
+        <tr data-judgehost-row="1" data-judgehost-hostname="{{ row.get('hostname', '') | lower }}" data-judgehost-status="{% if not row.get('enabled') %}disabled{% elif row.get('online') %}online{% else %}offline{% endif %}" data-judgehost-enabled="{{ 'yes' if row.get('enabled') else 'no' }}">
+          <td>{{ loop.index }}</td>
+          <td><code>{{ row.get('hostname', '') }}</code></td>
+          <td>{{ 'yes' if row.get('enabled') else 'no' }}</td>
+          <td>
+            {% if not row.get('enabled') %}
+            <span class="muted">{{ 'disabled' | status_label }}</span>
+            {% elif row.get('online') %}
+            <span class="ok">{{ 'online' | status_label }}</span>
             {% else %}
-            -
+            <span class="danger">{{ 'offline' | status_label }}</span>
             {% endif %}
           </td>
+          <td class="muted">{{ "%.2f"|format(row.get('load_5m', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_15m', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_1h', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_5h', 0.0) | float) }}</td>
+          <td><code>{{ row.get('last_judging', '-') or '-' }}</code></td>
           <td>
-            {% if row.changed %}
-            <span class="danger">override</span>
-            {% else %}
-            <span class="muted">default</span>
-            {% endif %}
+            <form
+              class="inline-form settings-judgehost-toggle-form"
+              method="post"
+              action="/problems/{{ user.username }}/settings/judgehost/host-action"
+              data-judgehost-toggle-form="1"
+              data-confirm-message="Disable judgehost {{ row.get('hostname', '') }}? Uncommitted in-flight judging state on this host will be requeued."
+            >
+              <input type="hidden" name="hostname" value="{{ row.get('hostname', '') }}" />
+              <input type="hidden" name="action" value="{% if row.get('enabled') %}disable{% else %}enable{% endif %}" />
+              <label class="switch-toggle" title="toggle judgehost enabled">
+                <input type="checkbox" data-judgehost-toggle="1" {% if row.get('enabled') %}checked{% endif %} />
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
+            </form>
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    {% else %}
+    <p class="muted">No judgehost heartbeat/fetch/report observed yet.</p>
+    {% endif %}
+    <h3>Configuration Center</h3>
+    <p class="muted">Total overrides: {{ admin_config_changed_total }}</p>
+    {% if admin_config_sections %}
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Overrides</th>
+          <th>Keys</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for section in admin_config_sections %}
+        <tr>
+          <td><a href="{{ section.href }}"><strong>{{ section.category }}</strong></a></td>
+          <td>{{ section.changed_count }}</td>
+          <td>{{ section.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if admin_default_category_slug %}
+    <p class="muted">Quick entry: <a href="/problems/{{ user.username }}/settings/config/{{ admin_default_category_slug }}">open first category</a></p>
+    {% endif %}
+    {% else %}
+    <p class="muted">No editable system config keys were found.</p>
+    {% endif %}
+    <form method="post" action="/problems/{{ user.username }}/settings/system-config/reset">
+      <button type="submit">Reset To Defaults</button>
+    </form>
   </section>
   {% endif %}
 </div>

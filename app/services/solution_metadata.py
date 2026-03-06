@@ -4,9 +4,15 @@ import re
 from pathlib import Path
 
 
+def _normalize_behavior_token(raw: str) -> str:
+    return str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
 EXPECTED_BEHAVIOR_VALUES = [
     "accepted",
     "wrong_answer",
+    "tle_or_correct",
+    "tle_or_re",
     "time_limit_exceeded",
     "run_time_error",
     "rejected",
@@ -16,45 +22,72 @@ EXPECTED_BEHAVIOR_VALUES = [
 EXPECTED_BEHAVIOR_LABELS = {
     "accepted": "accepted (AC)",
     "wrong_answer": "wrong_answer (WA)",
-    "time_limit_exceeded": "time_limit_exceeded (TL)",
+    "tle_or_correct": "tle_or_correct (TL/AC)",
+    "tle_or_re": "tle_or_re (TL/RE)",
+    "time_limit_exceeded": "time_limit_exceed (TL)",
     "run_time_error": "run_time_error (RE)",
     "rejected": "rejected",
     "unknown": "unknown",
 }
 
 EXPECTED_BEHAVIOR_ALIASES = {
-    "ac": "accepted",
     "accepted": "accepted",
-    "ok": "accepted",
-    "wa": "wrong_answer",
     "wrong_answer": "wrong_answer",
-    "wronganswer": "wrong_answer",
-    "tle": "time_limit_exceeded",
-    "time_limit": "time_limit_exceeded",
+    "tle_or_correct": "tle_or_correct",
+    "tle_or_re": "tle_or_re",
     "time_limit_exceeded": "time_limit_exceeded",
-    "timelimit": "time_limit_exceeded",
-    "timelimitexceeded": "time_limit_exceeded",
+    "run_time_error": "run_time_error",
+    "rejected": "rejected",
+    "unknown": "unknown",
+}
+
+# Filename-only shorthand used when creating/importing solution metadata.
+# Runtime verification does not consult these aliases.
+EXPECTED_BEHAVIOR_FILENAME_ALIASES = {
+    "ac": "accepted",
+    "main": "accepted",
+    "wa": "wrong_answer",
+    "tlac": "tle_or_correct",
+    "tle_or_ac": "tle_or_correct",
+    "tleorac": "tle_or_correct",
+    "tlre": "tle_or_re",
+    "tle_or_re": "tle_or_re",
+    "tleorre": "tle_or_re",
+    "tl": "time_limit_exceeded",
+    "tle": "time_limit_exceeded",
+    "bf": "time_limit_exceeded",
+    "bruteforce": "time_limit_exceeded",
+    "brute_force": "time_limit_exceeded",
     "re": "run_time_error",
     "rte": "run_time_error",
-    "runtime_error": "run_time_error",
-    "runtimeerror": "run_time_error",
-    "run_time_error": "run_time_error",
-    "rterr": "run_time_error",
-    "rejected": "rejected",
+    "mle": "run_time_error",
+    "rej": "rejected",
     "reject": "rejected",
-    "not_accepted": "rejected",
-    "non_ac": "rejected",
-    "brute_force": "time_limit_exceeded",
-    "bruteforce": "time_limit_exceeded",
-    "unknown": "unknown",
 }
 
 
 def normalize_expected_behavior(raw: str) -> str:
-    token = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    token = _normalize_behavior_token(raw)
     if not token:
         return "unknown"
     return EXPECTED_BEHAVIOR_ALIASES.get(token, "unknown")
+
+
+def _infer_behavior_from_filename_token(raw: str) -> str:
+    token = _normalize_behavior_token(raw)
+    if not token:
+        return "unknown"
+    direct = normalize_expected_behavior(token)
+    if direct != "unknown":
+        return direct
+    alias = EXPECTED_BEHAVIOR_FILENAME_ALIASES.get(token)
+    if alias:
+        return alias
+    compact = token.replace("_", "")
+    alias = EXPECTED_BEHAVIOR_FILENAME_ALIASES.get(compact)
+    if alias:
+        return alias
+    return "unknown"
 
 
 def expected_behavior_label(value: str) -> str:
@@ -68,13 +101,13 @@ def desc_rel_path_for_source(source_rel: str) -> str:
 
 def infer_expected_behavior_from_name(source_rel: str) -> str:
     stem = Path(str(source_rel or "")).stem.lower()
-    direct = normalize_expected_behavior(stem)
+    direct = _infer_behavior_from_filename_token(stem)
     if direct != "unknown":
         return direct
     for token in re.split(r"[^a-z0-9]+", stem):
         if not token:
             continue
-        guess = normalize_expected_behavior(token)
+        guess = _infer_behavior_from_filename_token(token)
         if guess != "unknown":
             return guess
     return "unknown"

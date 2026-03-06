@@ -34,7 +34,6 @@ class NativeSandboxBackend(SandboxBackend):
         "recvmmsg",
         "shutdown",
     )
-    _ROOT_SWITCH_TOOL_ENV = "POLYGONLIKE_SANDBOX_ROOT_SWITCH_TOOL"
     _ROOT_SWITCH_SYSTEM_DIRS = (
         "/usr",
         "/bin",
@@ -47,13 +46,20 @@ class NativeSandboxBackend(SandboxBackend):
         # with "I can't find the format file `pdflatex.fmt'".
         "/var/lib/texmf",
     )
+    _TEX_COMMAND_BASENAMES = {
+        "latex",
+        "pdflatex",
+        "xelatex",
+        "lualatex",
+    }
 
-    def __init__(self) -> None:
+    def __init__(self, *, root_switch_tool: str = "bwrap") -> None:
         self._seccomp = self._load_seccomp()
         if self._seccomp is None:
             raise RuntimeError("native-sandbox requires libseccomp (network policy: deny-all)")
         self._root_switch_mode = "required"
         self._root_switch_tool = ""
+        self._configured_root_switch_tool = str(root_switch_tool or "").strip()
         self._root_switch_enabled = False
         self._root_switch_status = "disabled"
         self._configure_root_switch()
@@ -114,7 +120,7 @@ class NativeSandboxBackend(SandboxBackend):
         return details
 
     def _resolve_root_switch_tool(self) -> str:
-        raw = str(os.getenv(self._ROOT_SWITCH_TOOL_ENV, "bwrap") or "").strip()
+        raw = str(self._configured_root_switch_tool or "").strip()
         if not raw:
             return ""
         if "/" in raw:
@@ -246,6 +252,9 @@ class NativeSandboxBackend(SandboxBackend):
             candidate = Path(raw)
             if candidate.exists() and candidate.is_dir():
                 self._add_mount_path(mounts, candidate, writable=False)
+        if self._is_tex_command(spec):
+            for candidate in self._optional_tex_runtime_dirs(spec):
+                self._add_mount_path(mounts, candidate, writable=False)
         self._add_mount_path(mounts, working_dir, writable=True)
         if spec.stdin_path is not None:
             self._add_mount_path(mounts, spec.stdin_path, writable=False)
@@ -265,6 +274,62 @@ class NativeSandboxBackend(SandboxBackend):
                 if raw.startswith("/"):
                     self._add_mount_path(mounts, Path(raw), writable=True)
         return self._collapse_mounts(mounts)
+
+    def _is_tex_command(self, spec: ExecSpec) -> bool:
+        if not spec.command:
+            return False
+        first = str(spec.command[0] or "").strip()
+        if not first:
+            return False
+        return Path(first).name.lower() in self._TEX_COMMAND_BASENAMES
+
+    def _optional_tex_runtime_dirs(self, spec: ExecSpec) -> list[Path]:
+        env_map: dict[str, str] = {}
+        try:
+            env_map.update({str(k): str(v) for k, v in os.environ.items()})
+        except Exception:
+            env_map = {}
+        if spec.env:
+            for k, v in spec.env.items():
+                key = str(k or "").strip()
+                if not key:
+                    continue
+                env_map[key] = str(v or "")
+        candidates: list[Path] = []
+        home = Path(os.path.expanduser("~"))
+        candidates.append(home / "texmf")
+        try:
+            for item in sorted(home.glob(".texlive*")):
+                if item.exists() and item.is_dir() and (not item.is_symlink()):
+                    candidates.append(item)
+        except OSError:
+            pass
+        for key in ("TEXMFHOME", "TEXMFCONFIG", "TEXMFVAR", "TEXMFCACHE"):
+            raw = str(env_map.get(key) or "").strip()
+            if not raw:
+                continue
+            for token in raw.split(os.pathsep):
+                safe = str(token or "").strip()
+                if not safe:
+                    continue
+                safe = safe.lstrip("!").strip("{}")
+                if not safe.startswith("/"):
+                    continue
+                candidates.append(Path(safe))
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            try:
+                if (not path.exists()) or (not path.is_dir()) or path.is_symlink():
+                    continue
+            except OSError:
+                continue
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(path)
+        return unique
 
     def _effective_working_dir(self, spec: ExecSpec) -> Path:
         if spec.cwd is not None:

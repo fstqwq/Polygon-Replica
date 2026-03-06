@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import re
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from app.services.hashing import sha256_hex_json
 
 _BUILD_REF_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -32,13 +29,7 @@ class FsManager:
     def compute_build_ref(self, payload: dict) -> str:
         if not isinstance(payload, dict):
             raise TypeError("payload must be a dict")
-        encoded = json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        return sha256_hex_json(payload, ensure_ascii=True)
 
     def build_paths(self, build_ref: str) -> BuildPaths:
         safe_build_ref = self._normalize_build_ref(build_ref)
@@ -73,35 +64,6 @@ class FsManager:
             raise ValueError("run_id escapes run_root")
         return target
 
-    def latest_ref_path(self, problem: str, kind: str) -> Path:
-        safe_kind = self._normalize_token(kind, field_name="kind")
-        path = self.artifacts_root / "latest_refs"
-        for part in self._normalize_problem(problem):
-            path = path / part
-        return path / f"{safe_kind}.json"
-
-    def set_latest_ref(self, problem: str, kind: str, build_ref: str) -> None:
-        safe_build_ref = self._normalize_build_ref(build_ref)
-        path = self.latest_ref_path(problem, kind)
-        payload = {"build_ref": safe_build_ref}
-        self._atomic_write_json(path, payload)
-
-    def get_latest_ref(self, problem: str, kind: str) -> str | None:
-        path = self.latest_ref_path(problem, kind)
-        if not path.exists() or not path.is_file():
-            return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            return None
-        if not isinstance(payload, dict):
-            return None
-        value = str(payload.get("build_ref") or "").strip()
-        try:
-            return self._normalize_build_ref(value)
-        except ValueError:
-            return None
-
     def _normalize_build_ref(self, build_ref: str) -> str:
         token = str(build_ref or "").strip().lower()
         if not _BUILD_REF_RE.fullmatch(token):
@@ -113,28 +75,6 @@ class FsManager:
         if not _TOKEN_RE.fullmatch(token):
             raise ValueError(f"{field_name} has invalid format")
         return token
-
-    def _normalize_problem(self, problem: str) -> tuple[str, ...]:
-        raw = str(problem or "").strip().replace("\\", "/")
-        parts = tuple(part for part in raw.split("/") if part)
-        if not parts:
-            raise ValueError("problem must not be empty")
-        for part in parts:
-            self._normalize_token(part, field_name="problem")
-        return parts
-
-    def _atomic_write_json(self, path: Path, payload: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
-        data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
-        try:
-            with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, path)
-        finally:
-            temp_path.unlink(missing_ok=True)
 
 
 __all__ = ["BuildPaths", "FsManager"]

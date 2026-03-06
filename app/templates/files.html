@@ -7,108 +7,39 @@
 {% endif %}
 
 <div class="grid files-grid">
-  <section>
+  <section class="files-panel files-panel-browser">
     <h2>Repository Browser</h2>
     <p class="muted">Browse by folder and open files directly in the editor.</p>
     <div class="inline-meta-row">
       <p><strong>Current folder:</strong> <code>{{ browse_dir if browse_dir else "/" }}</code></p>
       {% if browse_dir %}
-      <a class="button-link" href="?dir={{ browse_parent }}{{ source_query_tail }}">Go Up</a>
+      <a href="?dir={{ browse_parent }}{{ source_query_tail }}">Go Up</a>
       {% endif %}
     </div>
     {% if files_truncated %}
     <p><em>Repository listing is capped at {{ file_limit }} entries; narrow by folder for complete browsing.</em></p>
     {% endif %}
     <table>
-      <tr><th>Type</th><th>Name</th><th>Path</th><th>Action</th></tr>
+      <tr><th>Type</th><th>Path</th></tr>
       {% for d in browse_dirs %}
       <tr>
         <td>dir</td>
-        <td><code>{{ d.name }}</code></td>
-        <td><code>{{ d.path }}/</code></td>
-        <td><a href="?dir={{ d.path }}{{ source_query_tail }}">open folder</a></td>
+        <td><a href="?dir={{ d.path }}{{ source_query_tail }}"><code>{{ d.path }}/</code></a></td>
       </tr>
       {% endfor %}
       {% for f in browse_files %}
       <tr>
         <td>file</td>
-        <td><code>{{ f.name }}</code></td>
-        <td><code>{{ f.path }}</code></td>
-        <td><a href="?path={{ f.path }}&dir={{ browse_dir }}{{ source_query_tail }}">open file</a></td>
+        <td><a href="?path={{ f.path }}&dir={{ browse_dir }}{{ source_query_tail }}"><code>{{ f.path }}</code></a></td>
       </tr>
       {% endfor %}
     </table>
     {% if not browse_dirs and not browse_files %}
     <p class="muted">No repository entries matched this folder.</p>
     {% endif %}
-
-    <h2>Selected Path Actions</h2>
-    <p class="muted">Create uses current folder. Rename/Delete/Upload target the path shown in each form.</p>
-    <div class="form-stack selected-path-actions-list">
-      <div class="form-block">
-        <h3>Create File</h3>
-        <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/new">
-          <div class="form-row">
-            <label for="create-file-path">New file path</label>
-            <input id="create-file-path" name="path" value="{{ (browse_dir ~ '/' if browse_dir else (selected_parent ~ '/' if selected_parent else '')) ~ 'new-file.txt' }}" />
-            <button type="submit">Create Empty File</button>
-          </div>
-          <input type="hidden" name="dir" value="{{ browse_dir }}" />
-          <input type="hidden" name="src" value="{{ source_page }}" />
-          <input type="hidden" name="sid" value="{{ source_id }}" />
-        </form>
-      </div>
-      <div class="form-block">
-        <h3>Rename Path</h3>
-        <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/rename">
-          <div class="form-row">
-            <label for="rename-old-path">Current path</label>
-            <input id="rename-old-path" name="old_path" value="{{ selected }}" />
-          </div>
-          <div class="form-row">
-            <label for="rename-new-path">New path</label>
-            <input id="rename-new-path" name="new_path" value="{{ selected }}" />
-            <button type="submit">Rename</button>
-          </div>
-          <input type="hidden" name="dir" value="{{ browse_dir }}" />
-          <input type="hidden" name="src" value="{{ source_page }}" />
-          <input type="hidden" name="sid" value="{{ source_id }}" />
-        </form>
-      </div>
-      <div class="form-block">
-        <h3>Delete Path</h3>
-        <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/delete">
-          <div class="form-row">
-            <label for="delete-path">Target path</label>
-            <input id="delete-path" name="path" value="{{ selected }}" />
-            <button type="submit">Delete</button>
-          </div>
-          <input type="hidden" name="dir" value="{{ browse_dir }}" />
-          <input type="hidden" name="src" value="{{ source_page }}" />
-          <input type="hidden" name="sid" value="{{ source_id }}" />
-        </form>
-      </div>
-      <div class="form-block">
-        <h3>Upload File</h3>
-        <form class="form-stack selected-path-form" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/upload">
-          <div class="form-row">
-            <label for="upload-target-path">Target path</label>
-            <input id="upload-target-path" name="path" value="{{ selected }}" />
-            <button type="submit">Upload And Replace</button>
-          </div>
-          <input type="hidden" name="dir" value="{{ browse_dir }}" />
-          <input type="hidden" name="src" value="{{ source_page }}" />
-          <input type="hidden" name="sid" value="{{ source_id }}" />
-          <div class="form-row">
-            <label for="upload-local-file">Local file</label>
-            <input id="upload-local-file" type="file" name="upload" />
-          </div>
-        </form>
-      </div>
-    </div>
   </section>
 
-  <section>
+  <section class="files-panel files-panel-editor">
     <h2>Editor</h2>
     <div class="inline-meta-row">
       <p><strong>File:</strong> <code>{{ selected }}</code></p>
@@ -129,29 +60,111 @@
     {% elif selected_is_dir %}
     <p class="flash">Selected path is a directory. Choose a file to edit.</p>
     {% endif %}
-    {% if line_focus %}
-    <p class="muted"><strong>Jump target:</strong> line {{ line_focus.line }}</p>
-    <pre class="line-context">{{ line_focus.text }}</pre>
-    {% elif line_jump_missing %}
-    <p class="flash">Requested line {{ selected_line }} is outside current file range.</p>
+    {% if selected_is_binary and (not selected_missing) and (not selected_is_dir) %}
+    <p class="flash">Binary file is read-only in text editor.</p>
+    {% if selected_is_pdf %}
+    <p class="muted">PDF preview:</p>
+    <iframe class="pdf-preview files-pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}{{ browse_query_tail }}{{ source_query_tail }}"></iframe>
+    {% else %}
+    <p class="muted">This file is binary{% if selected_media_type %} ({{ selected_media_type }}){% endif %}. Use download/upload actions to manage it.</p>
     {% endif %}
-    {% if content_truncated %}
-    <p><em>Showing first {{ content_char_limit }} characters; Save is disabled for truncated file views.</em></p>
+    {% else %}
+      {% if line_focus %}
+      <p class="muted"><strong>Jump target:</strong> line {{ line_focus.line }}</p>
+      <pre class="line-context">{{ line_focus.text }}</pre>
+      {% elif line_jump_missing %}
+      <p class="flash">Requested line {{ selected_line }} is outside current file range.</p>
+      {% endif %}
+      {% if content_truncated %}
+      <p><em>Showing first {{ content_char_limit }} characters; Save is disabled for truncated file views.</em></p>
+      {% endif %}
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/save">
+        <input type="hidden" name="path" value="{{ selected }}" />
+        <input type="hidden" name="dir" value="{{ browse_dir }}" />
+        <input type="hidden" name="src" value="{{ source_page }}" />
+        <input type="hidden" name="sid" value="{{ source_id }}" />
+        <textarea
+          name="content"
+          data-code-editor="1"
+          data-code-path="{{ selected }}"
+          data-code-height="520"
+          {% if content_truncated %}readonly{% endif %}
+        >{{ content }}</textarea>
+        <button class="primary-action" type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
+      </form>
     {% endif %}
-    <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/save">
-      <input type="hidden" name="path" value="{{ selected }}" />
-      <input type="hidden" name="dir" value="{{ browse_dir }}" />
-      <input type="hidden" name="src" value="{{ source_page }}" />
-      <input type="hidden" name="sid" value="{{ source_id }}" />
-      <textarea
-        name="content"
-        data-code-editor="1"
-        data-code-path="{{ selected }}"
-        data-code-height="520"
-        {% if content_truncated %}readonly{% endif %}
-      >{{ content }}</textarea>
-      <button class="primary-action" type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
-    </form>
+  </section>
+
+  <section class="files-panel files-panel-ops">
+    <h2>File Operations</h2>
+    <p class="muted">Fast actions on paths. Rename/Delete are grouped under Advanced.</p>
+    <div class="form-stack selected-path-actions-list">
+      <div class="form-block">
+        <h3>Create File</h3>
+        <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/new">
+          <div class="form-row">
+            <label for="create-file-path">Path</label>
+            <input id="create-file-path" name="path" value="{{ (browse_dir ~ '/' if browse_dir else (selected_parent ~ '/' if selected_parent else '')) ~ 'new-file.txt' }}" />
+            <button type="submit">Create</button>
+          </div>
+          <input type="hidden" name="dir" value="{{ browse_dir }}" />
+          <input type="hidden" name="src" value="{{ source_page }}" />
+          <input type="hidden" name="sid" value="{{ source_id }}" />
+        </form>
+      </div>
+      <div class="form-block">
+        <h3>Upload File</h3>
+        <form class="form-stack selected-path-form" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/upload">
+          <div class="form-row">
+            <label for="upload-target-path">Target path</label>
+            <input id="upload-target-path" name="path" value="{{ selected }}" />
+            <button type="submit">Upload</button>
+          </div>
+          <input type="hidden" name="dir" value="{{ browse_dir }}" />
+          <input type="hidden" name="src" value="{{ source_page }}" />
+          <input type="hidden" name="sid" value="{{ source_id }}" />
+          <div class="form-row">
+            <label for="upload-local-file">Local file</label>
+            <input id="upload-local-file" type="file" name="upload" />
+          </div>
+        </form>
+      </div>
+      <details class="form-block">
+        <summary>Advanced (Rename/Delete)</summary>
+        <div class="form-stack selected-path-actions-list">
+          <div class="form-block">
+            <h3>Rename Path</h3>
+            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/rename">
+              <div class="form-row">
+                <label for="rename-old-path">Current path</label>
+                <input id="rename-old-path" name="old_path" value="{{ selected }}" />
+              </div>
+              <div class="form-row">
+                <label for="rename-new-path">New path</label>
+                <input id="rename-new-path" name="new_path" value="{{ selected }}" />
+                <button type="submit">Rename</button>
+              </div>
+              <input type="hidden" name="dir" value="{{ browse_dir }}" />
+              <input type="hidden" name="src" value="{{ source_page }}" />
+              <input type="hidden" name="sid" value="{{ source_id }}" />
+            </form>
+          </div>
+          <div class="form-block">
+            <h3>Delete Path</h3>
+            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/delete" data-confirm-message="Delete path {{ selected }}? This cannot be undone; uncommitted changes will be lost.">
+              <div class="form-row">
+                <label for="delete-path">Target path</label>
+                <input id="delete-path" name="path" value="{{ selected }}" />
+                <button type="submit">Delete</button>
+              </div>
+              <input type="hidden" name="dir" value="{{ browse_dir }}" />
+              <input type="hidden" name="src" value="{{ source_page }}" />
+              <input type="hidden" name="sid" value="{{ source_id }}" />
+            </form>
+          </div>
+        </div>
+      </details>
+    </div>
   </section>
 </div>
 {% endblock %}

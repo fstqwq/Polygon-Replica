@@ -1,0 +1,124 @@
+{% extends "contest_base.html" %}
+{% block content %}
+<h1 class="page-title">Contest Packages</h1>
+
+{% include "_flash_message.html" %}
+
+<section>
+  <h2>Preview / Build</h2>
+  <p><strong>Problems in contest:</strong> {{ problem_count }}</p>
+  {% if not ctx.access.can_write %}
+  <p class="muted">Write access is required to start preview/build jobs.</p>
+  {% elif problem_count <= 0 %}
+  <p class="muted">Add at least one problem before running preview/build.</p>
+  {% else %}
+  <div class="form-row">
+    <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages/preview/start">
+      <button type="submit">Build Contest Preview Bundle</button>
+    </form>
+    <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages/build/start">
+      <button class="primary-action" type="submit">Build Contest Package Bundle</button>
+    </form>
+  </div>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Recent Jobs</h2>
+  {% if job_rows %}
+  <table>
+    <tr>
+      <th>Job</th>
+      <th>Type</th>
+      <th>Status</th>
+      <th>Summary</th>
+      <th>Created</th>
+      <th>Finished</th>
+    </tr>
+    {% for row in job_rows %}
+    {% set totals = row.summary.get("totals", {}) if row.summary else {} %}
+    <tr>
+      <td><a href="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages?job_id={{ row.id }}"><code>{{ row.id }}</code></a></td>
+      <td>{{ row.job_type }}</td>
+      <td>{{ row.status | status_label }}</td>
+      <td>
+        {% if totals %}
+          {{ totals.get("success", 0) }} success / {{ totals.get("failed", 0) }} failed
+        {% else %}
+          -
+        {% endif %}
+      </td>
+      <td>{{ row.created_at | local_time }}</td>
+      <td>{{ row.finished_at | local_time if row.finished_at else "-" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No contest jobs yet.</p>
+  {% endif %}
+</section>
+
+{% if selected_job and selected_job.summary and selected_job.summary.get("results") %}
+<section>
+  <h2>Selected Job Report</h2>
+  <p><strong>Job:</strong> <code>{{ selected_job.id }}</code> / {{ selected_job.job_type }} / {{ selected_job.status | status_label }}</p>
+  {% if selected_job.summary.get("artifact_id") %}
+  <p><strong>Artifact:</strong> <code>{{ selected_job.summary.get("artifact_id") }}</code></p>
+  {% endif %}
+  <table>
+    <tr>
+      <th>Idx</th>
+      <th>Problem</th>
+      <th>Status</th>
+      <th>Build/Preview</th>
+      <th>Error</th>
+    </tr>
+    {% for row in selected_job.summary.get("results") %}
+    <tr>
+      <td><code>{{ row.get("idx", "") }}</code></td>
+      <td><code>{{ row.get("problem_slug", "") }}</code></td>
+      <td>{{ row.get("status", "") | status_label }}</td>
+      <td><code>{{ row.get("preview_id", row.get("build_id", "")) }}</code></td>
+      <td>{{ row.get("error", "") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+
+<section>
+  <h2>Artifacts</h2>
+  {% if artifact_rows %}
+  <table>
+    <tr>
+      <th>Artifact</th>
+      <th>Job</th>
+      <th>Type</th>
+      <th>Filename</th>
+      <th>Size</th>
+      <th>Created</th>
+      <th>Download</th>
+    </tr>
+    {% for row in artifact_rows %}
+    <tr>
+      <td><code>{{ row.id }}</code></td>
+      <td><code>{{ row.job_id or "" }}</code></td>
+      <td>{{ row.artifact_type }}</td>
+      <td>{{ row.filename }}</td>
+      <td>{{ row.size_bytes if row.size_bytes is not none else "-" }}</td>
+      <td>{{ row.created_at | local_time }}</td>
+      <td>
+        {% if row.downloadable %}
+        <a href="{{ row.download_href }}">download</a>
+        {% else %}
+        <span class="muted">missing</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No contest artifacts yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

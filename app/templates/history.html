@@ -12,18 +12,44 @@
       <td>{{ c.subject }}</td>
       <td>{{ c.author }}</td>
       <td>{{ c.date|local_time }}</td>
-      <td><code title="{{ c.commit }}">{{ c.commit[:12] }}</code></td>
       <td>
+        <code title="{{ c.commit }}">{{ c.commit[:12] }}</code>
+        {% if selected_commit == c.commit %}
+        <span class="muted">selected</span>
+        {% endif %}
+      </td>
+      <td>
+        <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/history?revision={{ c.commit }}">View Diff</a>
+        <span class="muted">|</span>
         <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/restore-revision">
           <input type="hidden" name="revision" value="{{ c.commit }}" />
           <input type="hidden" name="page" value="history" />
-          <button type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Restore To Working Copy</button>
+          <a
+            href="#"
+            class="linkish danger"
+            data-submit-form="1"
+            {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}
+          >Restore To Working Copy</a>
         </form>
       </td>
     </tr>
     {% endfor %}
   </table>
   <p class="muted">Restore action first updates working copy to latest <code>main</code>, then replaces files with the selected revision as uncommitted changes.</p>
+  {% if selected_commit %}
+  <h2>Revision Diff</h2>
+  <p class="muted">Selected revision: <code>{{ selected_commit[:12] }}</code>{% if selected_subject %} - {{ selected_subject }}{% endif %}</p>
+  {% if selected_diff_truncated %}
+  <p><em>Showing first {{ diff_char_limit }} diff characters.</em></p>
+  {% endif %}
+  {% if selected_diff_lines %}
+  <pre class="workspace-diff-view">{% for row in selected_diff_lines %}<span class="workspace-diff-line workspace-diff-line-{{ row.kind }}">{{ row.text }}</span>{% endfor %}</pre>
+  {% else %}
+  <p class="muted">No textual diff for selected revision.</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">Click <code>View Diff</code> on a revision to browse its patch.</p>
+  {% endif %}
   {% else %}
   <p class="muted">No commits yet.</p>
   {% endif %}

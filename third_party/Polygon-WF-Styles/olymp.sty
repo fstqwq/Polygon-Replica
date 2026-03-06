@@ -1,0 +1,988 @@
+%
+% Macros for the contest problems
+% for MikTeX: use latex.exe
+% License: https://github.com/GassaFM/olymp.sty/blob/master/LICENSE
+% Authors: https://github.com/GassaFM/olymp.sty/blob/master/AUTHORS
+%
+
+\ProvidesPackage{olymp}
+
+\makeatletter
+\usepackage{verbatim}
+\RequirePackage{times}
+\RequirePackage[T1]{fontenc}
+\RequirePackage[utf8]{inputenc}
+\RequirePackage[colorlinks=true,implicit=false]{hyperref}
+
+\providecommand{\wfCurrentProblemName}{}
+
+
+\newif\if@landscape\@landscapefalse
+\newif\if@russian\@russianfalse
+\newif\if@ukrainian\@ukrainianfalse
+\newif\if@arabic\@arabicfalse
+
+\DeclareOption{landscape}{
+    \@landscapetrue
+}
+\DeclareOption{russian}{
+    \@russiantrue
+}
+\DeclareOption{ukrainian}{
+    \@ukrainiantrue
+}
+\DeclareOption{arabic}{
+    \@arabictrue
+}
+\ProcessOptions\relax
+
+
+% -- Setup margins --
+%
+% Tex defines to large margins for our purposes. 
+% So we redefine this to use paper more efficiently
+%
+
+\newlength{\thelinewidth}
+
+\if@landscape
+    \if@twocolumn
+    \else
+        \error Landscape is only supported for two column mode
+    \fi
+
+    \ifcase\@ptsize % 10 pt
+        \hoffset=-15mm
+        \voffset=-35mm
+        \textheight=165mm
+        \textwidth=272mm
+    \or % 11 pt
+        \hoffset=-13mm
+        \voffset=-36mm
+        \textheight=166mm
+        \textwidth=272mm
+    \or % 12 pt
+        \hoffset=-12mm
+        \voffset=-35mm
+        \textheight=162mm
+        \textwidth=268mm
+    \fi
+\else
+    \ifcase\@ptsize % 10 pt
+        \hoffset=-26.5mm
+        \voffset=-35mm
+        \textheight=250mm
+        \textwidth=175mm
+    \or % 11 pt
+        \hoffset=-25mm
+        \voffset=-37.5mm
+        \textheight=255mm
+        \textwidth=175mm
+    \or % 12 pt
+        \hoffset=-20mm
+        \voffset=-35mm
+        \textheight=245mm
+        \textwidth=175mm
+    \fi
+
+    \if@twocolumn
+        \hoffset=-14.3mm
+        \voffset=-38mm
+        \textheight=255mm
+        \textwidth=188mm
+    \fi
+\fi
+
+\if@twocolumn
+    \thelinewidth=0.47\textwidth
+\else
+    \thelinewidth=\textwidth
+\fi
+
+% -- End of setup margins --
+
+%---------- From package "lastpage" ------------------
+\def\lastpage@putlabel{\addtocounter{page}{-1}%
+   \immediate\write\@auxout{\string\newlabel{LastPage}{{}{\thepage}}}%
+   \addtocounter{page}{1}}
+\AtEndDocument{\clearpage\lastpage@putlabel}%
+%---------- end of "lastpage" ------------------
+
+% -- Setup sizes --
+\newlength{\exmpwidinf}
+\newlength{\exmpwidouf}
+\newlength{\exmpwidewid}
+\newlength{\exmpthreewidinf}
+\newlength{\exmpthreewidouf}
+\newlength{\exmpthreewidnote}
+\newlength{\wfSampleTableWidth}
+\newlength{\wfSampleLeft}
+\newlength{\wfInteractBlockWidth}
+
+\newif\ifintentionallyblankpages
+
+\exmpwidinf=0.47\thelinewidth
+\exmpwidouf=\exmpwidinf
+\exmpwidewid=0.9\thelinewidth
+\exmpthreewidinf=0.28\thelinewidth
+\exmpthreewidouf=0.28\thelinewidth
+\exmpthreewidnote=0.30\thelinewidth
+\wfSampleTableWidth=\dimexpr\exmpwidinf+\exmpwidouf+5\tabcolsep+4\arrayrulewidth\relax
+\wfSampleLeft=0pt
+\wfInteractBlockWidth=0.55\wfSampleTableWidth
+
+\newlength{\afterproblemhead}
+\newlength{\afterconstraints}
+
+\renewcommand{\t}[1]{\ifmmode{\mathtt{#1}}\else{\texttt{#1}}\fi}
+\if@russian
+\renewcommand{\le}{\leqslant}
+\renewcommand{\ge}{\geqslant}
+\renewcommand{\leq}{\leqslant}
+\renewcommand{\geq}{\geqslant}
+\else
+\if@ukrainian
+\renewcommand{\le}{\leqslant}
+\renewcommand{\ge}{\geqslant}
+\renewcommand{\leq}{\leqslant}
+\renewcommand{\geq}{\geqslant}
+\else
+\parindent=0mm
+\parskip=1ex
+\fi
+\fi
+
+% -- End of setup sizes --
+
+% -- Setup keywords --
+
+\if@russian
+\def\kw@ProblemTutorial{Разбор задачи}
+\def\kw@Problem{Задача}
+\def\kw@ProblemAuthor{Автор:}
+\def\kw@ProblemDeveloper{Разработчик:}
+\def\kw@ProblemOrigin{Источник:}
+\def\kw@InputFileName{Имя входного файла:}
+\def\kw@OutputFileName{Имя выходного файла:}
+\def\kw@TimeLimit{Ограничение по времени:}
+\def\kw@MemoryLimit{Ограничение по памяти:}
+\def\kw@Feedback{Отображение результатов:}
+\def\kw@stdin{стандартный поток ввода}
+\def\kw@stdout{стандартный поток вывода}
+\def\kw@Specification{Спецификация}
+\def\kw@Interaction{Протокол взаимодействия}
+\def\kw@Input{Формат входных данных}
+\def\kw@Output{Формат выходных данных}
+\def\kw@Example{Пример}
+\def\kw@Examples{Примеры}
+\def\kwExampleNotes{Пояснение}
+\def\kw@Explanation{Пояснение к примеру}
+\def\kw@Explanations{Пояснения к примерам}
+\def\kw@Illustration{Иллюстрация}
+\def\kw@Scoring{Система оценки}
+\def\kw@Note{Замечание}
+\def\kw@Notes{Замечания}
+\def\kw@Constraints{Ограничения}
+\def\kw@version{версия}
+\def\kw@revision{ревизия}
+\def\kw@SubtaskOne{Подзадача 1}
+\def\kw@SubtaskTwo{Подзадача 2}
+\def\kw@SubtaskThree{Подзадача 3}
+\def\kw@SubtaskFour{Подзадача 4}
+\def\kw@SubtaskFive{Подзадача 5}
+\def\kw@SubtaskSix{Подзадача 6}
+\def\kw@Subtask{Подзадача}
+\def\kw@points{баллы}
+\def\kw@Page{Страница}
+\def\kw@of{из}
+\def\kw@notstated{не указан}
+\def\kw@IntentionallyBlankPage{Эта страница специально оставлена пустой}
+\def\kw@defaultinputname{тест}
+\def\kw@defaultoutputname{ответ}
+\else
+\if@ukrainian
+\def\kw@ProblemTutorial{Розбір задачі}
+\def\kw@Problem{Задача}
+\def\kw@ProblemAuthor{Автор:}
+\def\kw@ProblemDeveloper{Розробник:}
+\def\kw@ProblemOrigin{Джерело:}
+\def\kw@InputFileName{Назва вхідного файлу:}
+\def\kw@OutputFileName{Назва вихідного файлу:}
+\def\kw@TimeLimit{Ліміт часу:}
+\def\kw@MemoryLimit{Ліміт використання пам'яті:}
+\def\kw@Feedback{Відображення результатів:}
+\def\kw@stdin{стандартний потік вводу}
+\def\kw@stdout{стандартний потік виводу}
+\def\kw@Specification{Специфікація}
+\def\kw@Interaction{Протокол взаємодії}
+\def\kw@Input{Формат вхідних даних}
+\def\kw@Output{Формат вихідних даних}
+\def\kw@Example{Приклад}
+\def\kw@Examples{Приклади}
+\def\kwExampleNotes{Пояснення}
+\def\kw@Explanation{Пояснення до прикладу}
+\def\kw@Explanations{Пояснения до прикладів}
+\def\kw@Illustration{Ілюстрація}
+\def\kw@Scoring{Система оцінювання}
+\def\kw@Note{Зауваження}
+\def\kw@Notes{Зауваження}
+\def\kw@Constraints{Обмеження}
+\def\kw@version{версія}
+\def\kw@revision{ревізія}
+\def\kw@SubtaskOne{Підзадача 1}
+\def\kw@SubtaskTwo{Підзадача 2}
+\def\kw@SubtaskThree{Підзадача 3}
+\def\kw@SubtaskFour{Підзадача 4}
+\def\kw@SubtaskFive{Підзадача 5}
+\def\kw@SubtaskSix{Підзадача 6}
+\def\kw@Subtask{Підзадача}
+\def\kw@points{бали}
+\def\kw@Page{Сторінка}
+\def\kw@of{з}
+\def\kw@notstated{не вказано}
+\def\kw@IntentionallyBlankPage{Ця сторінка спеціально залишена порожньою}
+\def\kw@defaultinputname{тест}
+\def\kw@defaultoutputname{відповідь}
+\else
+\def\kw@ProblemTutorial{Problem Tutorial}
+\def\kw@Problem{Problem}
+\def\kw@ProblemAuthor{Author:}
+\def\kw@ProblemDeveloper{Developer:}
+\def\kw@ProblemOrigin{Origin:}
+\def\kw@InputFileName{Input file:}
+\def\kw@OutputFileName{Output file:}
+\def\kw@TimeLimit{Time limit:}
+\def\kw@MemoryLimit{Memory limit:}
+\def\kw@Feedback{Feedback:}
+\def\kw@stdin{standard input}
+\def\kw@stdout{standard output}
+\def\kw@Specification{Specification}
+\def\kw@Interaction{Interaction Protocol}
+\def\kw@Input{Input}
+\def\kw@Output{Output}
+\def\kw@Example{Example}
+\def\kw@Examples{Examples}
+\def\kwExampleNotes{Notes}
+\def\kw@Explanation{Explanation}
+\def\kw@Explanations{Explanations}
+\def\kw@Illustration{Illustration}
+\def\kw@Scoring{Scoring}
+\def\kw@Note{Note}
+\def\kw@Notes{Notes}
+\def\kw@Constraints{Constraints}
+\def\kw@version{version}
+\def\kw@revision{revision}
+\def\kw@SubtaskOne{Subtask 1}
+\def\kw@SubtaskTwo{Subtask 2}
+\def\kw@SubtaskThree{Subtask 3}
+\def\kw@SubtaskFour{Subtask 4}
+\def\kw@SubtaskFive{Subtask 5}
+\def\kw@SubtaskSix{Subtask 6}
+\def\kw@Subtask{Subtask}
+\def\kw@points{points}
+\def\kw@Page{Page}
+\def\kw@of{of}
+\def\kw@notstated{not stated}
+\def\kw@IntentionallyBlankPage{This page is intentionally left blank.}
+\def\kw@defaultinputname{test}
+\def\kw@defaultoutputname{answer}
+\fi
+\fi
+
+\afterproblemhead=5mm
+\afterconstraints=2mm
+
+\newcommand{\problemheadfont}{\huge}
+\newcommand{\problemsectionfont}{\large}
+\newcommand{\problemend}{
+\clearpage
+\ifintentionallyblankpages
+  \ifodd\value{page}
+  \else
+     \thispagestyle{empty}
+     \vspace*{\fill}
+     \begin{center}
+     \textsf{\LARGE\kw@IntentionallyBlankPage}
+     \end{center}
+     \vspace*{\fill}
+     \clearpage
+  \fi
+\fi
+}
+\newcommand{\problemtextfont}{\normalsize}
+\newcommand{\beforeproblemsectioncaption}{\smallbreak\smallskip}
+\newcommand{\afterproblemsectioncaption}{\smallskip}
+
+\if@twocolumn
+    \afterproblemhead=1mm
+    \afterconstraints=1mm
+    \renewcommand{\problemheadfont}{\large}
+    \renewcommand{\problemsectionfont}{\normalsize}
+    \renewcommand{\problemend}{\par\medskip}
+    \renewcommand{\problemtextfont}{\footnotesize}
+    \renewcommand{\beforeproblemsectioncaption}{\smallbreak\smallskip}
+    \renewcommand{\afterproblemsectioncaption}{}
+\fi
+
+% -- End of setup keywords --
+
+\newcommand{\wfProblemLetter}{%
+  \ifdefined\ProblemIndex
+    \ProblemIndex
+  \fi
+}
+
+\newcommand{\wfProblemLabel}{%
+    \ifdefined\ProblemIndex
+      \kw@Problem\ \wfProblemLetter
+    \else
+      \kw@Problem
+    \fi
+}
+
+\newcommand{\wfProblemHeader}[3]{%
+  \begin{center}
+    \textsf{%
+      {\huge {\wfProblemLabel}}\\[3mm]%
+      {\LARGE {#1}%
+        \ifdefined\DivisionNumber%
+          \if\DivisionNumber2%
+            {\ \textit{(Division\ \DivisionNumber)}}%
+          \fi%
+        \fi%
+      }%
+      \ifx&#2&\else \\[2mm]{\Large {\kw@TimeLimit\ #2}}\fi%
+      \\[5mm]%
+    }%
+  \end{center}%
+}
+
+
+
+% -- Problem sections --
+
+\newcommand{\createsection}{\@newsection}
+
+\def\@newsection#1#2{\DeclareRobustCommand{#1}{
+{\beforeproblemsectioncaption\noindent\bf\problemsectionfont
+\textsf{#2}}
+\nopagebreak\par\afterproblemsectioncaption}
+}
+
+\newcommand{\createsectionexample}{\@newsectionexample}
+
+\def\@newsectionexample#1#2{\DeclareRobustCommand{#1}{
+\ifdefined\NoExamples\else%
+{\beforeproblemsectioncaption\noindent\bf\problemsectionfont
+\textsf{#2}}
+\nopagebreak\par\afterproblemsectioncaption%
+\fi%
+}
+}
+
+\newcommand{\createsectionpar}{\@newsectionpar}
+
+\def\@newsectionpar#1#2{\DeclareRobustCommand{#1}[1]{
+{\beforeproblemsectioncaption\noindent\bf\problemsectionfont
+\textsf{#2~##1}}
+\nopagebreak\par\afterproblemsectioncaption}
+}
+
+\newcommand{\createsectionpartwo}{\@newsectionpartwo}
+
+\def\@newsectionpartwo#1#2#3{\DeclareRobustCommand{#1}[2]{
+{\beforeproblemsectioncaption\noindent\problemsectionfont
+\textsf{\textbf{#2}~\textbf{##1}~(##2~#3)}}
+\nopagebreak\par\afterproblemsectioncaption}
+}
+
+\createsection{\Specification}{\kw@Specification}
+\createsection{\Interaction}{\kw@Interaction}
+\createsection{\InputFile}{\kw@Input}
+\createsection{\OutputFile}{\kw@Output}
+\createsectionexample{\Example}{\kw@Example}
+\createsectionexample{\Examples}{\kw@Examples}
+\renewcommand{\Example}{}
+\renewcommand{\Examples}{}
+\createsection{\Explanation}{\kw@Explanation}
+\createsection{\Explanations}{\kw@Explanations}
+\createsection{\Illustration}{\kw@Illustration}
+\createsection{\Scoring}{\kw@Scoring}
+\createsection{\Note}{\kw@Note}
+\createsection{\Notes}{\kw@Notes}
+\renewcommand{\Note}{}
+\renewcommand{\Notes}{}
+\createsection{\Constraints}{\kw@Constraints}
+\createsection{\SubtaskOne}{\kw@SubtaskOne}
+\createsection{\SubtaskTwo}{\kw@SubtaskTwo}
+\createsection{\SubtaskThree}{\kw@SubtaskThree}
+\createsection{\SubtaskFour}{\kw@SubtaskFour}
+\createsection{\SubtaskFive}{\kw@SubtaskFive}
+\createsection{\SubtaskSix}{\kw@SubtaskSix}
+\createsectionpar{\Subtask}{\kw@Subtask}
+\createsectionpartwo{\SubtaskWithCost}{\kw@Subtask}{\kw@points}
+
+% -- End of problem sections
+
+% -- Default limits definition --
+
+\if@russian
+\def\defaulttimelimit{2 секунды}
+\else
+\if@ukrainian
+\def\defaulttimelimit{2 секунди}
+\else
+\def\defaulttimelimit{2 seconds}
+\fi
+\fi
+
+
+
+\if@russian
+\def\defaultmemorylimit{256 мебибайт}
+\else
+\if@ukrainian
+\def\defaulttimelimit{256 мебібайт}
+\else
+\def\defaultmemorylimit{256 mebibytes}
+\fi
+\fi
+
+% -- End of default limits definition --
+
+% -- Problem environment --
+
+\def\defaultproblemauthor{\textit{\kw@notstated}}
+\gdef\thisproblemauthor{\defaultproblemauthor}
+\def\defaultproblemdeveloper{\textit{\kw@notstated}}
+\gdef\thisproblemdeveloper{\defaultproblemdeveloper}
+\def\defaultproblemorigin{\textit{\kw@notstated}}
+\gdef\thisproblemorigin{\defaultproblemorigin}
+
+\newif\ifdisplayauthor
+\newif\ifdisplaydeveloper
+\newif\ifdisplayorigin
+\newif\ifrevisionsignature
+\newif\ifdisplayauthorinfooter
+\newif\ifdisplaydeveloperinfooter
+
+\newcounter{problem}
+\newcounter{subtasknum}[problem]
+
+\newcommand{\SubtaskWithScore}[1]{%
+{\addtocounter{subtasknum}{1}%
+\beforeproblemsectioncaption\noindent\problemsectionfont%
+\textsf{\textbf{\kw@Subtask~\arabic{subtasknum}}}%
+\textsf{~(\kw@points:~#1)}%
+\nopagebreak\par\afterproblemsectioncaption}%
+}%
+
+\newenvironment{tutorial}[1]{%
+    \bigskip%
+    \refstepcounter{problem}
+    \wfProblemHeader{#1}{}{}%
+    \problemtextfont%
+}
+
+\newenvironment{@problem}[6]{
+\global\let\lastproblemauthor\thisproblemauthor
+\global\let\lastproblemdeveloper\thisproblemdeveloper
+\global\let\lastproblemorigin\thisproblemorigin
+\ifx&#4&%
+    \gdef\wfCurrentTimeLimit{\kw@notstated}%
+    \gdef\contestshortname{Time limit: \kw@notstated}%
+\else%
+    \gdef\wfCurrentTimeLimit{#4}%
+    \gdef\contestshortname{Time limit: #4}%
+\fi%
+\gdef\wfCurrentProblemName{#1}%
+
+% Hotfix
+%\def\@memorylimit{#5}
+
+%% -- Default memory limit --
+%% :FIXME:
+%\def\@t{#5}
+%
+%\ifx\@t\empty
+%    \def\@memorylimit{\defaultmemorylimit}
+%\else
+%%\ifcat\par\@t
+%%    \def\@memorylimit{\defaultmemorylimit}
+%%\else
+%    \def\@memorylimit{#5}
+%%\fi
+%\fi
+%% -- End of default memory limit --
+
+% -- No feedback case --
+% :FIXME:
+\def\@t{#6}
+
+\ifx\@t\empty
+    \def\@feedback{}
+\else
+%\ifcat\par\@t
+%    \def\@feedback{}
+%\else
+    \def\@feedback{\kw@Feedback & #6 \\}
+\fi
+%\fi
+% -- End of no feedback case --
+
+    {
+        \ifdefined\NoProblemHead\else%
+        \refstepcounter{problem}
+        \wfProblemHeader{#1}{#4}{#5}%
+        \problemtextfont%
+        \fi%
+    }
+    \problemtextfont
+
+    \newcommand{\InputFileName}{\ifx\relax#2\relax{\kw@defaultinputname}\else{#2}\fi}
+    \newcommand{\OutputFileName}{\ifx\relax#3\relax{\kw@defaultoutputname}\else{#3}\fi}
+}{%
+    \global\let\lastproblemauthor\thisproblemauthor%
+    \global\let\lastproblemdeveloper\thisproblemdeveloper%
+    \global\let\lastproblemdorigin\thisproblemorigin%
+    \gdef\thisproblemauthor{\defaultproblemauthor}%
+    \gdef\thisproblemdeveloper{\defaultproblemdeveloper}%
+    \gdef\thisproblemorigin{\defaultproblemorigin}%
+    \problemend%
+}
+
+\def\s@tm@cr@s{
+    \def\widthin##1{\exmpwidinf=##1\relax}
+    \def\widthout##1{\exmpwidouf=##1\relax}
+    \def\stretchin##1{\advance\exmpwidinf by ##1\relax}
+    \def\stretchout##1{\advance\exmpwidouf by ##1\relax}
+    \@ifstar{
+        \error Star must not be used in example environment any more
+    }
+}
+
+% This is magic, which delete space after verbatiminput
+\addto@hook{\every@verbatim}{\topsep=0pt\relax}
+
+% :FIXME:
+\newcounter{exmpnum}
+\newenvironment{example}[1][]{
+    \s@tm@cr@s#1
+    \setcounter{exmpnum}{0}%
+    \ttfamily\obeylines\obeyspaces\frenchspacing
+    \newcommand{\exmp}[2]{
+    \ifdefined\NoExamples\else%
+        \ifnum\value{exmpnum}=0\relax
+            \vspace{0.6\baselineskip}%
+        \fi
+        \stepcounter{exmpnum}%
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{minipage}{\wfSampleTableWidth}
+            \hbox to \wfSampleTableWidth{%
+                {\sffamily\bfseries Sample Input \arabic{exmpnum}}%
+                \hfil
+                {\sffamily\bfseries Sample Output \arabic{exmpnum}}%
+                \hfil
+            }%
+            \par\smallskip
+            \setlength{\extrarowheight}{1mm}
+            \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
+                \hline
+                \begin{minipage}[t]{\exmpwidinf}\rightskip=0pt plus 1fill\relax##1\smallskip\end{minipage}&
+                \begin{minipage}[t]{\exmpwidouf}\rightskip=0pt plus 1fill\relax##2\smallskip\end{minipage}\\
+                \hline
+            \end{tabular}
+        \end{minipage}
+        \par\medskip
+    \fi%
+    }
+    \newcommand{\exmpinteract}[2]{
+    \ifdefined\NoExamples\else%
+        \ifnum\value{exmpnum}=0\relax
+            \vspace{0.6\baselineskip}%
+        \fi
+        \stepcounter{exmpnum}%
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
+            \sffamily\bfseries Read &
+            \sffamily\bfseries Sample Interaction \arabic{exmpnum} &
+            \sffamily\bfseries Write
+        \end{tabular*}%
+        \par
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{minipage}{\wfSampleTableWidth}
+            \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
+                \hline
+                \begin{minipage}[t]{\exmpwidinf}\rightskip=0pt plus 1fill\relax##1\medskip\end{minipage}&
+                \begin{minipage}[t]{\exmpwidouf}\rightskip=0pt plus 1fill\relax##2\medskip\end{minipage}\\
+                \hline
+            \end{tabular}
+        \end{minipage}
+        \par\medskip
+    \fi%
+    }
+    \newcommand{\exmpinteractfile}[2]{%
+        \exmpinteract{\verbatiminput{##1}}{\verbatiminput{##2}}%
+    }
+
+    \newcommand{\exmpfile}[2]{
+    \ifdefined\NoExamples\else%
+       \exmp{
+          \verbatiminput{##1}
+       }{
+          \verbatiminput{##2}
+       }%
+    \fi%
+    }
+}{
+}
+
+\newcounter{exmpnumtwice}
+\newcounter{exmpnumtwicepair}
+\newenvironment{exampletwice}[1][]{
+    \s@tm@cr@s#1
+    \setcounter{exmpnumtwice}{0}%
+    \setcounter{exmpnumtwicepair}{0}%
+    \ttfamily\obeylines\obeyspaces\frenchspacing
+    \newcommand{\exmp}[2]{
+    \ifdefined\NoExamples\else%
+        \ifnum\value{exmpnumtwice}=0\relax
+            \vspace{0.6\baselineskip}%
+        \fi
+        \stepcounter{exmpnumtwice}%
+        \ifodd\value{exmpnumtwice}
+            \stepcounter{exmpnumtwicepair}%
+            \edef\wfPassIndex{1}%
+        \else
+            \edef\wfPassIndex{2}%
+        \fi
+        \edef\wfSampleIndex{\arabic{exmpnumtwicepair}}%
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
+            \sffamily\bfseries Sample Input \wfSampleIndex &
+            \sffamily\bfseries Pass \wfPassIndex &
+            \sffamily\bfseries Sample Output \wfSampleIndex
+        \end{tabular*}%
+        \par
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{minipage}{\wfSampleTableWidth}
+            \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
+                \hline
+                \begin{minipage}[t]{\exmpwidinf}\rightskip=0pt plus 1fill\relax##1\smallskip\end{minipage}&
+                \begin{minipage}[t]{\exmpwidouf}\rightskip=0pt plus 1fill\relax##2\smallskip\end{minipage}\\
+                \hline
+            \end{tabular}
+        \end{minipage}
+        \par\medskip
+    \fi%
+    }
+    \newcommand{\exmpinteract}[2]{
+    \ifdefined\NoExamples\else%
+        \ifnum\value{exmpnumtwice}=0\relax
+            \vspace{0.6\baselineskip}%
+        \fi
+        \stepcounter{exmpnumtwice}%
+        \ifodd\value{exmpnumtwice}
+            \stepcounter{exmpnumtwicepair}%
+            \edef\wfPassIndex{1}%
+        \else
+            \edef\wfPassIndex{2}%
+        \fi
+        \edef\wfSampleIndex{\arabic{exmpnumtwicepair}}%
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
+            \sffamily\bfseries Read &
+            \sffamily\bfseries Sample \wfSampleIndex, Pass \wfPassIndex &
+            \sffamily\bfseries Write
+        \end{tabular*}%
+        \par
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{minipage}{\wfSampleTableWidth}
+            \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
+                \hline
+                \begin{minipage}[t]{\exmpwidinf}\rightskip=0pt plus 1fill\relax##1\smallskip\end{minipage}&
+                \begin{minipage}[t]{\exmpwidouf}\rightskip=0pt plus 1fill\relax##2\smallskip\end{minipage}\\
+                \hline
+            \end{tabular}
+        \end{minipage}
+        \par\medskip
+    \fi%
+    }
+    \newcommand{\exmpinteractfile}[2]{%
+        \exmpinteract{\verbatiminput{##1}}{\verbatiminput{##2}}%
+    }
+
+    \newcommand{\exmpfile}[2]{
+    \ifdefined\NoExamples\else%
+       \exmp{
+          \verbatiminput{##1}
+       }{
+          \verbatiminput{##2}
+       }%
+    \fi%
+    }
+}{
+}
+
+% -- Interactive zigzag samples (read/write alternating) --
+\newcommand{\interactread}[1]{%
+    \noindent\hspace*{\wfSampleLeft}%
+    \makebox[\wfSampleTableWidth][l]{%
+        \begin{tabular}{|p{\wfInteractBlockWidth}|}
+            \hline
+            \begin{minipage}[t]{\wfInteractBlockWidth}\rightskip=0pt plus 1fill\relax\strut#1\strut\end{minipage}\\
+            \hline
+        \end{tabular}
+    }%
+    \par\smallskip
+}
+\newcommand{\interactwrite}[1]{%
+    \noindent\hspace*{\wfSampleLeft}%
+    \makebox[\wfSampleTableWidth][r]{%
+        \begin{tabular}{|p{\wfInteractBlockWidth}|}
+            \hline
+            \begin{minipage}[t]{\wfInteractBlockWidth}\rightskip=0pt plus 1fill\relax\strut#1\strut\end{minipage}\\
+            \hline
+        \end{tabular}
+    }%
+    \par\smallskip
+}
+
+\newenvironment{interactzigzag}{
+    \ifdefined\NoExamples\else%
+        \ifnum\value{exmpnum}=0\relax
+            \vspace{0.6\baselineskip}%
+        \fi
+        \stepcounter{exmpnum}%
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
+            \sffamily\bfseries Read &
+            \sffamily\bfseries Sample Interaction \arabic{exmpnum} &
+            \sffamily\bfseries Write
+        \end{tabular*}%
+        \par
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{minipage}{\wfSampleTableWidth}
+    \fi%
+}{
+    \ifdefined\NoExamples\else%
+        \end{minipage}
+        \par\medskip
+    \fi%
+}
+
+\newenvironment{interactzigzagtwice}{
+    \ifdefined\NoExamples\else%
+        \ifnum\value{exmpnumtwice}=0\relax
+            \vspace{0.6\baselineskip}%
+        \fi
+        \stepcounter{exmpnumtwice}%
+        \ifodd\value{exmpnumtwice}
+            \stepcounter{exmpnumtwicepair}%
+            \edef\wfPassIndex{1}%
+        \else
+            \edef\wfPassIndex{2}%
+        \fi
+        \edef\wfSampleIndex{\arabic{exmpnumtwicepair}}%
+        \noindent\hspace*{\wfSampleLeft}%
+        \hbox to \wfSampleTableWidth{%
+            {\sffamily\bfseries Read}%
+            \hfil
+            {\sffamily\bfseries Sample \wfSampleIndex, Pass \wfPassIndex}%
+            \hfil
+            {\sffamily\bfseries Write}%
+        }%
+        \par
+        \noindent\hspace*{\wfSampleLeft}%
+        \begin{minipage}{\wfSampleTableWidth}
+    \fi%
+}{
+    \ifdefined\NoExamples\else%
+        \end{minipage}
+        \par\medskip
+    \fi%
+}
+
+\newenvironment{examplewide}[1][]{%
+    \s@tm@cr@s#1
+    \ttfamily\obeylines\obeyspaces\frenchspacing
+    \newcommand{\exmp}[2]{
+        \ifdefined\NoExamples\else%
+        \begin{tabular}{|c|}
+        \hline
+        \multicolumn{1}{|c|}{\bf\texttt{\InputFileName}}\\
+        \hline
+        \begin{minipage}[t]{\exmpwidewid}\rightskip=0pt plus 1fill\relax
+        ##1
+        \smallskip\end{minipage}\\
+        \hline
+        \multicolumn{1}{|c|}{\bf\texttt{\OutputFileName}}\\%
+        \hline
+        \begin{minipage}[t]{\exmpwidewid}\rightskip=0pt plus 1fill\relax
+        ##2    
+        \smallskip\end{minipage}\\%
+        \hline
+        \end{tabular}
+        \fi%
+    }
+    \newcommand{\exmpfile}[2]{
+        \ifdefined\NoExamples\else%
+       \exmp{
+          \verbatiminput{##1}
+       }{
+          \verbatiminput{##2}
+       }%
+        \fi%
+    }
+}{
+}
+
+\newenvironment{examplethree}[1][]{
+    \s@tm@cr@s#1
+    \ttfamily\obeylines\obeyspaces\frenchspacing
+    \newcommand{\exmp}[3]{
+        \ifdefined\NoExamples\else%
+        \begin{minipage}[t]{\exmpthreewidinf}\rightskip=0pt plus 1fill\relax##1\smallskip\end{minipage}&
+        \begin{minipage}[t]{\exmpthreewidouf}\rightskip=0pt plus 1fill\relax##2\smallskip\end{minipage}&
+        \begin{minipage}[t]{\exmpthreewidnote}\rightskip=0pt plus 1fill\relax##3\smallskip\end{minipage}\\
+        \hline
+        \fi%
+    }
+
+    \newcommand{\exmpfile}[3]{
+    \ifdefined\NoExamples\else%
+       \exmp{
+          \verbatiminput{##1}
+       }{
+          \verbatiminput{##2}
+       }{
+          ##3
+       }%
+    \fi%
+    }
+
+
+    \ifdefined\NoExamples\else%
+    \begin{tabular}{|l|l|l|}
+        \hline
+        \multicolumn{1}{|c|}{\bf\texttt{\InputFileName}}&
+        \multicolumn{1}{|c|}{\bf\texttt{\OutputFileName}}&
+        \multicolumn{1}{|c|}{\bf\texttt{\expandafter\unexpanded{\expandafter\kwExampleNotes}}}\\
+        \hline
+    \fi%
+}{
+    \ifdefined\NoExamples\else%
+    \end{tabular}
+    \fi%
+}
+
+% -- This is hack to make feedback argument optional
+
+\newenvironment{problem}[5]{%
+\def\@ProblemCommon{\begin{@problem}{#1}{#2}{#3}{#4}{#5}}%
+\newcommand\@problemSix[1]{\@ProblemCommon{##1}}%
+\newcommand\@problemFive{\@ProblemCommon{}}%
+\@ifnextchar\bgroup\@problemSix\@problemFive%
+}{%
+\end{@problem}%
+}
+
+
+% -- End of problem environment --
+
+
+% -- Declare "shortitems" and "shortnums" environment: it's a "compact itemize" --
+\if@twocolumn
+    \def\shortitems{\vspace{-1mmplus6mm}\itemize\itemsep-0.618mmplus0.5mm\relax}%
+    \def\endshortitems{\vspace{-1mmplus6mm}\enditemize}%
+    \def\shortnums{\vspace{-1mmplus6mm}\enumerate\itemsep-0.618mmplus0.5mm\relax}%
+    \def\endshortnums{\vspace{-1mmplus6mm}\endenumerate}%
+\else
+    \def\shortitems{\vspace{-3mmplus2mm}\itemize\itemsep-1.618mmplus0.5mm\relax}%
+    \def\endshortitems{\vspace{-3mmplus2mm}\enditemize}%
+    \def\shortnums{\vspace{-3mmplus2mm}\enumerate\itemsep-1.618mmplus0.5mm\relax}%
+    \def\endshortnums{\vspace{-3mmplus2mm}\endenumerate}%
+\fi
+% -- end of "shortitems" and "shortnums" declaration --
+
+\newcommand{\thecontestname}{Olympiad in Informatics}
+\newcommand{\thecontestlocation}{Somewhere}
+\newcommand{\thecontestdate}{Once upon a time}
+\newcommand{\therevision}{undefined}
+
+\DeclareRobustCommand{\contestname}{\thecontestname\par\thecontestlocation\unskip, \thecontestdate}
+
+\DeclareRobustCommand{\contest}[3]{
+    \renewcommand{\thecontestname}{#1}
+    \renewcommand{\thecontestlocation}{#2}
+    \renewcommand{\thecontestdate}{#3}
+
+    \def\temp{#1}\ifx\temp\empty
+       \def\temp{#2}\ifx\temp\empty
+          \def\temp{#3}\ifx\temp\empty
+            \let\thecontestname\undefined%
+            \let\thecontestlocation\undefined%
+            \let\thecontestdate\undefined%
+          \fi
+       \fi
+    \fi
+}
+
+\DeclareRobustCommand{\revision}[1]{
+    \renewcommand{\therevision}{#1}
+}
+
+\makeatletter
+
+\renewcommand{\@oddhead}{%
+\parbox{\textwidth}{
+\begin{center}
+% \includegraphics[width=\textwidth]{statements-banner.pdf}
+\end{center}
+}
+}
+
+\renewcommand{\@evenhead}{\@oddhead}
+
+
+
+\renewcommand{\@oddfoot}{
+    \parbox{\textwidth}{
+        \emph{%
+            \ifdefined\thecontestname
+                \thecontestname%
+            \fi%
+            \ifx\wfCurrentProblemName\empty\else%
+                \ifdefined\thecontestname\space\fi%
+                \kw@Problem\ \wfProblemLetter: \wfCurrentProblemName%
+            \fi%
+        }%
+        \hfill
+        \thepage
+    }
+}
+\renewcommand{\@evenfoot}{
+    \parbox{\textwidth}{
+        \emph{%
+            \ifdefined\thecontestname
+                \thecontestname%
+            \fi%
+            \ifx\wfCurrentProblemName\empty\else%
+                \ifdefined\thecontestname\space\fi%
+                \kw@Problem\ \wfProblemLetter: \wfCurrentProblemName%
+            \fi%
+        }%
+        \hfill
+        \thepage
+    }
+}
+
+\makeatother
+
+\headheight=22mm
+\headsep=14mm
+\addtolength{\textheight}{-7mm}
+
+\hfuzz=0.5pt
+
+\sloppy

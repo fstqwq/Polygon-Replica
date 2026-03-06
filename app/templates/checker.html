@@ -4,14 +4,14 @@
 <section>
   <h2 class="checker-section-title">Standard Checker{% if active %}<span class="checker-mode-chip checker-mode-chip-active">active</span>{% endif %}</h2>
   {% if standard_checker_options %}
-  <form class="form-row checker-standard-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/set-standard">
+  <form class="form-row form-row-inline-controls" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/set-standard">
     <label for="standard-checker-name">Checker</label>
     <select id="standard-checker-name" name="checker_name">
       {% for checker in standard_checker_options %}
       <option value="{{ checker.value }}" {% if checker.value == selected_standard_checker %}selected{% endif %}>{{ checker.label }}</option>
       {% endfor %}
     </select>
-    <div class="checker-standard-actions">
+    <div class="form-row-actions">
       <button type="submit">Set Checker</button>
       <button type="submit" formaction="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/view-standard" formmethod="get">View Checker</button>
     </div>
@@ -36,13 +36,16 @@
     repo_content,
     repo_content_truncated,
     content_char_limit,
-    "Save Checker Source"
+    "Save Checker Source",
+    "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/checker/create-template",
+    "Create checker.cpp template"
   ) }}
-  {% endif %}
+  {% else %}
   {{ create_template_form(
     "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/checker/create-template",
     "Create checker.cpp template"
   ) }}
+  {% endif %}
 </section>
 {%- endmacro %}
 

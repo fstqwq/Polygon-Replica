@@ -7,7 +7,7 @@
 {% set expected_class = "tag-select-expected" %}
 {% if expected_value == "accepted" %}
 {% set expected_class = "tag-select-accepted" %}
-{% elif expected_value == "time_limit_exceeded" %}
+{% elif expected_value == "time_limit_exceeded" or expected_value == "tle_or_correct" %}
 {% set expected_class = "tag-select-time-limit-exceeded" %}
 {% elif expected_value == "unknown" %}
 {% set expected_class = "tag-select-neutral" %}

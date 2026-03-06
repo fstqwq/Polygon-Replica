@@ -4,7 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.util import ensure_dir, sha256_file, write_json
+from app.services.hashing import sha256_file
+from app.services.util import write_json
 
 
 @dataclass
@@ -64,15 +65,6 @@ class ArtifactService:
             for name in sorted(safe_filenames):
                 rel = f"{rel_prefix}/{name}" if rel_prefix else name
                 yield rel, dir_root / name
-
-    def prepare(self, problem_slug: str, build_id: str) -> ArtifactPaths:
-        root = self.artifacts_root / problem_slug / build_id
-        tests = ensure_dir(root / "tests")
-        ans = ensure_dir(root / "ans")
-        logs = ensure_dir(root / "logs")
-        statement_preview = ensure_dir(root / "statement_preview")
-        export = ensure_dir(root / "export")
-        return ArtifactPaths(root, tests, ans, logs, statement_preview, export)
 
     def write_manifest(
         self,

@@ -25,7 +25,7 @@
  * Copyright (c) 2005-2025
  */
 
-#define VERSION "0.9.45"
+#define VERSION "0.9.45-DOMJUDGE"
 
 /*
  * Mike Mirzayanov
@@ -60,6 +60,8 @@
  *   Reads test from inf (mapped to args[1]), writes result to tout (mapped to argv[2],
  *   can be judged by checker later), reads program output from ouf (mapped to stdin),
  *   writes output to program via stdout (use cout, printf, etc).
+ *
+ *   NOTE: This file is modified to run in domjudge.
  */
 
 const char *latestFeatures[] = {
@@ -189,7 +191,6 @@ const char *latestFeatures[] = {
 #include <fcntl.h>
 #include <functional>
 #include <cstdint>
-#include <sys/stat.h>
 
 #ifdef TESTLIB_THROW_EXIT_EXCEPTION_INSTEAD_OF_EXIT
 #   include <exception>
@@ -234,23 +235,49 @@ const char *latestFeatures[] = {
 #define EOFC (255)
 
 #ifndef OK_EXIT_CODE
-#   define OK_EXIT_CODE 42
+#   ifdef CONTESTER
+#       define OK_EXIT_CODE 0xAC
+#   else
+#       define OK_EXIT_CODE 42
+#   endif
 #endif
 
 #ifndef WA_EXIT_CODE
-#   define WA_EXIT_CODE 43
+#   ifdef EJUDGE
+#       define WA_EXIT_CODE 5
+#   elif defined(CONTESTER)
+#       define WA_EXIT_CODE 0xAB
+#   else
+#       define WA_EXIT_CODE 43
+#   endif
 #endif
 
 #ifndef PE_EXIT_CODE
-#   define PE_EXIT_CODE 43
+#   ifdef EJUDGE
+#       define PE_EXIT_CODE 4
+#   elif defined(CONTESTER)
+#       define PE_EXIT_CODE 0xAA
+#   else
+#       define PE_EXIT_CODE 43
+#   endif
 #endif
 
 #ifndef FAIL_EXIT_CODE
-#   define FAIL_EXIT_CODE 3
+#   ifdef EJUDGE
+#       define FAIL_EXIT_CODE 6
+#   elif defined(CONTESTER)
+#       define FAIL_EXIT_CODE 0xA3
+#   else
+#       define FAIL_EXIT_CODE 3
+#   endif
 #endif
 
 #ifndef DIRT_EXIT_CODE
-#   define DIRT_EXIT_CODE 4
+#   ifdef EJUDGE
+#       define DIRT_EXIT_CODE 6
+#   else
+#       define DIRT_EXIT_CODE 43
+#   endif
 #endif
 
 #ifndef POINTS_EXIT_CODE
@@ -258,7 +285,7 @@ const char *latestFeatures[] = {
 #endif
 
 #ifndef UNEXPECTED_EOF_EXIT_CODE
-#   define UNEXPECTED_EOF_EXIT_CODE 8
+#   define UNEXPECTED_EOF_EXIT_CODE 43
 #endif
 
 #ifndef PC_BASE_EXIT_CODE
@@ -3117,7 +3144,7 @@ NORETURN void InStream::quit(TResult result, const char *msg) {
     }
 
     if (resultName != "") {
-        resultFile = testlib_fopen_(resultName.c_str(), "w");
+        resultFile = testlib_fopen_(resultName.c_str(), "a");
         if (resultFile == NULL) {
             resultName = "";
             quit(_fail, "Can not write to the result file");
@@ -3149,7 +3176,6 @@ NORETURN void InStream::quit(TResult result, const char *msg) {
     }
 
     quitscr(LightGray, __testlib_toPrintableMessage(message).c_str());
-    std::fprintf(stderr, "\n");
 
     inf.close();
     ouf.close();
@@ -3158,10 +3184,10 @@ NORETURN void InStream::quit(TResult result, const char *msg) {
         tout.close();
 
     textColor(LightGray);
-
+/*
     if (resultName != "")
         std::fprintf(stderr, "See file to check exit message\n");
-
+*/
     halt(resultExitCode(result));
 }
 
@@ -4641,6 +4667,11 @@ void setAppesModeEncoding(std::string appesModeEncoding) {
     ::appesModeEncoding = appesModeEncoding;
 }
 
+std::string make_new_file_in_a_dir(std::string dir, std::string file = "judgemessage.txt") { // assume in linux
+    if (dir.back() != '/') dir.push_back('/');
+    return dir + file;
+}
+
 void registerInteraction(int argc, char *argv[]) {
     __testlib_ensuresPreconditions();
     __testlib_set_testset_and_group(argc, argv);
@@ -4651,23 +4682,20 @@ void registerInteraction(int argc, char *argv[]) {
 
     if (argc > 1 && !strcmp("--help", argv[1]))
         __testlib_help();
-
+/*
     if (argc < 3 || argc > 6) {
         quit(_fail, std::string("Program must be run with the following arguments: ") +
                     std::string("<input-file> <output-file> [<answer-file> [<report-file> [<-appes>]]]") +
                     "\nUse \"--help\" to get help information");
     }
-
-    if (argc <= 4) {
-        resultName = "";
+*/
+    if (argc == 4) {
+        resultName = make_new_file_in_a_dir(argv[3]);
         appesMode = false;
     }
 
-    if (argc == 5) {
-        resultName = argv[4];
-        appesMode = false;
-    }
-
+#ifndef EJUDGE
+/*
     if (argc == 6) {
         if (strcmp("-APPES", argv[5]) && strcmp("-appes", argv[5])) {
             quit(_fail, std::string("Program must be run with the following arguments: ") +
@@ -4677,17 +4705,19 @@ void registerInteraction(int argc, char *argv[]) {
             appesMode = true;
         }
     }
+*/
+#endif
 
     inf.init(argv[1], _input);
-
+/*
     tout.open(argv[2], std::ios_base::out);
     if (tout.fail() || !tout.is_open())
         quit(_fail, std::string("Can not write to the test-output-file '") + argv[2] + std::string("'"));
 
+*/
     ouf.init(stdin, _output);
-
-    if (argc >= 4)
-        ans.init(argv[3], _answer);
+    if (argc >= 3)
+        ans.init(argv[2], _answer);
     else
         ans.name = "unopened answer stream";
 }
@@ -4813,28 +4843,6 @@ public:
     }
 } checker;
 
-static bool __testlib_pathIsDirectory(const std::string &path) {
-    if (path.empty())
-        return false;
-    struct stat st;
-    if (0 != stat(path.c_str(), &st))
-        return false;
-    return (st.st_mode & S_IFDIR) != 0;
-}
-
-static std::string __testlib_joinPath(const std::string &base, const std::string &leaf) {
-    if (base.empty())
-        return leaf;
-    char last = base[base.size() - 1];
-    if (last == '/' || last == '\\')
-        return base + leaf;
-#ifdef ON_WINDOWS
-    return base + "\\" + leaf;
-#else
-    return base + "/" + leaf;
-#endif
-}
-
 void registerTestlibCmd(int argc, char *argv[]) {
     __testlib_ensuresPreconditions();
     __testlib_set_testset_and_group(argc, argv);
@@ -4864,30 +4872,20 @@ void registerTestlibCmd(int argc, char *argv[]) {
     argc = int(args.size());
     if (argc > 1 && "--help" == args[1])
         __testlib_help();
-
-    bool icpcCompatMode = (argc >= 4 && __testlib_pathIsDirectory(args[3]));
-    if (icpcCompatMode) {
-        resultName = __testlib_joinPath(args[3], "judgemessage.txt");
-        appesMode = false;
-        inf.init(args[1], _input);
-        ouf.init(stdin, _output);
-        ouf.skipBom();
-        ans.init(args[2], _answer);
-        return;
-    }
-
+/*
     if (argc < 4 || argc > 6) {
         quit(_fail, std::string("Program must be run with the following arguments: ") +
                     std::string("[--testset testset] [--group group] <input-file> <output-file> <answer-file> [<report-file> [<-appes>]]") +
-                    std::string(" or <input-file> <answer-file> <feedback-dir> [validator-args ...]") +
                     "\nUse \"--help\" to get help information");
     }
-
+*/
     if (argc == 4) {
-        resultName = "";
+        resultName = make_new_file_in_a_dir(args[3]);
         appesMode = false;
     }
 
+#ifndef EJUDGE
+/*
     if (argc == 5) {
         resultName = args[4];
         appesMode = false;
@@ -4902,11 +4900,13 @@ void registerTestlibCmd(int argc, char *argv[]) {
             appesMode = true;
         }
     }
+*/
+#endif
 
     inf.init(args[1], _input);
-    ouf.init(args[2], _output);
+    ouf.init(stdin, _output);
     ouf.skipBom();
-    ans.init(args[3], _answer);
+    ans.init(args[2], _answer);
 }
 
 void registerTestlib(int argc, ...) {

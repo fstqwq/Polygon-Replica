@@ -1,0 +1,75 @@
+{% extends "root_base.html" %}
+{% block content %}
+<h1 class="page-title">Review Contest Import</h1>
+{% include "_flash_message.html" %}
+
+<section>
+  <p class="muted">Package: <code>{{ package_name }}</code></p>
+  <p class="muted">Review and adjust slugs for each imported problem before creating the contest.</p>
+  {% if top_error %}
+  <p class="danger">{{ top_error }}</p>
+  {% endif %}
+</section>
+
+<section>
+  <form class="form-stack" method="post" action="/contests/import/confirm">
+    <input type="hidden" name="draft_id" value="{{ draft_id }}" />
+    <div class="form-row">
+      <label for="contest-import-review-slug">Contest Slug</label>
+      <input id="contest-import-review-slug" name="contest_slug" value="{{ contest_slug_value }}" required />
+    </div>
+    {% if contest_slug_error %}
+    <p class="danger">{{ contest_slug_error }}</p>
+    {% elif contest_slug_state.exists %}
+    <p class="danger">{{ contest_slug_state.message }}</p>
+    {% endif %}
+    {% if contest_slug_state.suggested and (contest_slug_state.suggested != contest_slug_value) %}
+    <p class="muted">Suggested available contest slug: <code>{{ contest_slug_state.suggested }}</code></p>
+    {% endif %}
+    <div class="form-row">
+      <label for="contest-import-review-title">Contest Title</label>
+      <input id="contest-import-review-title" name="contest_title" value="{{ contest_title_value }}" />
+    </div>
+
+    <table>
+      <tr>
+        <th>#</th>
+        <th>Index</th>
+        <th>Source</th>
+        <th>New Problem Slug</th>
+        <th>Status</th>
+      </tr>
+      {% for row in problem_rows %}
+      <tr>
+        <td>{{ row.seq }}</td>
+        <td>{{ row.index }}</td>
+        <td><code>{{ row.source_slug }}</code></td>
+        <td>
+          <input
+            name="problem_slug_{{ row.seq }}"
+            value="{{ row.slug_input }}"
+            required
+            autocomplete="off"
+          />
+        </td>
+        <td>
+          {% if row.ok %}
+          <span>ok</span>
+          {% else %}
+          <span class="danger">{{ row.message }}</span>
+          {% if row.suggested %}
+          <div class="muted">suggested: <code>{{ row.suggested }}</code></div>
+          {% endif %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    <div class="form-row">
+      <button type="submit" class="primary-action">Confirm Import</button>
+      <a class="linkish" href="/contests">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

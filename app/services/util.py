@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -106,17 +105,6 @@ def run_cmd(
 
 def is_canonical_artifact_id(value: str) -> bool:
     return bool(ARTIFACT_ID_RE.fullmatch(str(value or "")))
-
-
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:

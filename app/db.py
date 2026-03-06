@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import logging
+import os
 import sqlite3
+import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, TypeVar
+
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
+
+
+_TxResult = TypeVar("_TxResult")
 
 
 SCHEMA = """
@@ -35,6 +45,17 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS auth_sessions (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS sudo_sessions (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    scope TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
@@ -91,17 +112,71 @@ CREATE TABLE IF NOT EXISTS contest_members (
 CREATE TABLE IF NOT EXISTS contest_problems (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     contest_id INTEGER NOT NULL,
+    idx TEXT NOT NULL,
     problem_id INTEGER NOT NULL,
     added_by_user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE(contest_id, problem_id),
+    UNIQUE(contest_id, idx),
     FOREIGN KEY(contest_id) REFERENCES contests(id),
     FOREIGN KEY(problem_id) REFERENCES problems(id),
     FOREIGN KEY(added_by_user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS contest_jobs (
+    id TEXT PRIMARY KEY,
+    contest_id INTEGER NOT NULL,
+    actor_user_id INTEGER NOT NULL,
+    job_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary_json TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT,
+    FOREIGN KEY(contest_id) REFERENCES contests(id),
+    FOREIGN KEY(actor_user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS contest_artifacts (
+    id TEXT PRIMARY KEY,
+    contest_id INTEGER NOT NULL,
+    job_id TEXT,
+    artifact_type TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    artifact_path TEXT NOT NULL,
+    sha256 TEXT,
+    size_bytes INTEGER,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(contest_id) REFERENCES contests(id),
+    FOREIGN KEY(job_id) REFERENCES contest_jobs(id)
+);
+
+CREATE TABLE IF NOT EXISTS contest_properties (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contest_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by_user_id INTEGER NOT NULL,
+    UNIQUE(contest_id, key),
+    FOREIGN KEY(contest_id) REFERENCES contests(id),
+    FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS contest_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contest_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by_user_id INTEGER NOT NULL,
+    UNIQUE(contest_id, key),
+    FOREIGN KEY(contest_id) REFERENCES contests(id),
+    FOREIGN KEY(created_by_user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS builds (
     id TEXT PRIMARY KEY,
+    build_ref TEXT NOT NULL DEFAULT '',
     problem_id INTEGER NOT NULL,
     workspace_id INTEGER,
     source_commit TEXT,
@@ -135,6 +210,7 @@ CREATE TABLE IF NOT EXISTS runs (
     problem_id INTEGER NOT NULL,
     workspace_id INTEGER,
     build_id TEXT NOT NULL,
+    build_ref TEXT,
     mode TEXT NOT NULL,
     status TEXT NOT NULL,
     summary_json TEXT,
@@ -149,6 +225,7 @@ CREATE TABLE IF NOT EXISTS exports (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
     build_id TEXT NOT NULL,
+    build_ref TEXT,
     workspace_id INTEGER,
     export_type TEXT NOT NULL,
     filename TEXT NOT NULL,
@@ -185,20 +262,32 @@ CREATE INDEX IF NOT EXISTS idx_contest_members_user ON contest_members(user_id, 
 CREATE INDEX IF NOT EXISTS idx_contest_members_contest ON contest_members(contest_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_contest_problems_contest ON contest_problems(contest_id, problem_id);
 CREATE INDEX IF NOT EXISTS idx_contest_problems_problem ON contest_problems(problem_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contest_jobs_contest_created ON contest_jobs(contest_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contest_jobs_actor_created ON contest_jobs(actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contest_artifacts_contest_created ON contest_artifacts(contest_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contest_artifacts_job_created ON contest_artifacts(job_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contest_properties_contest_updated ON contest_properties(contest_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contest_attachments_contest_created ON contest_attachments(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_builds_problem_created ON builds(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_builds_problem_workspace_created ON builds(problem_id, workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_builds_workspace_created ON builds(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_builds_build_ref ON builds(build_ref);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_workspace_created ON previews(problem_id, workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_workspace_created ON previews(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_source_status_created ON previews(problem_id, source_commit, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_problem_created ON runs(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_problem_workspace_created ON runs(problem_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_build_status ON runs(build_id, status);
+CREATE INDEX IF NOT EXISTS idx_runs_build_ref_status ON runs(build_ref, status);
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_build_created ON exports(build_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_exports_build_ref_created ON exports(build_ref, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_sudo_sessions_user_created ON sudo_sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC);
 """
 
@@ -213,6 +302,7 @@ class DB:
     LOCK_RETRY_ATTEMPTS = 3
     LOCK_RETRY_BASE_SEC = 0.05
     SQLITE_BUSY_TIMEOUT_MS = 5000
+    SQL_TRACE_ENABLED = True
 
     @staticmethod
     def _should_retry_after_init(exc: sqlite3.OperationalError) -> bool:
@@ -234,17 +324,33 @@ class DB:
 
     def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as conn:
-            conn.executescript(SCHEMA)
-            self._migrate(conn)
-            conn.commit()
+        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
+            try:
+                with sqlite3.connect(self.path) as conn:
+                    self._install_sql_trace(conn)
+                    conn.row_factory = sqlite3.Row
+                    conn.execute("PRAGMA foreign_keys=ON")
+                    conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
+                    conn.executescript(SCHEMA)
+                    self._migrate(conn)
+                    conn.commit()
+                    return
+            except sqlite3.OperationalError as exc:
+                if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
+                    continue
+                raise
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._migrate_users_auth_columns(conn)
         self._migrate_users_system_admin(conn)
         self._migrate_auth_sessions(conn)
+        self._migrate_sudo_sessions(conn)
         self._migrate_exports_workspace_id(conn)
+        self._migrate_build_ref_columns(conn)
         self._migrate_system_config(conn)
+        self._migrate_contest_schema(conn)
+        self._migrate_runs_build_status_index(conn)
 
     def _migrate_users_auth_columns(self, conn: sqlite3.Connection) -> None:
         cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -307,6 +413,24 @@ class DB:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_id, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)")
 
+    def _migrate_sudo_sessions(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sudo_sessions (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                scope TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sudo_sessions_user_created ON sudo_sessions(user_id, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at)")
+
     def _migrate_exports_workspace_id(self, conn: sqlite3.Connection) -> None:
         cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
         if "workspace_id" not in cols:
@@ -326,6 +450,46 @@ class DB:
             "CREATE INDEX IF NOT EXISTS idx_exports_problem_workspace_created ON exports(problem_id, workspace_id, created_at DESC)"
         )
 
+    def _migrate_build_ref_columns(self, conn: sqlite3.Connection) -> None:
+        build_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(builds)").fetchall()}
+        if "build_ref" not in build_cols:
+            conn.execute("ALTER TABLE builds ADD COLUMN build_ref TEXT NOT NULL DEFAULT ''")
+        conn.execute("UPDATE builds SET build_ref=id WHERE COALESCE(TRIM(build_ref), '') = ''")
+
+        run_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        if "build_ref" not in run_cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN build_ref TEXT")
+        conn.execute(
+            """
+            UPDATE runs
+            SET build_ref = (
+                SELECT b.build_ref
+                FROM builds b
+                WHERE b.id = runs.build_id
+            )
+            WHERE COALESCE(TRIM(build_ref), '') = ''
+            """
+        )
+
+        export_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
+        if "build_ref" not in export_cols:
+            conn.execute("ALTER TABLE exports ADD COLUMN build_ref TEXT")
+        conn.execute(
+            """
+            UPDATE exports
+            SET build_ref = (
+                SELECT b.build_ref
+                FROM builds b
+                WHERE b.id = exports.build_id
+            )
+            WHERE COALESCE(TRIM(build_ref), '') = ''
+            """
+        )
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_builds_build_ref ON builds(build_ref)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_build_ref_status ON runs(build_ref, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_build_ref_created ON exports(build_ref, created_at DESC)")
+
     def _migrate_system_config(self, conn: sqlite3.Connection) -> None:
         conn.execute(
             """
@@ -342,9 +506,138 @@ class DB:
             "CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC)"
         )
 
+    def _migrate_runs_build_status_index(self, conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_build_status ON runs(build_id, status)")
+
+    @staticmethod
+    def _contest_index_label(seq: int) -> str:
+        value = max(1, int(seq))
+        chars: list[str] = []
+        while value > 0:
+            value -= 1
+            chars.append(chr(ord("A") + (value % 26)))
+            value //= 26
+        return "".join(reversed(chars))
+
+    def _migrate_contest_schema(self, conn: sqlite3.Connection) -> None:
+        contest_problem_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(contest_problems)").fetchall()}
+        added_idx_column = False
+        if contest_problem_cols and "idx" not in contest_problem_cols:
+            conn.execute("ALTER TABLE contest_problems ADD COLUMN idx TEXT")
+            added_idx_column = True
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contest_jobs (
+                id TEXT PRIMARY KEY,
+                contest_id INTEGER NOT NULL,
+                actor_user_id INTEGER NOT NULL,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                summary_json TEXT,
+                created_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(contest_id) REFERENCES contests(id),
+                FOREIGN KEY(actor_user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contest_artifacts (
+                id TEXT PRIMARY KEY,
+                contest_id INTEGER NOT NULL,
+                job_id TEXT,
+                artifact_type TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                sha256 TEXT,
+                size_bytes INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(contest_id) REFERENCES contests(id),
+                FOREIGN KEY(job_id) REFERENCES contest_jobs(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contest_properties (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contest_id INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by_user_id INTEGER NOT NULL,
+                UNIQUE(contest_id, key),
+                FOREIGN KEY(contest_id) REFERENCES contests(id),
+                FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contest_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contest_id INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                rel_path TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by_user_id INTEGER NOT NULL,
+                UNIQUE(contest_id, key),
+                FOREIGN KEY(contest_id) REFERENCES contests(id),
+                FOREIGN KEY(created_by_user_id) REFERENCES users(id)
+            )
+            """
+        )
+
+        needs_idx_rebuild = bool(added_idx_column)
+        if not needs_idx_rebuild:
+            missing_idx_row = conn.execute(
+                "SELECT id FROM contest_problems WHERE idx IS NULL OR TRIM(idx)='' LIMIT 1"
+            ).fetchone()
+            duplicate_idx_row = conn.execute(
+                """
+                SELECT contest_id, idx, COUNT(*) AS c
+                FROM contest_problems
+                GROUP BY contest_id, idx
+                HAVING c > 1
+                LIMIT 1
+                """
+            ).fetchone()
+            needs_idx_rebuild = (missing_idx_row is not None) or (duplicate_idx_row is not None)
+
+        if needs_idx_rebuild:
+            rows = conn.execute(
+                """
+                SELECT id, contest_id
+                FROM contest_problems
+                ORDER BY contest_id ASC, created_at ASC, id ASC
+                """
+            ).fetchall()
+            current_contest = None
+            seq = 0
+            for row in rows:
+                contest_id = int(row[1])
+                if contest_id != current_contest:
+                    current_contest = contest_id
+                    seq = 1
+                else:
+                    seq += 1
+                idx_value = self._contest_index_label(seq)
+                conn.execute("UPDATE contest_problems SET idx=? WHERE id=?", [idx_value, int(row[0])])
+
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_problems_contest_idx ON contest_problems(contest_id, idx)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_jobs_contest_created ON contest_jobs(contest_id, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_jobs_actor_created ON contest_jobs(actor_user_id, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_artifacts_contest_created ON contest_artifacts(contest_id, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_artifacts_job_created ON contest_artifacts(job_id, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_properties_contest_updated ON contest_properties(contest_id, updated_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_attachments_contest_created ON contest_attachments(contest_id, created_at DESC)")
+
     @contextmanager
     def conn(self):
         conn = sqlite3.connect(self.path)
+        self._install_sql_trace(conn)
         conn.row_factory = sqlite3.Row
         _ = conn.row_factory
         conn.execute("PRAGMA foreign_keys=ON")
@@ -353,6 +646,51 @@ class DB:
             yield conn
         finally:
             conn.close()
+
+    def _install_sql_trace(self, conn: sqlite3.Connection) -> None:
+        if not bool(self.SQL_TRACE_ENABLED):
+            return
+        conn_id = id(conn)
+        pid = os.getpid()
+
+        def _trace(statement: str) -> None:
+            text = " ".join(str(statement or "").strip().split())
+            if not text:
+                return
+            logger.info(
+                "db.sql pid=%s tid=%s conn=%s sql=%s",
+                pid,
+                threading.get_ident(),
+                conn_id,
+                text,
+            )
+
+        conn.set_trace_callback(_trace)
+
+    def write_transaction(
+        self,
+        fn: Callable[[sqlite3.Connection], _TxResult],
+    ) -> _TxResult:
+        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
+            try:
+                with self.conn() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        result = fn(conn)
+                    except Exception:
+                        conn.rollback()
+                        raise
+                    conn.commit()
+                    return result
+            except sqlite3.OperationalError as exc:
+                if attempt == 0 and self._should_retry_after_init(exc):
+                    self.init()
+                    continue
+                if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
+                    continue
+                raise
+        raise RuntimeError("write transaction failed")
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         values = tuple(params)

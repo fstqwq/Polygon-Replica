@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sqlite3
+
+from app.impl import auth as auth_impl
+
 from tests.ui_support import (
     ADMIN_CONFIG_DEFAULTS,
     AUTH_COOKIE_NAME,
@@ -11,13 +15,19 @@ from tests.ui_support import (
     _extract_hidden_input_value,
     _flash_messages_from_response,
     _issue_password_form_csrf_token,
+    _login_with_password_proof,
     _password_verifier_hex,
+    _post_form_request,
     _post_request,
+    _register_with_password_proof,
     _request,
     _request_with_cookie,
     _response_set_cookie_blob,
     _session_user,
+    _settings_password_update_with_proof,
     _sha256_hex,
+    _setup_with_password_proof,
+    _sudo_with_password_proof,
     asyncio,
     auth_middleware,
     auth_password_meta,
@@ -29,32 +39,63 @@ from tests.ui_support import (
     register_page,
     register_submit,
     settings_page,
+    settings_judgehost_snapshot,
+    settings_config_category_page,
+    settings_config_category_update,
     settings_password_update,
     settings_system_config_reset,
-    settings_system_config_update,
+    settings_worker_queue_snapshot,
+    patch,
     setup_page,
     setup_submit,
+    sudo_page,
     switch_workspace,
     uuid,
     workspace_service,
 )
 
+SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
+SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
+
 
 class TestUIAuth(UIBaseSuite):
+    def test_sudo_password_proof_flow_sets_short_lived_token(self) -> None:
+        username = f"sudo-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        reg = _register_with_password_proof(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(auth_token)
+        cookie_header = f"{AUTH_COOKIE_NAME}={auth_token}"
+        next_path = f"/problems/{username}/settings"
+
+        page = sudo_page(_request_with_cookie("/sudo", cookie_header, query=f"next={next_path}"))
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("Sudo Mode", html)
+        self.assertIn("Enable Sudo Mode", html)
+
+        enabled = _sudo_with_password_proof(cookie_header, password, next_path=next_path)
+        self.assertEqual(enabled.status_code, 303)
+        self.assertEqual(next_path, enabled.headers.get("location", ""))
+        sudo_set_cookie = _response_set_cookie_blob(enabled)
+        self.assertIn(f"{SUDO_COOKIE_NAME}=", sudo_set_cookie)
+        self.assertIn(f"Max-Age={SUDO_COOKIE_MAX_AGE}", sudo_set_cookie)
+
+        denied = _sudo_with_password_proof(cookie_header, "WrongPass123", next_path=next_path)
+        self.assertEqual(denied.status_code, 303)
+        self.assertIn("/sudo?next=", denied.headers.get("location", ""))
+        denied_messages = _flash_messages_from_response(denied)
+        self.assertTrue(any("invalid password proof" in item for item in denied_messages))
+
     def test_register_login_and_password_update(self) -> None:
         username = f"user-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
         updated = "UpdatedPass456"
 
-        reg = register_submit(
-            request=_post_request("/register"),
-            username=username,
-            password=password,
-            password_confirm=password,
-            next="/",
-        )
+        reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
-        self.assertIn(f"/problems/{username}/problems", reg.headers.get("location", ""))
+        self.assertIn("/problems", reg.headers.get("location", ""))
         reg_set_cookie = _response_set_cookie_blob(reg)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", reg_set_cookie)
         self.assertIn("Secure", reg_set_cookie)
@@ -68,45 +109,39 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(str(user_row["password_salt"] or ""))
         self.assertGreater(int(user_row["password_iters"] or 0), 0)
 
-        bad = login_submit(request=_post_request("/login"), username=username, password="wrong-password", next="/")
+        bad = _login_with_password_proof(username, "wrong-password", next_path="/")
         self.assertEqual(bad.status_code, 303)
         self.assertEqual("/login", bad.headers.get("location", ""))
         bad_messages = _flash_messages_from_response(bad)
         self.assertTrue(any("invalid username or password" in item for item in bad_messages))
 
-        ok = login_submit(request=_post_request("/login"), username=username, password=password, next="/")
+        ok = _login_with_password_proof(username, password, next_path="/")
         self.assertEqual(ok.status_code, 303)
-        self.assertIn(f"/problems/{username}/problems", ok.headers.get("location", ""))
+        self.assertIn("/problems", ok.headers.get("location", ""))
         set_cookie = _response_set_cookie_blob(ok)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", set_cookie)
         self.assertIn("Secure", set_cookie)
         token = _cookie_value_from_response(ok, AUTH_COOKIE_NAME)
         self.assertTrue(token)
-        req = _request_with_cookie("/problems/sample/alice/general", f"{AUTH_COOKIE_NAME}={token}")
+        req = _request_with_cookie("/problems/alice/sample/alice/general", f"{AUTH_COOKIE_NAME}={token}")
         self.assertEqual(_session_user(req), username)
 
-        changed = settings_password_update(
-            problem="sample",
-            user=username,
-            current_password=password,
-            new_password=updated,
-            new_password_confirm=updated,
-        )
+        changed = _settings_password_update_with_proof(username, password, updated)
         self.assertEqual(changed.status_code, 303)
-        self.assertIn("/problems/sample/", changed.headers.get("location", ""))
+        self.assertIn(f"/problems/{username}/settings", changed.headers.get("location", ""))
         changed_messages = _flash_messages_from_response(changed)
         self.assertTrue(any("password updated" in item for item in changed_messages))
         changed_set_cookie = _response_set_cookie_blob(changed)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", changed_set_cookie)
         self.assertIn("Secure", changed_set_cookie)
 
-        old_login = login_submit(request=_post_request("/login"), username=username, password=password, next="/")
+        old_login = _login_with_password_proof(username, password, next_path="/")
         self.assertEqual(old_login.status_code, 303)
         self.assertEqual("/login", old_login.headers.get("location", ""))
         old_messages = _flash_messages_from_response(old_login)
         self.assertTrue(any("invalid username or password" in item for item in old_messages))
 
-        new_login = login_submit(request=_post_request("/login"), username=username, password=updated, next="/")
+        new_login = _login_with_password_proof(username, updated, next_path="/")
         self.assertEqual(new_login.status_code, 303)
         new_login_set_cookie = _response_set_cookie_blob(new_login)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", new_login_set_cookie)
@@ -144,7 +179,7 @@ class TestUIAuth(UIBaseSuite):
             next="/",
         )
         self.assertEqual(reg.status_code, 303)
-        self.assertIn(f"/problems/{username}/problems", reg.headers.get("location", ""))
+        self.assertIn("/problems", reg.headers.get("location", ""))
 
         login_resp = login_page(_request("/login"))
         self.assertEqual(login_resp.status_code, 200)
@@ -169,7 +204,7 @@ class TestUIAuth(UIBaseSuite):
             next="/",
         )
         self.assertEqual(login_ok.status_code, 303)
-        self.assertIn(f"/problems/{username}/problems", login_ok.headers.get("location", ""))
+        self.assertIn("/problems", login_ok.headers.get("location", ""))
 
         settings_csrf = _issue_password_form_csrf_token("settings-password")
         self.assertTrue(settings_csrf)
@@ -191,7 +226,6 @@ class TestUIAuth(UIBaseSuite):
         updated_password_hash = _sha256_hex(settings_csrf + updated)
 
         changed = settings_password_update(
-            problem="sample",
             user=username,
             current_password=current_password_hash,
             new_password=updated_password_hash,
@@ -204,7 +238,7 @@ class TestUIAuth(UIBaseSuite):
             new_password_iters=str(new_iters),
         )
         self.assertEqual(changed.status_code, 303)
-        self.assertIn(f"/problems/sample/{username}/settings", changed.headers.get("location", ""))
+        self.assertIn(f"/problems/{username}/settings", changed.headers.get("location", ""))
         changed_messages = _flash_messages_from_response(changed)
         self.assertTrue(any("password updated" in item for item in changed_messages))
 
@@ -248,7 +282,7 @@ class TestUIAuth(UIBaseSuite):
             next="/",
         )
         self.assertEqual(new_login.status_code, 303)
-        self.assertIn(f"/problems/{username}/problems", new_login.headers.get("location", ""))
+        self.assertIn("/problems", new_login.headers.get("location", ""))
 
     def test_register_rejects_invalid_username_format(self) -> None:
         invalid = register_submit(
@@ -262,7 +296,7 @@ class TestUIAuth(UIBaseSuite):
         loc = invalid.headers.get("location", "")
         self.assertEqual("/register", loc)
         invalid_messages = _flash_messages_from_response(invalid)
-        self.assertTrue(any("Use lowercased words, separated by dash" in item for item in invalid_messages))
+        self.assertTrue(any("invalid username" in item.lower() for item in invalid_messages))
 
     def test_setup_page_shows_config_when_no_registered_users(self) -> None:
         count = db.fetch_one(
@@ -312,7 +346,7 @@ class TestUIAuth(UIBaseSuite):
             next="/",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{username}/problems", resp.headers.get("location", ""))
+        self.assertIn("/problems", resp.headers.get("location", ""))
         set_cookie = _response_set_cookie_blob(resp)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", set_cookie)
 
@@ -328,14 +362,7 @@ class TestUIAuth(UIBaseSuite):
 
     def test_setup_submit_requires_config_confirmation(self) -> None:
         username = f"bootstrap-{uuid.uuid4().hex[:8]}"
-        resp = setup_submit(
-            request=_post_request("/setup"),
-            username=username,
-            password="StrongPass123",
-            password_confirm="StrongPass123",
-            confirm_config="0",
-            next="/",
-        )
+        resp = _setup_with_password_proof(username, "StrongPass123", confirm_config="0", next_path="/")
         self.assertEqual(resp.status_code, 303)
         self.assertEqual("/setup", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
@@ -348,13 +375,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertIsNotNone(row_before)
         self.assertFalse(str(row_before["password_hash"] or ""))
 
-        resp = register_submit(
-            request=_post_request("/register"),
-            username=username,
-            password="StrongPass123",
-            password_confirm="StrongPass123",
-            next="/",
-        )
+        resp = _register_with_password_proof(username, "StrongPass123", next_path="/")
         self.assertEqual(resp.status_code, 303)
         location = resp.headers.get("location", "")
         self.assertEqual("/register", location)
@@ -376,25 +397,13 @@ class TestUIAuth(UIBaseSuite):
         self.assertIsNotNone(before)
         self.assertEqual(int(before["c"]), 0)
 
-        first_reg = register_submit(
-            request=_post_request("/register"),
-            username=first,
-            password="StrongPass123",
-            password_confirm="StrongPass123",
-            next="/",
-        )
+        first_reg = _register_with_password_proof(first, "StrongPass123", next_path="/")
         self.assertEqual(first_reg.status_code, 303)
         first_row = db.fetch_one("SELECT is_system_admin FROM users WHERE username=?", [first])
         self.assertIsNotNone(first_row)
         self.assertEqual(int(first_row["is_system_admin"] or 0), 1)
 
-        second_reg = register_submit(
-            request=_post_request("/register"),
-            username=second,
-            password="StrongPass123",
-            password_confirm="StrongPass123",
-            next="/",
-        )
+        second_reg = _register_with_password_proof(second, "StrongPass123", next_path="/")
         self.assertEqual(second_reg.status_code, 303)
         second_row = db.fetch_one("SELECT is_system_admin FROM users WHERE username=?", [second])
         self.assertIsNotNone(second_row)
@@ -410,19 +419,13 @@ class TestUIAuth(UIBaseSuite):
     def test_login_rate_limit_blocks_repeated_failures(self) -> None:
         username = f"ratelimit-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
-        reg = register_submit(
-            request=_post_request("/register"),
-            username=username,
-            password=password,
-            password_confirm=password,
-            next="/",
-        )
+        reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
 
         blocked_location = ""
         blocked_message = ""
         for _ in range(12):
-            bad = login_submit(request=_post_request("/login"), username=username, password="wrong-password", next="/")
+            bad = _login_with_password_proof(username, "wrong-password", next_path="/")
             self.assertEqual(bad.status_code, 303)
             blocked_location = bad.headers.get("location", "")
             blocked_messages = _flash_messages_from_response(bad)
@@ -432,7 +435,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual("/login", blocked_location)
         self.assertIn("too many failed attempts", blocked_message)
 
-        blocked_ok = login_submit(request=_post_request("/login"), username=username, password=password, next="/")
+        blocked_ok = _login_with_password_proof(username, password, next_path="/")
         self.assertEqual(blocked_ok.status_code, 303)
         blocked_ok_messages = _flash_messages_from_response(blocked_ok)
         self.assertTrue(any("too many failed attempts" in item for item in blocked_ok_messages))
@@ -440,19 +443,13 @@ class TestUIAuth(UIBaseSuite):
     def test_auth_middleware_blocks_cross_origin_post(self) -> None:
         username = f"csrf-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
-        reg = register_submit(
-            request=_post_request("/register"),
-            username=username,
-            password=password,
-            password_confirm=password,
-            next="/",
-        )
+        reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)
 
         req = _request_with_cookie(
-            f"/problems/sample/{username}/git/pull",
+            f"/problems/alice/sample/{username}/git/pull",
             f"{AUTH_COOKIE_NAME}={token}",
             method="POST",
             extra_headers=[(b"origin", b"http://evil.example")],
@@ -468,19 +465,13 @@ class TestUIAuth(UIBaseSuite):
     def test_auth_middleware_allows_same_origin_post(self) -> None:
         username = f"csrfok-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
-        reg = register_submit(
-            request=_post_request("/register"),
-            username=username,
-            password=password,
-            password_confirm=password,
-            next="/",
-        )
+        reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)
 
         req = _request_with_cookie(
-            f"/problems/sample/{username}/git/pull",
+            f"/problems/alice/sample/{username}/git/pull",
             f"{AUTH_COOKIE_NAME}={token}",
             method="POST",
             extra_headers=[(b"origin", b"http://testserver")],
@@ -492,8 +483,66 @@ class TestUIAuth(UIBaseSuite):
         resp = asyncio.run(auth_middleware(req, _next))
         self.assertEqual(resp.status_code, 200)
 
+    def test_auth_middleware_rewrites_contest_user_path(self) -> None:
+        username = f"contestauth-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        reg = _register_with_password_proof(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(token)
+
+        req = _request_with_cookie(
+            "/contests/demo/other-user/overview",
+            f"{AUTH_COOKIE_NAME}={token}",
+            method="GET",
+        )
+
+        async def _next(_: Request) -> PlainTextResponse:
+            return PlainTextResponse("ok", status_code=200)
+
+        resp = asyncio.run(auth_middleware(req, _next))
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.headers.get("location", ""), f"/contests/demo/{username}/overview")
+
+    def test_auth_middleware_rewrite_strips_legacy_message_query(self) -> None:
+        username = f"contestauthmsg-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        reg = _register_with_password_proof(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(token)
+
+        req = _request_with_cookie(
+            "/contests/demo/other-user/overview",
+            f"{AUTH_COOKIE_NAME}={token}",
+            query="keep=1&message=legacy+notice",
+            method="GET",
+        )
+
+        async def _next(_: Request) -> PlainTextResponse:
+            return PlainTextResponse("ok", status_code=200)
+
+        resp = asyncio.run(auth_middleware(req, _next))
+        self.assertEqual(resp.status_code, 303)
+        location = resp.headers.get("location", "")
+        self.assertIn(f"/contests/demo/{username}/overview", location)
+        self.assertIn("keep=1", location)
+        self.assertNotIn("message=", location)
+        self.assertEqual(_flash_messages_from_response(resp), [])
+
+    def test_auth_middleware_does_not_retry_schema_operational_error(self) -> None:
+        req = _request("/login")
+
+        async def _next(_: Request) -> PlainTextResponse:
+            raise sqlite3.OperationalError("no such table: users")
+
+        with patch.object(config.db, "init") as init_mock:
+            with self.assertRaises(sqlite3.OperationalError):
+                asyncio.run(auth_middleware(req, _next))
+        init_mock.assert_not_called()
+
     def test_auth_middleware_redirects_to_setup_when_no_registered_users(self) -> None:
-        req = _request("/problems/sample/alice/general")
+        req = _request("/problems/alice/sample/alice/general")
 
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
@@ -508,50 +557,154 @@ class TestUIAuth(UIBaseSuite):
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
-        resp = settings_page(_request("/problems/sample/alice/settings"), "sample", "alice")
+        resp = settings_page(_request("/problems/alice/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("System Admin Panel", html)
-        self.assertIn("System Config JSON", html)
-        self.assertIn("RUN_TEST_SELECTOR_LIMIT", html)
+        self.assertIn("Configuration Center", html)
+        self.assertIn("settings-admin-panel", html)
+        self.assertIn("settings-account-panel", html)
+        self.assertNotIn('data-main="problems" class="active"', html)
+        self.assertIn("/settings/config/", html)
+        self.assertIn("Judging", html)
 
-    def test_settings_system_config_update_requires_system_admin(self) -> None:
+    def test_settings_page_runtime_runner_hides_auth_fields_when_judgehost_disabled(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+        self.addCleanup(settings_system_config_reset, user="alice")
+        admin = db.fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
+        self.assertIsNotNone(admin)
+        config.system_config_service.apply_patch(
+            {
+                "JUDGEHOST_ENABLE": False,
+                "JUDGEHOST_API_USERNAME": "judgehost",
+                "JUDGEHOST_API_TOKEN": "token-disabled-demo",
+            },
+            actor_user_id=int(admin["id"]),
+        )
+        config.reload_runtime_values()
+
+        resp = settings_page(_request("/problems/alice/settings"), user="alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn('data-popup-open="judgehost-gen-script-popup"', html)
+        self.assertIn('id="judgehost-gen-script-popup"', html)
+        self.assertIn('data-gen-script-baseurl="1"', html)
+        self.assertIn('data-gen-script-sudo="1"', html)
+        self.assertIn('data-gen-script-output="1"', html)
+        self.assertIn('data-judgehost-enable-toggle="1"', html)
+        self.assertIn('data-judgehost-auth-block="1" hidden', html)
+
+    def test_settings_page_runtime_runner_shows_auth_fields_when_judgehost_enabled(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+        self.addCleanup(settings_system_config_reset, user="alice")
+        admin = db.fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
+        self.assertIsNotNone(admin)
+        config.system_config_service.apply_patch(
+            {
+                "JUDGEHOST_ENABLE": True,
+                "JUDGEHOST_API_USERNAME": "judgehost",
+                "JUDGEHOST_API_TOKEN": "token-enabled-demo",
+            },
+            actor_user_id=int(admin["id"]),
+        )
+        config.reload_runtime_values()
+
+        resp = settings_page(_request("/problems/alice/settings"), user="alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn('data-judgehost-enable-toggle="1"', html)
+        self.assertIn('data-judgehost-auth-block="1"', html)
+        self.assertNotIn('data-judgehost-auth-block="1" hidden', html)
+        self.assertIn('data-judgehost-api-username="1"', html)
+        self.assertIn('data-judgehost-api-token="1"', html)
+
+    def test_settings_page_formats_judgehost_last_seen_using_local_time(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+
+        raw_last_seen = "2026-02-28T21:43:08.505465+00:00"
+        fake_status = {
+            "enabled": True,
+            "auth_configured": True,
+            "hosts_online": 1,
+            "hosts_total": 1,
+            "queue": {"queued": 0, "leased": 0, "completed": 0, "failed": 0},
+            "hosts": [
+                {
+                    "hostname": "judgehost-localtime",
+                    "online": True,
+                    "age_sec": 3,
+                    "last_seen_at": raw_last_seen,
+                    "last_action": "heartbeat",
+                    "active_leases": 0,
+                    "last_task_id": "",
+                    "last_run_id": "",
+                }
+            ],
+        }
+        with patch.object(config.judgehost_task_service, "status", return_value=fake_status):
+            resp = settings_page(_request("/problems/alice/settings"), user="alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("judgehost-localtime", html)
+        self.assertIn("Disabled", html)
+        self.assertNotIn(raw_last_seen, html)
+
+    def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:
-            settings_system_config_update(
-                problem="sample",
-                user="alice",
-                config_json=json.dumps({"RUN_TEST_SELECTOR_LIMIT": 777}),
+            asyncio.run(
+                settings_config_category_update(
+                    _post_form_request(
+                        "/problems/alice/settings/config/judging",
+                        {"config_RUN_TEST_SELECTOR_LIMIT": "777"},
+                    ),
+                    user="alice",
+                    category="judging",
+                )
             )
         self.assertEqual(blocked.exception.status_code, 403)
 
-    def test_settings_system_config_update_and_reset(self) -> None:
+    def test_settings_config_category_update_and_reset(self) -> None:
         db.execute("UPDATE users SET is_system_admin=0")
         db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
         override_value = 777
-        update_resp = settings_system_config_update(
-            problem="sample",
-            user="alice",
-            config_json=json.dumps({"RUN_TEST_SELECTOR_LIMIT": override_value}),
+        update_resp = asyncio.run(
+            settings_config_category_update(
+                _post_form_request(
+                    "/problems/alice/settings/config/judging",
+                    {"config_RUN_TEST_SELECTOR_LIMIT": str(override_value)},
+                ),
+                user="alice",
+                category="judging",
+            )
         )
         self.assertEqual(update_resp.status_code, 303)
-        self.assertIn("/problems/sample/alice/settings", update_resp.headers.get("location", ""))
+        self.assertIn("/problems/alice/settings/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             override_value,
         )
         self.assertEqual(
             int(config.constants.RUN_TEST_SELECTOR_LIMIT),
-            int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]),
+            override_value,
         )
 
         row = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNotNone(row)
         self.assertEqual(json.loads(str(row["value_json"] or "null")), override_value)
 
-        reset_resp = settings_system_config_reset(problem="sample", user="alice")
+        reset_resp = settings_system_config_reset(user="alice")
         self.assertEqual(reset_resp.status_code, 303)
         self.assertEqual(
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
@@ -560,34 +713,241 @@ class TestUIAuth(UIBaseSuite):
         row_after = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNone(row_after)
 
+    def test_settings_config_category_update_rejects_non_ascii_judgehost_token(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+
+        self.addCleanup(settings_system_config_reset, user="alice")
+        bad_token = "abc_non_ascii_" + chr(0x00E9)
+        resp = asyncio.run(
+            settings_config_category_update(
+                _post_form_request(
+                    "/problems/alice/settings/config/judgehost",
+                    {"config_JUDGEHOST_API_TOKEN": bad_token},
+                ),
+                user="alice",
+                category="judgehost",
+            )
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("/problems/alice/settings/config/judgehost", resp.headers.get("location", ""))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("JUDGEHOST_API_TOKEN must contain only visible ASCII characters", messages[0])
+        self.assertNotEqual(str(config.system_config_service.get("JUDGEHOST_API_TOKEN") or ""), bad_token)
+
+    def test_settings_config_category_update_allows_printable_ascii_compile_flags(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+
+        self.addCleanup(settings_system_config_reset, user="alice")
+        flags = "-x c++ -Wall -O2 -static -pipe"
+        resp = asyncio.run(
+            settings_config_category_update(
+                _post_form_request(
+                    "/problems/alice/settings/config/toolchain",
+                    {"config_TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS": flags},
+                ),
+                user="alice",
+                category="toolchain",
+            )
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("/problems/alice/settings/config/toolchain", resp.headers.get("location", ""))
+        self.assertEqual(str(config.system_config_service.get("TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS") or ""), flags)
+
+    def test_settings_config_category_page_and_hot_reload(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+        self.addCleanup(settings_system_config_reset, user="alice")
+
+        page_resp = settings_config_category_page(
+            _request("/problems/alice/settings/config/judging"),
+            user="alice",
+            category="judging",
+        )
+        self.assertEqual(page_resp.status_code, 200)
+        page_html = page_resp.body.decode("utf-8", errors="replace")
+        self.assertIn("System Configuration", page_html)
+        self.assertIn("RUN_EXEC_MEMORY_MB", page_html)
+
+        update_value = 1536
+        update_resp = asyncio.run(
+            settings_config_category_update(
+                _post_form_request(
+                    "/problems/alice/settings/config/judging",
+                    {"config_RUN_EXEC_MEMORY_MB": str(update_value)},
+                ),
+                user="alice",
+                category="judging",
+            )
+        )
+        self.assertEqual(update_resp.status_code, 303)
+        self.assertIn("/problems/alice/settings/config/judging", update_resp.headers.get("location", ""))
+        self.assertEqual(int(config.system_config_service.get("RUN_EXEC_MEMORY_MB")), update_value)
+        self.assertEqual(int(config.constants.RUN_EXEC_MEMORY_MB), update_value)
+        self.assertEqual(int(config.run_service.default_run_memory_mb), update_value)
+
+    def test_settings_config_category_page_renders_token_generate_button(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+
+        page_resp = settings_config_category_page(
+            _request("/problems/alice/settings/config/judgehost"),
+            user="alice",
+            category="judgehost",
+        )
+        self.assertEqual(page_resp.status_code, 200)
+        page_html = page_resp.body.decode("utf-8", errors="replace")
+        self.assertIn("JUDGEHOST_API_TOKEN", page_html)
+        self.assertIn("data-token-generate=\"1\"", page_html)
+        self.assertIn("data-token-target=\"config_JUDGEHOST_API_TOKEN\"", page_html)
+        self.assertIn(">Generate</button>", page_html)
+
+    def test_settings_worker_queue_snapshot_requires_system_admin(self) -> None:
+        with self.assertRaises(HTTPException) as blocked:
+            settings_worker_queue_snapshot(user="alice")
+        self.assertEqual(blocked.exception.status_code, 403)
+
+    def test_settings_worker_queue_snapshot_returns_metrics_for_admin(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+        future, queued, reason = config.worker_queue_service.submit(
+            name="snapshot-probe",
+            fn=lambda: None,
+            queue_name="ops",
+            backend="local-sandbox",
+            job_type="snapshot-probe",
+        )
+        self.assertTrue(queued, msg=reason)
+        config.worker_queue_service.wait_for_futures([future], timeout_sec=5.0)
+        resp = settings_worker_queue_snapshot(user="alice", limit=50)
+        self.assertEqual(resp.status_code, 200)
+        payload = json.loads(resp.body.decode("utf-8", errors="replace"))
+        self.assertEqual(int(payload.get("limit") or 0), 50)
+        self.assertIn("queue_capacity", payload)
+        self.assertIn("job_type_stats", payload)
+        self.assertIn("snapshot-probe", payload.get("job_type_stats") or {})
+
+    def test_settings_judgehost_snapshot_requires_system_admin(self) -> None:
+        with self.assertRaises(HTTPException) as blocked:
+            settings_judgehost_snapshot(user="alice")
+        self.assertEqual(blocked.exception.status_code, 403)
+
+    def test_settings_judgehost_snapshot_returns_hosts_for_admin(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+        service = config.judgehost_task_service
+        old_enabled = bool(service._enabled)
+        old_token = str(service._api_token or "")
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        service._enabled = True
+        service._api_token = "admin-snapshot-token"
+        service.fetch_work("judgehost-admin-snapshot", limit=1)
+        resp = settings_judgehost_snapshot(user="alice")
+        self.assertEqual(resp.status_code, 200)
+        payload = json.loads(resp.body.decode("utf-8", errors="replace"))
+        self.assertIn("hosts", payload)
+        self.assertIn("hosts_online", payload)
+        self.assertIn("invocation_backend", payload)
+        hosts = payload.get("hosts") or []
+        self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-admin-snapshot" for item in hosts))
+
     def test_problem_id_validation_requires_lowercase_dash_format(self) -> None:
         with self.assertRaises(ValueError) as bad_format:
             workspace_service.ensure_problem("Sample_Problem", "Bad Format")
-        self.assertIn("Use lowercased words, separated by dash", str(bad_format.exception))
+        self.assertIn("Use <owner>/<slug>", str(bad_format.exception))
 
         with self.assertRaises(ValueError) as bad_dash:
             workspace_service.ensure_problem("sample-", "Bad Dash")
-        self.assertIn("Use lowercased words, separated by dash", str(bad_dash.exception))
+        self.assertIn("Use <owner>/<slug>", str(bad_dash.exception))
 
         invalid_open = switch_workspace(
             _request("/switch-workspace"),
             problem="Sample_Problem",
             user="alice",
-            page="general",
+            page="statement",
         )
         self.assertEqual(invalid_open.status_code, 303)
         invalid_loc = invalid_open.headers.get("location", "")
-        self.assertIn("/problems/alice/problems", invalid_loc)
+        self.assertIn("/problems", invalid_loc)
         self.assertNotIn("message=", invalid_loc)
         invalid_messages = _flash_messages_from_response(invalid_open)
         self.assertTrue(invalid_messages)
-        self.assertIn("Use lowercased words, separated by dash", invalid_messages[0])
+        self.assertIn("Use <owner>/<slug>", invalid_messages[0])
 
         valid = switch_workspace(
             _request("/switch-workspace"),
             problem="minimal-spanning-tree",
             user="alice",
-            page="general",
+            page="statement",
         )
         self.assertEqual(valid.status_code, 303)
-        self.assertIn("/problems/minimal-spanning-tree/alice/general", valid.headers.get("location", ""))
+        self.assertIn("/problems/alice/minimal-spanning-tree/alice/statement", valid.headers.get("location", ""))
+
+    def test_startup_reset_writes_run_cancel_for_audit_only_inflight_invocation(self) -> None:
+        problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", ["alice/sample"])
+        self.assertIsNotNone(problem_row)
+        user_row = db.fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
+        self.assertIsNotNone(user_row)
+        problem_id = int(problem_row["id"])
+        actor_user_id = int(user_row["id"])
+        invocation_id = f"inv-startup-audit-only-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-startup-audit-only-{uuid.uuid4().hex[:8]}"
+
+        db.execute(
+            """
+            INSERT INTO audit_log(actor_user_id, problem_id, action, details_json, created_at)
+            VALUES(?, ?, 'verification.start', ?, ?)
+            """,
+            [
+                actor_user_id,
+                problem_id,
+                json.dumps(
+                    {
+                        "invocation_id": invocation_id,
+                        "run_ids": [run_id],
+                        "status": "running",
+                        "mode": "pass-fail",
+                    }
+                ),
+                "2026-03-06T00:00:00+00:00",
+            ],
+        )
+
+        auth_impl._startup_cancel_audit_inflight("cancelled on service startup", now_text="2026-03-06T00:00:01+00:00")
+
+        cancel_row = db.fetch_one(
+            """
+            SELECT details_json
+            FROM audit_log
+            WHERE actor_user_id=? AND problem_id=? AND action='run.cancel'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            [actor_user_id, problem_id],
+        )
+        self.assertIsNotNone(cancel_row)
+        details = json.loads(str(cancel_row["details_json"] or "{}"))
+        self.assertEqual(str(details.get("invocation_id") or ""), invocation_id)
+        self.assertEqual(details.get("run_ids"), [run_id])
+        self.assertEqual(int(details.get("run_count") or 0), 1)
+        self.assertEqual(str(details.get("reason") or ""), "cancelled on service startup")
+
+
+
+
+
