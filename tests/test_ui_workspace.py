@@ -1053,12 +1053,21 @@ class TestUIWorkspace(UIBaseSuite):
             "problem_slug_3": custom_problem_slugs[3],
             "problem_slug_4": custom_problem_slugs[4],
         }
-        confirm_resp = asyncio.run(
-            contests_root_import_confirm(
-                _post_form_request("/contests/import/confirm", confirm_form),
-                user="alice",
+        with patch(
+            "app.impl.run_export.import_source._materialize_polygon_sample_answers",
+            return_value={
+                "sample_manual_total": 0,
+                "sample_answers_missing": 0,
+                "sample_answers_materialized": 0,
+                "build_id": "",
+            },
+        ):
+            confirm_resp = asyncio.run(
+                contests_root_import_confirm(
+                    _post_form_request("/contests/import/confirm", confirm_form),
+                    user="alice",
+                )
             )
-        )
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertIn(f"/contests/{target_slug}/alice/overview", str(confirm_resp.headers.get("location", "")))
         confirm_messages = _flash_messages_from_response(confirm_resp)

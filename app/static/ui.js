@@ -1629,6 +1629,520 @@
     });
   }
 
+  function initStatementDraftBackup() {
+    var form = document.querySelector("form[data-statement-draft-form='1']");
+    if (!form) return;
+    var triggers = Array.prototype.slice.call(document.querySelectorAll("[data-statement-draft-trigger='1']"));
+    var popup = document.getElementById("statement-draft-popup");
+    if (!triggers.length || !popup) return;
+
+    var popupTitleEl = popup.querySelector("#statement-draft-popup-title");
+    var statusEl = popup.querySelector("[data-statement-draft-status='1']");
+    var errorEl = popup.querySelector("[data-statement-draft-error='1']");
+    var emptyEl = popup.querySelector("[data-statement-draft-empty='1']");
+    var listEl = popup.querySelector("[data-statement-draft-list='1']");
+    if (!statusEl || !errorEl || !emptyEl || !listEl) return;
+
+    var MAX_HISTORY = 20;
+    var AUTO_SAVE_DEBOUNCE_MS = 5000;
+    var debounceTimers = Object.create(null);
+    var lastSerializedByField = Object.create(null);
+    var baselineSerializedByField = Object.create(null);
+    var dirtyByField = Object.create(null);
+    var storageUnavailable = false;
+    var activeFieldName = "";
+    var activeFieldLabel = "";
+    var fieldLabelByName = Object.create(null);
+    var isFormSubmitting = false;
+
+    function findCodeMirrorEditor(textarea) {
+      if (!textarea) return null;
+      var prev = textarea.previousElementSibling;
+      if (prev && prev.CodeMirror) return prev.CodeMirror;
+      var next = textarea.nextElementSibling;
+      if (next && next.CodeMirror) return next.CodeMirror;
+      var parent = textarea.parentElement;
+      if (!parent) return null;
+      var wrappers = parent.querySelectorAll(".CodeMirror");
+      if (wrappers.length !== 1) return null;
+      return wrappers[0] && wrappers[0].CodeMirror ? wrappers[0].CodeMirror : null;
+    }
+
+    function syncCodeEditor(textarea) {
+      if (!textarea) return;
+      var cm = findCodeMirrorEditor(textarea);
+      if (!cm || typeof cm.save !== "function") return;
+      cm.save();
+    }
+
+    function isLocalStorageAvailable() {
+      try {
+        if (!window.localStorage) return false;
+        var probeKey = "__polygonlike_statement_draft_probe__";
+        window.localStorage.setItem(probeKey, "1");
+        window.localStorage.removeItem(probeKey);
+        return true;
+      } catch (_err) {
+        return false;
+      }
+    }
+
+    function scopeToken(raw) {
+      return String(raw || "")
+        .trim()
+        .replace(/[|]/g, "_");
+    }
+
+    var draftStorageKeyPrefix =
+      "polygonlike:statement-draft:v2:" +
+      [
+        scopeToken(form.getAttribute("data-draft-scope-problem") || ""),
+        scopeToken(form.getAttribute("data-draft-scope-user") || ""),
+        scopeToken(form.getAttribute("data-draft-scope-page") || ""),
+        scopeToken(form.getAttribute("action") || ""),
+        scopeToken(window.location.pathname || ""),
+      ].join("|");
+
+    function draftStorageKeyForField(fieldName) {
+      return draftStorageKeyPrefix + "|field=" + scopeToken(fieldName || "");
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = String(text || "").trim();
+    }
+
+    function clearError() {
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+    }
+
+    function setError(text) {
+      var safe = String(text || "").trim();
+      if (!safe) {
+        clearError();
+        return;
+      }
+      errorEl.textContent = safe;
+      errorEl.hidden = false;
+    }
+
+    function updateTriggerLabel() {
+      triggers.forEach(function (triggerEl) {
+        triggerEl.textContent = "Draft";
+      });
+    }
+
+    function updatePopupTitle(fieldLabel) {
+      if (!popupTitleEl) return;
+      var safeLabel = String(fieldLabel || "").trim();
+      popupTitleEl.textContent = safeLabel ? safeLabel + " Draft History" : "Draft History";
+    }
+
+    function fieldDisplayName(name) {
+      var key = String(name || "").trim();
+      if (!key) return "";
+      var mapping = {
+        legend_tex: "Legend",
+        input_tex: "Input",
+        output_tex: "Output",
+        notes_tex: "Notes",
+        interaction_tex: "Interaction",
+        tutorial_tex: "Tutorial",
+      };
+      if (mapping[key]) return mapping[key];
+      var human = key.replace(/_tex$/i, "").replace(/_/g, " ").trim();
+      if (!human) return key;
+      return human.charAt(0).toUpperCase() + human.slice(1);
+    }
+
+    function resolveFieldNameFromTrigger(triggerEl) {
+      if (!triggerEl) return "";
+      var direct = String(triggerEl.getAttribute("data-draft-field") || "").trim();
+      if (direct) return direct;
+      var container = triggerEl.closest ? triggerEl.closest(".statement-editor-field") : null;
+      if (!container) {
+        var cursor = triggerEl.parentElement;
+        while (cursor && cursor !== form) {
+          if (cursor.classList && cursor.classList.contains("statement-editor-field")) {
+            container = cursor;
+            break;
+          }
+          cursor = cursor.parentElement;
+        }
+      }
+      if (!container) return "";
+      var field = container.querySelector("textarea[name]");
+      if (!field) return "";
+      return String(field.getAttribute("name") || "").trim();
+    }
+
+    function resolveFieldLabel(fieldName) {
+      var safeFieldName = String(fieldName || "").trim();
+      if (!safeFieldName) return "";
+      if (fieldLabelByName[safeFieldName]) return fieldLabelByName[safeFieldName];
+      return fieldDisplayName(safeFieldName) || safeFieldName;
+    }
+
+    function listFieldNames() {
+      var out = [];
+      var seen = Object.create(null);
+      form.querySelectorAll("textarea[name]").forEach(function (field) {
+        var name = String(field.getAttribute("name") || "").trim();
+        if (!name || seen[name]) return;
+        seen[name] = true;
+        out.push(name);
+      });
+      return out;
+    }
+
+    function getFieldTextarea(fieldName) {
+      var safeFieldName = String(fieldName || "").trim();
+      if (!safeFieldName) return null;
+      var selector = 'textarea[name="' + safeFieldName.replace(/"/g, '\\"') + '"]';
+      return form.querySelector(selector);
+    }
+
+    function collectFieldValue(fieldName) {
+      var textarea = getFieldTextarea(fieldName);
+      if (!textarea) return null;
+      syncCodeEditor(textarea);
+      return String(textarea.value || "");
+    }
+
+    function snapshotDigest(value) {
+      return String(value || "");
+    }
+
+    function readHistory(fieldName) {
+      var safeFieldName = String(fieldName || "").trim();
+      if (!safeFieldName || storageUnavailable) return [];
+      try {
+        var key = draftStorageKeyForField(safeFieldName);
+        var raw = window.localStorage.getItem(key);
+        if (!raw) return [];
+        var parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        var rows = [];
+        parsed.forEach(function (item) {
+          if (!item || typeof item !== "object") return;
+          var id = String(item.id || "").trim();
+          var savedAt = String(item.savedAt || "").trim();
+          if (!id || !savedAt) return;
+          if (typeof item.value === "string") {
+            rows.push({
+              id: id,
+              savedAt: savedAt,
+              value: item.value,
+            });
+            return;
+          }
+          var legacyFields = item.fields;
+          if (!legacyFields || typeof legacyFields !== "object" || Array.isArray(legacyFields)) return;
+          if (!Object.prototype.hasOwnProperty.call(legacyFields, safeFieldName)) return;
+          var legacyValue = String(legacyFields[safeFieldName] || "");
+          rows.push({
+            id: id,
+            savedAt: savedAt,
+            value: legacyValue,
+          });
+        });
+        return rows;
+      } catch (_err) {
+        return [];
+      }
+    }
+
+    function writeHistory(fieldName, rows) {
+      var safeFieldName = String(fieldName || "").trim();
+      if (!safeFieldName || storageUnavailable) return false;
+      try {
+        window.localStorage.setItem(draftStorageKeyForField(safeFieldName), JSON.stringify(rows || []));
+        clearError();
+        return true;
+      } catch (_err) {
+        setError("Failed to write local draft history (browser storage unavailable or full).");
+        return false;
+      }
+    }
+
+    function formatSavedAt(raw) {
+      var text = String(raw || "").trim();
+      if (!text) return "unknown time";
+      var dt = new Date(text);
+      if (!Number.isFinite(dt.getTime())) return text;
+      return dt.toLocaleString();
+    }
+
+    function setDraftFieldValue(name, value) {
+      var selector = 'textarea[name="' + String(name || "").replace(/"/g, '\\"') + '"]';
+      var textarea = form.querySelector(selector);
+      if (!textarea) return;
+      var safeValue = String(value || "");
+      textarea.value = safeValue;
+      var cm = findCodeMirrorEditor(textarea);
+      if (!cm || typeof cm.setValue !== "function") return;
+      cm.setValue(safeValue);
+    }
+
+    function renderPreviewContent(container, value) {
+      var safeValue = String(value || "");
+      if (!safeValue) {
+        var empty = document.createElement("p");
+        empty.className = "statement-draft-entry-preview";
+        empty.textContent = "(empty draft)";
+        container.appendChild(empty);
+        return;
+      }
+      var body = document.createElement("pre");
+      body.className = "statement-draft-entry-preview";
+      body.textContent = safeValue;
+      container.appendChild(body);
+    }
+
+    function renderHistory(fieldName, rows) {
+      var safeFieldName = String(fieldName || "").trim();
+      var label = resolveFieldLabel(safeFieldName);
+      activeFieldName = safeFieldName;
+      activeFieldLabel = label;
+      updatePopupTitle(label);
+
+      var history = Array.isArray(rows) ? rows : [];
+      listEl.textContent = "";
+      updateTriggerLabel();
+      if (!safeFieldName) {
+        emptyEl.hidden = false;
+        setStatus("No draft field selected.");
+        return;
+      }
+      if (!history.length) {
+        emptyEl.hidden = false;
+        setStatus("No local drafts for " + (label || safeFieldName) + ".");
+        return;
+      }
+      emptyEl.hidden = true;
+      setStatus("Local drafts for " + (label || safeFieldName) + ": " + String(history.length));
+
+      history.forEach(function (item, index) {
+        var entry = document.createElement("article");
+        entry.className = "statement-draft-entry";
+
+        var head = document.createElement("div");
+        head.className = "statement-draft-entry-head";
+        entry.appendChild(head);
+
+        var title = document.createElement("p");
+        title.className = "statement-draft-entry-title";
+        title.textContent = "Draft " + String(index + 1);
+        head.appendChild(title);
+
+        var timestamp = document.createElement("span");
+        timestamp.className = "statement-draft-entry-meta";
+        timestamp.textContent = formatSavedAt(item.savedAt);
+        head.appendChild(timestamp);
+
+        renderPreviewContent(entry, item.value);
+
+        var actions = document.createElement("div");
+        actions.className = "statement-draft-entry-actions";
+        entry.appendChild(actions);
+
+        var restore = document.createElement("a");
+        restore.href = "#";
+        restore.className = "linkish";
+        restore.textContent = "Restore";
+        restore.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          var timeLabel = formatSavedAt(item.savedAt);
+          showConfirmDialog("Restore " + (label || safeFieldName) + " draft from " + timeLabel + "? Current editor content will be replaced.").then(function (ok) {
+            if (!ok) return;
+            setDraftFieldValue(safeFieldName, item.value);
+            var currentValue = collectFieldValue(safeFieldName);
+            lastSerializedByField[safeFieldName] = snapshotDigest(currentValue === null ? "" : currentValue);
+            setStatus((label || safeFieldName) + " restored from " + timeLabel + ".");
+          });
+        });
+        actions.appendChild(restore);
+
+        listEl.appendChild(entry);
+      });
+    }
+
+    function saveSnapshotForField(fieldName) {
+      var safeFieldName = String(fieldName || "").trim();
+      if (!safeFieldName) return false;
+      if (storageUnavailable) return false;
+      var currentFieldValue = collectFieldValue(safeFieldName);
+      if (currentFieldValue === null) return false;
+      var value = currentFieldValue;
+      var digest = snapshotDigest(value);
+      if (digest === lastSerializedByField[safeFieldName]) return false;
+
+      var history = readHistory(safeFieldName);
+      if (history.length) {
+        var latestDigest = snapshotDigest(history[0].value || "");
+        if (latestDigest === digest) {
+          lastSerializedByField[safeFieldName] = digest;
+          return false;
+        }
+      }
+
+      var row = {
+        id: "draft-" + String(Date.now()) + "-" + String(Math.floor(Math.random() * 1000000)),
+        savedAt: new Date().toISOString(),
+        value: value,
+      };
+      history.unshift(row);
+      if (history.length > MAX_HISTORY) {
+        history = history.slice(0, MAX_HISTORY);
+      }
+      if (!writeHistory(safeFieldName, history)) return false;
+      lastSerializedByField[safeFieldName] = digest;
+      if (activeFieldName === safeFieldName) {
+        renderHistory(safeFieldName, history);
+      }
+      return true;
+    }
+
+    function saveAllSnapshots() {
+      listFieldNames().forEach(function (fieldName) {
+        saveSnapshotForField(fieldName);
+      });
+    }
+
+    function updateDirtyState(fieldName) {
+      var safeFieldName = String(fieldName || "").trim();
+      if (!safeFieldName) return;
+      var currentValue = collectFieldValue(safeFieldName);
+      var currentDigest = snapshotDigest(currentValue === null ? "" : currentValue);
+      var baselineDigest = snapshotDigest(baselineSerializedByField[safeFieldName] || "");
+      dirtyByField[safeFieldName] = currentDigest !== baselineDigest;
+    }
+
+    function hasDirtyEditors() {
+      var names = Object.keys(dirtyByField);
+      for (var i = 0; i < names.length; i += 1) {
+        if (dirtyByField[names[i]]) return true;
+      }
+      return false;
+    }
+
+    function resetDirtyToCurrentSnapshot() {
+      listFieldNames().forEach(function (fieldName) {
+        var currentValue = collectFieldValue(fieldName);
+        var digest = snapshotDigest(currentValue === null ? "" : currentValue);
+        baselineSerializedByField[fieldName] = digest;
+        dirtyByField[fieldName] = false;
+      });
+    }
+
+    function scheduleSnapshot(fieldName) {
+      var safeFieldName = String(fieldName || "").trim();
+      if (!safeFieldName) return;
+      if (debounceTimers[safeFieldName]) {
+        window.clearTimeout(debounceTimers[safeFieldName]);
+      }
+      debounceTimers[safeFieldName] = window.setTimeout(function () {
+        debounceTimers[safeFieldName] = 0;
+        saveSnapshotForField(safeFieldName);
+      }, AUTO_SAVE_DEBOUNCE_MS);
+    }
+
+    function bindEditorListeners() {
+      form.querySelectorAll("textarea[name]").forEach(function (field) {
+        var fieldName = String(field.getAttribute("name") || "").trim();
+        if (!fieldName) return;
+        if (field.dataset.statementDraftNativeBound !== "1") {
+          field.dataset.statementDraftNativeBound = "1";
+          field.addEventListener("input", function () {
+            scheduleSnapshot(fieldName);
+            updateDirtyState(fieldName);
+          });
+          field.addEventListener("change", function () {
+            scheduleSnapshot(fieldName);
+            updateDirtyState(fieldName);
+          });
+        }
+        var cm = findCodeMirrorEditor(field);
+        if (!cm || typeof cm.on !== "function") return;
+        if (field.dataset.statementDraftCodeMirrorBound === "1") return;
+        field.dataset.statementDraftCodeMirrorBound = "1";
+        cm.on("change", function () {
+          scheduleSnapshot(fieldName);
+          updateDirtyState(fieldName);
+        });
+      });
+    }
+
+    triggers.forEach(function (triggerEl) {
+      var fieldName = resolveFieldNameFromTrigger(triggerEl);
+      if (fieldName) {
+        var fieldLabel = String(triggerEl.getAttribute("data-draft-label") || "").trim();
+        fieldLabelByName[fieldName] = fieldLabel || fieldDisplayName(fieldName) || fieldName;
+      }
+      triggerEl.addEventListener("click", function () {
+        var openFieldName = resolveFieldNameFromTrigger(triggerEl);
+        renderHistory(openFieldName, readHistory(openFieldName));
+      });
+    });
+
+    form.addEventListener("submit", function () {
+      isFormSubmitting = true;
+      saveAllSnapshots();
+      resetDirtyToCurrentSnapshot();
+    });
+
+    window.addEventListener("beforeunload", function (event) {
+      saveAllSnapshots();
+      if (isFormSubmitting) return;
+      if (!hasDirtyEditors()) return;
+      if (event) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+      return "";
+    });
+
+    storageUnavailable = !isLocalStorageAvailable();
+    if (storageUnavailable) {
+      setError("Local draft backup is unavailable in this browser session.");
+      setStatus("Local draft backup unavailable.");
+      updateTriggerLabel();
+      return;
+    }
+
+    bindEditorListeners();
+    // Editor wrappers may attach after first paint; retry several times.
+    [400, 1200, 2400, 4800].forEach(function (delayMs) {
+      window.setTimeout(bindEditorListeners, delayMs);
+    });
+
+    listFieldNames().forEach(function (fieldName) {
+      var currentValue = collectFieldValue(fieldName);
+      var digest = snapshotDigest(currentValue === null ? "" : currentValue);
+      lastSerializedByField[fieldName] = digest;
+      baselineSerializedByField[fieldName] = digest;
+      dirtyByField[fieldName] = false;
+      if (!fieldLabelByName[fieldName]) {
+        fieldLabelByName[fieldName] = fieldDisplayName(fieldName) || fieldName;
+      }
+    });
+
+    var initialFieldName = "";
+    if (triggers.length) {
+      initialFieldName = resolveFieldNameFromTrigger(triggers[0]);
+    }
+    if (!initialFieldName) {
+      var fieldNames = listFieldNames();
+      if (fieldNames.length) initialFieldName = fieldNames[0];
+    }
+    renderHistory(initialFieldName, readHistory(initialFieldName));
+    if (activeFieldName) {
+      setStatus("Local drafts ready for " + (activeFieldLabel || activeFieldName) + ".");
+    } else {
+      setStatus("Local drafts ready.");
+    }
+  }
+
   function slugifyImportProblemId(raw) {
     var token = String(raw || "").trim().toLowerCase();
     if (!token) return "";
@@ -1833,6 +2347,7 @@
     initRegisterLikeProofForm("setup-form");
     initSettingsPasswordProofForm();
     initSudoProofForm();
+    initStatementDraftBackup();
     initPolygonImportSlugSuggest();
     initSettingsTokenGenerators();
     initSettingsJudgehostRunnerControls();

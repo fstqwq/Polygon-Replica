@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import base64
@@ -24,131 +24,150 @@ from tests.common import (
     _wait_for_run_execute_workers,
     _wait_for_verification_workers,
 )
-from app.impl import build_preview as build_preview_impl
-from app.impl import contests as contests_impl
-from app.impl import problem_editor as problem_editor_impl
-from app.impl import root_auth as root_auth_impl
-from app.impl import run_export as run_export_impl
-from app.impl import auth as auth_impl
-from app.impl import workspace as workspace_impl
-from app.impl.config import config
-from app.services.statement_template import statement_sources_signature
-from app.services.util import run_cmd
+import app.impl.auth.api
+import app.impl.build.api
+import app.impl.preview.api
+import app.impl.contest.api
+import app.impl.problem.api
+import app.impl.root.api
+import app.impl.run_export.api
+import app.impl.workspace.api
+from app.impl.runtime.config import config
+from app.service.statement.signature import statement_sources_signature
+from app.service.platform.process import run_cmd
+_API_MODULES = (
+    app.impl.auth.api,
+    app.impl.build.api,
+    app.impl.preview.api,
+    app.impl.contest.api,
+    app.impl.problem.api,
+    app.impl.root.api,
+    app.impl.run_export.api,
+    app.impl.workspace.api,
+)
+run_export_impl = app.impl.run_export.api
+workspace_impl = app.impl.workspace.api
+
+def _api_attr(name: str):
+    for module in _API_MODULES:
+        if hasattr(module, name):
+            return getattr(module, name)
+    raise AttributeError(f"api symbol not found: {name}")
 
 AUTH_COOKIE_NAME = config.constants.AUTH_COOKIE_NAME
 FLASH_COOKIE_NAME = config.constants.FLASH_COOKIE_NAME
 ADMIN_CONFIG_DEFAULTS = config.constants.ADMIN_CONFIG_DEFAULTS
-_issue_password_form_csrf_token = auth_impl._issue_password_form_csrf_token
-_session_user = auth_impl._session_user
-_workspace_revision_info = workspace_impl._workspace_revision_info
-auth_password_meta = root_auth_impl.auth_password_meta
-auth_middleware = auth_impl.auth_middleware
-artifact_file = run_export_impl.artifact_file
-access_page = problem_editor_impl.access_page
+issue_password_form_csrf_token = _api_attr("issue_password_form_csrf_token")
+session_user = _api_attr("session_user")
+workspace_revision_info = _api_attr("workspace_revision_info")
+auth_password_meta = _api_attr("auth_password_meta")
+auth_middleware = _api_attr("auth_middleware")
+artifact_file = _api_attr("artifact_file")
+access_page = _api_attr("access_page")
 build_service = config.build_service
-build_page = build_preview_impl.build_page
-tests_spec_add_gen = build_preview_impl.tests_spec_add_gen
-tests_spec_edit = build_preview_impl.tests_spec_edit
-tests_spec_add_manual = build_preview_impl.tests_spec_add_manual
-tests_spec_add_manual_upload = build_preview_impl.tests_spec_add_manual_upload
-tests_spec_delete = build_preview_impl.tests_spec_delete
-tests_spec_gen_script_save = build_preview_impl.tests_spec_gen_script_save
-tests_spec_payload_download = build_preview_impl.tests_spec_payload_download
-tests_spec_payload_upload = build_preview_impl.tests_spec_payload_upload
-tests_spec_reindex = build_preview_impl.tests_spec_reindex
-checker_page = problem_editor_impl.checker_page
-checker_save_source = problem_editor_impl.checker_save_source
-checker_set_standard = problem_editor_impl.checker_set_standard
-checker_view_standard = problem_editor_impl.checker_view_standard
+build_page = _api_attr("build_page")
+tests_spec_add_gen = _api_attr("tests_spec_add_gen")
+tests_spec_edit = _api_attr("tests_spec_edit")
+tests_spec_add_manual = _api_attr("tests_spec_add_manual")
+tests_spec_add_manual_upload = _api_attr("tests_spec_add_manual_upload")
+tests_spec_delete = _api_attr("tests_spec_delete")
+tests_spec_gen_script_save = _api_attr("tests_spec_gen_script_save")
+tests_spec_payload_download = _api_attr("tests_spec_payload_download")
+tests_spec_payload_upload = _api_attr("tests_spec_payload_upload")
+tests_spec_reindex = _api_attr("tests_spec_reindex")
+checker_page = _api_attr("checker_page")
+checker_save_source = _api_attr("checker_save_source")
+checker_set_standard = _api_attr("checker_set_standard")
+checker_view_standard = _api_attr("checker_view_standard")
 db = config.db
-export_create = run_export_impl.export_create
-export_import = run_export_impl.export_import
-export_import_slug_hint = run_export_impl.export_import_slug_hint
-export_page = run_export_impl.export_page
+export_create = _api_attr("export_create")
+export_import = _api_attr("export_import")
+export_import_slug_hint = _api_attr("export_import_slug_hint")
+export_page = _api_attr("export_page")
 export_service = config.export_service
-files_create_template = problem_editor_impl.files_create_template
-files_page = problem_editor_impl.files_page
-files_save = problem_editor_impl.files_save
-generator_create_template = problem_editor_impl.generator_create_template
-generator_save_source = problem_editor_impl.generator_save_source
-generators_page = problem_editor_impl.generators_page
-general_page = build_preview_impl.preview_page
-general_save = problem_editor_impl.general_save
-git_commit = problem_editor_impl.git_commit
-git_rebase_abort = problem_editor_impl.git_rebase_abort
-git_restore_revision = problem_editor_impl.git_restore_revision
+files_create_template = _api_attr("files_create_template")
+files_page = _api_attr("files_page")
+files_save = _api_attr("files_save")
+generator_create_template = _api_attr("generator_create_template")
+generator_save_source = _api_attr("generator_save_source")
+generators_page = _api_attr("generators_page")
+general_page = _api_attr("preview_page")
+general_save = _api_attr("general_save")
+git_commit = _api_attr("git_commit")
+git_rebase_abort = _api_attr("git_rebase_abort")
+git_restore_revision = _api_attr("git_restore_revision")
 git_service = config.git_service
-history_page = problem_editor_impl.history_page
-login_submit = root_auth_impl.login_submit
-login_page = root_auth_impl.login_page
-sudo_page = root_auth_impl.sudo_page
-sudo_submit = root_auth_impl.sudo_submit
-setup_page = root_auth_impl.setup_page
-setup_submit = root_auth_impl.setup_submit
-problems_root_page = root_auth_impl.problems_root_page
-problems_root_import = root_auth_impl.problems_root_import
-problems_root_import_slug_hint = root_auth_impl.problems_root_import_slug_hint
-preview_page = build_preview_impl.preview_page
-preview_run = build_preview_impl.preview_run
-preview_status = build_preview_impl.preview_status
-preview_save = build_preview_impl.preview_save
-register_submit = root_auth_impl.register_submit
-register_page = root_auth_impl.register_page
-run_page = run_export_impl.run_page
-run_new_page = run_export_impl.run_new_page
-run_details_page = run_export_impl.run_details_page
-run_details_test_fragment = run_export_impl.run_details_test_fragment
+history_page = _api_attr("history_page")
+login_submit = _api_attr("login_submit")
+login_page = _api_attr("login_page")
+sudo_page = _api_attr("sudo_page")
+sudo_submit = _api_attr("sudo_submit")
+setup_page = _api_attr("setup_page")
+setup_submit = _api_attr("setup_submit")
+problems_root_page = _api_attr("problems_root_page")
+problems_root_import = _api_attr("problems_root_import")
+problems_root_import_slug_hint = _api_attr("problems_root_import_slug_hint")
+preview_page = _api_attr("preview_page")
+preview_run = _api_attr("preview_run")
+preview_status = _api_attr("preview_status")
+preview_save = _api_attr("preview_save")
+register_submit = _api_attr("register_submit")
+register_page = _api_attr("register_page")
+run_page = _api_attr("run_page")
+run_new_page = _api_attr("run_new_page")
+run_details_page = _api_attr("run_details_page")
+run_details_test_fragment = _api_attr("run_details_test_fragment")
 run_service = config.run_service
-run_execute = run_export_impl.run_execute
-verification_start = build_preview_impl.verification_start
-contests_root_create = root_auth_impl.contests_root_create
-contests_root_import = root_auth_impl.contests_root_import
-contests_root_import_confirm = root_auth_impl.contests_root_import_confirm
-contests_root_import_review = root_auth_impl.contests_root_import_review
-contests_root_page = root_auth_impl.contests_root_page
-contest_access_grant = contests_impl.contest_access_grant
-contest_access_page = contests_impl.contest_access_page
-contest_access_revoke = contests_impl.contest_access_revoke
-contest_overview_page = contests_impl.contest_overview_page
-contest_packages_page = contests_impl.contest_packages_page
-contest_packages_artifact_download = contests_impl.contest_packages_artifact_download
-contest_packages_build_start = contests_impl.contest_packages_build_start
-contest_packages_job_status = contests_impl.contest_packages_job_status
-contest_packages_preview_start = contests_impl.contest_packages_preview_start
-contest_problems_add = contests_impl.contest_problems_add
-contest_problems_change_general = contests_impl.contest_problems_change_general
-contest_problems_page = contests_impl.contest_problems_page
-contest_problems_remove_selected = contests_impl.contest_problems_remove_selected
-contest_problems_renumber = contests_impl.contest_problems_renumber
-contest_problems_reorder = contests_impl.contest_problems_reorder
-contest_properties_page = contests_impl.contest_properties_page
-contest_properties_save = contests_impl.contest_properties_save
-solutions_create_template = problem_editor_impl.solutions_create_template
-solutions_editor_page = problem_editor_impl.solutions_editor_page
-solutions_page = problem_editor_impl.solutions_page
-solutions_save_source = problem_editor_impl.solutions_save_source
-solutions_rename = problem_editor_impl.solutions_rename
-solutions_delete = problem_editor_impl.solutions_delete
-solutions_set_tag = problem_editor_impl.solutions_set_tag
-settings_password_update = problem_editor_impl.settings_password_update
-settings_page = problem_editor_impl.settings_page
-settings_judgehost_snapshot = problem_editor_impl.settings_judgehost_snapshot
-settings_config_category_page = problem_editor_impl.settings_config_category_page
-settings_config_category_update = problem_editor_impl.settings_config_category_update
-settings_system_config_reset = problem_editor_impl.settings_system_config_reset
-settings_worker_queue_snapshot = problem_editor_impl.settings_worker_queue_snapshot
-switch_workspace = problem_editor_impl.switch_workspace
-workspace_delete = problem_editor_impl.workspace_delete
-problem_delete = problem_editor_impl.problem_delete
-interactor_create_template = problem_editor_impl.interactor_create_template
-interactor_page = problem_editor_impl.interactor_page
-interactor_save_source = problem_editor_impl.interactor_save_source
-validator_create_template = problem_editor_impl.validator_create_template
-validator_page = problem_editor_impl.validator_page
-validator_save_source = problem_editor_impl.validator_save_source
-workspace_page = workspace_impl._render_workspace_page
-workspace_access_grant = problem_editor_impl.workspace_access_grant
-workspace_access_revoke = problem_editor_impl.workspace_access_revoke
+run_execute = _api_attr("run_execute")
+verification_start = _api_attr("verification_start")
+contests_root_create = _api_attr("contests_root_create")
+contests_root_import = _api_attr("contests_root_import")
+contests_root_import_confirm = _api_attr("contests_root_import_confirm")
+contests_root_import_review = _api_attr("contests_root_import_review")
+contests_root_page = _api_attr("contests_root_page")
+contest_access_grant = _api_attr("contest_access_grant")
+contest_access_page = _api_attr("contest_access_page")
+contest_access_revoke = _api_attr("contest_access_revoke")
+contest_overview_page = _api_attr("contest_overview_page")
+contest_packages_page = _api_attr("contest_packages_page")
+contest_packages_artifact_download = _api_attr("contest_packages_artifact_download")
+contest_packages_build_start = _api_attr("contest_packages_build_start")
+contest_packages_job_status = _api_attr("contest_packages_job_status")
+contest_packages_preview_start = _api_attr("contest_packages_preview_start")
+contest_problems_add = _api_attr("contest_problems_add")
+contest_problems_change_general = _api_attr("contest_problems_change_general")
+contest_problems_page = _api_attr("contest_problems_page")
+contest_problems_remove_selected = _api_attr("contest_problems_remove_selected")
+contest_problems_renumber = _api_attr("contest_problems_renumber")
+contest_problems_reorder = _api_attr("contest_problems_reorder")
+contest_properties_page = _api_attr("contest_properties_page")
+contest_properties_save = _api_attr("contest_properties_save")
+solutions_create_template = _api_attr("solutions_create_template")
+solutions_editor_page = _api_attr("solutions_editor_page")
+solutions_page = _api_attr("solutions_page")
+solutions_save_source = _api_attr("solutions_save_source")
+solutions_rename = _api_attr("solutions_rename")
+solutions_delete = _api_attr("solutions_delete")
+solutions_set_tag = _api_attr("solutions_set_tag")
+settings_password_update = _api_attr("settings_password_update")
+settings_page = _api_attr("settings_page")
+settings_judgehost_snapshot = _api_attr("settings_judgehost_snapshot")
+settings_config_category_page = _api_attr("settings_config_category_page")
+settings_config_category_update = _api_attr("settings_config_category_update")
+settings_system_config_reset = _api_attr("settings_system_config_reset")
+settings_worker_queue_snapshot = _api_attr("settings_worker_queue_snapshot")
+switch_workspace = _api_attr("switch_workspace")
+workspace_delete = _api_attr("workspace_delete")
+problem_delete = _api_attr("problem_delete")
+interactor_create_template = _api_attr("interactor_create_template")
+interactor_page = _api_attr("interactor_page")
+interactor_save_source = _api_attr("interactor_save_source")
+validator_create_template = _api_attr("validator_create_template")
+validator_page = _api_attr("validator_page")
+validator_save_source = _api_attr("validator_save_source")
+workspace_page = _api_attr("render_workspace_page")
+workspace_access_grant = _api_attr("workspace_access_grant")
+workspace_access_revoke = _api_attr("workspace_access_revoke")
 workspace_service = config.workspace_service
 
 
@@ -420,7 +439,7 @@ def _sudo_with_password_proof(cookie_header: str, password: str, *, next_path: s
     )
 
 def _settings_password_update_with_proof(user: str, current_password: str, new_password: str):
-    csrf = _issue_password_form_csrf_token("settings-password")
+    csrf = issue_password_form_csrf_token("settings-password")
     auth_row = db.fetch_one("SELECT password_salt,password_iters FROM users WHERE username=?", [user])
     if auth_row is None:
         return settings_password_update(user=user)
@@ -550,157 +569,8 @@ int main() {
         )
         return ws
 
-__all__ = [
-    "ADMIN_CONFIG_DEFAULTS",
-    "AUTH_COOKIE_NAME",
-    "HTTPException",
-    "Path",
-    "PlainTextResponse",
-    "Request",
-    "UIBaseSuite",
-    "_cookie_value_from_response",
-    "_extract_hidden_input_value",
-    "_flash_cookie_header",
-    "_flash_messages_from_response",
-    "_issue_password_form_csrf_token",
-    "_password_verifier_hex",
-    "_register_with_password_proof",
-    "_login_with_password_proof",
-    "_setup_with_password_proof",
-    "_settings_password_update_with_proof",
-    "_sudo_with_password_proof",
-    "_post_request",
-    "_post_form_request",
-    "_request",
-    "_request_with_cookie",
-    "_response_set_cookie_blob",
-    "_session_user",
-    "_sha256_hex",
-    "_wait_for_export_workers",
-    "_wait_for_row",
-    "_wait_for_run_execute_workers",
-    "_wait_for_verification_workers",
-    "_workspace_revision_info",
-    "access_page",
-    "artifact_file",
-    "asyncio",
-    "auth_middleware",
-    "auth_password_meta",
-    "build_page",
-    "build_service",
-    "checker_page",
-    "checker_save_source",
-    "checker_set_standard",
-    "checker_view_standard",
-    "config",
-    "contests_root_create",
-    "contests_root_import",
-    "contests_root_import_confirm",
-    "contests_root_import_review",
-    "contests_root_page",
-    "contest_access_grant",
-    "contest_access_page",
-    "contest_access_revoke",
-    "contest_overview_page",
-    "contest_packages_artifact_download",
-    "contest_packages_build_start",
-    "contest_packages_job_status",
-    "contest_packages_page",
-    "contest_packages_preview_start",
-    "contest_problems_add",
-    "contest_problems_change_general",
-    "contest_problems_page",
-    "contest_problems_remove_selected",
-    "contest_problems_renumber",
-    "contest_problems_reorder",
-    "contest_properties_page",
-    "contest_properties_save",
-    "db",
-    "export_create",
-    "export_import",
-    "export_import_slug_hint",
-    "export_page",
-    "general_page",
-    "general_save",
-    "generator_create_template",
-    "generator_save_source",
-    "generators_page",
-    "git_commit",
-    "git_rebase_abort",
-    "git_restore_revision",
-    "git_service",
-    "history_page",
-    "interactor_create_template",
-    "interactor_page",
-    "interactor_save_source",
-    "io",
-    "json",
-    "login_page",
-    "login_submit",
-    "os",
-    "parse_qs",
-    "patch",
-    "preview_page",
-    "preview_run",
-    "preview_status",
-    "preview_save",
-    "problems_root_page",
-    "problems_root_import",
-    "problems_root_import_slug_hint",
-    "quote_plus",
-    "re",
-    "register_page",
-    "register_submit",
-    "run_cmd",
-    "run_details_page",
-    "run_details_test_fragment",
-    "run_execute",
-    "run_export_impl",
-    "run_new_page",
-    "run_page",
-    "run_service",
-    "settings_page",
-    "settings_judgehost_snapshot",
-    "settings_config_category_page",
-    "settings_config_category_update",
-    "settings_password_update",
-    "settings_system_config_reset",
-    "settings_worker_queue_snapshot",
-    "setup_page",
-    "setup_submit",
-    "sudo_page",
-    "sudo_submit",
-    "solutions_create_template",
-    "solutions_delete",
-    "solutions_editor_page",
-    "solutions_page",
-    "solutions_rename",
-    "solutions_save_source",
-    "solutions_set_tag",
-    "statement_sources_signature",
-    "switch_workspace",
-    "workspace_delete",
-    "problem_delete",
-    "tests_spec_add_gen",
-    "tests_spec_edit",
-    "tests_spec_add_manual",
-    "tests_spec_add_manual_upload",
-    "tests_spec_delete",
-    "tests_spec_gen_script_save",
-    "tests_spec_payload_download",
-    "tests_spec_payload_upload",
-    "tests_spec_reindex",
-    "threading",
-    "time",
-    "urlparse",
-    "uuid",
-    "validator_create_template",
-    "validator_page",
-    "validator_save_source",
-    "verification_start",
-    "workspace_access_grant",
-    "workspace_access_revoke",
-    "workspace_impl",
-    "workspace_page",
-    "workspace_service",
-]
+
+
+
+
+

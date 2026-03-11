@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block auth_page_title %}Polygon-Replica{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260307-3" />
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-card">
+      <h1>{% block auth_title %}Polygon-Replica{% endblock %}</h1>
+      <p class="muted">{% block auth_subtitle %}{% endblock %}</p>
+      {% block auth_hint %}{% endblock %}
+      {% set flash_presenter = 'inline' %}
+      {% include "_flash_message.html" %}
+      {% block auth_form %}{% endblock %}
+      {% block auth_footer %}{% endblock %}
+    </section>
+  </main>
+  {% include "_page_profile.html" %}
+  <script src="/static/ui.js?v=20260307-3" defer></script>
+  {% block auth_scripts %}{% endblock %}
+</body>
+</html>

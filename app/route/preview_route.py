@@ -1,0 +1,41 @@
+﻿from __future__ import annotations
+
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+
+from app.impl.preview.preview import (
+    preview_page,
+    preview_run,
+    preview_save,
+    preview_status,
+    statement_attachment_delete,
+)
+
+router = APIRouter()
+
+router.add_api_route(
+    "/problems/{problem:path}/{user}/preview",
+    preview_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/preview/run",
+    preview_run,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/preview/status",
+    preview_status,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/preview/save",
+    preview_save,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/statement/attachments/delete",
+    statement_attachment_delete,
+    methods=["POST"],
+)

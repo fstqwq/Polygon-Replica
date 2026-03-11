@@ -1,47 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import io
 import unittest
 from typing import Any
 
-from app.services.invocation_backend_service import InvocationBackendService
+from app.service.runtime.invocation_backend import InvocationBackendService
 
 
 class _FakeRunService:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def run_submission(
-        self,
-        problem: str,
-        username: str,
-        build_id: str,
-        *,
-        submission_path: str | None = None,
-        mode: str = "pass-fail",
-        upload_content: bytes | None = None,
-        upload_filename: str | None = None,
-        upload_stream: object | None = None,
-        run_id: str | None = None,
-        selected_tests: list[str] | None = None,
-        invocation_id: str | None = None,
-        invocation_run_ids: list[str] | None = None,
-        expected_behavior: str | None = None,
-        invocation_source: str = "run.execute",
-        force_recompile: bool = False,
-    ) -> str:
-        self.calls.append(
-            {
-                "problem": problem,
-                "username": username,
-                "build_id": build_id,
-                "run_id": run_id,
-                "force_recompile": bool(force_recompile),
-            }
-        )
-        return str(run_id or "r-local")
 
-
-class _FakeJudgehostTaskService:
+class _FakeJudgehost:
     def __init__(self, *, enabled: bool = True, auth: bool = True) -> None:
         self._enabled = bool(enabled)
         self._auth = bool(auth)
@@ -67,94 +38,36 @@ class _FakeJudgehostTaskService:
 
 
 class TestInvocationBackendService(unittest.TestCase):
-    def test_status_lists_only_local_and_domjudge_judgehost(self) -> None:
+    def test_status_lists_only_domjudge_judgehost(self) -> None:
         run_service = _FakeRunService()
-        judgehost = _FakeJudgehostTaskService(enabled=True, auth=True)
+        judgehost = _FakeJudgehost(enabled=True, auth=True)
         service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
         status = service.status()
-        names = [str(item.get("name") or "") for item in (status.get("available") or []) if isinstance(item, dict)]
-        self.assertIn("domjudge-judgehost", names)
-        self.assertIn("local-sandbox", names)
-        self.assertNotIn("domjudge-adapter", names)
-
-    def test_configured_judgehost_selects_domjudge_judgehost(self) -> None:
-        run_service = _FakeRunService()
-        judgehost = _FakeJudgehostTaskService(enabled=True, auth=True)
-        service = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost,  # type: ignore[arg-type]
-            configured_backend_name="domjudge-judgehost",
-        )
-        self.assertEqual(service.active_backend_name(), "domjudge-judgehost")
-
-    def test_default_auto_prefers_judgehost_when_ready(self) -> None:
-        run_service = _FakeRunService()
-        judgehost = _FakeJudgehostTaskService(enabled=True, auth=True)
-        service = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost,  # type: ignore[arg-type]
-        )
-        self.assertEqual(service.active_backend_name(), "domjudge-judgehost")
-
-    def test_auto_falls_back_to_local_when_judgehost_unavailable(self) -> None:
-        run_service = _FakeRunService()
-        judgehost_disabled = _FakeJudgehostTaskService(enabled=False, auth=True)
-        service_disabled = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost_disabled,  # type: ignore[arg-type]
-        )
-        self.assertEqual(service_disabled.active_backend_name(), "local-sandbox")
-
-        judgehost_missing_auth = _FakeJudgehostTaskService(enabled=True, auth=False)
-        service_missing_auth = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost_missing_auth,  # type: ignore[arg-type]
-        )
-        self.assertEqual(service_missing_auth.active_backend_name(), "local-sandbox")
-
-    def test_invalid_backend_name_falls_back_to_local(self) -> None:
-        run_service = _FakeRunService()
-        judgehost = _FakeJudgehostTaskService(enabled=True, auth=True)
-        service = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost,  # type: ignore[arg-type]
-            configured_backend_name="domjudge-adapter",
-        )
-        self.assertEqual(service.active_backend_name(), "local-sandbox")
-
-    def test_status_includes_configured_and_active_backend(self) -> None:
-        run_service = _FakeRunService()
-        judgehost = _FakeJudgehostTaskService(enabled=True, auth=True)
-        service = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost,  # type: ignore[arg-type]
-        )
-        status = service.status()
-        self.assertEqual(str(status.get("configured") or ""), "auto")
+        available = [item for item in (status.get("available") or []) if isinstance(item, dict)]
+        self.assertEqual(len(available), 1)
+        self.assertEqual(str(available[0].get("name") or ""), "domjudge-judgehost")
+        self.assertEqual(str(status.get("configured") or ""), "domjudge-judgehost")
         self.assertEqual(str(status.get("active") or ""), "domjudge-judgehost")
 
-    def test_domjudge_judgehost_backend_dispatches_to_queue_service(self) -> None:
+    def test_active_backend_name_is_fixed_to_domjudge_judgehost(self) -> None:
         run_service = _FakeRunService()
-        judgehost = _FakeJudgehostTaskService(enabled=True, auth=True)
-        service = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost,  # type: ignore[arg-type]
-            configured_backend_name="domjudge-judgehost",
-        )
+        judgehost = _FakeJudgehost(enabled=False, auth=False)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
+        self.assertEqual(service.active_backend_name(), "domjudge-judgehost")
+
+    def test_domjudge_backend_dispatches_to_queue_service(self) -> None:
+        run_service = _FakeRunService()
+        judgehost = _FakeJudgehost(enabled=True, auth=True)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
         run_id = service.run_submission(problem="p", username="u", build_id="b")
         self.assertEqual(run_id, "r-judgehost-1")
-        self.assertFalse(run_service.calls)
         self.assertEqual(len(judgehost.enqueued), 1)
         self.assertEqual(len(judgehost.waited), 1)
 
     def test_domjudge_backend_forwards_force_recompile_flag(self) -> None:
         run_service = _FakeRunService()
-        judgehost = _FakeJudgehostTaskService(enabled=True, auth=True)
-        service = InvocationBackendService(
-            run_service,
-            judgehost_task_service=judgehost,  # type: ignore[arg-type]
-            configured_backend_name="domjudge-judgehost",
-        )
+        judgehost = _FakeJudgehost(enabled=True, auth=True)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
         run_id = service.run_submission(
             problem="p",
             username="u",
@@ -164,6 +77,75 @@ class TestInvocationBackendService(unittest.TestCase):
         self.assertEqual(run_id, "r-judgehost-1")
         self.assertEqual(len(judgehost.enqueued), 1)
         self.assertTrue(bool(judgehost.enqueued[0].get("force_recompile")))
+
+    def test_domjudge_backend_rejects_upload_stream(self) -> None:
+        run_service = _FakeRunService()
+        judgehost = _FakeJudgehost(enabled=True, auth=True)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
+        with self.assertRaises(RuntimeError):
+            service.run_submission(
+                problem="p",
+                username="u",
+                build_id="b",
+                upload_stream=io.BytesIO(b"test"),
+            )
+
+    def test_domjudge_backend_requires_enabled_service(self) -> None:
+        run_service = _FakeRunService()
+        judgehost = _FakeJudgehost(enabled=False, auth=True)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
+        with self.assertRaises(RuntimeError) as cm:
+            service.run_submission(problem="p", username="u", build_id="b")
+        self.assertIn("disabled", str(cm.exception).lower())
+
+    def test_domjudge_backend_requires_auth_token(self) -> None:
+        run_service = _FakeRunService()
+        judgehost = _FakeJudgehost(enabled=True, auth=False)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
+        with self.assertRaises(RuntimeError) as cm:
+            service.run_submission(problem="p", username="u", build_id="b")
+        self.assertIn("token", str(cm.exception).lower())
+
+    def test_domjudge_backend_routes_buildsolve_and_verification_sources(self) -> None:
+        run_service = _FakeRunService()
+        judgehost = _FakeJudgehost(enabled=True, auth=True)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
+        service.run_submission(
+            problem="p",
+            username="u",
+            build_id="b",
+            invocation_source="build.solve",
+        )
+        service.run_submission(
+            problem="p",
+            username="u",
+            build_id="b",
+            invocation_source="verification.start",
+        )
+        self.assertEqual(len(judgehost.enqueued), 2)
+        self.assertEqual(str(judgehost.enqueued[0].get("invocation_source") or ""), "build.solve")
+        self.assertEqual(str(judgehost.enqueued[1].get("invocation_source") or ""), "verification.start")
+
+    def test_domjudge_backend_routes_generation_and_validation_sources(self) -> None:
+        run_service = _FakeRunService()
+        judgehost = _FakeJudgehost(enabled=True, auth=True)
+        service = InvocationBackendService(run_service, judgehost_task_service=judgehost)  # type: ignore[arg-type]
+        invocation_sources = [
+            "build.generate-input",
+            "build.generate-output",
+            "build.validate-tests",
+        ]
+        for source in invocation_sources:
+            service.run_submission(
+                problem="p",
+                username="u",
+                build_id="b",
+                invocation_source=source,
+            )
+        self.assertEqual(
+            [str(item.get("invocation_source") or "") for item in judgehost.enqueued],
+            invocation_sources,
+        )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,20 @@
 ﻿# BACKEND_TODO
 
-Last updated: 2026-03-06
+Last updated: 2026-03-09
 
 Only active backend debt is listed here.
+
+Judgehost acceptance execution checklist (post-restart, Playwright-required, fixed four-problem pass) is maintained in `JUDGEHOST_ACCEPTANCE.md`.
+
+## Latest Acceptance Anomalies (2026-03-09)
+
+Playwright acceptance pass evidence:
+- Matrix `inv-648517f30fa4`: FAILED with `compare script 223 crashed with exit code 3, expected one of 42/43`.
+- Taxi `inv-381e8cd7c2c7`: FAILED with accepted-target mismatch `1_array.cpp: required=[AC], allowed=[AC], got=[WA]`.
+- Fuzzy Ranking `inv-c4996938290e`: FAILED with `accepted solution failed on 001.in: combined run/compare script 242 crashed with exit code 3, expected one of 42/43`.
+- Guess the Number `inv-e73dc48eeaeb`: OK.
+
+Tracking note: this blocks green acceptance because expected outcomes require Matrix/Taxi/Guess to pass and Fuzzy to be pass or timeout.
 
 ## P0 (Must)
 
@@ -24,8 +36,8 @@ Only active backend debt is listed here.
 ## P1 (Should)
 
 1. Error model normalization
-- Problem: local and judgehost paths still diverge in error payload shape.
-- Exit criteria: one schema used by run details, verification, and export pages.
+- Problem: judgehost-only code execution path still has inconsistent error payload details across run/verification/build surfaces.
+- Exit criteria: one schema used by run details, verification, build solve, and export pages.
 - Status: open.
 
 2. Cache observability and diagnostics

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from tests.ui_support import (
     Path,
     UIBaseSuite,
@@ -153,12 +155,13 @@ class TestUIComponents(UIBaseSuite):
         self.assertNotIn("checker/save-source", html)
         self.assertNotIn("src=checker", html)
 
-        saved = checker_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=rel,
-            content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
-        )
+        with patch("app.impl.problem.checker.judgehost_compile_check_error", return_value=""):
+            saved = checker_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=rel,
+                content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
+            )
         self.assertEqual(saved.status_code, 303)
         self.assertIn("return argc", (ws / rel).read_text(encoding="utf-8"))
 
@@ -224,12 +227,13 @@ class TestUIComponents(UIBaseSuite):
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual([str(x) for x in cfg.get("generator_sources", [])], [rel])
 
-        saved = generator_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=rel,
-            content="#include \"testlib.h\"\nint main(int argc,char** argv){registerGen(argc, argv, 1); println(42); return 0;}\n",
-        )
+        with patch("app.impl.problem.generator.judgehost_compile_check_error", return_value=""):
+            saved = generator_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=rel,
+                content="#include \"testlib.h\"\nint main(int argc,char** argv){registerGen(argc, argv, 1); println(42); return 0;}\n",
+            )
         self.assertEqual(saved.status_code, 303)
         self.assertIn("println(42)", (ws / rel).read_text(encoding="utf-8"))
 
@@ -253,12 +257,13 @@ class TestUIComponents(UIBaseSuite):
         created = generator_create_template(problem="alice/sample", user="alice", path=rel)
         self.assertEqual(created.status_code, 303)
 
-        ok_saved = generator_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=rel,
-            content="#include \"testlib.h\"\nint main(int argc,char** argv){registerGen(argc, argv, 1); println(7); return 0;}\n",
-        )
+        with patch("app.impl.problem.generator.judgehost_compile_check_error", return_value=""):
+            ok_saved = generator_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=rel,
+                content="#include \"testlib.h\"\nint main(int argc,char** argv){registerGen(argc, argv, 1); println(7); return 0;}\n",
+            )
         self.assertEqual(ok_saved.status_code, 303)
         self.assertIn("println(7)", (ws / rel).read_text(encoding="utf-8"))
 
@@ -266,12 +271,16 @@ class TestUIComponents(UIBaseSuite):
         cfg_before = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual([str(x) for x in cfg_before.get("generator_sources", [])], [rel])
 
-        failed = generator_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=rel_bad,
-            content="#include \"testlib.h\"\nint main( { return 0; }\n",
-        )
+        with patch(
+            "app.impl.problem.generator.judgehost_compile_check_error",
+            return_value=f"{rel_bad}: syntax error",
+        ):
+            failed = generator_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=rel_bad,
+                content="#include \"testlib.h\"\nint main( { return 0; }\n",
+            )
         self.assertEqual(failed.status_code, 303)
         failed_location = failed.headers.get("location", "")
         self.assertIn("/problems/alice/sample/alice/generators", failed_location)
@@ -570,14 +579,15 @@ class TestUIComponents(UIBaseSuite):
         self.assertNotIn("src=solutions", editor_html)
 
         updated_content = "int main(){return 42;}\n"
-        saved = solutions_save_source(
-            _request("/problems/alice/sample/alice/solutions/save-source", method="POST"),
-            problem="alice/sample",
-            user="alice",
-            source_path=target_rel,
-            content=updated_content,
-            expected_behavior="wrong_answer",
-        )
+        with patch("app.impl.problem.solution.judgehost_compile_check_error", return_value=""):
+            saved = solutions_save_source(
+                _request("/problems/alice/sample/alice/solutions/save-source", method="POST"),
+                problem="alice/sample",
+                user="alice",
+                source_path=target_rel,
+                content=updated_content,
+                expected_behavior="wrong_answer",
+            )
         self.assertEqual(saved.status_code, 303)
         saved_location = saved.headers.get("location", "")
         self.assertIn("/solutions/editor", saved_location)
@@ -662,14 +672,15 @@ class TestUIComponents(UIBaseSuite):
             headers=[(b"x-requested-with", b"fetch"), (b"accept", b"application/json")],
         )
         updated_content = "int main(){return 7;}\n"
-        resp = solutions_save_source(
-            req,
-            problem="alice/sample",
-            user="alice",
-            source_path=target_rel,
-            content=updated_content,
-            expected_behavior="accepted",
-        )
+        with patch("app.impl.problem.solution.judgehost_compile_check_error", return_value=""):
+            resp = solutions_save_source(
+                req,
+                problem="alice/sample",
+                user="alice",
+                source_path=target_rel,
+                content=updated_content,
+                expected_behavior="accepted",
+            )
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8"))
         self.assertTrue(bool(payload.get("ok")))
@@ -682,6 +693,32 @@ class TestUIComponents(UIBaseSuite):
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("solution source", messages[0])
+
+    def test_solutions_save_source_success_message_stays_generic(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        target_rel = "solutions/editor_message_case.cpp"
+        source_abs = ws / target_rel
+        desc_abs = ws / f"{target_rel}.desc"
+        source_abs.parent.mkdir(parents=True, exist_ok=True)
+        source_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
+        desc_abs.write_text("expected: unknown\n", encoding="utf-8")
+
+        with patch("app.impl.problem.solution.judgehost_compile_check_error", return_value=""):
+            resp = solutions_save_source(
+                _request("/problems/alice/sample/alice/solutions/save-source", method="POST"),
+                problem="alice/sample",
+                user="alice",
+                source_path=target_rel,
+                content="int main(){return 7;}\n",
+                expected_behavior="accepted",
+            )
+
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        normalized_message = str(messages[0] or "").strip().lower()
+        self.assertTrue(normalized_message.startswith("solution source saved"))
+        self.assertNotIn("accepted", normalized_message)
 
     def test_checker_view_standard_page_shows_source(self) -> None:
         resp = checker_view_standard(
@@ -743,12 +780,13 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn("Create Interactor Template", interactor_after_html)
         self.assertIn("formaction=\"/problems/alice/sample/alice/interactor/create-template\"", interactor_after_html)
 
-        checker_seed = checker_save_source(
-            problem="alice/sample",
-            user="alice",
-            path="checkers/checker.cpp",
-            content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
-        )
+        with patch("app.impl.problem.checker.judgehost_compile_check_error", return_value=""):
+            checker_seed = checker_save_source(
+                problem="alice/sample",
+                user="alice",
+                path="checkers/checker.cpp",
+                content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
+            )
         self.assertEqual(checker_seed.status_code, 303)
         checker_after_create = checker_page(_request("/problems/alice/sample/alice/checker"), "alice/sample", "alice")
         checker_after_html = checker_after_create.body.decode("utf-8", errors="replace")
@@ -757,21 +795,23 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn("Create checker.cpp template", checker_after_html)
         self.assertIn("formaction=\"/problems/alice/sample/alice/checker/create-template\"", checker_after_html)
 
-        validator_save = validator_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=validator_rel,
-            content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
-        )
+        with patch("app.impl.problem.validator.judgehost_compile_check_error", return_value=""):
+            validator_save = validator_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=validator_rel,
+                content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
+            )
         self.assertEqual(validator_save.status_code, 303)
         self.assertIn("return argc", (ws / validator_rel).read_text(encoding="utf-8"))
 
-        interactor_save = interactor_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=interactor_rel,
-            content="int main(int argc, char** argv){return argv != nullptr ? 0 : 1;}\n",
-        )
+        with patch("app.impl.problem.interactor.judgehost_compile_check_error", return_value=""):
+            interactor_save = interactor_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=interactor_rel,
+                content="int main(int argc, char** argv){return argv != nullptr ? 0 : 1;}\n",
+            )
         self.assertEqual(interactor_save.status_code, 303)
         self.assertIn("argv !=", (ws / interactor_rel).read_text(encoding="utf-8"))
 
@@ -782,12 +822,13 @@ class TestUIComponents(UIBaseSuite):
         validator_abs.parent.mkdir(parents=True, exist_ok=True)
         validator_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        validator_saved = validator_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=validator_rel,
-            content="int main(){return 7;}\n",
-        )
+        with patch("app.impl.problem.validator.judgehost_compile_check_error", return_value=""):
+            validator_saved = validator_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=validator_rel,
+                content="int main(){return 7;}\n",
+            )
         self.assertEqual(validator_saved.status_code, 303)
         self.assertEqual(validator_abs.read_text(encoding="utf-8"), "int main(){return 7;}\n")
 
@@ -800,12 +841,16 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(files_saved.status_code, 303)
         self.assertEqual(validator_abs.read_text(encoding="utf-8"), "int main(){return 9;}\n")
 
-        emptied = validator_save_source(
-            problem="alice/sample",
-            user="alice",
-            path=validator_rel,
-            content="",
-        )
+        with patch(
+            "app.impl.problem.validator.judgehost_compile_check_error",
+            return_value=f"{validator_rel}: compile check failed",
+        ):
+            emptied = validator_save_source(
+                problem="alice/sample",
+                user="alice",
+                path=validator_rel,
+                content="",
+            )
         self.assertEqual(emptied.status_code, 303)
         # Empty validator source should fail compile-check and preserve the previous content.
         self.assertEqual(validator_abs.read_text(encoding="utf-8"), "int main(){return 9;}\n")

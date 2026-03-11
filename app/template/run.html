@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title-inline">
+  <h1 class="page-title">Verifications</h1>
+  <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Start customized verification</a>
+</div>
+{% include "_flash_message.html" %}
+{% if runs %}
+<table class="invocation-list-table">
+  <tr>
+    <th>Run time</th>
+    <th>Solutions</th>
+    <th>Tests</th>
+    <th>Status</th>
+    <th>Actions</th>
+  </tr>
+  {% for r in runs %}
+  <tr class="{{ 'invocation-row-failed' if r.is_failed else '' }}">
+    <td>
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?invocation_id={{ r.id }}">{{ r.created_at | local_time }}</a>
+    </td>
+    <td>
+      {{ r.source_display }}
+      {% if r.has_running %}
+      <div class="muted">{{ r.matched_completed_count }}/{{ r.completed_count }} completed matched{% if r.completed_count != r.run_count %} ({{ r.run_count }} total){% endif %}</div>
+      {% else %}
+      <div class="muted">{{ r.matched_count }}/{{ r.run_count }} expected</div>
+      {% endif %}
+    </td>
+    <td>{{ r.tests_label }}</td>
+    <td>
+      {% if r.status == "ok" %}
+      <span class="ok">{{ r.status_upper }}</span>
+      {% elif r.is_failed %}
+      <span class="danger">{{ r.status_upper }}</span>
+      {% else %}
+      <span>{{ r.status_upper }}</span>
+      {% endif %}
+    </td>
+    <td class="invocation-actions">
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?invocation_id={{ r.id }}">View</a>
+      {% if r.has_running %}
+      <form class="inline-form invocation-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/cancel">
+        <input type="hidden" name="invocation_id" value="{{ r.id }}" />
+        <a href="#" class="linkish danger" data-submit-form="1">Cancel</a>
+      </form>
+      {% endif %}
+      {% if r.rerun_solution_paths %}
+      <a class="invocation-inline-action linkish" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_invocation_id={{ r.id }}&force_recompile=1">Rejudge</a>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No verification yet. Start one from <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Run solutions</a>.</p>
+{% endif %}
+{% endblock %}

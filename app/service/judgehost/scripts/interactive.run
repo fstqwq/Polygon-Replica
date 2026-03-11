@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+TESTIN="$1";  shift
+PROGOUT="$1"; shift
+TESTOUT="$1"; shift
+META="$1"; shift
+FEEDBACK="$1"; shift
+MYDIR="$(dirname "$0")"
+exec ../../dj-bin/runpipe ${DEBUG:+-v} -M "$META" -o "$PROGOUT" "$MYDIR/runjury" "$TESTIN" "$TESTOUT" "$FEEDBACK" = "$@"

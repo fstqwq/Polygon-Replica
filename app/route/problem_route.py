@@ -1,0 +1,308 @@
+﻿from __future__ import annotations
+
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+
+from app.impl.workspace.public import render_workspace_page
+from app.impl.problem.access import access_page, workspace_access_grant, workspace_access_revoke
+from app.impl.problem.checker import checker_create_template, checker_page, checker_save_source, checker_set_standard, checker_view_standard
+from app.impl.problem.file import files_create_template, files_delete, files_download, files_new, files_page, files_rename, files_save, files_upload
+from app.impl.problem.general import general_save
+from app.impl.problem.generator import generator_create_template, generator_save_source, generators_page
+from app.impl.problem.git_op import git_commit, git_pull, git_push, git_rebase_abort, git_rebase_continue, git_restore_revision
+from app.impl.problem.history import history_page
+from app.impl.problem.interactor import interactor_create_template, interactor_page, interactor_save_source
+from app.impl.problem.setting import settings_config_category_page, settings_config_category_update, settings_judgehost_host_action, settings_judgehost_runtime_update, settings_judgehost_snapshot, settings_page, settings_password_update, settings_system_config_reset, settings_worker_queue_snapshot
+from app.impl.problem.solution import solutions_create_template, solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
+from app.impl.problem.validator import validator_create_template, validator_page, validator_save_source
+from app.impl.problem.workspace_op import problem_delete, switch_workspace, workspace_delete
+from app.impl.preview.preview import preview_page
+
+router = APIRouter()
+
+router.add_api_route(
+    "/problems/{problem:path}/{user}/statement",
+    preview_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/statement/save",
+    general_save,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/generators",
+    generators_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/generators/create-template",
+    generator_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/generators/save-source",
+    generator_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/checker",
+    checker_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/checker/view-standard",
+    checker_view_standard,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/checker/set-standard",
+    checker_set_standard,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/checker/create-template",
+    checker_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/checker/save-source",
+    checker_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/validator",
+    validator_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/validator/create-template",
+    validator_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/validator/save-source",
+    validator_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/interactor",
+    interactor_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/interactor/create-template",
+    interactor_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/interactor/save-source",
+    interactor_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/solutions",
+    solutions_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/solutions/create-template",
+    solutions_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/solutions/editor",
+    solutions_editor_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/solutions/save-source",
+    solutions_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/solutions/set-tag",
+    solutions_set_tag,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/solutions/rename",
+    solutions_rename,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/solutions/delete",
+    solutions_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{user}/settings",
+    settings_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{user}/settings/password",
+    settings_password_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{user}/settings/judgehost/runtime",
+    settings_judgehost_runtime_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{user}/settings/config/{category}",
+    settings_config_category_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{user}/settings/config/{category}",
+    settings_config_category_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{user}/settings/system-config/reset",
+    settings_system_config_reset,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{user}/settings/worker-queue",
+    settings_worker_queue_snapshot,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{user}/settings/judgehost",
+    settings_judgehost_snapshot,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{user}/settings/judgehost/host-action",
+    settings_judgehost_host_action,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/switch-workspace",
+    switch_workspace,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/workspace/delete",
+    workspace_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/problem/delete",
+    problem_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files",
+    files_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files/save",
+    files_save,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files/new",
+    files_new,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files/create-template",
+    files_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files/upload",
+    files_upload,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files/rename",
+    files_rename,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files/delete",
+    files_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/files/download",
+    files_download,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/workspace",
+    render_workspace_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/access",
+    access_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/access/grant",
+    workspace_access_grant,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/access/revoke",
+    workspace_access_revoke,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/history",
+    history_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/git/commit",
+    git_commit,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/git/push",
+    git_push,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/git/pull",
+    git_pull,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/git/restore-revision",
+    git_restore_revision,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/git/rebase/continue",
+    git_rebase_continue,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/git/rebase/abort",
+    git_rebase_abort,
+    methods=["POST"],
+)
+
+

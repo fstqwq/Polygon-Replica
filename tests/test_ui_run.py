@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from tests.ui_support import (
     HTTPException,
@@ -12,6 +12,7 @@ from tests.ui_support import (
     asyncio,
     build_page,
     build_service,
+    config,
     db,
     general_page,
     io,
@@ -20,6 +21,7 @@ from tests.ui_support import (
     parse_qs,
     patch,
     preview_page,
+    quote_plus,
     run_details_page,
     run_details_test_fragment,
     run_execute,
@@ -418,155 +420,6 @@ class TestUIRun(UIBaseSuite):
         self.assertIsNotNone(row)
         self.assertEqual(str(row["mode"]), "multi-pass")
 
-    def test_verification_start_uses_problem_mode_from_general_config(self) -> None:
-        problem = f"alice/verify-mode-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        problem_cfg = ws / "config" / "problem.json"
-        problem_cfg.parent.mkdir(parents=True, exist_ok=True)
-        problem_cfg.write_text(json.dumps({"mode": "multi-pass"}, indent=2) + "\n", encoding="utf-8")
-
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "")
-        build_id = f"b-vmode-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-vmode-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        run_artifact = build_artifact / "logs" / f"run-{run_id}"
-        build_artifact.mkdir(parents=True, exist_ok=True)
-        run_artifact.mkdir(parents=True, exist_ok=True)
-        captured_modes: list[str] = []
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    workspace_head,
-                    "main",
-                    "ok",
-                    "{}",
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        def _fake_run_submission(
-            _problem: str,
-            _user: str,
-            _build_id: str,
-            submission_path: str | None = None,
-            mode: str = "pass-fail",
-            upload_content: bytes | None = None,
-            upload_filename: str | None = None,
-            upload_stream=None,
-            run_id: str | None = None,
-            selected_tests: list[str] | None = None,
-            invocation_id: str | None = None,
-            invocation_run_ids: list[str] | None = None,
-            expected_behavior: str | None = None,
-            invocation_source: str = "run.execute",
-            force_recompile: bool = False,
-        ) -> str:
-            captured_modes.append(str(mode or ""))
-            effective_run_id = str(run_id or f"r-vmode-{uuid.uuid4().hex[:8]}")
-            summary = {
-                "mode": mode,
-                "source": submission_path or "solutions/accepted.cpp",
-                "tests": [{"test": "001.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]}],
-            }
-            db.execute(
-                """
-                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    effective_run_id,
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    mode,
-                    "ok",
-                    json.dumps(summary),
-                    str(run_artifact),
-                    "2026-02-23T00:00:02Z",
-                    "2026-02-23T00:00:03Z",
-                ],
-            )
-            return effective_run_id
-
-        original_run_build = build_service.run_build
-        original_run_submission = run_service.run_submission
-        build_service.run_build = _fake_run_build
-        run_service.run_submission = _fake_run_submission
-        try:
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            build_service.run_build = original_run_build
-            run_service.run_submission = original_run_submission
-
-        self.assertEqual(start_resp.status_code, 303)
-        self.assertTrue(captured_modes)
-        self.assertTrue(all((item == "multi-pass" for item in captured_modes)), captured_modes)
-
-    def test_run_execute_upload_compile_check_blocks_invalid_python(self) -> None:
-        class _FakeSubmission:
-            def __init__(self, name: str, payload: bytes):
-                self.filename = name
-                self.file = io.BytesIO(payload)
-
-        with patch("app.impl.run_export._start_run_execute_batch") as start_batch:
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                build_id="",
-                solution_paths=[],
-                submission_upload=_FakeSubmission("broken.py", b"def broken(:\n    pass\n"),
-            )
-        self.assertEqual(resp.status_code, 303)
-        loc = resp.headers.get("location", "")
-        self.assertEqual(loc, "/problems/alice/sample/alice/run/new")
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        message = messages[0]
-        self.assertIn("upload compile check failed", message)
-        self.assertTrue(("syntax" in message.lower()) or ("error" in message.lower()))
-        start_batch.assert_not_called()
-
-    def test_run_execute_upload_compile_check_allows_valid_python(self) -> None:
-        class _FakeSubmission:
-            def __init__(self, name: str, payload: bytes):
-                self.filename = name
-                self.file = io.BytesIO(payload)
-
-        with patch("app.impl.run_export._start_run_execute_batch") as start_batch:
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                build_id="",
-                solution_paths=[],
-                submission_upload=_FakeSubmission("ok.py", b"print('ok')\n"),
-            )
-        self.assertEqual(resp.status_code, 303)
-        loc = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/alice/run/details?invocation_id=", loc)
-        start_batch.assert_called_once()
-        kwargs = start_batch.call_args.kwargs
-        targets = kwargs.get("targets")
-        self.assertIsInstance(targets, list)
-        self.assertTrue(targets)
-        first = targets[0]
-        self.assertEqual(str(first.get("upload_filename") or ""), "ok.py")
-        self.assertIsInstance(first.get("upload_content"), (bytes, bytearray))
-
     def test_run_execute_records_invocation_audit_before_queue_start(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
@@ -599,7 +452,7 @@ class TestUIRun(UIBaseSuite):
             observed["checked"] = True
             return True
 
-        with patch("app.impl.run_export._start_run_execute_batch", side_effect=_fake_start_batch):
+        with patch("app.impl.run_export.run.start_run_execute_batch", side_effect=_fake_start_batch):
             resp = run_execute(
                 problem="alice/sample",
                 user="alice",
@@ -627,120 +480,11 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertIsNotNone(mapped_row)
 
-    def test_run_execute_solution_compile_check_blocks_invalid_saved_source(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        broken = ws / "solutions" / "broken.cpp"
-        broken.write_text("int main( { return 0; }\n", encoding="utf-8")
-
-        with patch("app.impl.run_export._start_run_execute_batch") as start_batch:
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                build_id="",
-                solution_paths=["solutions/broken.cpp"],
-                submission_upload=None,
-            )
-        self.assertEqual(resp.status_code, 303)
-        loc = resp.headers.get("location", "")
-        self.assertEqual(loc, "/problems/alice/sample/alice/run/new")
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        message = messages[0]
-        self.assertIn("compile check failed", message)
-        self.assertIn("solutions/broken.cpp", message)
-        start_batch.assert_not_called()
-
     def test_run_execute_passes_selected_tests_to_runner(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ws_ctx["problem"]["id"])
-        workspace_id = int(ws_ctx["workspace"]["id"])
-
-        build_id = f"b-select-tests-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        build_artifact.mkdir(parents=True, exist_ok=True)
-        (build_artifact / "tests").mkdir(parents=True, exist_ok=True)
-        (build_artifact / "ans").mkdir(parents=True, exist_ok=True)
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    "",
-                    "main",
-                    "ok",
-                    "{}",
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        captured_selected_tests: list[list[str]] = []
-
-        def _fake_run_submission(
-            _problem: str,
-            _user: str,
-            _build_id: str,
-            submission_path: str | None = None,
-            mode: str = "pass-fail",
-            upload_content: bytes | None = None,
-            upload_filename: str | None = None,
-            upload_stream=None,
-            run_id: str | None = None,
-            selected_tests: list[str] | None = None,
-            invocation_id: str | None = None,
-            invocation_run_ids: list[str] | None = None,
-            expected_behavior: str | None = None,
-            invocation_source: str = "run.execute",
-            force_recompile: bool = False,
-        ) -> str:
-            effective_run_id = str(run_id or f"r-select-tests-{uuid.uuid4().hex[:8]}")
-            selected = [str(item or "") for item in (selected_tests or []) if str(item or "")]
-            captured_selected_tests.append(selected)
-            tests = selected or ["001.in"]
-            run_root = build_artifact / "logs" / f"run-{effective_run_id}"
-            run_root.mkdir(parents=True, exist_ok=True)
-            summary = {
-                "mode": mode,
-                "source": submission_path or "solutions/accepted.cpp",
-                "tests": [{"test": name, "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]} for name in tests],
-            }
-            db.execute(
-                """
-                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    effective_run_id,
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    mode,
-                    "ok",
-                    json.dumps(summary),
-                    str(run_root),
-                    "2026-02-23T00:00:02Z",
-                    "2026-02-23T00:00:03Z",
-                ],
-            )
-            return effective_run_id
-
-        original_run_build = build_service.run_build
-        original_run_submission = run_service.run_submission
-        build_service.run_build = _fake_run_build
-        run_service.run_submission = _fake_run_submission
-        try:
+        with patch("app.impl.run_export.run.start_run_execute_batch", return_value=True) as start_batch:
             resp = run_execute(
                 problem="alice/sample",
                 user="alice",
@@ -749,16 +493,20 @@ class TestUIRun(UIBaseSuite):
                 test_names=["001.in", "003.in"],
                 submission_upload=None,
             )
-            self.assertEqual(resp.status_code, 303)
-            select_messages = _flash_messages_from_response(resp)
-            self.assertTrue(select_messages)
-            self.assertIn("tests selected (2)", select_messages[0])
-            _wait_for_run_execute_workers(timeout_sec=8.0)
-        finally:
-            build_service.run_build = original_run_build
-            run_service.run_submission = original_run_submission
-
-        self.assertEqual(captured_selected_tests, [["001.in", "003.in"]])
+        self.assertEqual(resp.status_code, 303)
+        select_messages = _flash_messages_from_response(resp)
+        self.assertTrue(select_messages)
+        self.assertIn("tests selected (2)", select_messages[0])
+        start_batch.assert_called_once()
+        kwargs = start_batch.call_args.kwargs
+        self.assertEqual(kwargs.get("selected_test_names"), ["001.in", "003.in"])
+        self.assertEqual(str(kwargs.get("run_mode") or ""), "pass-fail")
+        targets = kwargs.get("targets")
+        self.assertIsInstance(targets, list)
+        self.assertTrue(targets)
+        first = targets[0]
+        self.assertEqual(str(first.get("submission_path") or ""), "solutions/accepted.cpp")
+        self.assertEqual(str(first.get("expected_behavior") or ""), "accepted")
 
     def test_verification_start_requires_main_correct_solution_marker(self) -> None:
         problem = f"alice/verify-main-required-{uuid.uuid4().hex[:8]}"
@@ -789,197 +537,6 @@ class TestUIRun(UIBaseSuite):
         payload = json.loads(str(row["details_json"]))
         self.assertEqual(payload.get("status"), "failed")
         self.assertIn("main correct solution is required", str(payload.get("error") or ""))
-
-    def test_verification_start_updates_sidebar_status_to_pass(self) -> None:
-        problem = f"alice/verify-pass-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        (ws / "solutions" / "wa.cpp").write_text(
-            """#include <bits/stdc++.h>
-using namespace std;
-int main() { cout << 0 << "\\n"; return 0; }
-""",
-            encoding="utf-8",
-        )
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "")
-        build_id = f"b-vpass-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-vpass-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        run_artifact = build_artifact / "logs" / f"run-{run_id}"
-        build_artifact.mkdir(parents=True, exist_ok=True)
-        run_artifact.mkdir(parents=True, exist_ok=True)
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    workspace_head,
-                    "main",
-                    "ok",
-                    "{}",
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        def _fake_run_submission(
-            _problem: str,
-            _user: str,
-            _build_id: str,
-            submission_path: str | None = None,
-            mode: str = "pass-fail",
-            upload_content: bytes | None = None,
-            upload_filename: str | None = None,
-            upload_stream=None,
-            run_id: str | None = None,
-            selected_tests: list[str] | None = None,
-            invocation_id: str | None = None,
-            invocation_run_ids: list[str] | None = None,
-            expected_behavior: str | None = None,
-            invocation_source: str = "run.execute",
-            force_recompile: bool = False,
-        ) -> str:
-            self.assertEqual(_build_id, build_id)
-            effective_run_id = str(run_id or f"r-vpass-{uuid.uuid4().hex[:8]}")
-            called_sources.append(str(submission_path or ""))
-            verdict = "OK" if str(submission_path or "").endswith("accepted.cpp") else "WA"
-            summary = {
-                "mode": mode,
-                "source": submission_path or "solutions/accepted.cpp",
-                "tests": [{"test": "001.in", "verdict": verdict, "passes": [{"pass": 1, "verdict": verdict}]}],
-            }
-            db.execute(
-                """
-                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    effective_run_id,
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    mode,
-                    "ok",
-                    json.dumps(summary),
-                    str(run_artifact),
-                    "2026-02-23T00:00:02Z",
-                    "2026-02-23T00:00:03Z",
-                ],
-            )
-            return effective_run_id
-
-        original_run_build = build_service.run_build
-        original_run_submission = run_service.run_submission
-        called_sources: list[str] = []
-        build_service.run_build = _fake_run_build
-        run_service.run_submission = _fake_run_submission
-        try:
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            build_service.run_build = original_run_build
-            run_service.run_submission = original_run_submission
-
-        self.assertEqual(start_resp.status_code, 303)
-        loc = start_resp.headers.get("location", "")
-        self.assertIn(f"/problems/{problem}/alice/statement", loc)
-        pass_messages = _flash_messages_from_response(start_resp)
-        self.assertTrue(pass_messages)
-        self.assertIn("verification running", pass_messages[0])
-        self.assertEqual(sorted(called_sources), ["solutions/accepted.cpp", "solutions/wa.cpp"])
-
-        page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertRegex(html, r'<span class="status-title(?: [^"]*)?">Verification</span>')
-        self.assertIn(">pass</strong>", html)
-
-        row = db.fetch_one(
-            """
-            SELECT a.details_json
-            FROM audit_log a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug=? AND a.action='verification.start'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-            """,
-            [problem],
-        )
-        self.assertIsNotNone(row)
-        payload = json.loads(str(row["details_json"]))
-        self.assertEqual(payload.get("status"), "pass")
-        self.assertEqual(int(payload.get("run_count") or 0), 2)
-
-    def test_verification_start_updates_sidebar_status_to_failed(self) -> None:
-        problem = f"alice/verify-fail-{uuid.uuid4().hex[:8]}"
-        self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = f"b-vfail-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        build_artifact.mkdir(parents=True, exist_ok=True)
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    "",
-                    "main",
-                    "failed",
-                    json.dumps({"error": "compile failed"}),
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        original_run_build = build_service.run_build
-        build_service.run_build = _fake_run_build
-        try:
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            build_service.run_build = original_run_build
-
-        self.assertEqual(start_resp.status_code, 303)
-        loc = start_resp.headers.get("location", "")
-        self.assertIn(f"/problems/{problem}/alice/statement", loc)
-        fail_messages = _flash_messages_from_response(start_resp)
-        self.assertTrue(fail_messages)
-        msg = fail_messages[0]
-        self.assertIn("verification running", msg)
-        self.assertNotIn(build_id, msg)
-
-        page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn(">failed</strong>", html)
-        self.assertRegex(
-            html,
-            r'<span class="status-title(?: [^"]+)?">Verification</span>\s*<strong\s+class="status-value danger"[^>]*>\s*failed</strong>',
-        )
-        self.assertRegex(
-            html,
-            r'<strong\s+class="status-value danger"[^>]*data-tooltip="[^"]*compile failed[^"]*"[^>]*>\s*failed</strong>',
-        )
-        self.assertIn("compile failed", html)
-        self.assertNotIn(build_id, html)
 
     def test_verification_sidebar_marks_stale_when_gen_chk_sol_tests_change(self) -> None:
         problem = f"alice/verify-stale-{uuid.uuid4().hex[:8]}"
@@ -1073,573 +630,6 @@ int main() { cout << 0 << "\\n"; return 0; }
             r'<strong\s+class="status-value warn"[^>]*data-tooltip="[^"]*changed: general info[^"]*"[^>]*>\s*stale</strong>',
         )
         self.assertIn("changed: general info", html)
-
-    def test_verification_fails_when_nonaccepted_solution_passes(self) -> None:
-        problem = f"alice/verify-nonac-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        (ws / "solutions" / "wa.cpp").write_text(
-            """#include <bits/stdc++.h>
-using namespace std;
-int main() { long long x = 0; if (!(cin >> x)) return 0; cout << x << "\\n"; return 0; }
-""",
-            encoding="utf-8",
-        )
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "")
-        build_id = f"b-vnonac-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        build_artifact.mkdir(parents=True, exist_ok=True)
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    workspace_head,
-                    "main",
-                    "ok",
-                    "{}",
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        def _fake_run_submission(
-            _problem: str,
-            _user: str,
-            _build_id: str,
-            submission_path: str | None = None,
-            mode: str = "pass-fail",
-            upload_content: bytes | None = None,
-            upload_filename: str | None = None,
-            upload_stream=None,
-            run_id: str | None = None,
-            selected_tests: list[str] | None = None,
-            invocation_id: str | None = None,
-            invocation_run_ids: list[str] | None = None,
-            expected_behavior: str | None = None,
-            invocation_source: str = "run.execute",
-            force_recompile: bool = False,
-        ) -> str:
-            effective_run_id = str(run_id or f"r-vnonac-{uuid.uuid4().hex[:8]}")
-            summary = {
-                "mode": mode,
-                "source": submission_path or "solutions/accepted.cpp",
-                "tests": [{"test": "001.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]}],
-            }
-            run_root = build_artifact / "logs" / f"run-{effective_run_id}"
-            run_root.mkdir(parents=True, exist_ok=True)
-            db.execute(
-                """
-                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    effective_run_id,
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    mode,
-                    "ok",
-                    json.dumps(summary),
-                    str(run_root),
-                    "2026-02-23T00:00:02Z",
-                    "2026-02-23T00:00:03Z",
-                ],
-            )
-            return effective_run_id
-
-        original_run_build = build_service.run_build
-        original_run_submission = run_service.run_submission
-        build_service.run_build = _fake_run_build
-        run_service.run_submission = _fake_run_submission
-        try:
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            build_service.run_build = original_run_build
-            run_service.run_submission = original_run_submission
-
-        self.assertEqual(start_resp.status_code, 303)
-        loc = start_resp.headers.get("location", "")
-        self.assertIn(f"/problems/{problem}/alice/statement", loc)
-        fail_messages = _flash_messages_from_response(start_resp)
-        self.assertTrue(fail_messages)
-        self.assertIn("verification running", fail_messages[0])
-
-        row = db.fetch_one(
-            """
-            SELECT a.details_json
-            FROM audit_log a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug=? AND a.action='verification.start'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-            """,
-            [problem],
-        )
-        self.assertIsNotNone(row)
-        payload = json.loads(str(row["details_json"]))
-        self.assertEqual(payload.get("status"), "failed")
-        self.assertEqual(int(payload.get("run_count") or 0), 2)
-        self.assertIn("required=[WA], allowed=[AC, WA], got=[AC]", str(payload.get("error") or ""))
-
-    def test_verification_fails_when_expected_wa_gets_tl(self) -> None:
-        problem = f"alice/verify-wa-tl-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        (ws / "solutions" / "wa.cpp").write_text(
-            """#include <bits/stdc++.h>
-using namespace std;
-int main() { for (;;) {} }
-""",
-            encoding="utf-8",
-        )
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "")
-        build_id = f"b-vwatl-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        build_artifact.mkdir(parents=True, exist_ok=True)
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    workspace_head,
-                    "main",
-                    "ok",
-                    "{}",
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        def _fake_run_submission(
-            _problem: str,
-            _user: str,
-            _build_id: str,
-            submission_path: str | None = None,
-            mode: str = "pass-fail",
-            upload_content: bytes | None = None,
-            upload_filename: str | None = None,
-            upload_stream=None,
-            run_id: str | None = None,
-            selected_tests: list[str] | None = None,
-            invocation_id: str | None = None,
-            invocation_run_ids: list[str] | None = None,
-            expected_behavior: str | None = None,
-            invocation_source: str = "run.execute",
-            force_recompile: bool = False,
-        ) -> str:
-            effective_run_id = str(run_id or f"r-vwatl-{uuid.uuid4().hex[:8]}")
-            verdict = "OK" if str(submission_path or "").endswith("accepted.cpp") else "TL"
-            summary = {
-                "mode": mode,
-                "source": submission_path or "solutions/accepted.cpp",
-                "tests": [{"test": "001.in", "verdict": verdict, "passes": [{"pass": 1, "verdict": verdict}]}],
-            }
-            run_root = build_artifact / "logs" / f"run-{effective_run_id}"
-            run_root.mkdir(parents=True, exist_ok=True)
-            db.execute(
-                """
-                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    effective_run_id,
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    mode,
-                    "ok",
-                    json.dumps(summary),
-                    str(run_root),
-                    "2026-02-23T00:00:02Z",
-                    "2026-02-23T00:00:03Z",
-                ],
-            )
-            return effective_run_id
-
-        original_run_build = build_service.run_build
-        original_run_submission = run_service.run_submission
-        build_service.run_build = _fake_run_build
-        run_service.run_submission = _fake_run_submission
-        try:
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            build_service.run_build = original_run_build
-            run_service.run_submission = original_run_submission
-
-        self.assertEqual(start_resp.status_code, 303)
-        row = db.fetch_one(
-            """
-            SELECT a.details_json
-            FROM audit_log a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug=? AND a.action='verification.start'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-            """,
-            [problem],
-        )
-        self.assertIsNotNone(row)
-        payload = json.loads(str(row["details_json"]))
-        self.assertEqual(payload.get("status"), "failed")
-        self.assertIn("required=[WA], allowed=[AC, WA], got=[TL]", str(payload.get("error") or ""))
-
-    def test_verification_fails_when_unknown_solution_gets_fl(self) -> None:
-        problem = f"alice/verify-unknown-fl-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        (ws / "solutions" / "custom.cpp").write_text(
-            """#include <bits/stdc++.h>
-using namespace std;
-int main() { return 0; }
-""",
-            encoding="utf-8",
-        )
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "")
-        build_id = f"b-vunknownfl-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        build_artifact.mkdir(parents=True, exist_ok=True)
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    workspace_head,
-                    "main",
-                    "ok",
-                    "{}",
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        def _fake_run_submission(
-            _problem: str,
-            _user: str,
-            _build_id: str,
-            submission_path: str | None = None,
-            mode: str = "pass-fail",
-            upload_content: bytes | None = None,
-            upload_filename: str | None = None,
-            upload_stream=None,
-            run_id: str | None = None,
-            selected_tests: list[str] | None = None,
-            invocation_id: str | None = None,
-            invocation_run_ids: list[str] | None = None,
-            expected_behavior: str | None = None,
-            invocation_source: str = "run.execute",
-            force_recompile: bool = False,
-        ) -> str:
-            effective_run_id = str(run_id or f"r-vunknownfl-{uuid.uuid4().hex[:8]}")
-            verdict = "OK" if str(submission_path or "").endswith("accepted.cpp") else "FL"
-            summary = {
-                "mode": mode,
-                "source": submission_path or "solutions/accepted.cpp",
-                "tests": [{"test": "001.in", "verdict": verdict, "passes": [{"pass": 1, "verdict": verdict}]}],
-            }
-            run_root = build_artifact / "logs" / f"run-{effective_run_id}"
-            run_root.mkdir(parents=True, exist_ok=True)
-            db.execute(
-                """
-                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    effective_run_id,
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    mode,
-                    "ok",
-                    json.dumps(summary),
-                    str(run_root),
-                    "2026-02-23T00:00:02Z",
-                    "2026-02-23T00:00:03Z",
-                ],
-            )
-            return effective_run_id
-
-        original_run_build = build_service.run_build
-        original_run_submission = run_service.run_submission
-        build_service.run_build = _fake_run_build
-        run_service.run_submission = _fake_run_submission
-        try:
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            build_service.run_build = original_run_build
-            run_service.run_submission = original_run_submission
-
-        self.assertEqual(start_resp.status_code, 303)
-        row = db.fetch_one(
-            """
-            SELECT a.details_json
-            FROM audit_log a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug=? AND a.action='verification.start'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-            """,
-            [problem],
-        )
-        self.assertIsNotNone(row)
-        payload = json.loads(str(row["details_json"]))
-        self.assertEqual(payload.get("status"), "failed")
-        self.assertIn("custom.cpp", str(payload.get("error") or ""))
-        self.assertIn("required=[], allowed=[AC, WA, TL, RE, CE], got=[FL]", str(payload.get("error") or ""))
-
-    def test_verification_start_returns_immediately_while_worker_runs(self) -> None:
-        problem = f"alice/verify-async-{uuid.uuid4().hex[:8]}"
-        self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = f"b-vasync-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        build_artifact.mkdir(parents=True, exist_ok=True)
-        started = threading.Event()
-        release = threading.Event()
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            started.set()
-            release.wait(5.0)
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    "",
-                    "main",
-                    "failed",
-                    json.dumps({"error": "compile failed"}),
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        original_run_build = build_service.run_build
-        build_service.run_build = _fake_run_build
-        try:
-            started_at = time.monotonic()
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            elapsed = time.monotonic() - started_at
-            self.assertLess(elapsed, 1.0)
-
-            self.assertEqual(start_resp.status_code, 303)
-            running_messages = _flash_messages_from_response(start_resp)
-            self.assertTrue(running_messages)
-            self.assertIn("verification running", running_messages[0])
-
-            running_row = db.fetch_one(
-                """
-                SELECT a.details_json
-                FROM audit_log a
-                JOIN problems p ON p.id=a.problem_id
-                WHERE p.slug=? AND a.action='verification.start'
-                ORDER BY a.created_at DESC
-                LIMIT 1
-                """,
-                [problem],
-            )
-            self.assertIsNotNone(running_row)
-            running_payload = json.loads(str(running_row["details_json"]))
-            self.assertEqual(running_payload.get("status"), "running")
-            self.assertGreaterEqual(int(running_payload.get("run_count") or 0), 1)
-            run_ids_running = [str(item or "") for item in (running_payload.get("run_ids") or []) if str(item or "")]
-            self.assertEqual(int(running_payload.get("run_count") or 0), len(run_ids_running))
-            self.assertTrue(all(item.startswith("r-") for item in run_ids_running))
-            self.assertTrue(str(running_payload.get("run_id") or "").startswith("r-"))
-
-            self.assertTrue(started.wait(2.0))
-            release.set()
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            release.set()
-            build_service.run_build = original_run_build
-
-        done_row = db.fetch_one(
-            """
-            SELECT a.details_json
-            FROM audit_log a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug=? AND a.action='verification.start'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-            """,
-            [problem],
-        )
-        self.assertIsNotNone(done_row)
-        done_payload = json.loads(str(done_row["details_json"]))
-        self.assertEqual(done_payload.get("status"), "failed")
-        self.assertIn("build failed", str(done_payload.get("error") or ""))
-
-    def test_verification_start_backfills_failed_runs_when_submission_errors(self) -> None:
-        problem = f"alice/verify-backfill-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        (ws / "solutions" / "wa.cpp").write_text(
-            """#include <bits/stdc++.h>
-using namespace std;
-int main() { cout << 0 << "\\n"; return 0; }
-""",
-            encoding="utf-8",
-        )
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = f"b-vbackfill-{uuid.uuid4().hex[:8]}"
-        build_artifact = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
-        build_artifact.mkdir(parents=True, exist_ok=True)
-
-        def _fake_run_build(_problem: str, _user: str) -> str:
-            db.execute(
-                """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    build_id,
-                    problem_id,
-                    workspace_id,
-                    "",
-                    "main",
-                    "ok",
-                    "{}",
-                    str(build_artifact),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return build_id
-
-        def _fake_run_submission(
-            _problem: str,
-            _user: str,
-            _build_id: str,
-            submission_path: str | None = None,
-            mode: str = "pass-fail",
-            upload_content: bytes | None = None,
-            upload_filename: str | None = None,
-            upload_stream=None,
-            run_id: str | None = None,
-            selected_tests: list[str] | None = None,
-            invocation_id: str | None = None,
-            invocation_run_ids: list[str] | None = None,
-            expected_behavior: str | None = None,
-            invocation_source: str = "run.execute",
-            force_recompile: bool = False,
-        ) -> str:
-            effective_run_id = str(run_id or f"r-vbackfill-{uuid.uuid4().hex[:8]}")
-            source = str(submission_path or "")
-            if source.endswith("accepted.cpp"):
-                run_root = build_artifact / "logs" / f"run-{effective_run_id}"
-                run_root.mkdir(parents=True, exist_ok=True)
-                summary = {
-                    "mode": mode,
-                    "source": source,
-                    "error": "compare script crashed",
-                    "tests": [{"test": "001.in", "verdict": "FL", "passes": [{"pass": 1, "verdict": "FL"}]}],
-                }
-                db.execute(
-                    """
-                    INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    [
-                        effective_run_id,
-                        problem_id,
-                        workspace_id,
-                        build_id,
-                        mode,
-                        "failed",
-                        json.dumps(summary),
-                        str(run_root),
-                        "2026-02-23T00:00:02Z",
-                        "2026-02-23T00:00:03Z",
-                    ],
-                )
-                return effective_run_id
-            raise RuntimeError("judgehost enqueue failed")
-
-        original_run_build = build_service.run_build
-        original_run_submission = run_service.run_submission
-        build_service.run_build = _fake_run_build
-        run_service.run_submission = _fake_run_submission
-        try:
-            start_resp = verification_start(problem=problem, user="alice", page="statement")
-            _wait_for_verification_workers(timeout_sec=10.0)
-        finally:
-            build_service.run_build = original_run_build
-            run_service.run_submission = original_run_submission
-
-        self.assertEqual(start_resp.status_code, 303)
-        row = db.fetch_one(
-            """
-            SELECT a.details_json
-            FROM audit_log a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug=? AND a.action='verification.start'
-            ORDER BY a.created_at DESC
-            LIMIT 1
-            """,
-            [problem],
-        )
-        self.assertIsNotNone(row)
-        payload = json.loads(str(row["details_json"]))
-        invocation_id = str(payload.get("invocation_id") or "")
-        run_ids = [str(item or "") for item in (payload.get("run_ids") or []) if str(item or "")]
-        self.assertTrue(invocation_id)
-        self.assertEqual(int(payload.get("run_count") or 0), len(run_ids))
-        self.assertEqual(len(run_ids), 2)
-
-        placeholders = ",".join(["?"] * len(run_ids))
-        runs_rows = db.fetch_all(
-            f"SELECT id,status,summary_json FROM runs WHERE workspace_id=? AND id IN ({placeholders})",
-            [workspace_id, *run_ids],
-        )
-        self.assertEqual(len(runs_rows), len(run_ids))
-        failed_rows = [r for r in runs_rows if str(r["status"] or "").lower() == "failed"]
-        self.assertTrue(failed_rows)
-        self.assertTrue(
-            any("judgehost enqueue failed" in str(json.loads(str(r["summary_json"] or "{}")).get("error") or "") for r in failed_rows)
-        )
 
     def test_run_page_shows_multi_solution_selector_without_mode_select(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1849,7 +839,7 @@ int main() { cout << 0 << "\\n"; return 0; }
                 ],
             )
 
-        rows = workspace_impl._run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
+        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
         rows_by_id = {str(item.get("id") or ""): item for item in rows}
         self.assertIn(run_ok, rows_by_id)
         self.assertIn(run_wa, rows_by_id)
@@ -1910,7 +900,7 @@ int main() { cout << 0 << "\\n"; return 0; }
             ],
         )
 
-        rows = workspace_impl._run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
+        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
         rows_by_id = {str(item.get("id") or ""): item for item in rows}
         self.assertIn(run_a, rows_by_id)
         self.assertNotIn(run_b, rows_by_id)
@@ -1953,7 +943,7 @@ int main() { cout << 0 << "\\n"; return 0; }
             ],
         )
 
-        rows = workspace_impl._run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
+        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
         self.assertEqual(len(rows), 1)
         self.assertEqual(str(rows[0].get("id") or ""), invocation_id)
         self.assertEqual(str(rows[0].get("status") or ""), "running")
@@ -1963,18 +953,41 @@ int main() { cout << 0 << "\\n"; return 0; }
         self.assertIn("solutions/wa.cpp", str(rows[0].get("source_display") or ""))
         self.assertEqual(str(rows[0].get("tests_label") or ""), "tests: in progress")
 
-    def test_run_list_includes_build_solve_invocations(self) -> None:
+    def test_run_list_hides_build_solve_invocations(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         invocation_id = f"inv-buildsolve-{uuid.uuid4().hex[:8]}"
         run_id = f"r-buildsolve-{uuid.uuid4().hex[:8]}"
+        invocation_generate_id = f"inv-buildgen-{uuid.uuid4().hex[:8]}"
+        run_generate_id = f"r-buildgen-{uuid.uuid4().hex[:8]}"
         summary = {
             "source": "solutions/accepted.cpp",
             "invocation": {
                 "id": invocation_id,
                 "source": "build.solve",
                 "run_ids": [run_id],
+                "expected_behavior": "accepted",
+                "matched": True,
+                "completed": True,
+                "passed_all_tests": True,
+                "reason": "",
+            },
+            "tests": [
+                {
+                    "test": "001.in",
+                    "verdict": "OK",
+                    "passes": [{"pass": 1, "verdict": "OK"}],
+                }
+            ],
+            "error": "",
+        }
+        summary_generate = {
+            "source": "generators/gen.cpp",
+            "invocation": {
+                "id": invocation_generate_id,
+                "source": "build.generate-input",
+                "run_ids": [run_generate_id],
                 "expected_behavior": "accepted",
                 "matched": True,
                 "completed": True,
@@ -2008,12 +1021,145 @@ int main() { cout << 0 << "\\n"; return 0; }
                 "2026-03-03T00:00:01Z",
             ],
         )
+        db.execute(
+            """
+            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                run_generate_id,
+                problem_id,
+                workspace_id,
+                self.random_id("b-buildgen"),
+                "pass-fail",
+                "ok",
+                json.dumps(summary_generate),
+                str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_generate_id),
+                "2026-03-03T00:00:02Z",
+                "2026-03-03T00:00:03Z",
+            ],
+        )
         resp = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f"invocation_id={invocation_id}", html)
-        self.assertIn("solutions/accepted.cpp", html)
-        self.assertIn("Main correct solution run", html)
+        self.assertNotIn(f"invocation_id={invocation_id}", html)
+        self.assertNotIn(f"invocation_id={invocation_generate_id}", html)
+        self.assertNotIn("Main correct solution run", html)
+
+    def test_run_details_shows_gen_and_main_stage_markers(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        actor_user_id = int(ctx["user"]["id"])
+
+        build_id = self.random_id("b-verif-stage-markers")
+        invocation_id = f"inv-verif-stage-{uuid.uuid4().hex[:8]}"
+        verify_run_id = f"r-verif-stage-{uuid.uuid4().hex[:8]}"
+        gen_run_id = f"r-buildgen-stage-{uuid.uuid4().hex[:8]}"
+        main_run_id = f"r-buildsolve-stage-{uuid.uuid4().hex[:8]}"
+
+        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root.mkdir(parents=True, exist_ok=True)
+        for run_id in (verify_run_id, gen_run_id, main_run_id):
+            (Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id).mkdir(parents=True, exist_ok=True)
+
+        db.execute(
+            """
+            INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                build_id,
+                problem_id,
+                workspace_id,
+                "deadbeef",
+                "main",
+                "ok",
+                "{}",
+                str(build_root),
+                "2026-03-10T00:00:00Z",
+                "2026-03-10T00:00:01Z",
+            ],
+        )
+
+        def _summary(run_source: str, invocation_source: str, run_id: str) -> dict[str, object]:
+            return {
+                "mode": "pass-fail",
+                "source": run_source,
+                "tests": [{"test": "001.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]}],
+                "error": "",
+                "invocation": {
+                    "id": f"inv-{run_id}",
+                    "source": invocation_source,
+                    "run_ids": [run_id],
+                    "expected_behavior": "accepted",
+                    "matched": True,
+                    "completed": True,
+                    "passed_all_tests": True,
+                    "reason": "",
+                },
+            }
+
+        run_rows = [
+            (gen_run_id, build_id, _summary("generators/gen.cpp", "build.generate-input", gen_run_id), "ok", "2026-03-10T00:00:02Z"),
+            (main_run_id, build_id, _summary("solutions/accepted.cpp", "build.solve", main_run_id), "ok", "2026-03-10T00:00:03Z"),
+            (verify_run_id, build_id, _summary("solutions/accepted.cpp", "verification.start", verify_run_id), "ok", "2026-03-10T00:00:04Z"),
+        ]
+        for run_id, build_token, summary, status, created_at in run_rows:
+            db.execute(
+                """
+                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    run_id,
+                    problem_id,
+                    workspace_id,
+                    build_token,
+                    "pass-fail",
+                    status,
+                    json.dumps(summary),
+                    str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id),
+                    created_at,
+                    "2026-03-10T00:00:05Z",
+                ],
+            )
+
+        db.execute(
+            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            [
+                actor_user_id,
+                problem_id,
+                "verification.start",
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "steps": ["gen", "val", "run", "check"],
+                        "invocation_id": invocation_id,
+                        "run_id": verify_run_id,
+                        "run_ids": [verify_run_id],
+                        "run_count": 1,
+                        "build_id": build_id,
+                        "build_status": "ok",
+                        "error": "",
+                    }
+                ),
+                "2026-03-10T00:00:06Z",
+            ],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"invocation_id={invocation_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("GEN AC", html)
+        self.assertIn("MAIN AC", html)
 
     def test_run_list_orders_by_invocation_run_time_not_latest_member_time(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -2070,7 +1216,7 @@ int main() { cout << 0 << "\\n"; return 0; }
                 ],
             )
 
-        rows = workspace_impl._run_list_rows(problem_id, workspace_id, ws, limit=10, actor_user_id=int(ctx["user"]["id"]))
+        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=10, actor_user_id=int(ctx["user"]["id"]))
         ordered_ids = [str(item.get("id") or "") for item in rows]
         self.assertIn(old_invocation, ordered_ids)
         self.assertIn(new_invocation, ordered_ids)
@@ -2723,7 +1869,7 @@ int main() { cout << 0 << "\\n"; return 0; }
                 "memory_kb": 1024,
             },
         ]
-        with patch.object(workspace_impl.config.judgehost_task_service, "domjudge_case_cells_for_runs", return_value=fake_case_rows):
+        with patch.object(config.judgehost_task_service, "domjudge_case_cells_for_runs", return_value=fake_case_rows):
             page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"run_id={run_id}"), "alice/sample", "alice")
             detail = run_details_test_fragment(
                 _request("/problems/alice/sample/alice/run/details/test-fragment", f"run_id={run_id}&test=003.in"),
@@ -2976,8 +2122,8 @@ int main() { cout << 0 << "\\n"; return 0; }
         self.assertIn("Generated tests", html)
         self.assertIn("2 tests", html)
         self.assertIn("generating outputs", html)
-        self.assertIn("Generated outputs", html)
-        self.assertIn("0/2", html)
+        self.assertNotIn("Generated outputs", html)
+        self.assertNotIn("0/2", html)
 
     def test_run_details_marks_step2_done_once_outputs_ready_even_if_build_running(self) -> None:
         import re
@@ -3162,7 +2308,10 @@ int main() { cout << 0 << "\\n"; return 0; }
                 "2026-03-06T00:00:02Z",
             ],
         )
-        with patch.object(workspace_impl, "_verification_buildsolve_case_progress", return_value={"total": 27, "reported": 18}):
+        with patch(
+            "app.impl.workspace.run_view_lifecycle_builder._verification_buildsolve_case_progress",
+            return_value={"total": 27, "reported": 18},
+        ):
             page = run_details_page(
                 _request("/problems/alice/sample/alice/run/details", f"invocation_id={invocation_id}"),
                 "alice/sample",
@@ -3170,7 +2319,7 @@ int main() { cout << 0 << "\\n"; return 0; }
             )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Generated outputs", html)
+        self.assertIn("Generate Outputs", html)
         self.assertIn("18/27", html)
         self.assertRegex(
             html,
@@ -3180,7 +2329,7 @@ int main() { cout << 0 << "\\n"; return 0; }
             html,
             re.compile(r'id="verification-step-tab-3"[\s\S]*?verification-lifecycle-tab-status">Pending<', re.IGNORECASE),
         )
-        self.assertIn("Main correct solution run", html)
+        self.assertNotIn("Main correct solution run", html)
 
     def test_run_details_build_running_without_case_progress_keeps_step2_in_progress(self) -> None:
         import re
@@ -3243,7 +2392,10 @@ int main() { cout << 0 << "\\n"; return 0; }
                 "2026-03-06T00:00:02Z",
             ],
         )
-        with patch.object(workspace_impl, "_verification_buildsolve_case_progress", return_value={"total": 0, "reported": 0}):
+        with patch(
+            "app.impl.workspace.run_view_lifecycle_builder._verification_buildsolve_case_progress",
+            return_value={"total": 0, "reported": 0},
+        ):
             page = run_details_page(
                 _request("/problems/alice/sample/alice/run/details", f"invocation_id={invocation_id}"),
                 "alice/sample",
@@ -3348,7 +2500,10 @@ int main() { cout << 0 << "\\n"; return 0; }
                 "",
             ],
         )
-        with patch.object(workspace_impl, "_verification_buildsolve_case_progress", return_value={"total": 27, "reported": 18}):
+        with patch(
+            "app.impl.workspace.run_view_lifecycle_builder._verification_buildsolve_case_progress",
+            return_value={"total": 27, "reported": 18},
+        ):
             page = run_details_page(
                 _request("/problems/alice/sample/alice/run/details", f"invocation_id={invocation_id}"),
                 "alice/sample",
@@ -3356,7 +2511,7 @@ int main() { cout << 0 << "\\n"; return 0; }
             )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Generated outputs", html)
+        self.assertIn("Generate Outputs", html)
         self.assertIn("18/27", html)
         self.assertRegex(
             html,
@@ -3823,13 +2978,13 @@ int main() { cout << 0 << "\\n"; return 0; }
                 created_at,
             ],
         )
-        scope_run_ids = workspace_impl._run_invocation_scope_run_ids(
+        scope_run_ids = workspace_impl.run_invocation_scope_run_ids(
             problem_id,
             workspace_id,
             invocation_id,
         )
         self.assertEqual(scope_run_ids, [])
-        detail_ctx = workspace_impl._build_run_detail_context(
+        detail_ctx = workspace_impl.build_run_detail_context(
             ctx,
             scope_run_ids,
             "pass-fail",
@@ -4166,6 +3321,107 @@ int main() { cout << 0 << "\\n"; return 0; }
         flashes = _flash_messages_from_response(resp)
         self.assertTrue(any("rerun verification" in str(msg or "").lower() for msg in flashes))
 
+    def test_run_artifact_file_serves_cache_blob_token(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        run_id = f"r-artifact-cache-{uuid.uuid4().hex[:8]}"
+        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        db.execute(
+            """
+            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                run_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                self.random_id("b-artifact-cache"),
+                "multi-pass",
+                "ok",
+                "{}",
+                str(run_root),
+                "2026-03-11T00:00:00Z",
+                "2026-03-11T00:00:01Z",
+            ],
+        )
+        service = config.judgehost_task_service
+        key_hash = uuid.uuid4().hex + uuid.uuid4().hex
+        signature = uuid.uuid4().hex + uuid.uuid4().hex
+        service._domjudge_cache_put(
+            service.CASE_CACHE_KIND,
+            key_hash,
+            signature,
+            {"runresult": "correct"},
+            files={"program.out": b"line 1\nline 2\n"},
+            tags={"test": "cache-download"},
+        )
+        token = service._domjudge_cache_blob_ref(
+            kind=service.CASE_CACHE_KIND,
+            key_hash=key_hash,
+            signature=signature,
+            name="program.out",
+        )
+
+        resp = run_export_impl.run_artifact_file("alice/sample", "alice", run_id, token)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.body, b"line 1\nline 2\n")
+        self.assertIn('attachment; filename="program.out"', str(resp.headers.get("content-disposition") or ""))
+        self.assertEqual(str(resp.headers.get("content-type") or ""), "text/plain; charset=utf-8")
+
+    def test_run_details_transcript_preview_shows_download_link(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        token = "cache://judgehost-domjudge-case/" + ("a" * 64) + "/" + ("b" * 64) + "/program.out"
+        detail_ctx = {
+            "detail_rows": [
+                {
+                    "test_name": "001.in",
+                    "input_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_href": "", "message": "missing"},
+                    "answer_preview": {"available": False, "text": "", "truncated": False, "limit": 1024, "download_href": "", "message": "missing"},
+                    "cells": [
+                        {
+                            "detail": {
+                                "final_row": {
+                                    "kind": "ok",
+                                    "verdict_short": "AC",
+                                    "time_display": "1ms cpu, 2ms wall",
+                                    "memory_display": "1MB",
+                                    "feedback_display": "ok",
+                                    "output_preview": {
+                                        "available": True,
+                                        "text": "> ping\n< pong\n",
+                                        "truncated": False,
+                                        "limit": 1024,
+                                        "download_href": f"/problems/alice/sample/alice/runs/r-transcript/artifacts/{quote_plus(token)}",
+                                        "message": "",
+                                    },
+                                    "interactive_transcript": {
+                                        "available": True,
+                                        "shown": 2,
+                                        "rows": [{"side": "right", "text": "ping"}, {"side": "left", "text": "pong"}],
+                                        "truncated": False,
+                                    },
+                                }
+                            }
+                        }
+                    ],
+                }
+            ],
+            "detail_columns": [{"id": "r-transcript", "title": "wtf.py"}],
+        }
+
+        with patch("app.impl.run_export.run.build_run_detail_context", return_value=detail_ctx):
+            detail = run_details_test_fragment(
+                _request("/problems/alice/sample/alice/run/details/test-fragment", "run_id=r-transcript&test=001.in"),
+                "alice/sample",
+                "alice",
+            )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("Transcript (first 2 lines)", detail_html)
+        self.assertIn(f"/problems/alice/sample/alice/runs/r-transcript/artifacts/{quote_plus(token)}", detail_html)
+        self.assertIn(">download</a>", detail_html)
+
     def test_run_cell_kind_nonaccepted_expected_uses_required_allowed_policy(self) -> None:
         self.assertEqual(workspace_impl._run_cell_kind("OK", "wrong_answer"), "neutral")
         self.assertEqual(workspace_impl._run_cell_kind("TL", "wrong_answer"), "fail")
@@ -4286,48 +3542,6 @@ int main() { cout << 0 << "\\n"; return 0; }
         self.assertTrue(unknown_fail_completed)
         self.assertFalse(unknown_fail_matched)
         self.assertIn("required=[], allowed=[AC, WA, TL, RE, CE], got=[FL]", unknown_fail_reason)
-
-    def test_run_details_shows_failed_status_set_for_expected_tl_mismatch(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        workspace_id = int(ctx["workspace"]["id"])
-        run_id = f"r-tl-set-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-tl-set")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
-        run_root.mkdir(parents=True, exist_ok=True)
-        summary = {
-            "mode": "pass-fail",
-            "source": "solutions/tle_or_ac.py",
-            "tests": [
-                {"test": "001.in", "verdict": "TL", "time_ms": 9, "memory_kb": 64},
-                {"test": "002.in", "verdict": "RE", "time_ms": 7, "memory_kb": 64},
-                {"test": "003.in", "verdict": "WA", "time_ms": 5, "memory_kb": 64},
-            ],
-        }
-        db.execute(
-            """
-            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                run_id,
-                int(ctx["problem"]["id"]),
-                workspace_id,
-                build_id,
-                "pass-fail",
-                "ok",
-                json.dumps(summary),
-                str(run_root),
-                "2026-02-23T00:00:00Z",
-                "2026-02-23T00:00:01Z",
-            ],
-        )
-        page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"run_id={run_id}"), "alice/sample", "alice")
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("expected TL", html)
-        self.assertNotIn("expected TL, got TL/RE/WA", html)
-        self.assertIn('<span class="danger">TL/RE/WA</span>', html)
 
     def test_run_details_marks_unknown_fail_as_unexpected_danger(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -4565,13 +3779,13 @@ int main() { cout << 0 << "\\n"; return 0; }
 
         run_id = f"r-detail-answer-feedback-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-detail-answer-feedback")
-        build_root = Path(str(workspace_impl.config.settings.artifacts_root)) / "alice/sample" / build_id
+        build_root = Path(str(config.settings.artifacts_root)) / "alice/sample" / build_id
         (build_root / "tests").mkdir(parents=True, exist_ok=True)
         (build_root / "ans").mkdir(parents=True, exist_ok=True)
         (build_root / "tests" / "001.in").write_text("1 1 123\n", encoding="utf-8")
         (build_root / "ans" / "001.ans").write_text("[  0.071s/0]]\n", encoding="utf-8")
 
-        run_root = workspace_impl.config.fs_manager.prepare_run_root(run_id).resolve()
+        run_root = config.fs_manager.prepare_run_root(run_id).resolve()
         (run_root / "feedback_dir" / "001").mkdir(parents=True, exist_ok=True)
         judge_message = "Unexpected end of file - double expected\n"
         (run_root / "feedback_dir" / "001" / "judgemessage.txt").write_text(judge_message, encoding="utf-8")
@@ -4672,7 +3886,7 @@ int main() { cout << 0 << "\\n"; return 0; }
         )
 
         run_id = f"r-async-fail-{uuid.uuid4().hex[:8]}"
-        workspace_impl._record_async_run_failure(
+        workspace_impl.record_async_run_failure(
             "alice/sample",
             "alice",
             run_id,

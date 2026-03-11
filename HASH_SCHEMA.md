@@ -8,7 +8,7 @@ Conventions:
 - SHA-256 outputs are lowercase 64-hex strings.
 - MD5 outputs are lowercase 32-hex strings.
 
-Primary helpers live in `app/services/hashing.py`.
+Primary helpers live in `app/service/hashing.py`.
 
 ## 1) Build Ref
 
@@ -152,25 +152,41 @@ File-set integrity:
 
 Producer: `JudgehostTaskService`
 
-Case cache signature payload (`schema='v2'`):
+Case cache key/signature:
 
-- `source_hash`
-- `compile_hash`
-- `run_hash`
-- `compare_hash`
-- `compile_config_hash`
-- `run_config_hash`
-- `compare_config_hash`
-- `toolchain_cmd_digest`
+- key hash:
+  - `testcase_hash`
+  - for `build.solve` / `solve.main`: `testcase_hash = testcase_input_hash`
+  - for other tasks: `testcase_hash = sha256_hash_of_hashes([sha256(input), sha256(answer)])`
+- signature payload:
+  - `schema = "case-cache"`
+  - `source_hash`
+  - `compile_hash`
+  - `run_hash`
+  - `compare_hash`
+  - `compile_config_hash`
+  - `run_config_hash`
+  - `compare_config_hash`
+  - `toolchain_cmd_digest`
 
-Solve-output signature payload (`schema='v2'`):
+Solve-output cache key/signature:
 
-- `source_hash`
-- `compile_hash`
-- `run_hash`
-- `compile_config_hash`
-- `run_config_hash`
-- `toolchain_cmd_digest`
+- key hash:
+  - `testcase_input_hash`
+- signature payload:
+  - `schema = "solve-output-cache"`
+  - `source_hash`
+  - `compile_hash`
+  - `run_hash`
+  - `compile_config_hash`
+  - `run_config_hash`
+  - `toolchain_cmd_digest`
+
+Solve/verify answer consistency contract:
+
+- solve-main stores output cache by `(source(main), testcase_input_hash, compile/run config)`
+- solve-verify cache/shortcut requires answer consistency via `testcase_answer_hash` vs solve-main `output_hash`
+- per-test invalidation is isolated because key hash is testcase-scoped
 
 Both use `JudgeFsIndexService.signature(payload)`.
 

@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block content %}
+{% set ns = namespace(latest=None) %}
+{% set preview_nav = ctx.nav_status.get('preview', {}) if ctx.nav_status is defined else {} %}
+{% set preview_is_stale = preview_nav.get('text') == 'stale' %}
+{% if preview_id %}
+  {% for p in previews %}
+    {% if p.id == preview_id %}
+      {% set ns.latest = p %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+{% if ns.latest is none and previews %}
+  {% set ns.latest = previews[0] %}
+{% endif %}
+<h1 class="page-title">Statement</h1>
+{% include "_flash_message.html" %}
+
+<div class="grid">
+  <section>
+    <div class="statement-summary">
+      <h2 class="statement-summary-title">{{ ctx.problem.name }}</h2>
+      <div class="statement-summary-meta">
+        <div class="statement-summary-values">
+          <span class="statement-summary-chip">{{ ctx.general_cfg.time_limit_ms }}ms</span>
+          <span class="statement-summary-chip">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
+          <span class="statement-summary-chip">{{ ctx.general_cfg.mode }}</span>
+        </div>
+        <a class="linkish statement-summary-edit" href="#statement-settings-popup" data-popup-open="statement-settings-popup">Edit metadata</a>
+      </div>
+    </div>
+
+    <form
+      method="post"
+      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/save"
+      data-statement-draft-form="1"
+      data-draft-scope-problem="{{ ctx.problem.slug }}"
+      data-draft-scope-user="{{ ctx.user.username }}"
+      data-draft-scope-page="{{ return_page if return_page is defined else 'preview' }}"
+    >
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      {% for section in statement_sections %}
+      {% if section.enabled %}
+      {% set editor_height = 230 if section.key in ['input', 'output'] else 460 %}
+      <div class="statement-editor-field">
+        <div class="statement-editor-field-head">
+          <label>{{ section.label }} (<code>{{ section.path }}</code>)</label>
+          <a
+            href="#statement-draft-popup"
+            class="linkish statement-draft-inline-trigger"
+            data-popup-open="statement-draft-popup"
+            data-statement-draft-trigger="1"
+            data-draft-field="{{ section.field_name }}"
+            data-draft-label="{{ section.label }}"
+            aria-label="Open local draft history for {{ section.label }}"
+          >Draft</a>
+        </div>
+        <textarea
+          name="{{ section.field_name }}"
+          rows="12"
+          data-code-editor="1"
+          data-code-path="{{ section.path }}"
+          data-code-height="{{ editor_height }}"
+          data-code-wrap="1"
+        >{{ section.content }}</textarea>
+      </div>
+      {% if section.truncated %}
+      <p><em>{{ section.label }} text is truncated in editor (showing first {{ editor_char_limit }} chars).</em></p>
+      {% endif %}
+      {% endif %}
+      {% endfor %}
+      {% if not interaction_section_enabled %}
+      <p class="muted">Interaction Protocol section is disabled because current mode is <code>{{ statement_mode }}</code>. Switch mode to <code>interactive</code> or <code>multi-pass</code> to edit it.</p>
+      {% endif %}
+      <button type="submit">Save Statement</button>
+    </form>
+  </section>
+  <section>
+    <h2>Preview Output</h2>
+    {% if not (preview_id and pdf_exists) %}
+    <form
+      method="post"
+      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run"
+      data-preview-compile-form="1"
+    >
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <button class="primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
+    </form>
+    {% endif %}
+    {% if preview_compile_failed %}
+    <div class="flash">
+      <strong>Compile failed.</strong>
+      {% if compile_error_summary %}
+      <span>{{ compile_error_summary }}</span>
+      {% endif %}
+      {% if latex_log_href %}
+      <a href="{{ latex_log_href }}" target="_blank" rel="noopener">Open full latex.log</a>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if preview_id %}
+    {% if pdf_exists %}
+    {% if preview_is_stale %}
+    <p class="muted">
+      PDF is ready, but statement is stale (sources have changed).
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+    </p>
+    {% else %}
+    <p class="muted">
+      PDF is ready.
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+    </p>
+    {% endif %}
+    <iframe class="pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf"></iframe>
+    <form
+      method="post"
+      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run"
+      data-preview-compile-form="1"
+    >
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <button class="primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
+    </form>
+    {% else %}
+    <p class="muted">Latest preview has no PDF output.</p>
+    {% endif %}
+    {% if log_refs %}
+    <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
+      <summary>Log References ({{ log_refs_total }})</summary>
+      {% if log_refs_truncated %}
+      <p><em>Showing first {{ log_refs_limit }} references ({{ log_refs_total }} total).</em></p>
+      {% endif %}
+      <ul>
+        {% for r in log_refs %}
+        <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ r.file }}&line={{ r.line }}&src=statement&sid={{ preview_id }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {% if log %}
+    <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
+      <summary>latex.log</summary>
+      {% if log_truncated %}
+      <p><em>Showing first {{ log_char_limit }} characters.</em></p>
+      {% endif %}
+      <pre class="preview-log">{{ log }}</pre>
+    </details>
+    {% endif %}
+    {% else %}
+    <p class="muted">Compile Statement to generate preview PDF and latex.log.</p>
+    {% endif %}
+  </section>
+</div>
+
+<div id="statement-draft-popup" class="ui-popup-overlay statement-draft-popup" data-popup-overlay="1" hidden>
+  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="statement-draft-popup-title">
+    <div class="ui-popup-header">
+      <h2 id="statement-draft-popup-title" class="ui-popup-title">Draft History</h2>
+      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
+    </div>
+    <div class="ui-popup-content">
+      <p class="muted" data-statement-draft-status="1">Loading local drafts...</p>
+      <p class="flash" data-statement-draft-error="1" hidden></p>
+      <p class="muted" data-statement-draft-empty="1" hidden>No local drafts yet.</p>
+      <div class="statement-draft-list" data-statement-draft-list="1"></div>
+    </div>
+  </div>
+</div>
+
+<div id="statement-settings-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
+  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="statement-settings-popup-title">
+    <div class="ui-popup-header">
+      <h2 id="statement-settings-popup-title" class="ui-popup-title">Edit Statement Settings</h2>
+      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
+    </div>
+    <div class="ui-popup-content">
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/save">
+        <div class="form-row">
+          <label for="general-problem-name">Problem name</label>
+          <input
+            id="general-problem-name"
+            name="problem_name"
+            maxlength="{{ problem_name_max_len }}"
+            value="{{ ctx.problem.name }}"
+          />
+        </div>
+        <div class="form-row form-row-inline-distribute">
+          <div class="form-field-stack">
+            <label for="time-limit">Time Limit</label>
+            <input id="time-limit" type="text" inputmode="numeric" name="time_limit_ms" value="{{ ctx.general_cfg.time_limit_ms }}" />
+          </div>
+          <div class="form-field-stack">
+            <label for="memory-limit">Memory Limit</label>
+            <input id="memory-limit" type="text" inputmode="numeric" name="memory_limit_mb" value="{{ ctx.general_cfg.memory_limit_mb }}" />
+          </div>
+          <div class="form-field-stack">
+            <label for="problem-mode">Mode</label>
+            <select id="problem-mode" name="mode">
+              {% for mode_value in problem_mode_values %}
+              <option value="{{ mode_value }}" {% if mode_value == ctx.general_cfg.mode %}selected{% endif %}>{{ mode_value }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<section>
+  <h2>Statement attachments</h2>
+  <div class="inline-meta-row">
+    <p class="muted">Only uploaded images are shown.</p>
+    <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?dir={{ statement_section_dir }}&path={{ statement_section_dir }}/attachment.png&src=statement{% if preview_id %}&sid={{ preview_id }}{% endif %}">Upload attachments</a>
+  </div>
+  <table>
+    <tr>
+      <th>Path</th>
+      <th>Action</th>
+    </tr>
+    {% if statement_attachments %}
+    {% for row in statement_attachments %}
+    <tr>
+      <td><code>{{ row.path }}</code></td>
+      <td>
+        <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ row.path_q }}">Download</a>
+        <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/attachments/delete" data-confirm-message="Delete attachment {{ row.path }}? This cannot be undone; uncommitted changes will be lost.">
+          <input type="hidden" name="path" value="{{ row.path }}" />
+          <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
+          <a href="#" class="linkish" data-submit-form="1">Delete</a>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    {% else %}
+    <tr>
+      <td colspan="2" class="muted">No uploaded images in <code>{{ statement_section_dir }}/</code>.</td>
+    </tr>
+    {% endif %}
+  </table>
+</section>
+{% endblock %}

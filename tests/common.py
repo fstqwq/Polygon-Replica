@@ -85,7 +85,7 @@ def ensure_local_env() -> None:
 
 ensure_local_env()
 
-from app.impl.config import config  # noqa: E402
+from app.impl.runtime.config import config  # noqa: E402
 
 
 def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float = 300.0) -> None:

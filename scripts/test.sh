@@ -24,14 +24,42 @@ if [[ ${#PY_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-echo "[1/4] Syntax check (py_compile)"
+echo "[1/5] Syntax check (py_compile)"
 python -m py_compile "${PY_FILES[@]}"
 
-echo "[2/4] Lint check (pyflakes)"
+echo "[2/5] Lint check (pyflakes)"
 python -m pyflakes "${PY_FILES[@]}"
 
-echo "[3/4] Dead code check (vulture, confidence=60)"
+echo "[3/5] Dead code check (vulture, confidence=60)"
 python -m vulture app tests --min-confidence 60
 
-echo "[4/4] Unit tests"
-python -m unittest discover -s tests -p 'test_*.py' -v
+echo "[4/5] Import architecture policy checks"
+bash scripts/check-import-policy.sh
+bash scripts/check-refactor-placeholders.sh
+bash scripts/check-migrated-handler-imports.sh
+bash scripts/check-migrated-service-imports.sh
+
+echo "[5/5] Unit tests"
+: "${POLYGONLIKE_INCLUDE_SLOW_TESTS:=0}"
+if [[ "$POLYGONLIKE_INCLUDE_SLOW_TESTS" == "1" ]]; then
+  echo "Running full unittest suite (including slow ui integration tests)."
+  mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name 'test_*.py' -print | sort)
+else
+  echo "Running fast unittest suite (skipping slow ui integration tests: tests/test_ui_*.py)."
+  echo "Set POLYGONLIKE_INCLUDE_SLOW_TESTS=1 to include them."
+  mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name 'test_*.py' ! -name 'test_ui_*.py' -print | sort)
+fi
+
+if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
+  echo "No test files selected."
+  exit 0
+fi
+
+TEST_MODULES=()
+for file in "${TEST_FILES[@]}"; do
+  module="${file%.py}"
+  module="${module//\//.}"
+  TEST_MODULES+=("$module")
+done
+
+python -m unittest -v "${TEST_MODULES[@]}"

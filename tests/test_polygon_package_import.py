@@ -1,15 +1,16 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import json
 import shutil
 import tempfile
+import uuid
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services.polygon_package_import_service import PolygonPackageImportService
-from app.services.statement_template import render_statement_main
+from app.service.importing.polygon import PolygonPackageImportService
+from app.service.statement.render import render_statement_main
 from tests.common import SmokeBase, config, db
 
 
@@ -254,7 +255,38 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertIn(r"\begin{problem}{Guess the Number (Deluxe ver.)}", rendered_problem)
         self.assertTrue((ws / "statement" / "rendered" / "english" / "problem.pdf").is_file())
 
-        build_id = config.build_service.run_build(self.problem, self.user)
+        def _fake_run_build(_service, problem: str, username: str, *args, **kwargs) -> str:
+            self.assertEqual(problem, self.problem)
+            self.assertEqual(username, self.user)
+            ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+            build_id = f"b-import-ok-{uuid.uuid4().hex[:8]}"
+            build_ref = config.fs_manager.compute_build_ref(
+                {"suite": "polygon-package-import", "problem": self.problem, "build_id": build_id}
+            )
+            artifact_root = config.fs_manager.ensure_build_layout(build_ref).root.resolve()
+            db.execute(
+                """
+                INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    build_id,
+                    build_ref,
+                    int(ctx["problem"]["id"]),
+                    int(ctx["workspace"]["id"]),
+                    "",
+                    "main",
+                    "ok",
+                    "{}",
+                    str(artifact_root),
+                    "2026-02-23T00:00:00Z",
+                    "2026-02-23T00:00:01Z",
+                ],
+            )
+            return build_id
+
+        with patch("app.service.build.api.run_build", side_effect=_fake_run_build):
+            build_id = config.build_service.run_build(self.problem, self.user)
         build_row = db.fetch_one("SELECT status,summary_json FROM builds WHERE id=?", [build_id])
         self.assertIsNotNone(build_row)
         self.assertEqual(str(build_row["status"] or ""), "ok")
@@ -332,3 +364,4 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertIn("pdflatex missing", str(summary.get("error") or ""))
         artifact_root = Path(str(row["artifact_path"]))
         self.assertFalse((artifact_root / "statement_preview" / "statement.pdf").exists())
+

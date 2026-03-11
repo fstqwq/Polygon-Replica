@@ -3,3 +3,8 @@ __pycache__/
 *.pyo
 .venv/
 var/
+openspec/*
+migration-gates/*
+.*
+!.gitattributes
+tmp/

@@ -30,11 +30,9 @@ echo "[1/5] Installing system dependencies..."
 "${SUDO[@]}" apt-get update
 "${SUDO[@]}" apt-get install -y \
   git \
-  build-essential \
   python3 \
   python3-venv \
   python3-pip \
-  openjdk-17-jdk \
   texlive-latex-base \
   texlive-latex-recommended \
   texlive-latex-extra \

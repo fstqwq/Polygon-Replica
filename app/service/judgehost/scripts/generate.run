@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+TESTIN="$1"
+PROGOUT="$2"
+shift 2
+
+if [ "$#" -eq 0 ]; then
+  echo "missing submission command" >&2
+  exit 43
+fi
+
+CMD_PAYLOAD=""
+if [ -r "$TESTIN" ] && [ ! -d "$TESTIN" ]; then
+  CMD_PAYLOAD="$(tr -d '\r' <"$TESTIN" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' | head -n 1)"
+fi
+
+if [ -z "$CMD_PAYLOAD" ]; then
+  echo "missing generate command payload" >&2
+  exit 43
+fi
+
+ARGS_PAYLOAD="$(printf '%s' "$CMD_PAYLOAD" | sed -e 's/^"\$SUBMISSION_BIN"[[:space:]]*//')"
+if [ "$ARGS_PAYLOAD" = "$CMD_PAYLOAD" ]; then
+  ARGS_PAYLOAD="$(printf '%s' "$CMD_PAYLOAD" | sed -e 's/^\$SUBMISSION_BIN[[:space:]]*//')"
+fi
+
+if [ -n "$ARGS_PAYLOAD" ]; then
+  # Payload is shell-quoted by backend. Preserve the original command vector
+  # (`sudo -n runguard ... -- program`) and append payload args after it.
+  exec sh -c "exec \"\$@\" $ARGS_PAYLOAD" sh "$@" </dev/null >"$PROGOUT"
+fi
+
+exec "$@" </dev/null >"$PROGOUT"

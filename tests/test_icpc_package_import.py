@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import json
 import zipfile
 
-from app.services.icpc_package_import_service import ICPCPackageImportService
+from app.service.importing.icpc import ICPCPackageImportService
 from tests.common import SmokeBase
 
 
@@ -160,3 +160,4 @@ class TestICPCPackageImport(SmokeBase):
         self.assertIn("english not found", str(statement_summary.get("language_warning") or ""))
         self.assertTrue((ws / "statement-sections" / "russian" / "legend.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english").exists())
+

@@ -1,4 +1,4 @@
-﻿# PERMISSION.md
+# PERMISSION.md
 
 ## Scope
 
@@ -6,6 +6,12 @@ This policy applies to work executed inside the WSL distro used for this reposit
 
 - Distro: `PolygonReplica-Dev`
 - Repo path: `/root/work/Polygon-Replica`
+
+DO NOT RUN TESTS IN WINDOWS OR ANY OTHER NON-WSL ENVIRONMENT.
+
+DO NOT DIRECTLY MODIFY THE `PolygonReplica-Dev` FILES; USE SYNC SCRIPTS OR OTHER CONTROLLED METHODS TO AVOID INCONSISTENCIES.
+
+ALWAYS RUN TESTS AFTER SYNCING.
 
 ## Permission Model
 

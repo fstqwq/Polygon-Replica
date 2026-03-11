@@ -11,6 +11,8 @@ Engineering baseline:
 - Web UI is the primary workflow entry.
 - No backward-compat target for removed routes or old data shapes.
 
+Remember that Claude Opus 4.6 will review your code.
+
 ## Runtime Model
 
 - bare repository: `/srv/git/<owner>/<slug>.git`

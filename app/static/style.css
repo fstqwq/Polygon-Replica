@@ -1413,13 +1413,6 @@ form {
   vertical-align: middle;
 }
 
-.run-kind-chip-main-correct {
-  border-color: #22c55e;
-  color: #166534;
-  background: #dcfce7;
-  box-shadow: inset 0 0 0 1px rgba(22, 101, 52, 0.08);
-}
-
 .inline-form,
 .tag-form {
   display: inline-flex;
@@ -2005,6 +1998,7 @@ section.invocation-header-section {
 .verification-lifecycle-step-detail {
   font-size: 11px;
   color: #4b5563;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -2041,6 +2035,7 @@ section.invocation-header-section {
 .verification-lifecycle-step-notes li {
   font-size: 11px;
   color: #4b5563;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -2443,6 +2438,11 @@ section.invocation-header-section {
   font-weight: 600;
 }
 
+.invocation-feedback-cell {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .invocation-solution-output {
   display: grid;
   gap: 4px;
@@ -2582,6 +2582,8 @@ section.invocation-header-section {
 .compile-diagnostics-error {
   margin: 6px 0;
   color: var(--danger);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .compile-diagnostics-log {
@@ -2663,6 +2665,39 @@ section.invocation-header-section {
 .compile-diagnostics-location {
   color: #475569;
   white-space: nowrap;
+}
+
+.invocation-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.1;
+  border-radius: 999px;
+  border: 1px solid #9ca3af;
+  background: #f3f4f6;
+  color: #374151;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.invocation-stage-chip-ok {
+  border-color: #22c55e;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.invocation-stage-chip-fail {
+  border-color: #ef4444;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.invocation-stage-chip-neutral {
+  border-color: #9ca3af;
+  background: #f3f4f6;
+  color: #6b7280;
 }
 
 .compile-diagnostics-message {
@@ -3228,6 +3263,116 @@ body.confirm-open {
   padding: 12px;
   display: grid;
   gap: 10px;
+}
+
+.statement-editor-field {
+  margin-bottom: 8px;
+}
+
+.statement-editor-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.statement-editor-field-head label {
+  margin: 0;
+}
+
+.statement-draft-inline-trigger {
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.statement-draft-popup .ui-popup-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.statement-draft-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(46vh, 420px);
+  overflow: auto;
+}
+
+.statement-draft-entry {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.statement-draft-entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.statement-draft-entry-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.statement-draft-entry-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.statement-draft-entry-preview {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.statement-draft-preview-list {
+  display: grid;
+  gap: 8px;
+}
+
+.statement-draft-preview-item {
+  border: 1px dashed var(--line);
+  padding: 6px;
+  background: #f8fafc;
+  display: grid;
+  gap: 6px;
+}
+
+.statement-draft-preview-title {
+  margin: 0;
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.statement-draft-preview-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #0f172a;
+}
+
+.statement-draft-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.statement-draft-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .ui-confirm-overlay {

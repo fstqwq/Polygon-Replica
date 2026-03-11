@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -302,7 +303,74 @@ class DB:
     LOCK_RETRY_ATTEMPTS = 3
     LOCK_RETRY_BASE_SEC = 0.05
     SQLITE_BUSY_TIMEOUT_MS = 5000
-    SQL_TRACE_ENABLED = True
+    SQL_TRACE_ENABLED = False
+    SQL_TRACE_TEXT_LIMIT = 256
+    SQL_TRACE_JSON_FIELDS = ("summary_json", "details_json", "value_json")
+
+    @staticmethod
+    def _coerce_bool(value: object, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if text in {"1", "true", "yes", "on", "y"}:
+            return True
+        if text in {"0", "false", "no", "off", "n"}:
+            return False
+        return bool(default)
+
+    def apply_runtime_values(self, values: object) -> None:
+        enabled = getattr(values, "DB_SQL_TRACE_ENABLED", self.SQL_TRACE_ENABLED)
+        self.sql_trace_enabled = self._coerce_bool(enabled, default=bool(self.SQL_TRACE_ENABLED))
+
+    @staticmethod
+    def _trace_sql_verb(text: str) -> str:
+        match = re.match(r"^\s*([A-Za-z]+)", str(text or ""))
+        return str(match.group(1) if match else "SQL").upper()
+
+    @staticmethod
+    def _trace_sql_table(text: str) -> str:
+        raw = str(text or "")
+        patterns = (
+            r"^\s*UPDATE\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+            r"^\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+            r"^\s*DELETE\s+FROM\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+            r"^\s*SELECT\b.*?\bFROM\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+            r"^\s*PRAGMA\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, raw, flags=re.IGNORECASE)
+            if match is not None:
+                return str(match.group(1) or "").strip()
+        return ""
+
+    @classmethod
+    def _truncate_trace_text(cls, text: str, *, limit: int | None = None) -> str:
+        safe_text = str(text or "").strip()
+        cap = max(64, int(limit or cls.SQL_TRACE_TEXT_LIMIT))
+        if len(safe_text) <= cap:
+            return safe_text
+        return f"{safe_text[:cap].rstrip()}... [truncated; len={len(safe_text)}]"
+
+    @classmethod
+    def _summarize_traced_sql(cls, statement: str) -> str:
+        text = " ".join(str(statement or "").strip().split())
+        if not text:
+            return ""
+        lowered = text.lower()
+        verb = cls._trace_sql_verb(text)
+        table = cls._trace_sql_table(text)
+        json_fields = [field for field in cls.SQL_TRACE_JSON_FIELDS if field in lowered]
+        if json_fields:
+            field_positions = [lowered.find(field) for field in json_fields if lowered.find(field) >= 0]
+            prefix_end = min(field_positions) if field_positions else len(text)
+            prefix = text[:prefix_end].rstrip(" ,")
+            if not prefix:
+                prefix = f"{verb} {table}".strip()
+            prefix = cls._truncate_trace_text(prefix, limit=max(96, cls.SQL_TRACE_TEXT_LIMIT // 2))
+            table_part = table or "?"
+            fields_part = ",".join(json_fields)
+            return f"{verb} {table_part} [json_fields={fields_part} len={len(text)}] {prefix} <redacted-json>"
+        return cls._truncate_trace_text(text)
 
     @staticmethod
     def _should_retry_after_init(exc: sqlite3.OperationalError) -> bool:
@@ -648,13 +716,14 @@ class DB:
             conn.close()
 
     def _install_sql_trace(self, conn: sqlite3.Connection) -> None:
-        if not bool(self.SQL_TRACE_ENABLED):
+        enabled = getattr(self, "sql_trace_enabled", self.SQL_TRACE_ENABLED)
+        if not bool(enabled):
             return
         conn_id = id(conn)
         pid = os.getpid()
 
         def _trace(statement: str) -> None:
-            text = " ".join(str(statement or "").strip().split())
+            text = self._summarize_traced_sql(statement)
             if not text:
                 return
             logger.info(

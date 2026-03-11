@@ -1,0 +1,855 @@
+﻿from __future__ import annotations
+import json
+import os
+import time
+from pathlib import Path
+from urllib.parse import quote_plus
+from fastapi import HTTPException
+from app.db import now_iso
+from app.impl.runtime.config import config
+from .artifact import (
+    artifact_root,
+)
+from .context import (
+    count_label,
+)
+from .problem_config import (
+    coerce_int,
+)
+from .revision import workspace_revision_info
+from .solution import (
+    list_solution_sources,
+)
+from .test_spec import (
+    read_tests_spec,
+    tests_spec_bool_flag,
+    tests_spec_payload_file_path,
+    tests_spec_payload_rel_path,
+    tests_spec_read_payload,
+)
+from .context_verification import (
+    _expected_status_rule,
+    _json_truthy,
+    _status_rule_expectation_display,
+    _status_rule_expected_display,
+    _verification_solution_match,
+)
+from app.main_util import (
+    normalize_optional_component_source_path_safe,
+    normalize_workspace_rel_path,
+    safe_workspace_path,
+)
+from app.service.problem.solution_metadata import (
+    desc_rel_path_for_source,
+    expected_behavior_label,
+    infer_expected_behavior_from_name,
+    normalize_expected_behavior,
+    parse_solution_desc,
+)
+from app.service.problem.test_spec import (
+    TESTS_SPEC_REL,
+    summarize_tests_spec,
+)
+from app.service.platform.process import is_canonical_artifact_id
+
+_C = config.constants
+
+_STANDARD_CHECKER_CACHE_TTL_SEC = 2.0
+_STANDARD_CHECKER_CACHE_TS = 0.0
+_STANDARD_CHECKER_CACHE_AVAILABLE = False
+_STANDARD_CHECKER_CACHE_NAMES: tuple[str, ...] = ()
+_STANDARD_CHECKER_CACHE_SET: frozenset[str] = frozenset()
+
+def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
+    uid = int(user_id)
+    cap = max(1, int(limit))
+    rows = config.db.fetch_all('\n        SELECT p.slug,p.name,a.role AS role,\n               w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,\n               COALESCE(NULLIF(w.updated_at, \'\'), p.created_at) AS last_updated_at\n        FROM repo_acl a\n        JOIN problems p ON p.id=a.problem_id\n        LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?\n        WHERE a.user_id=?\n        ORDER BY last_updated_at DESC, p.slug ASC\n        LIMIT ?\n        ', [uid, uid, cap])
+    items: list[dict] = []
+    for row in rows:
+        role = str(row['role'] or 'read').strip().lower()
+        if role not in {'owner', 'write', 'read'}:
+            role = 'read'
+        head = str(row['head_commit'] or '').strip()
+        branch = str(row['branch'] or 'main').strip() or 'main'
+        dirty_raw = row['dirty']
+        dirty = False
+        if dirty_raw is not None:
+            try:
+                dirty = int(dirty_raw) != 0
+            except Exception:
+                dirty = bool(dirty_raw)
+        workspace_path_raw = str(row['path'] or '').strip()
+        if workspace_path_raw:
+            revision = workspace_revision_info(Path(workspace_path_raw), branch, fetch_remote=False)
+        else:
+            revision = {'local': None, 'upstream': None, 'display': 'none / upstream missing', 'highlight': True, 'upstream_higher': False, 'missing': True}
+        items.append({'slug': str(row['slug']), 'name': str(row['name']), 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path_raw, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision['local'], 'revision_upstream': revision['upstream'], 'revision_display': revision['display'], 'revision_highlight': revision['highlight'], 'revision_upstream_higher': revision['upstream_higher'], 'revision_missing': revision['missing'], 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
+    return items
+
+def normalize_contest_role(raw: object) -> str:
+    role = str(raw or '').strip().lower()
+    if role in {'owner', 'write', 'read'}:
+        return role
+    return 'read'
+
+def normalize_contest_slug_required(value: str) -> str:
+    slug = str(value or '').strip()
+    if not _C.CONTEST_IDENT_RE.fullmatch(slug):
+        raise ValueError('invalid contest slug')
+    return slug
+
+def normalize_contest_title_required(value: str) -> str:
+    title = str(value or '').strip()
+    if not title:
+        raise ValueError('contest title is required')
+    if len(title) > _C.CONTEST_TITLE_MAX_LEN:
+        raise ValueError(f'contest title is too long (max {_C.CONTEST_TITLE_MAX_LEN})')
+    return title
+
+def normalize_problem_name_required(value: str) -> str:
+    name = str(value or '').strip()
+    if not name:
+        raise ValueError('problem name is required')
+    if len(name) > _C.PROBLEM_NAME_MAX_LEN:
+        raise ValueError(f'problem name is too long (max {_C.PROBLEM_NAME_MAX_LEN})')
+    return name
+
+def user_contests_overview(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
+    uid = int(user_id)
+    cap = max(1, int(limit))
+    rows = config.db.fetch_all("\n        SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,m.role,\n               MAX(\n                   c.created_at,\n                   COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),\n                   COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),\n                   COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),\n                   COALESCE((\n                       SELECT MAX(w2.updated_at)\n                       FROM contest_problems cp2\n                       JOIN workspaces w2 ON w2.problem_id=cp2.problem_id AND w2.user_id=?\n                       WHERE cp2.contest_id=c.id\n                   ), '')\n               ) AS last_updated_at,\n               (\n                   SELECT COUNT(*)\n                   FROM contest_problems cp\n                   WHERE cp.contest_id=c.id\n               ) AS problem_count,\n               (\n                   SELECT group_concat(x.slug, ', ')\n                   FROM (\n                       SELECT p.slug AS slug\n                       FROM contest_problems cp\n                       JOIN problems p ON p.id=cp.problem_id\n                       WHERE cp.contest_id=c.id\n                       ORDER BY p.slug ASC\n                       LIMIT 5\n                   ) x\n               ) AS problem_slugs_preview,\n               (\n                   SELECT COUNT(*)\n                   FROM contest_problems cp3\n                   JOIN workspaces w ON w.problem_id=cp3.problem_id AND w.user_id=?\n                   WHERE cp3.contest_id=c.id\n                     AND COALESCE(w.dirty, 0) <> 0\n               ) AS dirty_problem_count\n        FROM contests c\n        JOIN contest_members m ON m.contest_id=c.id\n        WHERE m.user_id=?\n        ORDER BY last_updated_at DESC, c.slug ASC\n        LIMIT ?\n        ", [uid, uid, uid, cap])
+    entries: list[dict] = []
+    for row in rows:
+        try:
+            problem_count = max(0, int(row['problem_count'] or 0))
+        except Exception:
+            problem_count = 0
+        try:
+            dirty_problem_count = max(0, int(row['dirty_problem_count'] or 0))
+        except Exception:
+            dirty_problem_count = 0
+        preview = str(row['problem_slugs_preview'] or '').strip()
+        entries.append({'id': int(row['id']), 'slug': str(row['slug']), 'title': str(row['title']), 'owner_user_id': int(row['owner_user_id']), 'created_at': row['created_at'], 'last_updated_at': row['last_updated_at'], 'role': normalize_contest_role(row['role']), 'problem_count': problem_count, 'problem_slugs_preview': preview, 'problem_preview_truncated': problem_count > 5, 'dirty_problem_count': dirty_problem_count, 'has_dirty': dirty_problem_count > 0})
+    return entries
+
+def audit(actor_user_id: int, problem_id: int | None, action: str, details: dict) -> None:
+    config.db.execute('INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)', [actor_user_id, problem_id, action, json.dumps(details), now_iso()])
+
+def normalize_page_target(page: str) -> str:
+    raw = str(page or '').strip().lower()
+    allowed = {
+        'problems',
+        'statement',
+        'contests',
+        'files',
+        'generators',
+        'checker',
+        'interactor',
+        'validator',
+        'solutions',
+        'git',
+        'workspace',
+        'tests',
+        'preview',
+        'run',
+        'export',
+        'access',
+        'history',
+        'settings',
+    }
+    return raw if raw in allowed else 'tests'
+
+def parse_summary_json(raw: str | None, label: str) -> dict | None:
+    if not raw:
+        return None
+    text = str(raw)
+    if len(text) > _C.SUMMARY_JSON_UI_CHAR_LIMIT:
+        return {'error': f'summary_json for {label} exceeds UI parse limit ({_C.SUMMARY_JSON_UI_CHAR_LIMIT} chars)', 'summary_json_too_large': True, 'summary_json_chars': len(text), 'summary_json_char_limit': _C.SUMMARY_JSON_UI_CHAR_LIMIT}
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return {'error': f'invalid summary_json for {label}'}
+    if isinstance(payload, dict):
+        return payload
+    return {'error': f'summary_json for {label} must be a JSON object'}
+
+def read_text_safe_limited(path: Path, max_chars: int) -> tuple[str, bool]:
+    cap = max(1, int(max_chars))
+    with path.open('r', encoding='utf-8', errors='replace') as fh:
+        text = fh.read(cap + 1)
+    if len(text) <= cap:
+        return (text, False)
+    clipped = text[:cap]
+    if '\n' in clipped:
+        clipped = clipped.rsplit('\n', 1)[0] + '\n'
+    clipped += f'... [truncated; showing first {cap} characters]\n'
+    return (clipped, True)
+
+def read_workspace_source_with_default(workspace: Path, rel: Path, default_text: str) -> tuple[str, bool]:
+    try:
+        file_path = safe_workspace_path(workspace, rel.as_posix())
+    except HTTPException:
+        return (default_text, False)
+    if not file_path.exists() or not file_path.is_file() or file_path.is_symlink():
+        return (default_text, False)
+    return read_text_safe_limited(file_path, _C.STATEMENT_EDITOR_CHAR_LIMIT)
+
+def parse_line_param(raw: str | None, default: int=1) -> int:
+    try:
+        line = int(str(raw or '').strip())
+    except Exception:
+        return default
+    return line if line > 0 else default
+
+def build_line_focus_context(text: str, line: int, radius: int=2) -> dict | None:
+    rows = str(text or '').splitlines()
+    if not rows:
+        return None
+    target = int(line)
+    if target <= 0 or target > len(rows):
+        return None
+    start = max(1, target - max(0, int(radius)))
+    end = min(len(rows), target + max(0, int(radius)))
+    snippet: list[str] = []
+    for ln in range(start, end + 1):
+        marker = '>' if ln == target else ' '
+        snippet.append(f'{marker} {ln:5d} | {rows[ln - 1]}')
+    return {'start': start, 'end': end, 'line': target, 'text': '\n'.join(snippet)}
+
+def normalize_files_source(raw: str | None) -> str:
+    value = str(raw or '').strip().lower()
+    allowed = {'tests', 'preview', 'statement', 'run', 'export', 'workspace', 'access', 'checker', 'validator', 'interactor', 'solutions', 'generators'}
+    return value if value in allowed else ''
+
+def normalize_source_id(raw: str | None) -> str:
+    value = str(raw or '').strip()
+    return value if is_canonical_artifact_id(value) else ''
+
+def files_back_target(problem: str, user: str, source: str, source_id: str) -> tuple[str, str]:
+    base = f'/problems/{problem}/{user}'
+    if source == 'tests':
+        if source_id:
+            return (f'{base}/tests?build_id={quote_plus(source_id)}', 'Tests')
+        return (f'{base}/tests', 'Tests')
+    if source == 'preview':
+        if source_id:
+            return (f'{base}/preview?preview_id={quote_plus(source_id)}', 'Statement')
+        return (f'{base}/preview', 'Statement')
+    if source == 'statement':
+        return (f'{base}/statement', 'Statement')
+    if source == 'run':
+        if source_id:
+            return (f'{base}/run/details?run_id={quote_plus(source_id)}', 'Invocations')
+        return (f'{base}/run', 'Invocations')
+    if source == 'export':
+        return (f'{base}/export', 'Packages')
+    if source == 'workspace':
+        return (f'{base}/workspace', 'Working copy')
+    if source == 'access':
+        return (f'{base}/access', 'Manage access')
+    if source == 'checker':
+        return (f'{base}/checker', 'Checker')
+    if source == 'validator':
+        return (f'{base}/validator', 'Validator')
+    if source == 'interactor':
+        return (f'{base}/interactor', 'Interactor')
+    if source == 'solutions':
+        return (f'{base}/solutions', 'Solution files')
+    if source == 'generators':
+        return (f'{base}/generators', 'Generators')
+    return ('', '')
+
+def files_source_query_tail(source: str, source_id: str) -> str:
+    parts: list[str] = []
+    if source:
+        parts.append(f'src={quote_plus(source)}')
+    if source_id:
+        parts.append(f'sid={quote_plus(source_id)}')
+    if not parts:
+        return ''
+    return '&' + '&'.join(parts)
+
+def _normalize_repo_dir(raw: str | None) -> str:
+    text = str(raw or '').strip().replace('\\', '/')
+    if not text:
+        return ''
+    if text.startswith('/'):
+        return ''
+    parts: list[str] = []
+    for part in text.split('/'):
+        item = part.strip()
+        if not item or item == '.':
+            continue
+        if item == '..':
+            return ''
+        parts.append(item)
+    return '/'.join(parts)
+
+def files_browse_query_tail(repo_dir: str) -> str:
+    parts: list[str] = []
+    dir_norm = _normalize_repo_dir(repo_dir)
+    if dir_norm:
+        parts.append(f'dir={quote_plus(dir_norm)}')
+    if not parts:
+        return ''
+    return '&' + '&'.join(parts)
+
+def build_repo_browser_entries(workspace: Path, paths: list[str], browse_dir: str) -> tuple[str, str, list[dict[str, str]], list[dict[str, str]], int]:
+    normalized: list[dict[str, object]] = []
+    for raw in paths:
+        rel = str(raw).strip()
+        if not rel:
+            continue
+        is_dir = False
+        try:
+            abs_path = safe_workspace_path(workspace, rel)
+            is_dir = abs_path.exists() and abs_path.is_dir()
+        except HTTPException:
+            is_dir = False
+        normalized.append({'path': rel, 'is_dir': is_dir})
+    dir_norm = _normalize_repo_dir(browse_dir)
+    prefix = f'{dir_norm}/' if dir_norm else ''
+    if dir_norm and (not any((str(row['path']) == dir_norm or str(row['path']).startswith(prefix) for row in normalized))):
+        dir_norm = ''
+        prefix = ''
+    child_dirs: dict[str, str] = {}
+    child_files: list[dict[str, str]] = []
+    for row in normalized:
+        full = str(row['path'])
+        if full == dir_norm:
+            continue
+        if prefix and (not full.startswith(prefix)):
+            continue
+        rel = full[len(prefix):] if prefix else full
+        if not rel:
+            continue
+        if '/' in rel:
+            name = rel.split('/', 1)[0]
+            child_dirs.setdefault(name, f'{prefix}{name}' if prefix else name)
+        elif bool(row['is_dir']):
+            child_dirs.setdefault(rel, f'{prefix}{rel}' if prefix else rel)
+        else:
+            child_files.append({'name': rel, 'path': f'{prefix}{rel}' if prefix else rel})
+    dirs = [{'name': name, 'path': child_dirs[name]} for name in sorted(child_dirs)]
+    files = sorted(child_files, key=lambda row: row['name'])
+    parent = dir_norm.rsplit('/', 1)[0] if '/' in dir_norm else ''
+    return (dir_norm, parent, dirs, files, len(normalized))
+
+def kind_for_path(path: str) -> str:
+    target = str(path or '').strip()
+    for row in _C.CORE_SOURCE_TARGETS:
+        if str(row['path']) == target:
+            return str(row['kind'])
+    return ''
+
+def default_files_selected_path(workspace: Path, listed_paths: list[str]) -> str:
+    for rel in ['config/problem.json', 'statement/problem.tex', 'config/build.json', 'solutions/accepted.cpp']:
+        try:
+            candidate = safe_workspace_path(workspace, rel)
+        except HTTPException:
+            continue
+        if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
+            return rel
+    for rel in listed_paths:
+        safe_rel = normalize_workspace_rel_path(rel)
+        if not safe_rel:
+            continue
+        try:
+            candidate = safe_workspace_path(workspace, safe_rel)
+        except HTTPException:
+            continue
+        if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
+            return safe_rel
+    return 'config/problem.json'
+
+def template_for_kind(kind: str) -> str:
+    key = str(kind or '').strip().lower()
+    if key not in _C.FILE_TEMPLATES:
+        raise ValueError('unknown template kind')
+    return str(_C.FILE_TEMPLATES[key])
+
+def _standard_checker_cache_values() -> tuple[tuple[str, ...], frozenset[str], bool]:
+    global _STANDARD_CHECKER_CACHE_TS
+    global _STANDARD_CHECKER_CACHE_AVAILABLE
+    global _STANDARD_CHECKER_CACHE_NAMES
+    global _STANDARD_CHECKER_CACHE_SET
+    now = time.monotonic()
+    if (now - _STANDARD_CHECKER_CACHE_TS) <= _STANDARD_CHECKER_CACHE_TTL_SEC:
+        return (_STANDARD_CHECKER_CACHE_NAMES, _STANDARD_CHECKER_CACHE_SET, _STANDARD_CHECKER_CACHE_AVAILABLE)
+    root = _C.STANDARD_CHECKER_ROOT
+    available = False
+    names: list[str] = []
+    try:
+        if root.exists() and root.is_dir() and (not root.is_symlink()):
+            available = True
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    name = str(entry.name or '')
+                    if Path(name).suffix.lower() != '.cpp':
+                        continue
+                    if not _C.STANDARD_CHECKER_NAME_RE.fullmatch(name):
+                        continue
+                    try:
+                        if entry.is_symlink() or (not entry.is_file(follow_symlinks=False)):
+                            continue
+                    except OSError:
+                        continue
+                    names.append(name)
+            names.sort()
+    except OSError:
+        available = False
+        names = []
+    _STANDARD_CHECKER_CACHE_TS = now
+    _STANDARD_CHECKER_CACHE_AVAILABLE = available
+    _STANDARD_CHECKER_CACHE_NAMES = tuple(names)
+    _STANDARD_CHECKER_CACHE_SET = frozenset(names)
+    return (_STANDARD_CHECKER_CACHE_NAMES, _STANDARD_CHECKER_CACHE_SET, _STANDARD_CHECKER_CACHE_AVAILABLE)
+
+def _standard_checker_options() -> list[str]:
+    names, _name_set, _available = _standard_checker_cache_values()
+    return list(names)
+
+def standard_checker_catalog() -> list[dict]:
+    catalog: list[dict] = []
+    for name in _standard_checker_options():
+        canonical = f'std::{name}'
+        description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(name, 'general-purpose standard checker from testlib'))
+        catalog.append({'name': name, 'value': canonical, 'description': description, 'label': f'{canonical} - {description}'})
+    return catalog
+
+def _normalize_standard_checker_name(raw: str) -> str:
+    value = str(raw or '').strip()
+    if value.startswith('std::'):
+        value = value[5:]
+    if not value:
+        raise ValueError('standard checker name is required')
+    if '/' in value or '\\' in value:
+        raise ValueError('invalid standard checker name')
+    if not value.endswith('.cpp'):
+        value += '.cpp'
+    if not _C.STANDARD_CHECKER_NAME_RE.fullmatch(value):
+        raise ValueError('invalid standard checker name')
+    return value
+
+def _canonical_standard_checker_name(raw: str) -> str:
+    return f'std::{_normalize_standard_checker_name(raw)}'
+
+def resolve_standard_checker_path(raw_name: str) -> tuple[str, Path]:
+    checker_name = _normalize_standard_checker_name(raw_name)
+    _names, name_set, available = _standard_checker_cache_values()
+    if not available:
+        raise ValueError('standard checker catalog is unavailable')
+    if checker_name not in name_set:
+        raise ValueError(f'unknown standard checker: std::{checker_name}')
+    source = _C.STANDARD_CHECKER_ROOT / checker_name
+    return (checker_name, source)
+
+def read_build_config(workspace: Path) -> tuple[dict, Path]:
+    cfg_path = safe_workspace_path(workspace, str(_C.BUILD_CONFIG_REL))
+    payload: dict = {}
+    if cfg_path.exists() and cfg_path.is_file():
+        try:
+            raw = json.loads(cfg_path.read_text(encoding='utf-8'))
+            if isinstance(raw, dict):
+                payload = dict(raw)
+        except Exception:
+            payload = {}
+    return (payload, cfg_path)
+
+def write_build_config(cfg_path: Path, payload: dict) -> None:
+    data = dict(payload) if isinstance(payload, dict) else {}
+    has_generator_keys = 'generator_sources' in data
+    if has_generator_keys:
+        normalized_sources = generator_sources_from_build_cfg(data)
+        if normalized_sources:
+            data['generator_sources'] = normalized_sources
+        else:
+            data.pop('generator_sources', None)
+    data.pop('generator_source', None)
+    data.pop('accepted_source', None)
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+def dedupe_preserve_order(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+def workspace_rel_file_exists(workspace: Path, rel: str | None) -> bool:
+    normalized = normalize_workspace_rel_path(rel)
+    if not normalized:
+        return False
+    try:
+        target = safe_workspace_path(workspace, normalized)
+    except HTTPException:
+        return False
+    try:
+        if target.is_symlink():
+            return False
+        return bool(target.exists() and target.is_file())
+    except OSError:
+        return False
+
+def _text_head_by_bytes(raw: str, max_bytes: int) -> tuple[str, bool]:
+    cap = max(1, int(max_bytes))
+    encoded = str(raw or '').encode('utf-8', errors='replace')
+    clipped = len(encoded) > cap
+    head = encoded[:cap].decode('utf-8', errors='replace')
+    return (head, clipped)
+
+def _file_head_text(path: Path, max_bytes: int) -> tuple[str, bool]:
+    cap = max(1, int(max_bytes))
+    try:
+        with path.open('rb') as f:
+            head = f.read(cap + 1)
+    except OSError:
+        return ('(unreadable)', False)
+    clipped = len(head) > cap
+    text = head[:cap].decode('utf-8', errors='replace')
+    return (text, clipped)
+
+def tests_spec_editor_context(workspace: Path, limit: int=_C.TESTS_SPEC_ROWS_LIMIT) -> dict:
+    entries, path = read_tests_spec(workspace)
+    summary = summarize_tests_spec(entries)
+    rows: list[dict] = []
+    cap = max(1, int(limit))
+    truncated = len(entries) > cap
+    for idx, entry in enumerate(entries[:cap], start=1):
+        kind = str(entry.get('kind') or '')
+        test_id = str(entry.get('id') or '').strip()
+        sample = bool(entry.get('sample'))
+        sample_input = str(entry.get('sample_input') or '')
+        sample_output = str(entry.get('sample_output') or '')
+        sample_output_validate = tests_spec_bool_flag(entry.get('sample_output_validate', True))
+        payload_path = tests_spec_payload_rel_path(test_id, kind) if test_id and kind else ''
+        payload_abs: Path | None = None
+        if payload_path:
+            try:
+                payload_abs = tests_spec_payload_file_path(workspace, test_id, kind)
+            except (HTTPException, ValueError):
+                payload_abs = None
+        payload = ''
+        preview_source = ''
+        payload_size_bytes = 0
+        manual_large_payload = False
+        preview_clipped = False
+        preview_bytes_limit = 0
+        payload_file_exists = False
+        if payload_abs is not None:
+            try:
+                payload_file_exists = bool(payload_abs.exists() and payload_abs.is_file() and (not payload_abs.is_symlink()))
+            except OSError:
+                payload_file_exists = False
+        if payload_file_exists and payload_abs is not None:
+            try:
+                payload_size_bytes = max(0, int(payload_abs.stat().st_size))
+            except OSError:
+                payload_size_bytes = 0
+        if kind == 'manual' and payload_size_bytes > _C.TESTS_SPEC_MANUAL_INLINE_EDIT_MAX_BYTES:
+            manual_large_payload = True
+            preview_bytes_limit = _C.TESTS_SPEC_MANUAL_PREVIEW_BYTES
+            if payload_file_exists and payload_abs is not None:
+                preview_source, preview_clipped = _file_head_text(payload_abs, _C.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
+            else:
+                fallback_payload = tests_spec_read_payload(workspace, entry)
+                payload_size_bytes = len(fallback_payload.encode('utf-8', errors='replace'))
+                preview_source, preview_clipped = _text_head_by_bytes(fallback_payload, _C.TESTS_SPEC_MANUAL_PREVIEW_BYTES)
+        else:
+            payload = tests_spec_read_payload(workspace, entry)
+            preview_source = payload
+            if payload_size_bytes <= 0:
+                payload_size_bytes = len(payload.encode('utf-8', errors='replace'))
+        if manual_large_payload:
+            preview_text = str(preview_source or '').replace('\r\n', '\n').replace('\r', '\n')
+            if not preview_text:
+                preview_text = '(empty)'
+        else:
+            preview_text = _inline_text_preview(preview_source, _C.TESTS_SPEC_PREVIEW_CHARS, _C.TESTS_SPEC_PREVIEW_LINES)
+        rows.append(
+            {
+                'index': idx,
+                'id': test_id,
+                'kind': kind,
+                'sample': sample,
+                'sample_input': sample_input,
+                'sample_output': sample_output,
+                'sample_output_validate': sample_output_validate,
+                'custom_sample_input': bool(sample_input),
+                'custom_sample_output': bool(sample_output),
+                'payload_path': payload_path,
+                'payload': payload,
+                'preview': preview_text,
+                'payload_size_bytes': payload_size_bytes,
+                'payload_size_human': _human_size(payload_size_bytes),
+                'manual_large_payload': manual_large_payload,
+                'preview_bytes_limit': preview_bytes_limit,
+                'preview_clipped': preview_clipped,
+            }
+        )
+    return {'path': TESTS_SPEC_REL.as_posix(), 'exists': bool(path.exists() and path.is_file() and (not path.is_symlink())), 'entries': entries, 'rows': rows, 'summary': summary, 'total': len(entries), 'shown': len(rows), 'truncated': truncated}
+
+# Referenced via dynamic re-export in workspace.api/public.
+_DYNAMIC_EXPORT_KEEP = (read_workspace_source_with_default, tests_spec_editor_context)
+_ = len(_DYNAMIC_EXPORT_KEEP)
+
+def _tests_spec_status_context(workspace: Path) -> dict:
+    try:
+        entries, _path = read_tests_spec(workspace)
+    except ValueError:
+        return {'mode': 'invalid', 'display': 'invalid', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
+    summary = summarize_tests_spec(entries)
+    total = int(summary.get('total') or 0)
+    manual = int(summary.get('manual') or 0)
+    gen = int(summary.get('gen') or 0)
+    sample = int(summary.get('sample') or 0)
+    if total <= 0:
+        return {'mode': 'empty', 'display': 'empty', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
+    return {'mode': 'ready', 'display': f'{total} ({count_label(sample, "sample")})', 'total': total, 'manual': manual, 'gen': gen, 'sample': sample}
+
+def _list_cpp_sources(workspace: Path, folder: str, limit: int=64) -> tuple[list[str], bool]:
+    base = workspace / folder
+    try:
+        if not base.exists() or not base.is_dir() or base.is_symlink():
+            return ([], False)
+    except OSError:
+        return ([], False)
+    names: list[str] = []
+    try:
+        with os.scandir(base) as entries:
+            for entry in entries:
+                name = str(entry.name or '')
+                if Path(name).suffix.lower() not in _C.CPP_SOURCE_EXTENSIONS:
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                names.append(f'{folder}/{name}')
+    except OSError:
+        return ([], False)
+    names.sort()
+    truncated = len(names) > int(limit)
+    if truncated:
+        names = names[:int(limit)]
+    return (names, truncated)
+
+def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
+    source_path = str(source_rel or '')
+    desc_path = desc_rel_path_for_source(source_path)
+    desc_exists = workspace_rel_file_exists(workspace, desc_path)
+    expected = infer_expected_behavior_from_name(source_path)
+    note = ''
+    errors: list[str] = []
+    origin = 'inferred' if expected != 'unknown' else 'default'
+    if desc_exists:
+        try:
+            desc_abs = safe_workspace_path(workspace, desc_path)
+            desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
+            parsed = parse_solution_desc(desc_text)
+            expected = str(parsed.get('expected_behavior') or 'unknown')
+            note = str(parsed.get('note') or '')
+            origin = 'metadata'
+            errors = [str(item) for item in parsed.get('errors') or []]
+        except Exception as exc:
+            errors = [str(exc)]
+            origin = 'invalid'
+    note_preview = note
+    if len(note_preview) > 160:
+        note_preview = note_preview[:157] + '...'
+    return {'source_path': source_path, 'file_name': Path(source_path).name, 'expected_behavior': expected, 'expected_behavior_label': expected_behavior_label(expected), 'note': note, 'note_preview': note_preview, 'desc_path': desc_path, 'desc_exists': desc_exists, 'desc_origin': origin, 'desc_errors': errors, 'is_accepted': expected == 'accepted'}
+
+def list_solution_entries(workspace: Path) -> tuple[list[dict], bool]:
+    sources, truncated = list_solution_sources(workspace, limit=_C.SOLUTION_LIST_LIMIT)
+    entries = [solution_metadata_entry(workspace, rel) for rel in sources]
+    return (entries, truncated)
+
+def resolve_build_accepted_solution_source(workspace: Path, entries: list[dict]) -> str:
+    build_cfg, _ = read_build_config(workspace)
+    configured = normalize_optional_component_source_path_safe(build_cfg.get('accepted_solution_source'), 'solutions', 'accepted solution source')
+    if configured:
+        return configured
+    return ''
+
+def _solutions_status_context(workspace: Path) -> dict:
+    entries, truncated = list_solution_entries(workspace)
+    total = len(entries)
+    accepted_source = resolve_build_accepted_solution_source(workspace, entries)
+    accepted_exists = bool(accepted_source) and workspace_rel_file_exists(workspace, accepted_source)
+    if truncated:
+        count_display = f'{total}+ {"file" if total == 1 else "files"}'
+    elif total == 1:
+        count_display = '1 file'
+    else:
+        count_display = f'{total} files'
+    if accepted_exists:
+        mode = 'ready'
+        display = f'{accepted_source} ({count_display})'
+    elif total > 0:
+        mode = 'missing-main'
+        display = f'main missing ({count_display})'
+    else:
+        mode = 'missing'
+        display = 'missing'
+    return {'mode': mode, 'display': display, 'accepted_source': accepted_source, 'accepted_exists': accepted_exists, 'count': total, 'count_display': count_display, 'truncated': bool(truncated)}
+
+def run_solution_options_context(workspace: Path) -> tuple[list[dict], str, bool]:
+    entries, truncated = list_solution_entries(workspace)
+    default_path = resolve_build_accepted_solution_source(workspace, entries)
+    if default_path and (not any((str(row.get('source_path') or '') == default_path for row in entries))):
+        default_path = ''
+    options: list[dict] = []
+    for row in entries:
+        path = str(row.get('source_path') or '').strip()
+        if not path:
+            continue
+        behavior = str(row.get('expected_behavior_label') or '').strip()
+        label = path if not behavior else f'{path} ({behavior})'
+        options.append({'path': path, 'label': label, 'is_accepted': str(row.get('expected_behavior') or '') == 'accepted', 'expected_behavior': normalize_expected_behavior(str(row.get('expected_behavior') or 'unknown'))})
+    return (options, default_path, bool(truncated))
+
+def _run_test_options_from_build(problem: str, build_id: str, limit: int=_C.RUN_TEST_SELECTOR_LIMIT) -> tuple[list[dict], bool]:
+    options: list[dict] = []
+    truncated = False
+    try:
+        root = artifact_root(problem, build_id)
+    except HTTPException:
+        return (options, truncated)
+    tests_dir = root / 'tests'
+    try:
+        if not tests_dir.exists() or not tests_dir.is_dir() or tests_dir.is_symlink():
+            return (options, truncated)
+    except OSError:
+        return (options, truncated)
+    names: list[str] = []
+    try:
+        with os.scandir(tests_dir) as entries:
+            for entry in entries:
+                name = str(entry.name or '')
+                if not _C.RUN_TEST_NAME_RE.fullmatch(name):
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                names.append(name)
+    except OSError:
+        return (options, truncated)
+    names.sort()
+    cap = max(1, int(limit))
+    truncated = len(names) > cap
+    names = names[:cap]
+    tests_meta_by_name: dict[str, dict] = {}
+    tests_meta_path = root / 'logs' / 'tests_meta.json'
+    try:
+        if tests_meta_path.exists() and tests_meta_path.is_file() and (not tests_meta_path.is_symlink()):
+            tests_meta_text, _ = read_text_safe_limited(tests_meta_path, _C.SUMMARY_JSON_UI_CHAR_LIMIT)
+            payload = json.loads(tests_meta_text)
+            if isinstance(payload, list):
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    index = coerce_int(item.get('index'), 0, 1, 10 ** 7)
+                    if index <= 0:
+                        continue
+                    tests_meta_by_name[f'{index:03d}.in'] = item
+    except Exception:
+        tests_meta_by_name = {}
+    for name in names:
+        item = tests_meta_by_name.get(name) or {}
+        parts: list[str] = []
+        test_id = str(item.get('id') or '').strip()
+        if test_id:
+            parts.append(f'id={test_id}')
+        kind = str(item.get('kind') or '').strip().lower()
+        if kind in {'manual', 'gen'}:
+            parts.append(kind)
+        if bool(item.get('sample')):
+            parts.append('sample')
+        desc = str(item.get('desc') or '').strip()
+        if desc and desc not in {'manual', 'gen'}:
+            parts.append(desc)
+        suffix = f" ({'; '.join(parts)})" if parts else ''
+        options.append({'name': name, 'label': f'{name}{suffix}'})
+    return (options, truncated)
+
+def _run_test_options_from_spec(workspace: Path, limit: int=_C.RUN_TEST_SELECTOR_LIMIT) -> tuple[list[dict], bool]:
+    options: list[dict] = []
+    try:
+        entries, _ = read_tests_spec(workspace)
+    except Exception:
+        return (options, False)
+    cap = max(1, int(limit))
+    truncated = len(entries) > cap
+    for idx, row in enumerate(entries[:cap], start=1):
+        name = f'{idx:03d}.in'
+        parts: list[str] = []
+        test_id = str(row.get('id') or '').strip()
+        if test_id:
+            parts.append(f'id={test_id}')
+        kind = str(row.get('kind') or '').strip().lower()
+        if kind in {'manual', 'gen'}:
+            parts.append(kind)
+        if _json_truthy(row.get('sample')):
+            parts.append('sample')
+        suffix = f" ({'; '.join(parts)})" if parts else ''
+        options.append({'name': name, 'label': f'{name}{suffix}'})
+    return (options, truncated)
+
+def run_test_options_context(problem: str, workspace: Path, active_build: dict | None) -> tuple[list[dict], bool, str]:
+    build_id = str(active_build['id'] or '').strip() if active_build is not None else ''
+    if build_id:
+        build_options, build_truncated = _run_test_options_from_build(problem, build_id, limit=_C.RUN_TEST_SELECTOR_LIMIT)
+        if build_options:
+            return (build_options, build_truncated, f'build {build_id}')
+    spec_options, spec_truncated = _run_test_options_from_spec(workspace, limit=_C.RUN_TEST_SELECTOR_LIMIT)
+    if spec_options:
+        return (spec_options, spec_truncated, 'tests/spec.json')
+    return ([], False, '')
+
+def _human_size(num_bytes: int) -> str:
+    size = max(0, int(num_bytes))
+    if size < 1024:
+        return f'{size} B'
+    value = float(size)
+    for unit in ('KB', 'MB', 'GB'):
+        value /= 1024.0
+        if value < 1024.0 or unit == 'GB':
+            return f'{value:.1f} {unit}'
+    return f'{size} B'
+
+def _inline_text_preview(raw: str, max_chars: int, max_lines: int) -> str:
+    text = str(raw or '').replace('\r\n', '\n').replace('\r', '\n')
+    lines = [line.rstrip('\n\r') for line in text.splitlines()]
+    clipped_by_lines = False
+    if max_lines > 0 and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        clipped_by_lines = True
+    preview = '\n'.join(lines).strip()
+    if not preview:
+        preview = '(empty)'
+    clipped_by_chars = len(preview) > max_chars
+    if clipped_by_chars:
+        preview = preview[:max_chars - 3].rstrip() + '...'
+    elif clipped_by_lines:
+        preview += ' ...'
+    return preview
+
+def generator_sources_from_build_cfg(build_cfg: dict) -> list[str]:
+    sources: list[str] = []
+    raw_sources = build_cfg.get('generator_sources')
+    if isinstance(raw_sources, list):
+        for item in raw_sources:
+            normalized = normalize_optional_component_source_path_safe(item, 'generators', 'generator source')
+            if normalized:
+                sources.append(normalized)
+    return dedupe_preserve_order(sources)
+
+
+

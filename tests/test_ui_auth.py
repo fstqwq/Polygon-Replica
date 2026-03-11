@@ -1,8 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sqlite3
-
-from app.impl import auth as auth_impl
 
 from tests.ui_support import (
     ADMIN_CONFIG_DEFAULTS,
@@ -14,7 +12,7 @@ from tests.ui_support import (
     _cookie_value_from_response,
     _extract_hidden_input_value,
     _flash_messages_from_response,
-    _issue_password_form_csrf_token,
+    issue_password_form_csrf_token,
     _login_with_password_proof,
     _password_verifier_hex,
     _post_form_request,
@@ -23,7 +21,7 @@ from tests.ui_support import (
     _request,
     _request_with_cookie,
     _response_set_cookie_blob,
-    _session_user,
+    session_user,
     _settings_password_update_with_proof,
     _sha256_hex,
     _setup_with_password_proof,
@@ -53,7 +51,7 @@ from tests.ui_support import (
     uuid,
     workspace_service,
 )
-
+from app.impl.auth import api
 SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
 SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
 
@@ -124,7 +122,7 @@ class TestUIAuth(UIBaseSuite):
         token = _cookie_value_from_response(ok, AUTH_COOKIE_NAME)
         self.assertTrue(token)
         req = _request_with_cookie("/problems/alice/sample/alice/general", f"{AUTH_COOKIE_NAME}={token}")
-        self.assertEqual(_session_user(req), username)
+        self.assertEqual(session_user(req), username)
 
         changed = _settings_password_update_with_proof(username, password, updated)
         self.assertEqual(changed.status_code, 303)
@@ -206,7 +204,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(login_ok.status_code, 303)
         self.assertIn("/problems", login_ok.headers.get("location", ""))
 
-        settings_csrf = _issue_password_form_csrf_token("settings-password")
+        settings_csrf = issue_password_form_csrf_token("settings-password")
         self.assertTrue(settings_csrf)
         auth_row = db.fetch_one("SELECT password_salt,password_iters FROM users WHERE username=?", [username])
         self.assertIsNotNone(auth_row)
@@ -624,7 +622,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn('data-judgehost-api-username="1"', html)
         self.assertIn('data-judgehost-api-token="1"', html)
 
-    def test_settings_page_formats_judgehost_last_seen_using_local_time(self) -> None:
+    def test_settings_page_formats_judgehost_last_seen_in_user_timezone(self) -> None:
         db.execute("UPDATE users SET is_system_admin=0")
         db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
@@ -639,7 +637,7 @@ class TestUIAuth(UIBaseSuite):
             "queue": {"queued": 0, "leased": 0, "completed": 0, "failed": 0},
             "hosts": [
                 {
-                    "hostname": "judgehost-localtime",
+                    "hostname": "judgehost-lastseen-time",
                     "online": True,
                     "age_sec": 3,
                     "last_seen_at": raw_last_seen,
@@ -654,7 +652,7 @@ class TestUIAuth(UIBaseSuite):
             resp = settings_page(_request("/problems/alice/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("judgehost-localtime", html)
+        self.assertIn("judgehost-lastseen-time", html)
         self.assertIn("Disabled", html)
         self.assertNotIn(raw_last_seen, html)
 
@@ -706,6 +704,50 @@ class TestUIAuth(UIBaseSuite):
 
         reset_resp = settings_system_config_reset(user="alice")
         self.assertEqual(reset_resp.status_code, 303)
+        self.assertEqual(
+            int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
+            int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]),
+        )
+        row_after = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
+        self.assertIsNone(row_after)
+
+    def test_settings_config_category_update_can_revert_single_override_to_default(self) -> None:
+        db.execute("UPDATE users SET is_system_admin=0")
+        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        with workspace_service._cache_lock:
+            workspace_service._user_cache.clear()
+        self.addCleanup(settings_system_config_reset, user="alice")
+
+        override_value = int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]) + 123
+        set_override_resp = asyncio.run(
+            settings_config_category_update(
+                _post_form_request(
+                    "/problems/alice/settings/config/judging",
+                    {"config_RUN_TEST_SELECTOR_LIMIT": str(override_value)},
+                ),
+                user="alice",
+                category="judging",
+            )
+        )
+        self.assertEqual(set_override_resp.status_code, 303)
+        self.assertEqual(int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")), override_value)
+        row = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
+        self.assertIsNotNone(row)
+
+        revert_resp = asyncio.run(
+            settings_config_category_update(
+                _post_form_request(
+                    "/problems/alice/settings/config/judging",
+                    {
+                        "config_RUN_TEST_SELECTOR_LIMIT": str(override_value + 999),
+                        "config_reset_RUN_TEST_SELECTOR_LIMIT": "1",
+                    },
+                ),
+                user="alice",
+                category="judging",
+            )
+        )
+        self.assertEqual(revert_resp.status_code, 303)
         self.assertEqual(
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]),
@@ -826,7 +868,7 @@ class TestUIAuth(UIBaseSuite):
             name="snapshot-probe",
             fn=lambda: None,
             queue_name="ops",
-            backend="local-sandbox",
+            backend="domjudge-judgehost",
             job_type="snapshot-probe",
         )
         self.assertTrue(queued, msg=reason)
@@ -928,7 +970,7 @@ class TestUIAuth(UIBaseSuite):
             ],
         )
 
-        auth_impl._startup_cancel_audit_inflight("cancelled on service startup", now_text="2026-03-06T00:00:01+00:00")
+        api._startup_cancel_audit_inflight("cancelled on service startup", now_text="2026-03-06T00:00:01+00:00")
 
         cancel_row = db.fetch_one(
             """
@@ -946,6 +988,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(details.get("run_ids"), [run_id])
         self.assertEqual(int(details.get("run_count") or 0), 1)
         self.assertEqual(str(details.get("reason") or ""), "cancelled on service startup")
+
 
 
 

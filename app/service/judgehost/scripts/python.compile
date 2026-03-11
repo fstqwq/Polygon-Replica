@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+
+# Python3 compile wrapper-script for 'compile.sh'.
+# See that script for syntax and more info.
+#
+# This script does not actually "compile" the source, but writes a
+# shell script that will function as the executable: when called, it
+# will execute the source with the correct interpreter syntax, thus
+# allowing this interpreted source to be used transparently as if it
+# was compiled to a standalone binary.
+# Note that from version 8.0.0 the default Python 3 interpreter is
+# pypy 3 instead of CPython 3.
+#
+# This script requires that pypy3 is installed in the chroot.
+
+DEST="$1" ; shift
+MEMLIMIT="$1" ; shift
+MAIN="${ENTRY_POINT:-${1:-}}"
+ENTRY_POINT_VALUE="${ENTRY_POINT:-}"
+if [ -z "$MAIN" ]; then
+    echo "Error: python compile entry point is missing" >&2
+    exit 1
+fi
+
+PY=""
+for cand in pypy3 python3 python; do
+    if command -v "$cand" >/dev/null 2>&1; then
+        PY="$cand"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "Error: python interpreter not found (tried: pypy3, python3, python)" >&2
+    exit 1
+fi
+
+# Report the entry point, so it can be saved, e.g. for later replay:
+if [ -z "$ENTRY_POINT_VALUE" ]; then
+    echo "Info: detected entry_point: $MAIN"
+fi
+
+# Check syntax for the submission entry file only. Verification bundles may
+# include non-Python helper assets (e.g. testlib.h) in the source payload.
+"$PY"{{PYTHON_COMPILE_FLAG_SUFFIX}} -m py_compile "$MAIN"
+EXITCODE=$?
+[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+rm -f -- *.pyc
+rm -rf -- __pycache__
+
+# Check if entry point is valid
+if [ ! -r "$MAIN" ]; then
+    echo "Error: main source file '$MAIN' is not readable" >&2
+    exit 1
+fi
+
+# Write executing script:
+cat > "$DEST" <<EOF
+#!/bin/sh
+# Generated shell-script to execute python interpreter on source.
+
+# Detect dirname and change dir to prevent class not found errors.
+if [ "\${0%/*}" != "\$0" ]; then
+	cd "\${0%/*}"
+fi
+
+# set non-existing HOME variable to make python happy
+export HOME=/does/not/exist
+
+# Uncomment the line below if you want it make easier for teams to do local
+# debugging.
+# export ONLINE_JUDGE=1 DOMJUDGE=1
+
+exec "$PY" "$MAIN" "\$@"
+EOF
+
+chmod a+x "$DEST"
+
+exit 0

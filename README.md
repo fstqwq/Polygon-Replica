@@ -10,15 +10,13 @@
 
 - Owner-scoped 问题模型：`<owner>/<slug>`
 - End-to-end authoring：Statement / Files / Generators / Checker / Validator / Interactor / Tests / Solutions / Verifications / Packages
-- Invocation backend：`auto` / `local-sandbox` / `domjudge-judgehost`
+- Invocation backend：`domjudge-judgehost` (judgehost-only)
 - ICPC 导出基于 committed `HEAD`
 
 ## Prerequisites
 
 - `git`
-- `g++` / `gcc`
 - `python3`
-- `openjdk` (`javac` + `java`)
 - `tex-live`
 - Linux `cgroups`/`rlimit`
 
@@ -26,7 +24,7 @@ Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git build-essential python3 python3-venv openjdk-17-jdk texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended util-linux
+sudo apt-get install -y git python3 python3-venv texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended util-linux bubblewrap libseccomp2
 ```
 
 ## Quick Start
@@ -77,10 +75,9 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 
 ## Sandbox
 
-- 默认后端：`native-sandbox`
-- 覆盖 `compile/build/run/preview`
-- 使用 `rlimit + timeout + seccomp`
-- 默认 deny-all 网络
+- 评测执行：`domjudge-judgehost`（judgehost-only）
+- 本地 native 路径仅保留 TeX 编译
+- 本地隔离依赖 `bubblewrap` / `seccomp`
 
 ## Runtime Paths
 

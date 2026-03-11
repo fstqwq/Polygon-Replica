@@ -1,0 +1,72 @@
+#!/bin/sh
+set -eu
+TESTIN="${1:-/dev/null}"
+PROGOUT="${2:-/dev/null}"
+shift 2 || true
+
+COMPILE_ONLY=1
+
+pick_target() {
+  # DOMjudge testcase_run.sh executes from testcase workdir and keeps the
+  # compiled submission at ./execdir/program (while run command args may use
+  # a chroot-internal absolute path that does not exist in host FS).
+  if [ -f "./execdir/program" ] && [ ! -d "./execdir/program" ]; then
+    echo "./execdir/program"
+    return 0
+  fi
+
+  for cand in "$@"; do
+    [ -n "$cand" ] || continue
+    base="$(basename -- "$cand")"
+    case "$base" in
+      runguard|runuser|sudo|sh|bash|dash|env)
+        continue
+        ;;
+    esac
+    if [ -e "$cand" ] && [ -e "$0" ] && [ "$cand" -ef "$0" ] 2>/dev/null; then
+      continue
+    fi
+    if [ -e "$cand" ] && [ -e "$TESTIN" ] && [ "$cand" -ef "$TESTIN" ] 2>/dev/null; then
+      continue
+    fi
+    if [ -f "$cand" ] && [ ! -d "$cand" ]; then
+      echo "$cand"
+      return 0
+    fi
+  done
+
+  if [ -f "./run" ] && [ ! -d "./run" ]; then
+    if [ -e "./run" ] && [ -e "$0" ] && [ "./run" -ef "$0" ] 2>/dev/null; then
+      :
+    else
+      echo "./run"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+TARGET=""
+if TARGET="$(pick_target "$@")"; then
+  cat "$TARGET" >"$PROGOUT"
+else
+  echo "compile-only target not found" >&2
+  exit 43
+fi
+
+cat > program.meta <<'EOF'
+memory-bytes: 0
+exitcode: 0
+wall-time: 0.000
+user-time: 0.000
+sys-time: 0.000
+cpu-time: 0.000
+time-used: wall-time
+time-result:
+output-truncated:
+stdin-bytes: 0
+stdout-bytes: 0
+stderr-bytes: 0
+EOF
+exit 0

@@ -1,24 +1,25 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import json
 import fcntl
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services.sandbox.base import ExecResult
-from app.services.tests_spec import dumps_tests_spec
-from app.services.statement_template import (
+from app.service.sandbox.base import ExecResult
+from app.service.problem.test_spec import dumps_tests_spec
+from app.service.statement.constant import (
     STATEMENT_PROBLEM_REL,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
     WF_STYLE_OLYMP_REL,
     WF_STYLE_STATEMENTS_REL,
-    _render_ftl_template,
-    render_statement_main,
-    statement_sources_signature,
 )
+from app.service.statement.ftl.renderer import render_ftl_template
+from app.service.statement.render import render_statement_main
+from app.service.statement.signature import statement_sources_signature
 from tests.common import SmokeBase
-from app.impl.config import config
+from app.impl.runtime.config import config
 
 preview_service = config.preview_service
 
@@ -274,9 +275,9 @@ class TestPreview(SmokeBase):
             ],
         )
 
-        calls: list[tuple[str, str, bool]] = []
+        calls: list[tuple[str, str]] = []
 
-        class _FakeBuildService:
+        class _FakeBuild:
             def run_build(
                 self,
                 problem: str,
@@ -284,20 +285,19 @@ class TestPreview(SmokeBase):
                 commit=None,
                 ref=None,
                 *,
-                prefer_local_solve_backend: bool = False,
                 sample_only: bool = False,
             ):
-                calls.append((str(problem), str(username), bool(prefer_local_solve_backend)))
+                calls.append((str(problem), str(username)))
                 return build_id
 
         old_build_service = preview_service.build_service
         try:
-            preview_service.build_service = _FakeBuildService()
+            preview_service.build_service = _FakeBuild()
             summary = preview_service._copy_sample_payloads_from_build("alice/sample", "alice", ws)
         finally:
             preview_service.build_service = old_build_service
 
-        self.assertEqual(calls, [("alice/sample", "alice", True)])
+        self.assertEqual(calls, [("alice/sample", "alice")])
         self.assertEqual(int(summary.get("copied") or 0), 2)
         self.assertEqual((ws / "tests" / "manual" / "901.in").read_text(encoding="utf-8"), "build-manual-input\n")
         self.assertEqual((ws / "tests" / "answers" / "901.ans").read_text(encoding="utf-8"), "build-manual-answer\n")
@@ -364,7 +364,7 @@ class TestPreview(SmokeBase):
         self.assertIn("sample_sync", str(row["summary_json"] or ""))
 
     def test_render_ftl_strips_standalone_directive_lines(self) -> None:
-        rendered = _render_ftl_template(
+        rendered = render_ftl_template(
             "A\n<#list problem.sampleTests as test>\nX${test.inputFile}\n</#list>\nB\n",
             {"problem": {"sampleTests": [{"inputFile": "1"}, {"inputFile": "2"}]}},
         )
@@ -470,6 +470,70 @@ class TestPreview(SmokeBase):
         row = config.db.fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
+
+    def test_compile_preview_success_summary_contract_fields_stable(self) -> None:
+        def _fake_run(spec):
+            cwd = Path(spec.cwd or ".")
+            tex_name = str(spec.command[-1] or "main.tex")
+            stem = Path(tex_name).stem
+            (cwd / f"{stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+            (cwd / f"{stem}.log").write_text("ok\n", encoding="utf-8")
+            return ExecResult(
+                backend="fake",
+                status="ok",
+                returncode=0,
+                elapsed_ms=1,
+                timed_out=False,
+                stdout="",
+                stderr="",
+            )
+
+        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+            preview_id = preview_service.compile_preview("alice/sample", "alice")
+
+        row = config.db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [preview_id])
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"] or ""), "ok")
+        summary = json.loads(str(row["summary_json"] or "{}"))
+        self.assertEqual(str(summary.get("pdf") or ""), "statement_preview/statement.pdf")
+        self.assertTrue(str(summary.get("statement_signature") or "").strip())
+        self.assertTrue(str(summary.get("preview_ref") or "").strip())
+        self.assertNotIn("error", summary)
+
+    def test_compile_preview_failure_summary_contract_fields_stable(self) -> None:
+        marker = "statement/main.tex:7 Undefined control sequence"
+
+        def _fake_run(spec):
+            cwd = Path(spec.cwd or ".")
+            tex_name = str(spec.command[-1] or "main.tex")
+            stem = Path(tex_name).stem
+            (cwd / f"{stem}.log").write_text(marker + "\n", encoding="utf-8")
+            return ExecResult(
+                backend="fake",
+                status="error",
+                returncode=1,
+                elapsed_ms=1,
+                timed_out=False,
+                stdout="",
+                stderr="",
+            )
+
+        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+            preview_id = preview_service.compile_preview("alice/sample", "alice")
+
+        row = config.db.fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"] or ""), "failed")
+        summary = json.loads(str(row["summary_json"] or "{}"))
+        self.assertTrue(str(summary.get("error") or "").strip())
+        self.assertEqual(int(summary.get("returncode") or 0), 1)
+        self.assertTrue(str(summary.get("statement_signature") or "").strip())
+        self.assertTrue(str(summary.get("preview_ref") or "").strip())
+        log_text = (Path(str(row["artifact_path"] or "")) / "logs" / "latex.log").read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+        self.assertIn(marker, log_text)
 
     def test_preview_service_reports_missing_pdflatex_format_hint(self) -> None:
         detail = preview_service._latex_compile_error_detail(
@@ -643,4 +707,3 @@ class TestPreview(SmokeBase):
         self.assertIsNone(done_row)
         self.assertTrue(shared_root.exists())
         self.assertTrue((shared_root / "statement_preview" / "statement.pdf").exists())
-

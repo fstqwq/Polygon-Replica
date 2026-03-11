@@ -1,0 +1,126 @@
+{% extends "root_base.html" %}
+{% block content %}
+<h1 class="page-title">System Configuration</h1>
+{% include "_flash_message.html" %}
+<p class="muted"><a href="/problems/{{ user.username }}/settings">Back to Settings</a></p>
+<div class="grid settings-grid">
+  <section>
+    <h2>Categories</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Overrides</th>
+          <th>Keys</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for section in config_sections %}
+        <tr>
+          <td>
+            {% if section.slug == selected_slug %}
+            <strong>{{ section.category }}</strong>
+            {% else %}
+            <a href="{{ section.href }}">{{ section.category }}</a>
+            {% endif %}
+          </td>
+          <td>{{ section.changed_count }}</td>
+          <td>{{ section.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="settings-admin-panel">
+    {% if selected_section %}
+    <h2>{{ selected_section.category }}</h2>
+    <p class="muted">Overrides: {{ selected_changed_count }} / {{ selected_count }}</p>
+    <form class="form-stack" method="post" action="/problems/{{ user.username }}/settings/config/{{ selected_slug }}">
+      <table>
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Value</th>
+            <th>Default</th>
+            <th>Range</th>
+            <th>Impact</th>
+            <th>State</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in selected_rows %}
+          <tr>
+            <td>
+              <code>{{ row.key }}</code>
+              {% if row.description %}
+              <div class="muted">{{ row.description }}</div>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.type == 'bool' %}
+              <label>
+                <input type="checkbox" name="{{ row.input_name }}" {% if row.current_value %}checked{% endif %} />
+                {{ 'enabled' if row.current_value else 'disabled' }}
+              </label>
+              {% elif row.choices %}
+              <select name="{{ row.input_name }}">
+                {% for choice in row.choices %}
+                <option value="{{ choice }}" {% if row.current_display == choice %}selected{% endif %}>{{ choice }}</option>
+                {% endfor %}
+              </select>
+              {% elif row.type == 'int' %}
+              <input type="number" name="{{ row.input_name }}" value="{{ row.current_value }}" />
+              {% elif row.type == 'float' %}
+              <input type="number" step="any" name="{{ row.input_name }}" value="{{ row.current_value }}" />
+              {% elif 'token' in row.key|lower %}
+              <div class="form-input-with-action">
+                <input id="{{ row.input_name }}" type="text" name="{{ row.input_name }}" value="{{ row.current_value }}" autocomplete="off" spellcheck="false" />
+                <button type="button" data-token-generate="1" data-token-target="{{ row.input_name }}">Generate</button>
+              </div>
+              {% else %}
+              <input type="text" name="{{ row.input_name }}" value="{{ row.current_value }}" />
+              {% endif %}
+            </td>
+            <td><code>{{ row.default_display }}</code></td>
+            <td class="muted">
+              {% if row.min is not none or row.max is not none %}
+              {% if row.min is not none %}{{ row.min }}{% else %}-{% endif %} .. {% if row.max is not none %}{{ row.max }}{% else %}-{% endif %}
+              {% else %}
+              -
+              {% endif %}
+              {% if row.unit %}
+              <div>{{ row.unit }}</div>
+              {% endif %}
+            </td>
+            <td class="muted">
+              {% if row.restart_required %}
+              restart
+              {% else %}
+              runtime
+              {% endif %}
+            </td>
+            <td>
+              {% if row.changed %}
+              <span class="danger">override</span>
+              <div>
+                <label class="muted">
+                  <input type="checkbox" name="config_reset_{{ row.key }}" value="1" />
+                  use default
+                </label>
+              </div>
+              {% else %}
+              <span class="muted">default</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="submit">Save {{ selected_section.category }} Changes</button>
+    </form>
+    {% else %}
+    <p class="muted">Config category not found.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

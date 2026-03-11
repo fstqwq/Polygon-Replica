@@ -32,10 +32,7 @@ require_cmd() {
 }
 
 require_cmd git
-require_cmd g++
 require_cmd python3
-require_cmd javac
-require_cmd java
 require_cmd pdflatex
 require_cmd openssl
 require_cmd uvicorn

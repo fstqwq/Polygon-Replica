@@ -1,0 +1,103 @@
+#!/bin/sh
+set -eu
+TESTIN="$1"
+TESTANS="$2"
+FEEDBACK="$3"
+shift 3
+HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+mkdir -p "$FEEDBACK"
+TEAMOUT="$FEEDBACK/team.out"
+
+pick_teamout_src() {
+  for cand in "$@"; do
+    [ -n "$cand" ] || continue
+    [ "$cand" = "$FEEDBACK" ] && continue
+    if [ -e "$cand" ] && [ -e "$TESTIN" ] && [ "$cand" -ef "$TESTIN" ] 2>/dev/null; then
+      continue
+    fi
+    if [ -e "$cand" ] && [ -e "$TESTANS" ] && [ "$cand" -ef "$TESTANS" ] 2>/dev/null; then
+      continue
+    fi
+    if [ -r "$cand" ] && [ ! -d "$cand" ]; then
+      echo "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+TEAMOUT_SRC=""
+if TEAMOUT_SRC="$(pick_teamout_src "$@")"; then
+  cat "$TEAMOUT_SRC" >"$TEAMOUT" 2>/dev/null || true
+fi
+if [ ! -s "$TEAMOUT" ]; then
+  cat >"$TEAMOUT" || true
+fi
+if [ ! -s "$TEAMOUT" ] && [ -r "$FEEDBACK/program.out" ] && [ ! -d "$FEEDBACK/program.out" ]; then
+  cat "$FEEDBACK/program.out" >"$TEAMOUT" 2>/dev/null || true
+fi
+
+VALIDATOR_BIN="$HERE/validator"
+VALIDATOR_SRC="$HERE/validator.cpp"
+compile_validator() {
+  [ -f "$VALIDATOR_SRC" ] || return 1
+  command -v g++ >/dev/null 2>&1 || return 1
+  CACHE_ROOT="${TMPDIR:-/tmp}/validator-cache"
+  mkdir -p "$CACHE_ROOT" 2>/dev/null || true
+  HASH_HDR="$HERE/testlib.h"
+  VALIDATOR_KEY=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    if [ -f "$HASH_HDR" ]; then
+      VALIDATOR_KEY="$(cat "$VALIDATOR_SRC" "$HASH_HDR" | sha256sum | awk '{print $1}')"
+    else
+      VALIDATOR_KEY="$(sha256sum "$VALIDATOR_SRC" | awk '{print $1}')"
+    fi
+  fi
+  if [ -z "$VALIDATOR_KEY" ]; then
+    VALIDATOR_KEY="validator-$(basename "$VALIDATOR_SRC")"
+  fi
+  TARGET="$CACHE_ROOT/$VALIDATOR_KEY"
+  if [ -x "$TARGET" ]; then
+    VALIDATOR_BIN="$TARGET"
+    return 0
+  fi
+  TMP_TARGET="$TARGET.tmp.$$"
+  g++ -O2 -std=gnu++20 -pipe -DDOMJUDGE -I"$HERE" "$VALIDATOR_SRC" -o "$TMP_TARGET" >"$FEEDBACK/validator.build.log" 2>&1 || { rm -f "$TMP_TARGET"; return 1; }
+  chmod +x "$TMP_TARGET" || true
+  mv -f "$TMP_TARGET" "$TARGET" 2>/dev/null || cp -f "$TMP_TARGET" "$TARGET"
+  rm -f "$TMP_TARGET" 2>/dev/null || true
+  VALIDATOR_BIN="$TARGET"
+  return 0
+}
+if [ ! -x "$VALIDATOR_BIN" ] && [ -f "$VALIDATOR_SRC" ]; then
+  if ! compile_validator; then
+    if [ -s "$FEEDBACK/validator.build.log" ]; then
+      cat "$FEEDBACK/validator.build.log" >"$FEEDBACK/judgemessage.txt"
+    else
+      echo "validator compile failed" >"$FEEDBACK/judgemessage.txt"
+    fi
+    exit 43
+  fi
+fi
+if [ ! -x "$VALIDATOR_BIN" ]; then
+  echo "validator executable missing" >"$FEEDBACK/judgemessage.txt"
+  exit 43
+fi
+set +e
+"$VALIDATOR_BIN" <"$TEAMOUT" >"$FEEDBACK/validator.log" 2>&1
+VALIDATOR_RC=$?
+set -e
+if [ "$VALIDATOR_RC" -eq 0 ]; then
+  if [ -s "$FEEDBACK/validator.log" ]; then
+    cat "$FEEDBACK/validator.log" >"$FEEDBACK/judgemessage.txt"
+  else
+    echo "validator ok" >"$FEEDBACK/judgemessage.txt"
+  fi
+  exit 42
+fi
+if [ -s "$FEEDBACK/validator.log" ]; then
+  cat "$FEEDBACK/validator.log" >"$FEEDBACK/judgemessage.txt"
+else
+  echo "validator rejected generated payload (rc=$VALIDATOR_RC)" >"$FEEDBACK/judgemessage.txt"
+fi
+exit 43

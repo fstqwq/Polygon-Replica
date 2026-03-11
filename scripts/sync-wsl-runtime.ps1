@@ -45,6 +45,15 @@ if [ ! -d "`$src/.git" ]; then
 fi
 
 mkdir -p "`$dst"
+
+# Mirror source tree into WSL runtime repo:
+# remove stale files first so renames/deletes in Windows are reflected in WSL.
+find "`$dst" -mindepth 1 -maxdepth 1 \
+  ! -name '.git' \
+  ! -name '.venv' \
+  ! -name 'var' \
+  -exec rm -rf {} +
+
 tar --exclude=.git --exclude=.venv --exclude=var -cf - -C "`$src" . | tar -xf - -C "`$dst"
 echo "sync done"
 "@

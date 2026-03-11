@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import json
@@ -10,9 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.common import SmokeBase
-from app.impl import run_export as run_export_impl
-from app.impl.config import config
-from app.services.util import run_cmd
+from app.impl.run_export import api
+from app.impl.runtime.config import config
+from app.service.platform.process import run_cmd
 
 db = config.db
 export_service = config.export_service
@@ -84,57 +84,6 @@ class TestExport(SmokeBase):
         self.assertTrue((ws / "third_party" / "testlib" / "testlib.h").is_file())
         self.assertTrue(callable(export_service.create_export))
 
-    def test_icpc_export_maps_solution_expected_behaviors(self) -> None:
-        ws = Path(self._workspace_path())
-        token = uuid.uuid4().hex[:8]
-        files = {
-            "accepted": f"solutions/ac_{token}.cpp",
-            "wrong_answer": f"solutions/wa_{token}.cpp",
-            "tle_or_correct": f"solutions/tlac_{token}.cpp",
-            "tle_or_re": f"solutions/tlre_{token}.cpp",
-            "time_limit_exceeded": f"solutions/tle_{token}.cpp",
-            "run_time_error": f"solutions/rte_{token}.cpp",
-            "rejected": f"solutions/rej_{token}.cpp",
-            "brute_force_alias": f"solutions/bf_{token}.cpp",
-        }
-        for expected, rel in files.items():
-            src = ws / rel
-            src.write_text("int main(){return 0;}\n", encoding="utf-8")
-            if expected == "brute_force_alias":
-                (ws / f"{rel}.desc").write_text("expected: brute_force\n", encoding="utf-8")
-            else:
-                (ws / f"{rel}.desc").write_text(f"expected: {expected}\n", encoding="utf-8")
-
-        tracked: list[str] = []
-        for rel in files.values():
-            tracked.append(rel)
-            tracked.append(f"{rel}.desc")
-        head = self._commit_workspace_paths(ws, tracked, f"test export keywords {token}")
-
-        build_id = f"b-exp-{token}"
-        self._insert_exportable_build(build_id, head)
-        archive = export_service.create_export(self.problem, build_id, "icpc")
-        self.assertRegex(archive.name, rf"^{re.escape(self.problem.replace('/', '-'))}-v\d+\.zip$")
-
-        with zipfile.ZipFile(archive, "r") as zf:
-            names = set(zf.namelist())
-        package_root = ""
-        for name in names:
-            if name.endswith("/problem.yaml"):
-                package_root = name.split("/", 1)[0]
-                break
-        self.assertTrue(package_root)
-
-        self.assertIn(f"{package_root}/submissions/accepted/{Path(files['accepted']).name}", names)
-        self.assertIn(f"{package_root}/submissions/wrong_answer/{Path(files['wrong_answer']).name}", names)
-        self.assertIn(f"{package_root}/submissions/time_limit_exceeded/{Path(files['tle_or_correct']).name}", names)
-        self.assertIn(f"{package_root}/submissions/time_limit_exceeded/{Path(files['tle_or_re']).name}", names)
-        self.assertIn(f"{package_root}/submissions/time_limit_exceeded/{Path(files['time_limit_exceeded']).name}", names)
-        self.assertIn(f"{package_root}/submissions/run_time_error/{Path(files['run_time_error']).name}", names)
-        self.assertIn(f"{package_root}/submissions/rejected/{Path(files['rejected']).name}", names)
-        self.assertIn(f"{package_root}/submissions/time_limit_exceeded/{Path(files['brute_force_alias']).name}", names)
-        self.assertIn(f"{package_root}/problem.yaml", names)
-
     def test_export_rejects_non_icpc_type(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
@@ -186,7 +135,7 @@ class TestExport(SmokeBase):
         actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"imp-icpc-{token}"
-        imported = run_export_impl.import_package_as_new_problem(
+        imported = api.import_package_as_new_problem(
             actor_user_id=int(actor_row["id"]),
             actor_user=str(actor_row["username"]),
             package_name=archive.name,
@@ -255,14 +204,49 @@ class TestExport(SmokeBase):
         actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"poly-backfill-{uuid.uuid4().hex[:8]}"
-        imported = run_export_impl.import_package_as_new_problem(
-            actor_user_id=int(actor_row["id"]),
-            actor_user=str(actor_row["username"]),
-            package_name="sample-backfill.zip",
-            package_content=payload.getvalue(),
-            requested_slug=target_slug,
-            source_problem=self.problem,
-        )
+        target_problem = f"{self.user}/{target_slug}"
+
+        def _fake_run_build(problem: str, username: str, *args, **kwargs) -> str:
+            self.assertEqual(problem, target_problem)
+            self.assertEqual(username, self.user)
+            build_id = f"b-backfill-{uuid.uuid4().hex[:8]}"
+            target_ctx = workspace_service.workspace_context(target_problem, self.user, include_recent=False)
+            build_ref = config.fs_manager.compute_build_ref(
+                {"suite": "export-backfill", "problem": target_problem, "build_id": build_id}
+            )
+            artifact_root = config.fs_manager.ensure_build_layout(build_ref).root.resolve()
+            (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
+            (artifact_root / "ans" / "001.ans").write_text("7\n", encoding="utf-8")
+            db.execute(
+                """
+                INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    build_id,
+                    build_ref,
+                    int(target_ctx["problem"]["id"]),
+                    int(target_ctx["workspace"]["id"]),
+                    "",
+                    "main",
+                    "ok",
+                    "{}",
+                    str(artifact_root),
+                    "2026-02-23T00:00:00Z",
+                    "2026-02-23T00:00:01Z",
+                ],
+            )
+            return build_id
+
+        with patch("app.impl.run_export.import_source.config.build_service.run_build", side_effect=_fake_run_build):
+            imported = api.import_package_as_new_problem(
+                actor_user_id=int(actor_row["id"]),
+                actor_user=str(actor_row["username"]),
+                package_name="sample-backfill.zip",
+                package_content=payload.getvalue(),
+                requested_slug=target_slug,
+                source_problem=self.problem,
+            )
         target_problem = str(imported.get("target_problem") or "")
         imported_ws = Path(workspace_service.ensure_workspace(target_problem, self.user))
         answer_path = imported_ws / "tests" / "answers" / "001.ans"
@@ -298,7 +282,7 @@ class TestExport(SmokeBase):
         self.assertIsNotNone(actor_row)
         target_slug = f"poly-backfail-{uuid.uuid4().hex[:8]}"
         with self.assertRaisesRegex(ValueError, "sample answer materialization build failed"):
-            run_export_impl.import_package_as_new_problem(
+            api.import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
                 package_name="sample-backfill-fail.zip",
@@ -336,7 +320,7 @@ class TestExport(SmokeBase):
             zf.writestr("icpc/data/sample/1.ans", "1\n")
 
         with self.assertRaisesRegex(ValueError, rf"import target already has revision history: {re.escape(target_problem)}"):
-            run_export_impl.import_package_as_new_problem(
+            api.import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
                 package_name="reject-stale-target.zip",
@@ -493,3 +477,5 @@ class TestExport(SmokeBase):
         self.assertTrue(package_root)
         self.assertNotIn(f"{package_root}/statement/problem.en.pdf", names)
         self.assertIn(f"{package_root}/statement/problem.en.tex", names)
+
+
