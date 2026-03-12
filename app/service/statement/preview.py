@@ -13,7 +13,7 @@ from app.service.platform.artifact import ArtifactService
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_hex_json
 from app.service.sandbox.base import ExecSpec, SandboxBackend
-from app.service.sandbox.native_backend import NativeSandboxBackend
+from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
@@ -47,7 +47,7 @@ class PreviewService:
             self.workspace_service.settings.artifacts_root,
             self.workspace_service.settings.run_root,
         )
-        self.sandbox = sandbox_backend or NativeSandboxBackend()
+        self.sandbox = sandbox_backend or TexSandboxBackend()
         self.tex_timeout_sec = 120
         self.tex_memory_mb = 1024
         self.tex_process_limit = 64
@@ -524,24 +524,23 @@ class PreviewService:
                 summary["sample_sync"] = sample_sync
             tex = render_statement_main(snapshot / "statement", problem_title=problem_title)
 
-            cmd = [
-                "pdflatex",
-                "-interaction=nonstopmode",
-                "-halt-on-error",
-                str(tex.name),
-            ]
             try:
                 final_proc = None
                 final_log_text = ""
                 for _ in range(max(1, int(self.tex_passes))):
                     proc = self.sandbox.run(
                         ExecSpec(
-                            command=cmd,
+                            command=[
+                                "pdflatex",
+                                "-interaction=nonstopmode",
+                                "-halt-on-error",
+                                str(tex.name),
+                            ],
                             cwd=tex.parent,
                             timeout_sec=self.tex_timeout_sec,
+                            output_kb=self.tex_output_kb,
                             memory_mb=self.tex_memory_mb,
                             process_limit=self.tex_process_limit,
-                            output_kb=self.tex_output_kb,
                         )
                     )
                     final_proc = proc
@@ -561,10 +560,22 @@ class PreviewService:
                 target = artifacts.statement_preview / "statement.pdf"
                 if final_proc is None:
                     status = "failed"
-                    summary = _summary_with_sample({"error": "latex compile failed", "statement_signature": statement_signature})
+                    summary = _summary_with_sample(
+                        {
+                            "error": "latex compile failed",
+                            "statement_signature": statement_signature,
+                            "failed_stage": "latex_compile",
+                        }
+                    )
                 elif final_proc.timed_out:
                     status = "failed"
-                    summary = _summary_with_sample({"error": "latex compile timeout", "statement_signature": statement_signature})
+                    summary = _summary_with_sample(
+                        {
+                            "error": "latex compile timeout",
+                            "statement_signature": statement_signature,
+                            "failed_stage": "latex_compile",
+                        }
+                    )
                 elif int(final_proc.returncode or 0) != 0:
                     error_detail = self._latex_compile_error_detail(final_log_text, final_proc.returncode)
                     if not error_detail:
@@ -575,24 +586,44 @@ class PreviewService:
                             "error": error_detail,
                             "returncode": final_proc.returncode,
                             "statement_signature": statement_signature,
+                            "failed_stage": "latex_compile",
                         }
                     )
                 elif not generated.exists():
                     status = "failed"
-                    summary = _summary_with_sample({"error": "latex compile failed", "statement_signature": statement_signature})
+                    summary = _summary_with_sample(
+                        {
+                            "error": "latex compile failed",
+                            "statement_signature": statement_signature,
+                            "failed_stage": "latex_compile",
+                        }
+                    )
                 else:
                     if generated != target:
                         shutil.copy2(generated, target)
                     summary = _summary_with_sample({"pdf": "statement_preview/statement.pdf", "statement_signature": statement_signature})
             except FileNotFoundError as exc:
                 status = "failed"
-                summary = _summary_with_sample({"error": str(exc), "statement_signature": statement_signature})
+                summary = _summary_with_sample(
+                    {
+                        "error": str(exc),
+                        "statement_signature": statement_signature,
+                        "failed_stage": "latex_compile",
+                    }
+                )
                 log.write_text(str(exc) + "\n", encoding="utf-8")
         except Exception as exc:
             status = "failed"
-            summary = _summary_with_sample({"error": str(exc), "statement_signature": statement_signature})
-            if not log.exists():
-                log.write_text(str(exc) + "\n", encoding="utf-8")
+            failed_stage = "sample_sync" if str(exc).startswith("sample build failed") else "latex_compile"
+            summary = _summary_with_sample(
+                {
+                    "error": str(exc),
+                    "statement_signature": statement_signature,
+                    "failed_stage": failed_stage,
+                }
+            )
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(str(exc) + "\n", encoding="utf-8")
         finally:
             if status != "ok":
                 try:

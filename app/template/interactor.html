@@ -3,6 +3,7 @@
 {% block content %}
 <h1 class="page-title">Interactor</h1>
 {% include "_flash_message.html" %}
+{% set editor_error = message if message_level == 'error' else '' %}
 <section>
     <h2>Interactor Editor</h2>
     <p><strong>{{ "File path" if interactor_status.repo_source_exists else "New file" }}:</strong> <code>{{ repo_source }}</code></p>
@@ -15,7 +16,8 @@
       content_char_limit,
       "Save Interactor Source",
       "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/interactor/create-template",
-      "Create Interactor Template"
+      "Create Interactor Template",
+      editor_error
     ) }}
     {% else %}
     {{ create_template_form(

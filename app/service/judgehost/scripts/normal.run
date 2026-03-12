@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -e
 TESTIN="$1"
 PROGOUT="$2"
 shift 2

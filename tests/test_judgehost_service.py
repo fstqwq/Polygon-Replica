@@ -717,12 +717,12 @@ class TestJudgehostService(SmokeBase):
         run_root = config.fs_manager.resolve_run_root(run_id)
         self.assertFalse((run_root / "001.out").exists())
 
-    def test_domjudge_rewrites_untrusted_non_tl_result_when_cpu_exceeds_double_tl(self) -> None:
+    def test_domjudge_rewrites_untrusted_non_tl_result_when_cpu_exceeds_time_limit(self) -> None:
         service = config.judgehost_task_service
         self.assertEqual(
             service._domjudge_rewrite_untrusted_runresult(
                 "wrong-answer",
-                cpu_sec=12.5,
+                cpu_sec=6.5,
                 run_cfg_obj={"time_limit": 6.0},
             ),
             "timelimit",
@@ -730,7 +730,7 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(
             service._domjudge_rewrite_untrusted_runresult(
                 "run-error",
-                cpu_sec=13.0,
+                cpu_sec=6.1,
                 run_cfg_obj={"time_limit_ms": 6000},
             ),
             "timelimit",
@@ -738,7 +738,7 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(
             service._domjudge_rewrite_untrusted_runresult(
                 "wrong-answer",
-                cpu_sec=11.5,
+                cpu_sec=5.9,
                 run_cfg_obj={"time_limit": 6.0},
             ),
             "wrong-answer",
@@ -750,6 +750,22 @@ class TestJudgehostService(SmokeBase):
                 run_cfg_obj={"time_limit": 6.0},
             ),
             "correct",
+        )
+        self.assertEqual(
+            service._domjudge_rewrite_untrusted_runresult(
+                "run-error",
+                cpu_sec=0.6,
+                run_cfg_obj={"time_limit": 0.5},
+            ),
+            "timelimit",
+        )
+        self.assertEqual(
+            service._domjudge_rewrite_untrusted_runresult(
+                "run-error",
+                cpu_sec=0.4,
+                run_cfg_obj={"time_limit": 0.5},
+            ),
+            "run-error",
         )
 
     def test_domjudge_add_judging_run_rewrites_wa_to_tl_on_double_cpu(self) -> None:
@@ -1394,6 +1410,7 @@ class TestJudgehostService(SmokeBase):
     def test_domjudge_config_and_task_output_limits_use_kb_units(self) -> None:
         service = config.judgehost_task_service
         cfg = service.domjudge_config()
+        self.assertEqual(str(cfg.get("timelimit_overshoot") or ""), "1s|100%")
         self.assertEqual(
             int(cfg.get("output_storage_limit") or 0),
             int(getattr(service._constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536) * 1024,
@@ -1438,6 +1455,16 @@ class TestJudgehostService(SmokeBase):
         self.assertIn("TESTOUT", script_text)
         self.assertIn("META", script_text)
         self.assertNotIn("INTERACTOR_BIN", script_text)
+
+    def test_domjudge_cpp_executable_build_script_comes_from_asset(self) -> None:
+        service = config.judgehost_task_service
+        script_text = service._domjudge_cpp_executable_build_script(
+            "interactor.cpp",
+            role="interactor",
+        ).decode("utf-8")
+        self.assertIn("#!/bin/sh", script_text)
+        self.assertIn("Auto-generated build script for interactor by Polygon2DOMjudge", script_text)
+        self.assertIn("g++ -Wall -DDOMJUDGE -O2 interactor.cpp -std=gnu++20 -o run", script_text)
 
     def test_domjudge_generate_run_script_executes_submission_runner_with_payload_args(self) -> None:
         service = config.judgehost_task_service
@@ -1800,171 +1827,114 @@ class TestJudgehostService(SmokeBase):
         compare_files = service.domjudge_get_executable_files("compare", str(task_row.get("compare_script_id") or ""))
         self.assertTrue(any(str(item.get("filename") or "") == "validator" for item in compare_files))
 
-    def test_domjudge_run_script_compile_only_branch_copies_artifact(self) -> None:
+    def test_domjudge_run_script_compile_only_branch_uses_skip_run_copy(self) -> None:
         service = config.judgehost_task_service
         script_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
-        self.assertIn("COMPILE_ONLY", script_text)
-        self.assertIn("cat \"$TARGET\" >\"$PROGOUT\"", script_text)
+        self.assertIn('cat "$TESTIN" >"$PROGOUT"', script_text)
+        self.assertIn('"$@" </dev/null >/dev/null', script_text)
+
+    def test_domjudge_run_script_manual_validate_branch_copies_input_to_output(self) -> None:
+        service = config.judgehost_task_service
+        script_text = service._domjudge_run_script(
+            False,
+            solve_mode=False,
+            compile_only=False,
+            manual_validate_only=True,
+        ).decode("utf-8")
+        self.assertIn('cat "$TESTIN" >"$PROGOUT"', script_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_script = root / "run-wrapper"
+            test_in = root / "001.in"
+            prog_out = root / "program.out"
+            noop = root / "noop.sh"
+            run_script.write_text(script_text, encoding="utf-8")
+            os.chmod(run_script, 0o755)
+            test_in.write_text("manual input\n", encoding="utf-8")
+            noop.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            os.chmod(noop, 0o755)
+            result = subprocess.run(
+                [str(run_script), str(test_in), str(prog_out), str(noop)],
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=root,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(prog_out.read_text(encoding="utf-8"), "manual input\n")
+
+    def test_domjudge_skip_compile_creates_noop_executable(self) -> None:
+        service = config.judgehost_task_service
+        script_text = service._domjudge_compile_script(
+            "manual_validate.cpp",
+            manual_validate_only=True,
+        ).decode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            compile_script = root / "run"
+            dest = root / "program"
+            source = root / "manual_validate.cpp"
+            compile_script.write_text(script_text, encoding="utf-8")
+            os.chmod(compile_script, 0o755)
+            source.write_text("int main(){return 0;}\n", encoding="utf-8")
+            result = subprocess.run(
+                [str(compile_script), str(dest), "65536", str(source)],
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=root,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(dest.exists())
+            self.assertTrue(os.access(dest, os.X_OK))
 
     def test_domjudge_compile_script_matches_official_wrapper_shape(self) -> None:
         service = config.judgehost_task_service
         script_text = service._domjudge_compile_script("submission.cpp").decode("utf-8")
         self.assertIn('exec g++ -x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE -I. "$MAIN" -o "$DEST"', script_text)
 
-    def test_domjudge_run_script_compile_only_accepts_run_named_artifact(self) -> None:
+    def test_domjudge_compile_only_cpp_script_compiles_then_writes_noop_program(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
+        compile_text = service._domjudge_compile_script("submission.cpp", compile_only=True).decode("utf-8")
+        run_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            compile_script = root / "compile-wrapper"
             run_script = root / "run-wrapper"
+            dest = root / "program"
+            source = root / "submission.cpp"
             test_in = root / "001.in"
             prog_out = root / "program.out"
-            artifact = root / "run"
-            run_script.write_text(script_text, encoding="utf-8")
+            compile_script.write_text(compile_text, encoding="utf-8")
+            run_script.write_text(run_text, encoding="utf-8")
+            os.chmod(compile_script, 0o755)
             os.chmod(run_script, 0o755)
-            test_in.write_text("", encoding="utf-8")
-            artifact.write_bytes(b"\x7fELFcompiled-artifact\n")
-            os.chmod(artifact, 0o755)
-            result = subprocess.run(
-                [str(run_script), str(test_in), str(prog_out), str(artifact)],
+            source.write_text(
+                "#include <iostream>\n"
+                "int main(){ int *p=nullptr; std::cout << *p << '\\n'; return 0; }\n",
+                encoding="utf-8",
+            )
+            test_in.write_text("compile-only\n", encoding="utf-8")
+            compiled = subprocess.run(
+                [str(compile_script), str(dest), "65536", str(source)],
                 text=True,
                 capture_output=True,
                 check=False,
                 cwd=root,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(prog_out.read_bytes(), artifact.read_bytes())
-
-    def test_domjudge_run_script_compile_only_accepts_non_executable_artifact(self) -> None:
-        service = config.judgehost_task_service
-        script_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            run_script = root / "run-wrapper"
-            test_in = root / "001.in"
-            prog_out = root / "program.out"
-            artifact = root / "run"
-            run_script.write_text(script_text, encoding="utf-8")
-            os.chmod(run_script, 0o755)
-            test_in.write_text("", encoding="utf-8")
-            artifact.write_bytes(b"compiled-artifact-no-exec\n")
-            result = subprocess.run(
-                [str(run_script), str(test_in), str(prog_out), str(artifact)],
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            self.assertTrue(dest.exists())
+            self.assertTrue(os.access(dest, os.X_OK))
+            self.assertEqual(dest.read_text(encoding="utf-8"), "#!/bin/sh\nexit 0\n")
+            executed = subprocess.run(
+                [str(run_script), str(test_in), str(prog_out), str(dest)],
                 text=True,
                 capture_output=True,
                 check=False,
                 cwd=root,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(prog_out.read_bytes(), artifact.read_bytes())
-
-    def test_domjudge_run_script_compile_only_skips_self_script_candidate(self) -> None:
-        service = config.judgehost_task_service
-        script_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            run_script = root / "run"
-            test_in = root / "001.in"
-            prog_out = root / "program.out"
-            run_script.write_text(script_text, encoding="utf-8")
-            os.chmod(run_script, 0o755)
-            test_in.write_text("", encoding="utf-8")
-            result = subprocess.run(
-                [str(run_script), str(test_in), str(prog_out), str(run_script)],
-                text=True,
-                capture_output=True,
-                check=False,
-                cwd=root,
-            )
-            self.assertEqual(result.returncode, 43)
-            self.assertIn("compile-only target not found", result.stderr)
-
-    def test_domjudge_run_script_compile_only_uses_execdir_program_for_chroot_style_run_args(self) -> None:
-        service = config.judgehost_task_service
-        script_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            run_script = root / "run"
-            test_in = root / "001.in"
-            prog_out = root / "program.out"
-            execdir = root / "execdir"
-            artifact = execdir / "program"
-            run_script.write_text(script_text, encoding="utf-8")
-            os.chmod(run_script, 0o755)
-            test_in.write_text("", encoding="utf-8")
-            execdir.mkdir(parents=True, exist_ok=True)
-            artifact.write_bytes(b"\x7fELFcompiled-artifact\n")
-            os.chmod(artifact, 0o755)
-            result = subprocess.run(
-                [
-                    str(run_script),
-                    str(test_in),
-                    str(prog_out),
-                    "sudo",
-                    "-n",
-                    "/opt/domjudge/judgehost/bin/runguard",
-                    "--",
-                    "/testcase00001/1/execdir/program",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-                cwd=root,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(prog_out.read_bytes(), artifact.read_bytes())
-
-    def test_domjudge_run_script_compile_only_ignores_absolute_wrapper_and_uses_local_binary(self) -> None:
-        service = config.judgehost_task_service
-        script_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            run_script = root / "run"
-            test_in = root / "001.in"
-            prog_out = root / "program.out"
-            local_binary = root / "compiled.bin"
-            run_script.write_text(script_text, encoding="utf-8")
-            os.chmod(run_script, 0o755)
-            test_in.write_text("", encoding="utf-8")
-            local_binary.write_bytes(b"\x7fELFcompiled-artifact\n")
-            os.chmod(local_binary, 0o755)
-            wrapper = shutil.which("sh") or shutil.which("env") or "/bin/sh"
-            result = subprocess.run(
-                [str(run_script), str(test_in), str(prog_out), str(wrapper), str(local_binary)],
-                text=True,
-                capture_output=True,
-                check=False,
-                cwd=root,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(prog_out.read_bytes(), local_binary.read_bytes())
-
-    def test_domjudge_run_script_compile_only_skips_runguard_named_candidate(self) -> None:
-        service = config.judgehost_task_service
-        script_text = service._domjudge_run_script(False, solve_mode=False, compile_only=True).decode("utf-8")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            run_script = root / "run"
-            test_in = root / "001.in"
-            prog_out = root / "program.out"
-            wrapper = root / "runguard"
-            local_binary = root / "compiled.bin"
-            run_script.write_text(script_text, encoding="utf-8")
-            os.chmod(run_script, 0o755)
-            test_in.write_text("", encoding="utf-8")
-            wrapper.write_bytes(b"wrapper\n")
-            os.chmod(wrapper, 0o755)
-            local_binary.write_bytes(b"\x7fELFcompiled-artifact\n")
-            os.chmod(local_binary, 0o755)
-            result = subprocess.run(
-                [str(run_script), str(test_in), str(prog_out), str(wrapper), str(local_binary)],
-                text=True,
-                capture_output=True,
-                check=False,
-                cwd=root,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(prog_out.read_bytes(), local_binary.read_bytes())
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(prog_out.read_text(encoding="utf-8"), "compile-only\n")
 
     def test_domjudge_compile_only_uses_single_virtual_case_even_with_build_tests(self) -> None:
         service = config.judgehost_task_service
@@ -2097,7 +2067,8 @@ class TestJudgehostService(SmokeBase):
         run_files = service.domjudge_get_executable_files("run", str(task_row.get("run_script_id") or ""))
         run_item = next((item for item in run_files if str(item.get("filename") or "") == "run"), {})
         run_text = base64.b64decode(str(run_item.get("content") or "")).decode("utf-8", errors="replace")
-        self.assertIn("COMPILE_ONLY", run_text)
+        self.assertIn('cat "$TESTIN" >"$PROGOUT"', run_text)
+        self.assertIn('"$@" </dev/null >/dev/null', run_text)
         self.assertNotIn("runpipe", run_text)
 
         case_id = int(task_row.get("judgetaskid") or 0)
@@ -2181,7 +2152,6 @@ class TestJudgehostService(SmokeBase):
             {
                 "runresult": "correct",
                 "runtime": "0.001",
-                "output_run": base64.b64encode(b"artifact-a").decode("ascii"),
                 "output_error": "",
                 "output_system": "",
                 "output_diff": "",
@@ -2270,7 +2240,6 @@ class TestJudgehostService(SmokeBase):
             {
                 "runresult": "correct",
                 "runtime": "0.001",
-                "output_run": base64.b64encode(b"artifact-a").decode("ascii"),
                 "output_error": "",
                 "output_system": "",
                 "output_diff": "",
@@ -2417,7 +2386,6 @@ class TestJudgehostService(SmokeBase):
             {
                 "runresult": "correct",
                 "runtime": "0.001",
-                "output_run": base64.b64encode(b"binary-artifact").decode("ascii"),
                 "output_error": "",
                 "output_system": "",
                 "output_diff": "",
@@ -2505,7 +2473,7 @@ class TestJudgehostService(SmokeBase):
         self.assertIsInstance(tests, list)
         self.assertEqual(str((tests[0] or {}).get("verdict") or ""), "OK")
 
-    def test_domjudge_compile_only_missing_output_is_not_normalized_to_ok(self) -> None:
+    def test_domjudge_compile_only_missing_output_is_normalized_to_ok(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service._enabled
         old_token = service._api_token
@@ -2568,18 +2536,16 @@ class TestJudgehostService(SmokeBase):
                 "team_message": "",
             },
         )
-        with self.assertRaises(RuntimeError) as ctx:
-            service.wait_for_task(task_id, timeout_sec=2.0)
-        self.assertIn("internal error", str(ctx.exception).lower())
+        finished_run_id = service.wait_for_task(task_id, timeout_sec=2.0)
+        self.assertEqual(finished_run_id, run_id)
 
         run_row = config.db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id])
         self.assertIsNotNone(run_row)
-        self.assertEqual(str(run_row["status"] or "").strip().lower(), "failed")
+        self.assertEqual(str(run_row["status"] or "").strip().lower(), "ok")
         summary = json.loads(str(run_row["summary_json"] or "{}"))
         tests = summary.get("tests") if isinstance(summary, dict) else []
         self.assertIsInstance(tests, list)
-        self.assertEqual(str((tests[0] or {}).get("verdict") or ""), "FL")
-        self.assertIn("internal error", str(summary.get("error") or "").lower())
+        self.assertEqual(str((tests[0] or {}).get("verdict") or ""), "OK")
         passes = (tests[0] or {}).get("passes") if tests else []
         first_pass = (passes[0] if isinstance(passes, list) and passes else {})
         self.assertFalse(str((first_pass or {}).get("output_ref") or "").strip())
@@ -2633,13 +2599,15 @@ class TestJudgehostService(SmokeBase):
             case_id,
             {"compile_success": "0", "output_compile": base64.b64encode(b"compile failed detail").decode("ascii"), "compile_metadata": ""},
         )
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as ctx:
             service.wait_for_task(task_id, timeout_sec=2.0)
+        self.assertIn("compile failed detail", str(ctx.exception))
 
         run_row = config.db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [run_id])
         self.assertIsNotNone(run_row)
         self.assertEqual(str(run_row["status"] or "").strip().lower(), "failed")
         summary = json.loads(str(run_row["summary_json"] or "{}"))
+        self.assertIn("compile failed detail", str(summary.get("error") or ""))
         tests = summary.get("tests") if isinstance(summary, dict) else []
         self.assertIsInstance(tests, list)
         self.assertEqual(str((tests[0] or {}).get("verdict") or ""), "CE")
@@ -2647,6 +2615,78 @@ class TestJudgehostService(SmokeBase):
         self.assertIsInstance(diagnostics, list)
         first_diag = diagnostics[0] if diagnostics else {}
         self.assertIn("compile failed detail", str((first_diag or {}).get("message") or ""))
+
+    def test_domjudge_source_files_include_submission_extra_sources(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service._enabled
+        old_token = service._api_token
+        old_username = service._api_username
+        old_include_build_payload = service._include_build_payload
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        self.addCleanup(setattr, service, "_api_username", old_username)
+        self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
+        service._enabled = True
+        service._api_token = "test-token"
+        service._api_username = "judgehost"
+        service._include_build_payload = True
+
+        build_id = f"b-jh-extra-source-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-extra-source-{uuid.uuid4().hex[:8]}"
+        self._seed_build(build_id)
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            build_id=build_id,
+            mode="pass-fail",
+            submission_path=None,
+            upload_content=b'#include "testlib.h"\nint main(){return 0;}\n',
+            upload_filename="gen.cpp",
+            run_id=run_id,
+            selected_tests=[],
+            invocation_id="inv-jh-extra-source",
+            invocation_run_ids=[run_id],
+            expected_behavior="accepted",
+            invocation_source="build.generate-input",
+            task_kind="generate",
+            prepared_payload={
+                "build_payload": {
+                    "tests": [
+                        {
+                            "name": "001.in",
+                            "input_b64": base64.b64encode(b"1\n").decode("ascii"),
+                            "answer_name": "001.ans",
+                            "answer_b64": "",
+                        }
+                    ],
+                    "run_config_json": json.dumps(
+                        {
+                            "checker_mode": "testlib",
+                            "checker_args": [],
+                            "max_passes": 1,
+                            "time_limit_ms": 30000,
+                            "memory_limit_mb": 1024,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "problem_limits": {"time_limit_ms": 30000, "memory_limit_mb": 1024},
+                    "binaries_b64": {},
+                    "sources_b64": {},
+                },
+                "extra_sources_b64": {
+                    "testlib.h": base64.b64encode(b"// fake testlib\n").decode("ascii"),
+                },
+            },
+        )
+        self.assertTrue(task_id)
+        service.domjudge_register_host("judgehost-extra-source")
+        tasks = service.domjudge_fetch_work("judgehost-extra-source", max_batchsize=8)
+        self.assertEqual(len(tasks), 1)
+        source_files = service.domjudge_get_source_files(str(tasks[0].get("jobid") or ""))
+        source_names = {str(item.get("filename") or "") for item in source_files}
+        self.assertIn("gen.cpp", source_names)
+        self.assertIn("testlib.h", source_names)
 
     def test_domjudge_b64_decode_requires_base64_text(self) -> None:
         service = config.judgehost_task_service
@@ -2904,11 +2944,7 @@ class TestJudgehostService(SmokeBase):
         compile_config_raw = str(tasks[0].get("compile_config") or "{}")
         compile_config = json.loads(compile_config_raw)
         self.assertAlmostEqual(float(run_config.get("time_limit") or 0.0), 6.0, places=3)
-        expected_overshoot = max(
-            0.0,
-            float(getattr(service._constants, "RUN_WALL_TIME_SLACK_INTERACTIVE_SEC", 15) or 15),
-        )
-        self.assertAlmostEqual(float(run_config.get("overshoot") or 0.0), expected_overshoot, places=3)
+        self.assertAlmostEqual(float(run_config.get("overshoot") or 0.0), 0.0, places=3)
         self.assertEqual(int(run_config.get("memory_limit") or 0), 1024 * 1024)
         self.assertEqual(
             int(run_config.get("output_limit") or 0),

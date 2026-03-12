@@ -52,6 +52,7 @@ from app.impl.workspace.run_view_lifecycle_builder import _build_verification_li
 from app.impl.workspace.run_view_lifecycle_card import (
     _run_domjudge_case_cells,
     _run_verification_details_from_audit,
+    _verification_tests_meta_stats,
 )
 from app.impl.workspace.run_view_list import (
     _effective_run_timeout_ms,
@@ -553,6 +554,7 @@ def build_run_detail_context(
         max_memory_display = _run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
         columns.append({'id': run_id, 'build_id': build_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'invocation_source': invocation_source, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'status_upper': status.upper(), 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': str(summary.get('compile_log') or '') if isinstance(summary, dict) else '', 'compile_diagnostics': summary.get('compile_diagnostics') if isinstance(summary, dict) else [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')) if isinstance(summary, dict) else False, 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0) if isinstance(summary, dict) else 0, 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0) if isinstance(summary, dict) else 0, 'error': str(summary.get('error') or '') if isinstance(summary, dict) else '', 'error_display': _run_error_display(str(summary.get('error') or '')) if isinstance(summary, dict) else '', 'tests_total': int(summary.get('tests_total') or len(tests_map)) if isinstance(summary, dict) else len(tests_map), 'tests_truncated': bool(summary.get('tests_truncated')) if isinstance(summary, dict) else False, 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': str(match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display})
     ordered_tests = sorted(all_tests, key=_run_test_sort_key)
+    status_summary = _run_invocation_status_summary(columns)
     verification_build_id = str(verification_details.get('build_id') or '').strip() if isinstance(verification_details, dict) else ''
     if not is_canonical_artifact_id(verification_build_id):
         verification_build_id = ''
@@ -563,54 +565,50 @@ def build_run_detail_context(
                 verification_build_id = candidate_build
                 break
     gen_stage_map: dict[str, dict[str, str]] = {}
-    main_stage_map: dict[str, dict[str, str]] = {}
-    main_stage_source = ''
     if verification_build_id:
-        gen_stage_map, main_stage_map, main_stage_source = _collect_build_stage_markers(verification_build_id)
-    main_stage_source_rel = normalize_workspace_rel_path(main_stage_source)
-    main_stage_column_id = ''
-    if main_stage_source_rel:
-        for col in columns:
-            col_source = normalize_workspace_rel_path(str(col.get('source') or ''))
-            if col_source and col_source == main_stage_source_rel:
-                main_stage_column_id = str(col.get('id') or '').strip()
-                if main_stage_column_id:
-                    break
-    if not main_stage_column_id:
-        for col in columns:
-            if str(col.get('expected_behavior') or '').strip().lower() == 'accepted':
-                main_stage_column_id = str(col.get('id') or '').strip()
-                if main_stage_column_id:
-                    break
+        gen_stage_map, _main_stage_map, _main_stage_source = _collect_build_stage_markers(verification_build_id)
+    all_tests.update(gen_stage_map.keys())
+    ordered_tests = sorted(all_tests, key=_run_test_sort_key)
+    known_tests_by_index: dict[int, str] = {}
+    for test_name in ordered_tests:
+        try:
+            test_index = int(Path(test_name).stem)
+        except Exception:
+            continue
+        if test_index > 0 and test_index not in known_tests_by_index:
+            known_tests_by_index[test_index] = test_name
+    tests_meta_stats = _verification_tests_meta_stats(problem_slug, verification_build_id)
+    try:
+        tests_meta_total = max(0, int(tests_meta_stats.get('total') or 0))
+    except Exception:
+        tests_meta_total = 0
+    display_test_total = max(max(known_tests_by_index.keys(), default=0), tests_meta_total)
     row_index_by_test = {name: idx for idx, name in enumerate(ordered_tests, start=1)}
     detail_rows: list[dict] = []
     if not include_row_details:
-        for idx, test_name in enumerate(ordered_tests, start=1):
-            gen_stage_item = gen_stage_map.get(test_name)
-            row_gen_stage = {
-                'show': bool(isinstance(gen_stage_item, dict)),
-                'short': str((gen_stage_item or {}).get('short') or '--') if isinstance(gen_stage_item, dict) else '--',
-                'kind': str((gen_stage_item or {}).get('kind') or 'neutral') if isinstance(gen_stage_item, dict) else 'neutral',
-                'title': str((gen_stage_item or {}).get('detail') or '') if isinstance(gen_stage_item, dict) else '',
-            }
+        row_entries: list[tuple[int, str, str, bool]] = []
+        if bool(status_summary['has_running']) and display_test_total > 0:
+            for idx in range(1, display_test_total + 1):
+                actual_name = str(known_tests_by_index.get(idx) or '').strip()
+                row_entries.append((idx, actual_name, actual_name or f'test {idx}', not bool(actual_name)))
+        else:
+            row_entries = [(idx, test_name, test_name, False) for idx, test_name in enumerate(ordered_tests, start=1)]
+        for idx, actual_test_name, display_name, is_placeholder in row_entries:
             cells: list[dict] = []
             has_detail = False
             for col in columns:
-                col_run_id = str(col.get('id') or '').strip()
-                main_stage_item = main_stage_map.get(test_name) if (main_stage_column_id and col_run_id == main_stage_column_id) else None
-                main_stage_payload = (
-                    {
-                        'show': True,
-                        'short': str((main_stage_item or {}).get('short') or '--'),
-                        'kind': str((main_stage_item or {}).get('kind') or 'neutral'),
-                        'title': str((main_stage_item or {}).get('detail') or ''),
-                    }
-                    if isinstance(main_stage_item, dict)
-                    else None
-                )
-                cell = col['tests_map'].get(test_name)
+                cell = col['tests_map'].get(actual_test_name) if actual_test_name else None
                 if cell is None:
-                    cells.append({'text': '--', 'short': '--', 'metrics': '-', 'kind': 'neutral', 'detail': None, 'main_stage': main_stage_payload})
+                    missing_running = bool(status_summary['has_running'])
+                    cells.append(
+                        {
+                            'text': '..' if missing_running else '--',
+                            'short': '..' if missing_running else '--',
+                            'metrics': 'running' if missing_running else '-',
+                            'kind': 'neutral',
+                            'detail': None,
+                        }
+                    )
                     continue
                 if bool(cell.get('detail_available')):
                     has_detail = True
@@ -621,17 +619,17 @@ def build_run_detail_context(
                         'metrics': str(cell.get('metrics') or '-'),
                         'kind': str(cell.get('kind') or 'neutral'),
                         'detail': None,
-                        'main_stage': main_stage_payload,
                     }
                 )
             detail_rows.append(
                 {
                     'index': idx,
-                    'test_name': test_name,
+                    'test_name': actual_test_name or display_name,
+                    'display_name': display_name,
+                    'is_placeholder': bool(is_placeholder),
                     'row_id': f'test-detail-{idx}',
                     'cells': cells,
-                    'has_detail': bool(has_detail),
-                    'gen_stage': row_gen_stage,
+                    'has_detail': bool(has_detail and (not is_placeholder)),
                 }
             )
     else:
@@ -698,13 +696,6 @@ def build_run_detail_context(
             row_index = int(row_index_by_test.get(test_name) or 0)
             if row_index <= 0:
                 continue
-            gen_stage_item = gen_stage_map.get(test_name)
-            row_gen_stage = {
-                'show': bool(isinstance(gen_stage_item, dict)),
-                'short': str((gen_stage_item or {}).get('short') or '--') if isinstance(gen_stage_item, dict) else '--',
-                'kind': str((gen_stage_item or {}).get('kind') or 'neutral') if isinstance(gen_stage_item, dict) else 'neutral',
-                'title': str((gen_stage_item or {}).get('detail') or '') if isinstance(gen_stage_item, dict) else '',
-            }
             input_rel = f'tests/{test_name}'
             answer_name = _run_test_answer_name(test_name)
             answer_rel = f'ans/{answer_name}' if answer_name else ''
@@ -725,21 +716,9 @@ def build_run_detail_context(
                 answer_preview = source_answer_preview
             cells: list[dict] = []
             for col in columns:
-                col_run_id = str(col.get('id') or '').strip()
-                main_stage_item = main_stage_map.get(test_name) if (main_stage_column_id and col_run_id == main_stage_column_id) else None
-                main_stage_payload = (
-                    {
-                        'show': True,
-                        'short': str((main_stage_item or {}).get('short') or '--'),
-                        'kind': str((main_stage_item or {}).get('kind') or 'neutral'),
-                        'title': str((main_stage_item or {}).get('detail') or ''),
-                    }
-                    if isinstance(main_stage_item, dict)
-                    else None
-                )
                 cell = col['tests_map'].get(test_name)
                 if cell is None:
-                    cells.append({'text': '--', 'short': '--', 'metrics': '-', 'kind': 'neutral', 'detail': None, 'main_stage': main_stage_payload})
+                    cells.append({'text': '--', 'short': '--', 'metrics': '-', 'kind': 'neutral', 'detail': None})
                     continue
                 detail_raw = cell.get('detail') if isinstance(cell.get('detail'), dict) else None
                 detail_payload = dict(detail_raw) if isinstance(detail_raw, dict) else None
@@ -811,20 +790,20 @@ def build_run_detail_context(
                     if interactive_mode and isinstance(output_preview_obj, dict):
                         final_row_payload['interactive_transcript'] = _interactive_transcript_preview(output_preview_obj)
                     detail_payload['final_row'] = final_row_payload
-                cells.append({'text': str(cell['text']), 'short': str(cell.get('short') or cell.get('text') or '--'), 'metrics': str(cell.get('metrics') or '-'), 'kind': str(cell['kind']), 'detail': detail_payload, 'main_stage': main_stage_payload})
+                cells.append({'text': str(cell['text']), 'short': str(cell.get('short') or cell.get('text') or '--'), 'metrics': str(cell.get('metrics') or '-'), 'kind': str(cell['kind']), 'detail': detail_payload})
             detail_rows.append(
                 {
                     'index': row_index,
                     'test_name': test_name,
+                    'display_name': test_name,
+                    'is_placeholder': False,
                     'row_id': f'test-detail-{row_index}',
                     'input_preview': input_preview,
                     'answer_preview': answer_preview,
                     'cells': cells,
                     'has_detail': any((cell.get('detail') is not None for cell in cells)),
-                    'gen_stage': row_gen_stage,
                 }
             )
-    status_summary = _run_invocation_status_summary(columns)
     detail_invocation_sources = {
         str(col.get('invocation_source') or '').strip().lower()
         for col in columns

@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -e
 
 # Python3 compile wrapper-script for 'compile.sh'.
 # See that script for syntax and more info.

@@ -14,6 +14,7 @@ import re
 from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
+from app.service.platform.testlib_source import maintained_testlib_header
 from app.setting import Settings
 from app.service.statement.render import seed_statement_sources
 from app.service.platform.process import run_cmd
@@ -325,11 +326,8 @@ class WorkspaceService:
         seed_statement_sources(workspace)
         testlib = workspace / "third_party/testlib/testlib.h"
         if not testlib.exists():
-            source = (Path(__file__).resolve().parents[2] / "third_party/upstream/testlib/testlib.h")
-            if source.exists():
-                testlib.write_bytes(source.read_bytes())
-            else:
-                testlib.write_text("// place fixed testlib.h copy here\n", encoding="utf-8")
+            source = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3])
+            testlib.write_bytes(source.read_bytes())
         has_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
         if not has_head:
             # Keep newly-created repositories at v0 without an automatic initial commit.

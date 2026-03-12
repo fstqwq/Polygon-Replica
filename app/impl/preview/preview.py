@@ -102,7 +102,9 @@ def preview_page(request: Request, problem: str, user: str):
     selected_preview_summary: dict[str, object] | None = None
     selected_preview_status = 'none'
     preview_compile_failed = False
-    compile_error_summary = ''
+    preview_failed_stage = ''
+    preview_failure_title = 'Compile failed.'
+    preview_failure_detail = ''
     latex_log_href = ''
 
     def _selected_preview_nav_status(candidate_id: str) -> dict[str, object]:
@@ -184,12 +186,23 @@ def preview_page(request: Request, problem: str, user: str):
         selected_preview_nav = _selected_preview_nav_status(preview_id)
         preview_compile_failed = selected_preview_status in {'failed', 'error'}
         if preview_compile_failed:
-            if log_refs:
-                compile_error_summary = str(log_refs[0].get('context') or '').strip()
-            if not compile_error_summary:
-                compile_error_summary = extract_latex_failure_summary(log, selected_preview_summary)
-            if len(compile_error_summary) > 240:
-                compile_error_summary = compile_error_summary[:237].rstrip() + '...'
+            preview_failed_stage = str(selected_preview_summary.get('failed_stage') or '').strip().lower() if isinstance(selected_preview_summary, dict) else ''
+            if preview_failed_stage == 'sample_sync':
+                preview_failure_title = 'Sample build failed.'
+                preview_failure_detail = sanitize_log_text_for_ui(str((selected_preview_summary or {}).get('error') or ''))
+                latex_log_href = ''
+                log = ''
+                log_truncated = False
+                log_refs = []
+                log_refs_total = 0
+                log_refs_truncated = False
+            else:
+                if log_refs:
+                    preview_failure_detail = str(log_refs[0].get('context') or '').strip()
+                if not preview_failure_detail:
+                    preview_failure_detail = extract_latex_failure_summary(log, selected_preview_summary)
+                if len(preview_failure_detail) > 240:
+                    preview_failure_detail = preview_failure_detail[:237].rstrip() + '...'
     if selected_preview_nav is not None and isinstance(ctx.get('nav_status'), dict):
         ctx['nav_status']['preview'] = selected_preview_nav
     request_path = str(getattr(request.url, 'path', '') or '')
@@ -222,7 +235,9 @@ def preview_page(request: Request, problem: str, user: str):
             'log_refs_truncated': log_refs_truncated,
             'log_refs_limit': _C.PREVIEW_LOG_REF_LIST_LIMIT,
             'preview_compile_failed': preview_compile_failed,
-            'compile_error_summary': compile_error_summary,
+            'preview_failure_title': preview_failure_title,
+            'preview_failure_detail': preview_failure_detail,
+            'preview_failed_stage': preview_failed_stage,
             'latex_log_href': latex_log_href,
             'problem_name_max_len': _C.PROBLEM_NAME_MAX_LEN,
             'problem_mode_values': list(_C.GENERAL_MODE_VALUES),
@@ -248,6 +263,7 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
         'status': 'failed',
         'preview_id': '',
         'preview_status': 'missing',
+        'failed_stage': '',
         'workspace_head': workspace_head,
         'workspace_dirty': workspace_dirty,
         'source': 'sync',
@@ -285,7 +301,9 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
         else:
             details['status'] = 'failed'
             details['error'] = str(summary_obj.get('error') or 'preview failed') if isinstance(summary_obj, dict) else 'preview failed'
-            msg = 'preview compile failed'
+            failed_stage = str(summary_obj.get('failed_stage') or '').strip().lower() if isinstance(summary_obj, dict) else ''
+            details['failed_stage'] = failed_stage
+            msg = 'sample build failed' if failed_stage == 'sample_sync' else 'preview compile failed'
     except Exception as exc:
         details['status'] = 'failed'
         details['error'] = str(exc)

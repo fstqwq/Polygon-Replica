@@ -329,11 +329,15 @@ class JudgehostDomjudgeResultsMixin:
         compile_log = ""
         compile_diag: list[dict[str, object]] = []
         compile_text = self._domjudge_b64_decode(job_row["compile_output_b64"]).decode("utf-8", errors="replace")
+        compile_error_summary = ""
+        compile_error_task = ""
         if compile_success == 0:
             compile_log = "compile.log"
             message = "compilation failed"
             if compile_text.strip():
                 message = compile_text.strip()
+            compile_error_summary = message
+            compile_error_task = self._domjudge_feedback_line_from_text(message, max_chars=320) or "compilation failed"
             compile_diag.append(
                 {
                     "level": "error",
@@ -374,11 +378,15 @@ class JudgehostDomjudgeResultsMixin:
         summary.setdefault("invocation_backend", "domjudge-judgehost")
         if force_failed and error_text:
             summary["error"] = str(error_text)
+        elif compile_error_summary:
+            summary["error"] = compile_error_summary
         elif internal_failure_error:
             summary["error"] = internal_failure_error
         result_payload: dict[str, object] = {"run_status": run_status, "summary": summary}
         if force_failed and error_text:
             result_payload["error"] = str(error_text)
+        elif compile_error_task:
+            result_payload["error"] = compile_error_task
         elif internal_failure_error:
             result_payload["error"] = internal_failure_error
         try:
@@ -465,6 +473,10 @@ class JudgehostDomjudgeResultsMixin:
         work_root = Path(self._domjudge_text(row["work_root"])).resolve()
         result_root = (work_root / "results" / f"{case_id}").resolve()
         result_root.mkdir(parents=True, exist_ok=True)
+        task_payload_obj = self._task_payload(safe_task_id) if safe_task_id else {}
+        invocation_source = self._domjudge_lower_text(task_payload_obj.get("invocation_source"))
+        task_kind = self._domjudge_task_kind(task_payload_obj, invocation_source=invocation_source)
+        compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
 
         def _store_payload_file(
             name: str,
@@ -482,11 +494,13 @@ class JudgehostDomjudgeResultsMixin:
             target.write_bytes(raw)
             return str(target.relative_to(work_root).as_posix())
 
-        output_run_rel = _store_payload_file(
-            "program.out",
-            payload.get("output_run"),
-            allow_empty=True,
-        )
+        output_run_rel = ""
+        if not compile_only:
+            output_run_rel = _store_payload_file(
+                "program.out",
+                payload.get("output_run"),
+                allow_empty=True,
+            )
         output_err_rel = _store_payload_file("program.err", payload.get("output_error"))
         output_sys_rel = _store_payload_file("system.out", payload.get("output_system"))
         output_diff_rel = _store_payload_file("judgemessage.txt", payload.get("output_diff"))
@@ -527,13 +541,6 @@ class JudgehostDomjudgeResultsMixin:
             blob = self._domjudge_read_artifact_blob(work_root, token)
             if blob is not None:
                 feedback_text = self._domjudge_feedback_line_from_bytes(blob)
-
-        task_payload_obj: dict[str, object] = {}
-        if safe_task_id:
-            task_payload_obj = self._task_payload(safe_task_id)
-        invocation_source = self._domjudge_lower_text(task_payload_obj.get("invocation_source"))
-        task_kind = self._domjudge_task_kind(task_payload_obj, invocation_source=invocation_source)
-        compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
 
         def _load_json_object(raw: object) -> dict[str, object]:
             text = self._domjudge_text(raw)
@@ -616,11 +623,6 @@ class JudgehostDomjudgeResultsMixin:
         if runresult in {"compare-error", "run-error"} and compare_exit_code == 3:
             runresult = "checker-fail"
         verdict = self._domjudge_verdict_from_runresult(runresult)
-        if compile_only and verdict == "OK" and (not self._domjudge_text(output_run_rel)):
-            # compile-only success must carry a compiled artifact payload; otherwise
-            # treat as internal failure instead of silently normalizing to OK.
-            runresult = "internal-error"
-            verdict = "FL"
         if (not compile_only) and verdict == "OK" and (not self._domjudge_text(output_run_rel)):
             target = (result_root / "program.out").resolve()
             target.parent.mkdir(parents=True, exist_ok=True)

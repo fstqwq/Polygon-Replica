@@ -1,0 +1,3 @@
+#!/bin/sh
+# Auto-generated build script for {{ROLE}} by Polygon2DOMjudge
+{{CPP_EXECUTABLE_BUILD_CMD}} {{SOURCE_NAME}} -std=gnu++20 -o run

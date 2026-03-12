@@ -47,6 +47,7 @@ from tests.ui_support import (
     workspace_impl,
     workspace_service,
 )
+import app.impl.workspace.context_job as workspace_context_job
 
 
 class TestUIRun(UIBaseSuite):
@@ -537,6 +538,150 @@ class TestUIRun(UIBaseSuite):
         payload = json.loads(str(row["details_json"]))
         self.assertEqual(payload.get("status"), "failed")
         self.assertIn("main correct solution is required", str(payload.get("error") or ""))
+
+    def test_verification_worker_reuses_buildsolve_for_accepted_solution(self) -> None:
+        problem = f"alice/verify-buildsolve-reuse-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        actor_user_id = int(ctx["user"]["id"])
+        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
+        workspace_dirty = bool(ctx["workspace"].get("dirty"))
+        build_id = self.random_id("b-verif-buildsolve-reuse")
+        invocation_id = f"inv-verif-buildsolve-reuse-{uuid.uuid4().hex[:8]}"
+        accepted_run_id = f"r-verif-accepted-reuse-{uuid.uuid4().hex[:8]}"
+        wa_run_id = f"r-verif-wa-reuse-{uuid.uuid4().hex[:8]}"
+        buildsolve_run_id = f"r-buildsolve-reuse-{uuid.uuid4().hex[:8]}"
+        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
+        build_root.mkdir(parents=True, exist_ok=True)
+        buildsolve_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / buildsolve_run_id
+        buildsolve_root.mkdir(parents=True, exist_ok=True)
+        db.execute(
+            """
+            INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                build_id,
+                problem_id,
+                workspace_id,
+                workspace_head,
+                "main",
+                "ok",
+                "{}",
+                str(build_root),
+                "2026-03-11T00:00:00Z",
+                "2026-03-11T00:00:01Z",
+            ],
+        )
+        buildsolve_summary = {
+            "mode": "pass-fail",
+            "source": "solutions/accepted.cpp",
+            "tests": [{"test": "001.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]}],
+            "error": "",
+            "invocation": {
+                "id": f"inv-{buildsolve_run_id}",
+                "source": "build.solve",
+                "run_ids": [buildsolve_run_id],
+                "expected_behavior": "accepted",
+                "matched": True,
+                "completed": True,
+                "passed_all_tests": True,
+                "reason": "",
+            },
+        }
+        db.execute(
+            """
+            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                buildsolve_run_id,
+                problem_id,
+                workspace_id,
+                build_id,
+                "pass-fail",
+                "ok",
+                json.dumps(buildsolve_summary),
+                str(buildsolve_root),
+                "2026-03-11T00:00:02Z",
+                "2026-03-11T00:00:03Z",
+            ],
+        )
+
+        submitted_paths: list[str] = []
+
+        def _fake_run_submission(**kwargs):
+            run_id = str(kwargs.get("run_id") or "")
+            source_path = str(kwargs.get("submission_path") or "")
+            submitted_paths.append(source_path)
+            run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+            run_root.mkdir(parents=True, exist_ok=True)
+            summary = {
+                "mode": "pass-fail",
+                "source": source_path,
+                "tests": [{"test": "001.in", "verdict": "WA", "passes": [{"pass": 1, "verdict": "WA"}]}],
+                "error": "",
+                "invocation": {
+                    "id": invocation_id,
+                    "source": "verification.start",
+                    "run_ids": [accepted_run_id, wa_run_id],
+                    "expected_behavior": "wrong_answer",
+                    "matched": True,
+                    "completed": True,
+                    "passed_all_tests": False,
+                    "reason": "",
+                },
+            }
+            db.execute(
+                """
+                INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    run_id,
+                    problem_id,
+                    workspace_id,
+                    build_id,
+                    "pass-fail",
+                    "ok",
+                    json.dumps(summary),
+                    str(run_root),
+                    "2026-03-11T00:00:04Z",
+                    "2026-03-11T00:00:05Z",
+                ],
+            )
+            return run_id
+
+        targets = [
+            {"path": "solutions/accepted.cpp", "expected_behavior": "accepted", "run_id": accepted_run_id},
+            {"path": "solutions/wa.cpp", "expected_behavior": "wrong_answer", "run_id": wa_run_id},
+        ]
+        with patch("app.impl.workspace.context_job._ensure_implicit_build", return_value=(build_id, False)):
+            with patch.object(config.invocation_backend_service, "run_submission", side_effect=_fake_run_submission):
+                workspace_context_job._run_verification_start_worker(
+                    problem,
+                    "alice",
+                    actor_user_id=actor_user_id,
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    workspace_head=workspace_head,
+                    workspace_dirty=workspace_dirty,
+                    targets=targets,
+                    invocation_id=invocation_id,
+                )
+
+        self.assertEqual(submitted_paths, ["solutions/wa.cpp"])
+        accepted_row = db.fetch_one("SELECT status,summary_json FROM runs WHERE id=?", [accepted_run_id])
+        self.assertIsNotNone(accepted_row)
+        self.assertEqual(str(accepted_row["status"] or ""), "ok")
+        accepted_summary = json.loads(str(accepted_row["summary_json"] or "{}"))
+        self.assertEqual(str(accepted_summary.get("source") or ""), "solutions/accepted.cpp")
+        invocation = accepted_summary.get("invocation") if isinstance(accepted_summary, dict) else {}
+        self.assertIsInstance(invocation, dict)
+        self.assertEqual(str(invocation.get("source") or ""), "verification.start")
 
     def test_verification_sidebar_marks_stale_when_gen_chk_sol_tests_change(self) -> None:
         problem = f"alice/verify-stale-{uuid.uuid4().hex[:8]}"
@@ -1046,7 +1191,7 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn(f"invocation_id={invocation_generate_id}", html)
         self.assertNotIn("Main correct solution run", html)
 
-    def test_run_details_shows_gen_and_main_stage_markers(self) -> None:
+    def test_run_details_uses_build_stage_rows_without_gen_main_badges(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -1158,8 +1303,10 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("GEN AC", html)
-        self.assertIn("MAIN AC", html)
+        self.assertNotIn("GEN AC", html)
+        self.assertNotIn("MAIN AC", html)
+        self.assertIn("001.in", html)
+        self.assertIn("accepted.cpp", html)
 
     def test_run_list_orders_by_invocation_run_time_not_latest_member_time(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1943,6 +2090,7 @@ class TestUIRun(UIBaseSuite):
         actor_user_id = int(ctx["user"]["id"])
         invocation_id = f"inv-verif-lifecycle-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-lifecycle-{uuid.uuid4().hex[:8]}"
+        gen_run_id = f"r-buildgen-lifecycle-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-lifecycle")
         build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
@@ -1957,11 +2105,159 @@ class TestUIRun(UIBaseSuite):
             ),
             encoding="utf-8",
         )
-        (build_root / "logs" / "validate.log").write_text(
-            "validate_jobs=1\n"
-            "001.in: args=[] rc=42\n"
-            "002.in: args=[] rc=42\n"
-            "003.in: args=[] rc=42\n",
+        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        gen_run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / gen_run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        gen_run_root.mkdir(parents=True, exist_ok=True)
+        summary = {
+            "mode": "pass-fail",
+            "source": "solutions/accepted.cpp",
+            "tests": [],
+            "tests_total": 3,
+            "usage": {"tests": 3},
+            "invocation": {
+                "id": invocation_id,
+                "source": "verification.start",
+                "run_ids": [run_id],
+                "matched": False,
+                "completed": False,
+                "passed_all_tests": False,
+            },
+        }
+        gen_summary = {
+            "mode": "pass-fail",
+            "source": "generators/generator.cpp",
+            "tests": [
+                {"test": "001.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]},
+                {"test": "002.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]},
+                {"test": "003.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]},
+            ],
+            "invocation": {
+                "id": f"inv-{gen_run_id}",
+                "source": "build.generate-input",
+                "run_ids": [gen_run_id],
+                "expected_behavior": "accepted",
+                "matched": True,
+                "completed": True,
+                "passed_all_tests": True,
+                "reason": "",
+            },
+        }
+        db.execute(
+            """
+            INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                build_id,
+                problem_id,
+                workspace_id,
+                "deadbeef",
+                "main",
+                "ok",
+                "{}",
+                str(build_root),
+                "2026-02-23T00:00:00Z",
+                "2026-02-23T00:00:01Z",
+            ],
+        )
+        db.execute(
+            """
+            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                gen_run_id,
+                problem_id,
+                workspace_id,
+                build_id,
+                "pass-fail",
+                "ok",
+                json.dumps(gen_summary),
+                str(gen_run_root),
+                "2026-02-23T00:00:01Z",
+                "2026-02-23T00:00:02Z",
+            ],
+        )
+        db.execute(
+            """
+            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                run_id,
+                problem_id,
+                workspace_id,
+                build_id,
+                "pass-fail",
+                "running",
+                json.dumps(summary),
+                str(run_root),
+                "2026-02-23T00:00:02Z",
+                "",
+            ],
+        )
+        db.execute(
+            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            [
+                actor_user_id,
+                problem_id,
+                "verification.start",
+                json.dumps(
+                    {
+                        "status": "running",
+                        "steps": ["gen", "val", "run", "check"],
+                        "invocation_id": invocation_id,
+                        "run_id": run_id,
+                        "run_ids": [run_id],
+                        "run_count": 1,
+                        "build_id": build_id,
+                        "build_status": "ok",
+                    }
+                ),
+                "2026-02-23T00:00:03Z",
+            ],
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"invocation_id={invocation_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("Verification Progress", html)
+        self.assertIn("Generate Inputs", html)
+        self.assertIn("Check Expectations", html)
+        self.assertIn("Generated tests", html)
+        self.assertIn("3 tests", html)
+        self.assertIn("Validated inputs", html)
+        self.assertIn("3/3", html)
+        self.assertIn("Solutions finished", html)
+        self.assertIn("0/1", html)
+        self.assertIn("Matched expectations", html)
+
+    def test_run_details_does_not_fake_validated_inputs_without_generate_results(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        actor_user_id = int(ctx["user"]["id"])
+        invocation_id = f"inv-verif-no-validate-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-verif-no-validate-{uuid.uuid4().hex[:8]}"
+        build_id = self.random_id("b-verif-no-validate")
+        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root.mkdir(parents=True, exist_ok=True)
+        (build_root / "logs").mkdir(parents=True, exist_ok=True)
+        (build_root / "logs" / "tests_meta.json").write_text(
+            json.dumps(
+                [
+                    {"index": 1, "kind": "manual", "id": "m1", "sample": True},
+                    {"index": 2, "kind": "gen", "id": "g2", "sample": False},
+                    {"index": 3, "kind": "gen", "id": "g3", "sample": False},
+                ]
+            ),
             encoding="utf-8",
         )
         run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
@@ -2045,16 +2341,9 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification Progress", html)
-        self.assertIn("Generate Inputs", html)
-        self.assertIn("Check Expectations", html)
         self.assertIn("Generated tests", html)
         self.assertIn("3 tests", html)
-        self.assertIn("Validated inputs", html)
-        self.assertIn("3/3", html)
-        self.assertIn("Solutions finished", html)
-        self.assertIn("0/1", html)
-        self.assertIn("Matched expectations", html)
+        self.assertNotIn("Validated inputs", html)
 
     def test_run_details_shows_generated_count_while_build_running(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

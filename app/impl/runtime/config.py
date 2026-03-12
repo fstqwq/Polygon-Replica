@@ -16,9 +16,10 @@ from app.service.repository.git import GitService
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.runtime.invocation_backend import InvocationBackendService
 from app.service.judgehost.api import Judgehost
+from app.service.sandbox.base import SandboxBackend
+from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.preview import PreviewService
 from app.service.run.api import Run
-from app.service.sandbox.native_backend import NativeSandboxBackend
 from app.service.platform.system_config import SystemConfigService
 from app.service.problem import test_spec
 from app.service.runtime import toolchain
@@ -29,6 +30,7 @@ from app.service.platform import workspace_path
 
 @dataclass
 class RuntimeConfig:
+    TEMPLATE_ROOT: Path = Path(__file__).resolve().parents[2] / "template"
     settings: Settings = field(default_factory=load_settings)
     constants: RuntimeValues = field(init=False)
     db: DB = field(init=False)
@@ -36,7 +38,7 @@ class RuntimeConfig:
     git_service: GitService = field(init=False)
     fs_manager: FsManager = field(init=False)
     artifact_service: ArtifactService = field(init=False)
-    sandbox_backend: object = field(init=False)
+    preview_sandbox_backend: SandboxBackend = field(init=False)
     toolchain_service: toolchain.ToolchainService = field(init=False)
     build_service: Build = field(init=False)
     preview_service: PreviewService = field(init=False)
@@ -48,7 +50,9 @@ class RuntimeConfig:
     judge_fs_index_service: JudgeFsIndexService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
-    templates: Jinja2Templates = field(default_factory=lambda: Jinja2Templates(directory='app/template'))
+    templates: Jinja2Templates = field(
+        default_factory=lambda: Jinja2Templates(directory=str(RuntimeConfig.TEMPLATE_ROOT))
+    )
     run_execute_lock: threading.Lock = field(default_factory=threading.Lock)
     run_execute_workers: set[WorkerFuture] = field(default_factory=set)
     preview_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -107,10 +111,9 @@ class RuntimeConfig:
         self.git_service = GitService()
         self.fs_manager = FsManager(self.settings.artifacts_root, self.settings.run_root)
         self.artifact_service = ArtifactService(self.settings.artifacts_root)
-        self.sandbox_backend = NativeSandboxBackend(root_switch_tool=str(self.constants.SANDBOX_ROOT_SWITCH_TOOL))
+        self.preview_sandbox_backend = TexSandboxBackend()
         self.toolchain_service = toolchain.ToolchainService(
             self.settings.cache_root,
-            sandbox_backend=self.sandbox_backend,
             constants=self.constants,
         )
         self.build_service = Build(
@@ -118,7 +121,6 @@ class RuntimeConfig:
             self.workspace_service,
             self.artifact_service,
             self.toolchain_service,
-            sandbox_backend=self.sandbox_backend,
             constants=self.constants,
             async_task_cache_service=self.async_task_cache_service,
         )
@@ -127,7 +129,7 @@ class RuntimeConfig:
             self.workspace_service,
             self.artifact_service,
             build_service=self.build_service,
-            sandbox_backend=self.sandbox_backend,
+            sandbox_backend=self.preview_sandbox_backend,
             constants=self.constants,
             async_task_cache_service=self.async_task_cache_service,
         )
@@ -135,7 +137,6 @@ class RuntimeConfig:
             self.db,
             self.workspace_service,
             self.toolchain_service,
-            sandbox_backend=self.sandbox_backend,
             constants=self.constants,
         )
         self.judgehost_task_service = Judgehost(

@@ -235,6 +235,26 @@ class TestPreview(SmokeBase):
         rows = preview_service._sample_rows_from_spec(ws)
         self.assertEqual(rows, [(2, "002", "manual")])
 
+    def test_generation_params_digest_changes_when_build_sources_change(self) -> None:
+        ws = self._workspace_path()
+        digest_before = config.build_service._generation_params_digest(ws, sample_only=False)
+
+        testlib_path = ws / "third_party" / "testlib" / "testlib.h"
+        testlib_path.write_text(
+            testlib_path.read_text(encoding="utf-8") + "\n// digest probe\n",
+            encoding="utf-8",
+        )
+        digest_after_testlib = config.build_service._generation_params_digest(ws, sample_only=False)
+        self.assertNotEqual(digest_before, digest_after_testlib)
+
+        validator_path = ws / "validators" / "validator.cpp"
+        validator_path.write_text(
+            '#include "testlib.h"\nint main(int argc, char* argv[]) { registerValidation(argc, argv); inf.readEof(); }\n',
+            encoding="utf-8",
+        )
+        digest_after_validator = config.build_service._generation_params_digest(ws, sample_only=False)
+        self.assertNotEqual(digest_after_testlib, digest_after_validator)
+
     def test_preview_sample_sync_materializes_manual_and_generator_from_build(self) -> None:
         ws = self._workspace_path()
         (ws / "tests" / "spec.json").write_text(
@@ -331,8 +351,7 @@ class TestPreview(SmokeBase):
 
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
-            tex_name = str(spec.command[-1] or "main.tex")
-            stem = Path(tex_name).stem
+            stem = Path(str(spec.command[-1])).stem
             (cwd / f"{stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             (cwd / f"{stem}.log").write_text("ok\n", encoding="utf-8")
             return ExecResult(
@@ -416,10 +435,9 @@ class TestPreview(SmokeBase):
         captured: dict[str, object] = {}
 
         def _fake_run(spec):
-            captured["command"] = list(spec.command)
+            captured["command"] = [str(token) for token in spec.command]
             cwd = Path(spec.cwd or ".")
-            tex_name = str(spec.command[-1] or "main.tex")
-            stem = Path(tex_name).stem
+            stem = Path(str(spec.command[-1])).stem
             (cwd / f"{stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             (cwd / f"{stem}.log").write_text("ok\n", encoding="utf-8")
             return ExecResult(
@@ -449,8 +467,7 @@ class TestPreview(SmokeBase):
         def _fake_run(spec):
             calls["count"] = int(calls["count"]) + 1
             cwd = Path(spec.cwd or ".")
-            tex_name = str(spec.command[-1] or "main.tex")
-            stem = Path(tex_name).stem
+            stem = Path(str(spec.command[-1])).stem
             (cwd / f"{stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             (cwd / f"{stem}.log").write_text("ok\n", encoding="utf-8")
             return ExecResult(
@@ -474,8 +491,7 @@ class TestPreview(SmokeBase):
     def test_compile_preview_success_summary_contract_fields_stable(self) -> None:
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
-            tex_name = str(spec.command[-1] or "main.tex")
-            stem = Path(tex_name).stem
+            stem = Path(str(spec.command[-1])).stem
             (cwd / f"{stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             (cwd / f"{stem}.log").write_text("ok\n", encoding="utf-8")
             return ExecResult(
@@ -505,8 +521,7 @@ class TestPreview(SmokeBase):
 
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
-            tex_name = str(spec.command[-1] or "main.tex")
-            stem = Path(tex_name).stem
+            stem = Path(str(spec.command[-1])).stem
             (cwd / f"{stem}.log").write_text(marker + "\n", encoding="utf-8")
             return ExecResult(
                 backend="fake",
@@ -554,8 +569,7 @@ class TestPreview(SmokeBase):
     def test_compile_preview_failed_run_still_writes_nonempty_latex_log(self) -> None:
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
-            tex_name = str(spec.command[-1] or "main.tex")
-            stem = Path(tex_name).stem
+            stem = Path(str(spec.command[-1])).stem
             # Simulate TeX generating an empty log and no PDF on failure.
             (cwd / f"{stem}.log").write_text("", encoding="utf-8")
             return ExecResult(
@@ -589,8 +603,7 @@ class TestPreview(SmokeBase):
 
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
-            tex_name = str(spec.command[-1] or "main.tex")
-            stem = Path(tex_name).stem
+            stem = Path(str(spec.command[-1])).stem
             (cwd / f"{stem}.log").write_text("! undefined control sequence\n", encoding="utf-8")
             return ExecResult(
                 backend="fake",

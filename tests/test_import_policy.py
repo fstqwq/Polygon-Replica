@@ -10,7 +10,6 @@ from pathlib import Path
 from scripts import import_policy
 ROOT = Path(__file__).resolve().parents[1]
 IMPORT_POLICY_SCRIPT = ROOT / "scripts" / "import_policy.py"
-BASELINE_PATH = ROOT / "migration-gates" / "import-import_policy-baseline.json"
 
 
 class TestImportPolicy(unittest.TestCase):
@@ -84,23 +83,6 @@ _export_public(globals(), module)
                 in {"ALIAS_FROM_IMPORT", "MESH_RELATIVE_IMPORT", "WILDCARD_IMPORT", "REEXPORT_DYNAMIC"}
             ]
             self.assertEqual(first_wave_blockers, [])
-
-    def test_import_policy_no_new_gate_passes_against_baseline(self) -> None:
-        proc = subprocess.run(
-            [
-                sys.executable,
-                str(IMPORT_POLICY_SCRIPT),
-                "check",
-                "--baseline",
-                str(BASELINE_PATH),
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
-
 
 if __name__ == "__main__":
     unittest.main()

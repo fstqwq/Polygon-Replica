@@ -39,13 +39,15 @@ def generators_page(request: Request, problem: str, user: str):
             path = normalize_optional_component_source_path_safe(row.get('path'), 'generators', 'generator source')
             if not path:
                 continue
-            source_rows.append({'path': path, 'exists': bool(row.get('exists')), 'configured': bool(row.get('configured'))})
+            if not bool(row.get('exists')):
+                continue
+            source_rows.append({'path': path, 'configured': bool(row.get('configured'))})
     requested_source = normalize_optional_component_source_path_safe(request.query_params.get('path'), 'generators', 'generator source')
     repo_source = str(generator_status.get('repo_source') or 'generators/generator.cpp')
     selected_source = requested_source or repo_source or 'generators/generator.cpp'
     selected_exists = workspace_rel_file_exists(workspace, selected_source)
-    if selected_source and all((str(row.get('path') or '') != selected_source for row in source_rows)):
-        source_rows.insert(0, {'path': selected_source, 'exists': selected_exists, 'configured': False})
+    if selected_source and selected_exists and all((str(row.get('path') or '') != selected_source for row in source_rows)):
+        source_rows.insert(0, {'path': selected_source, 'configured': False})
     repo_content = ''
     repo_content_truncated = False
     try:

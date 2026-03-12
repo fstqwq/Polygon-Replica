@@ -63,7 +63,7 @@ def domjudge_rewrite_untrusted_runresult(
     if tl_sec <= 0:
         return token
     cpu_total_sec = domjudge_parse_float(cpu_sec, 0.0)
-    if cpu_total_sec <= float(tl_sec) * 2.0:
+    if cpu_total_sec <= tl_sec:
         return token
     return "timelimit"
 

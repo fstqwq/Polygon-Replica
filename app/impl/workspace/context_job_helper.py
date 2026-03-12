@@ -211,7 +211,7 @@ def record_async_run_failure(
         'compile_log': compile_log_name,
         'compile_diagnostics': [],
         'toolchain_digest': 'unknown',
-        'sandbox_backend': config.sandbox_backend.name,
+        'sandbox_backend': config.invocation_backend_service.active_backend_name(),
         'invocation_backend': config.invocation_backend_service.active_backend_name(),
         'limits': {},
         'usage': {'tests': len(tests_payload)},

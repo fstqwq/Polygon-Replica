@@ -1,4 +1,4 @@
-{% macro source_editor_form(action, path, content, content_truncated, content_char_limit, save_label, extra_action='', extra_label='') -%}
+{% macro source_editor_form(action, path, content, content_truncated, content_char_limit, save_label, extra_action='', extra_label='', inline_error='') -%}
 <form class="form-stack component-source-form" method="post" action="{{ action }}">
   <input type="hidden" name="path" value="{{ path }}" />
   <textarea name="content" data-code-editor="1" data-code-path="{{ path }}" data-code-height="420">{{ content }}</textarea>
@@ -11,6 +11,9 @@
     <button type="submit" formaction="{{ extra_action }}" formmethod="post" formnovalidate>{{ extra_label }}</button>
     {% endif %}
   </div>
+  {% if inline_error %}
+  <div class="flash flash-inline component-editor-error" data-component-editor-error="1">{{ inline_error }}</div>
+  {% endif %}
 </form>
 {%- endmacro %}
 

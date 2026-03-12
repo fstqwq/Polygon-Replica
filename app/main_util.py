@@ -227,19 +227,8 @@ def _pick_compile_error_line(lines: list[str]) -> str:
 def _compile_check_include_dirs(workspace: Path) -> list[Path]:
     include_dirs: list[Path] = []
     workspace_testlib = workspace / "third_party" / "testlib"
-    workspace_testlib_header = workspace_testlib / "testlib.h"
-    placeholder_header = False
-    if workspace_testlib_header.exists() and workspace_testlib_header.is_file():
-        try:
-            first_line = workspace_testlib_header.read_text(encoding="utf-8", errors="ignore").splitlines()[0].strip()
-            placeholder_header = first_line == "// place fixed testlib.h copy here"
-        except Exception:
-            placeholder_header = False
-    if workspace_testlib.exists() and workspace_testlib.is_dir() and (not placeholder_header):
+    if workspace_testlib.exists() and workspace_testlib.is_dir():
         include_dirs.append(workspace_testlib)
-    upstream_testlib = Path(__file__).resolve().parents[1] / "third_party" / "upstream" / "testlib"
-    if upstream_testlib.exists() and upstream_testlib.is_dir():
-        include_dirs.append(upstream_testlib)
     return include_dirs
 
 

@@ -14,6 +14,7 @@ from .shared import (
     uuid,
 )
 from app.service.run.summary import summary_for_db
+from app.service.platform.testlib_source import workspace_testlib_header
 
 
 class JudgehostEnqueueMixin:
@@ -213,11 +214,7 @@ class JudgehostEnqueueMixin:
         if interactor_source is not None:
             source_files["interactor.cpp"] = interactor_source
         if source_files:
-            testlib_source = _safe_workspace_rel_file("third_party/testlib/testlib.h")
-            if testlib_source is None:
-                upstream_testlib = (repo_root / "third_party" / "upstream" / "testlib" / "testlib.h").resolve()
-                if upstream_testlib.exists() and upstream_testlib.is_file():
-                    testlib_source = upstream_testlib
+            testlib_source = workspace_testlib_header(workspace)
             if testlib_source is not None:
                 source_files["testlib.h"] = testlib_source
 
@@ -359,6 +356,7 @@ class JudgehostEnqueueMixin:
                     checker_args.append(token)
         mode = self._domjudge_lower_text(payload.get("mode"), default="pass-fail")
         compile_only, generate_mode, solve_mode = self._domjudge_execution_modes(payload)
+        manual_validate_only = self._domjudge_bool(payload.get("manual_validate_only"), default=False)
         configured_max_passes = max(
             1,
             self._domjudge_parse_int(
@@ -390,14 +388,7 @@ class JudgehostEnqueueMixin:
         run_tl_ms = max(100, run_tl_ms)
         run_mem_mb = max(16, run_mem_mb)
         run_tl_sec = max(0.1, float(run_tl_ms) / 1000.0)
-        pass_fail_slack = max(0.0, float(getattr(self._constants, "RUN_WALL_TIME_SLACK_PASS_FAIL_SEC", 1) or 1))
-        multi_pass_slack = max(0.0, float(getattr(self._constants, "RUN_WALL_TIME_SLACK_MULTI_PASS_SEC", 15) or 15))
-        interactive_slack = max(0.0, float(getattr(self._constants, "RUN_WALL_TIME_SLACK_INTERACTIVE_SEC", 15) or 15))
-        run_overshoot_sec = pass_fail_slack
-        if mode == "interactive":
-            run_overshoot_sec = interactive_slack
-        elif mode == "multi-pass":
-            run_overshoot_sec = multi_pass_slack
+        run_overshoot_sec = 0.0
         run_mem_kb = max(16 * 1024, int(run_mem_mb * 1024))
         binaries_b64 = build_payload.get("binaries_b64")
         binaries_obj = binaries_b64 if isinstance(binaries_b64, dict) else {}
@@ -431,7 +422,17 @@ class JudgehostEnqueueMixin:
         if (not compile_only) and (not generate_mode) and mode == "interactive" and not has_interactor_payload:
             raise RuntimeError("interactive mode requires interactor payload")
 
-        compile_files: list[tuple[str, bytes, bool]] = [("run", self._domjudge_compile_script(source_name), True)]
+        compile_files: list[tuple[str, bytes, bool]] = [
+            (
+                "run",
+                self._domjudge_compile_script(
+                    source_name,
+                    manual_validate_only=manual_validate_only,
+                    compile_only=compile_only,
+                ),
+                True,
+            )
+        ]
         run_files: list[tuple[str, bytes, bool]] = []
         compare_files: list[tuple[str, bytes, bool]] = []
         if interactive:
@@ -459,6 +460,7 @@ class JudgehostEnqueueMixin:
                         solve_mode=solve_mode,
                         compile_only=compile_only,
                         generate_mode=generate_mode,
+                        manual_validate_only=manual_validate_only,
                     ),
                     True,
                 )
@@ -490,7 +492,10 @@ class JudgehostEnqueueMixin:
         compile_hash = domjudge_executable_hash(compile_files)
         run_hash = domjudge_executable_hash(run_files)
         compare_hash = domjudge_executable_hash(compare_files)
-        toolchain_cmd_digest = self._domjudge_toolchain_cmd_digest(source_name)
+        toolchain_cmd_digest = self._domjudge_toolchain_cmd_digest(
+            source_name,
+            manual_validate_only=manual_validate_only,
+        )
         compare_script_timelimit = max(1, int(run_tl_sec))
         if checker_source_bytes or validator_source_bytes:
             compare_script_timelimit = max(compare_script_timelimit, min(compile_timeout, 120))
@@ -517,7 +522,9 @@ class JudgehostEnqueueMixin:
         compare_config = {
             "hash": compare_hash,
             "combined_run_compare": bool(interactive),
-            "compare_args": " ".join(checker_args),
+            "compare_args": " ".join(
+                [*(['--validate-input'] if manual_validate_only else []), *checker_args]
+            ),
             "script_timelimit": int(compare_script_timelimit),
             "script_memory_limit": run_mem_kb,
             "script_filesize_limit": int(run_output_kb),
@@ -614,7 +621,7 @@ class JudgehostEnqueueMixin:
             "compile_log": "",
             "compile_diagnostics": [],
             "toolchain_digest": "judgehost",
-            "sandbox_backend": self._run_service.sandbox.name,
+            "sandbox_backend": getattr(self._run_service, "execution_backend_name", "domjudge-judgehost"),
             "invocation_backend": "domjudge-judgehost",
             "limits": {},
             "usage": {},

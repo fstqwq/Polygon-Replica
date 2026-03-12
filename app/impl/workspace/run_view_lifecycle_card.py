@@ -25,6 +25,7 @@ from .run_lifecycle import (
 )
 from .context_operation import (
     dedupe_preserve_order,
+    parse_summary_json,
 )
 from .context_run_detail import (
     normalize_run_id_token,
@@ -222,57 +223,47 @@ def _verification_validate_stats(problem_slug: str, build_id: str) -> dict[str, 
     safe_build_id = str(build_id or '').strip()
     if (not safe_problem) or (not is_canonical_artifact_id(safe_build_id)):
         return stats
-    try:
-        root = artifact_root(safe_problem, safe_build_id)
-    except HTTPException:
-        return stats
-    validate_log = root / 'logs' / 'validate.log'
-    try:
-        if (not validate_log.exists()) or (not validate_log.is_file()) or validate_log.is_symlink():
-            return stats
-    except OSError:
-        return stats
+    rows = config.db.fetch_all(
+        """
+        SELECT summary_json
+        FROM runs
+        WHERE build_id=?
+        ORDER BY created_at DESC
+        LIMIT 256
+        """,
+        [safe_build_id],
+    )
+    seen: set[str] = set()
     total = 0
     ok_count = 0
     failed_count = 0
     timed_out_count = 0
-    seen: set[str] = set()
-    max_lines = 200000
-    line_count = 0
-    try:
-        with validate_log.open('r', encoding='utf-8', errors='replace') as fh:
-            for raw_line in fh:
-                line_count += 1
-                if line_count > max_lines:
-                    stats['truncated'] = True
-                    break
-                line = str(raw_line or '').strip()
-                if not line:
-                    continue
-                if ': ' not in line:
-                    continue
-                test_name, remainder = line.split(': ', 1)
-                test_name = str(test_name or '').strip()
-                if (not _C.RUN_TEST_NAME_RE.fullmatch(test_name)) or (test_name in seen):
-                    continue
-                if ' rc=' not in remainder:
-                    continue
-                seen.add(test_name)
-                total += 1
-                timed_out = 'timed_out=1' in remainder
-                if timed_out:
-                    timed_out_count += 1
-                rc_token = remainder.rsplit(' rc=', 1)[-1].split()[0]
-                try:
-                    rc = int(rc_token)
-                except Exception:
-                    rc = -1
-                if (not timed_out) and (rc in {0, 42}):
-                    ok_count += 1
-                else:
-                    failed_count += 1
-    except Exception:
-        return stats
+    for row in rows:
+        summary_obj = parse_summary_json(row['summary_json'], f'verify-validate/{safe_build_id}')
+        if not isinstance(summary_obj, dict):
+            continue
+        invocation_obj = summary_obj.get('invocation')
+        invocation_source = str(invocation_obj.get('source') or '').strip().lower() if isinstance(invocation_obj, dict) else ''
+        if invocation_source != 'build.generate-input':
+            continue
+        tests_obj = summary_obj.get('tests')
+        tests_rows = tests_obj if isinstance(tests_obj, list) else []
+        for item in tests_rows:
+            if not isinstance(item, dict):
+                continue
+            test_name = str(item.get('test') or '').strip()
+            if (not _C.RUN_TEST_NAME_RE.fullmatch(test_name)) or (test_name in seen):
+                continue
+            seen.add(test_name)
+            total += 1
+            verdict = str(item.get('verdict') or '').strip().upper()
+            timed_out = verdict.startswith('TL') or bool(item.get('timed_out'))
+            if timed_out:
+                timed_out_count += 1
+            if verdict in {'OK', 'AC'} and not timed_out:
+                ok_count += 1
+            else:
+                failed_count += 1
     if total <= 0:
         return stats
     stats.update({

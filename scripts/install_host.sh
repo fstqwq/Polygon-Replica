@@ -191,7 +191,6 @@ echo "[5/5] Writing runtime environment file..."
 mkdir -p var
 ENV_FILE="var/polygonlike.env"
 cat >"$ENV_FILE" <<'EOF'
-export POLYGONLIKE_SANDBOX_ROOT_SWITCH_TOOL=/usr/bin/bwrap
 EOF
 
 echo

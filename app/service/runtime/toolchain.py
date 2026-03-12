@@ -11,8 +11,6 @@ import os
 
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.hashing import compile_command_digest, sha256_file, sha256_hex_of_hashes, sha256_hex_text
-from app.service.sandbox.base import ExecSpec, SandboxBackend
-from app.service.sandbox.native_backend import NativeSandboxBackend
 
 TOOLCHAIN_CACHE_CLEANUP_LOCK: str = ".cleanup.lock"
 TOOLCHAIN_CPP_COMPILER: str = "g++"
@@ -91,12 +89,10 @@ class ToolchainService:
     def __init__(
         self,
         cache_root: Path,
-        sandbox_backend: SandboxBackend | None = None,
         constants: RuntimeValues | None = None,
     ):
         self.cache_root = cache_root / "compile"
         self.cache_root.mkdir(parents=True, exist_ok=True)
-        self.sandbox = sandbox_backend or NativeSandboxBackend()
         self.compile_timeout_sec = 120
         self.compile_memory_mb = 2048
         self.compile_process_limit = 0
@@ -162,31 +158,8 @@ class ToolchainService:
         )
 
     def _compile_cmd(self, cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
-        process_limit = int(self.compile_process_limit)
-        if process_limit <= 0:
-            process_limit = None
-        try:
-            result = self.sandbox.run(
-                ExecSpec(
-                    command=cmd,
-                    cwd=cwd,
-                    timeout_sec=self.compile_timeout_sec,
-                    memory_mb=self.compile_memory_mb,
-                    process_limit=process_limit,
-                    output_kb=self.compile_output_kb,
-                )
-            )
-        except FileNotFoundError as exc:
-            missing = str(cmd[0]) if cmd else "tool"
-            return 127, "", f"{missing} not found: {exc}"
-        status = str(result.status or "").strip().lower()
-        if result.timed_out or status == "tle":
-            return -1, result.stdout, (result.stderr or "") + "\ncompile timed out"
-        if status == "sandbox_error":
-            return 1, result.stdout, result.stderr
-        if result.returncode is None:
-            return 1, result.stdout, result.stderr
-        return int(result.returncode), result.stdout, result.stderr
+        _ = (cmd, cwd)
+        return 1, "", "local code compilation has been removed; use domjudge-judgehost backend"
 
     def _cache_lock_path(self, cache_bin: Path) -> Path:
         return cache_bin.with_suffix(".lock")
@@ -429,7 +402,7 @@ class ToolchainService:
         return compile_command_digest(cxx, cxxflags)[:16]
 
     def current_cpp_command_digest(self) -> str:
-        return compile_command_digest(TOOLCHAIN_CPP_COMPILER, list(TOOLCHAIN_CPP_CXXFLAGS))
+        return compile_command_digest("judgehost-only", [])
 
     def _is_within_roots(self, resolved_path: Path, roots: list[Path]) -> bool:
         for root in roots:
@@ -520,64 +493,8 @@ class ToolchainService:
         cxx: str | None = None,
         cxxflags: list[str] | None = None,
     ) -> tuple[bool, str, str, str]:
-        source = source.resolve()
-        output = output.resolve()
-        normalized_include_dirs = [inc.resolve() for inc in include_dirs]
-        cxxflags = _with_domjudge_define(cxxflags or list(TOOLCHAIN_CPP_CXXFLAGS))
-        cxx_cmd = str(cxx or TOOLCHAIN_CPP_COMPILER).strip() or "g++"
-        self.cleanup_cache(force=False)
-        normalized_roots: list[Path] = []
-        for root in [*(path_roots or []), source.parent, *normalized_include_dirs]:
-            resolved = root.resolve()
-            if resolved not in normalized_roots:
-                normalized_roots.append(resolved)
-        toolchain_digest = self.digest(cxx_cmd, cxxflags)
-        dep_files = self._dependency_files(
-            source,
-            normalized_include_dirs,
-            allowed_roots=normalized_roots,
-        )
-        key_parts = []
-        for p in dep_files:
-            dep_id = self._canonical_dep_id(p, normalized_roots)
-            key_parts.append(f"{dep_id}:{sha256_file(p)}")
-        key_parts.sort()
-        source_hash = sha256_hex_text("\n".join(key_parts))
-        cache_entry_dir = self._cache_entry_dir(toolchain_digest, source_hash, self.cache_root)
-        cache_entry_dir.mkdir(parents=True, exist_ok=True)
-        cache_bin = cache_entry_dir / "binary.bin"
-        cache_lock = self._cache_lock_path(cache_bin)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        compile_cwd = output.parent
-        with cache_lock.open("w", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            if cache_bin.exists() and self._cache_integrity_ok(cache_bin):
-                shutil.copy2(cache_bin, output)
-                output.chmod(0o755)
-                self._touch_cache_file(cache_bin)
-                return True, "", "", toolchain_digest
-            if cache_bin.exists():
-                self._try_remove_cache_file(cache_bin)
-
-            cmd = [cxx_cmd, *cxxflags]
-            for inc in normalized_include_dirs:
-                cmd += ["-I", str(inc)]
-            # Keep output path relative to cwd so compile outputs stay constrained
-            # to the declared working directory.
-            cmd += [str(source), "-o", output.name]
-            rc, out, err = self._compile_cmd(cmd, cwd=compile_cwd)
-            if rc == 0 and output.exists():
-                cache_bin.parent.mkdir(parents=True, exist_ok=True)
-                tmp_cache = cache_bin.parent / f".{cache_bin.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-                try:
-                    shutil.copy2(output, tmp_cache)
-                    tmp_cache.chmod(0o755)
-                    os.replace(tmp_cache, cache_bin)
-                    self._write_cache_integrity_marker(cache_bin)
-                finally:
-                    if tmp_cache.exists():
-                        tmp_cache.unlink(missing_ok=True)
-            return rc == 0, out, err, toolchain_digest
+        _ = (source, output, include_dirs, path_roots, cxx, cxxflags)
+        return self._unsupported_local_runtime("cpp")
 
     def _compiler_digest(self, tool: str) -> str:
         payload = f"{tool}:{self.compile_timeout_sec}:{self.compile_memory_mb}:{self.compile_output_kb}"
@@ -617,18 +534,5 @@ class ToolchainService:
         cxx: str | None = None,
         cxxflags: list[str] | None = None,
     ) -> tuple[bool, str, str, str]:
-        language = self._detect_language(source)
-        if language == "cpp":
-            return self.compile_cpp(
-                source,
-                output,
-                include_dirs,
-                path_roots=path_roots,
-                cxx=cxx,
-                cxxflags=cxxflags,
-            )
-        if language == "python":
-            return self._unsupported_local_runtime("python")
-        if language == "java":
-            return self._unsupported_local_runtime("java")
-        raise RuntimeError(f"unsupported source language: {source.suffix.lower()}")
+        _ = (output, include_dirs, path_roots, cxx, cxxflags)
+        return self._unsupported_local_runtime(self._detect_language(source))

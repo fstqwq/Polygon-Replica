@@ -306,11 +306,6 @@ def _build_verification_lifecycle_card(
     validated_ok = max(0, int(validate_stats.get('ok') or 0))
     validated_failed = max(0, int(validate_stats.get('failed') or 0))
     validated_timed_out = max(0, int(validate_stats.get('timed_out') or 0))
-    if validated_total <= 0 and build_status == 'ok' and generated_total > 0:
-        validated_total = generated_total
-        validated_ok = generated_total
-        validated_failed = 0
-        validated_timed_out = 0
 
     build_failed = build_status in {'failed', 'error'}
     build_running = build_status in {'running', 'queued', 'pending'}
@@ -597,8 +592,6 @@ def _build_verification_lifecycle_card(
             _step_add_fact('gen', 'Validation timeouts', count_label(validated_timed_out, 'test'), tone='danger')
         if bool(validate_stats.get('truncated')):
             _step_add_note('gen', 'Validation log was truncated while summarizing.')
-    elif build_status == 'ok' and generated_total > 0:
-        _step_add_fact('gen', 'Validated inputs', f'{generated_total}/{generated_total}')
     elif (val_status_token in {'pending', 'running'}) and (build_status in {'running', 'queued', 'pending', ''}):
         if generated_total > 0:
             _step_add_note('val', 'Waiting for output generation results.')

@@ -1,16 +1,212 @@
 ﻿from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.common import SmokeBase
+from tests.ui_support import _flash_messages_from_response, _request
 import app.impl.preview.api
 import app.impl.workspace.api
 from app.impl.runtime.config import config
+from app.impl.problem.compile_check import _summary_needs_compile_detail, judgehost_compile_check_error
 
 
 class TestBackendMinimal(SmokeBase):
+    def test_compile_check_waits_for_real_compile_diagnostics_when_error_is_generic_header(self) -> None:
+        self.assertTrue(
+            _summary_needs_compile_detail(
+                {"error": "Compiling failed with exitcode 1, compiler output:"}
+            )
+        )
+        self.assertFalse(
+            _summary_needs_compile_detail(
+                {
+                    "error": "Compiling failed with exitcode 1, compiler output:",
+                    "compile_diagnostics": [{"message": "validator.cpp:4: error: expected ';'"}],
+                }
+            )
+        )
+
+    def test_judgehost_compile_check_waits_for_terminal_status_and_full_diagnostics(self) -> None:
+        rows = iter(
+            [
+                {"status": "running", "summary_json": "{}"},
+                {
+                    "status": "running",
+                    "summary_json": json.dumps({"error": "Compiling failed with exitcode 1, compiler output:"}),
+                },
+                {
+                    "status": "failed",
+                    "summary_json": json.dumps(
+                        {
+                            "error": "Compiling failed with exitcode 1, compiler output:",
+                            "compile_diagnostics": [
+                                {
+                                    "message": "Compiling failed with exitcode 1, compiler output:\nvalidator.cpp:4:35: error: expected ';' before 'inf'"
+                                }
+                            ],
+                        }
+                    ),
+                },
+            ]
+        )
+
+        def _fake_fetch_one(_sql, _params):
+            try:
+                return next(rows)
+            except StopIteration:
+                return {
+                    "status": "failed",
+                    "summary_json": json.dumps(
+                        {
+                            "error": "Compiling failed with exitcode 1, compiler output:",
+                            "compile_diagnostics": [
+                                {
+                                    "message": "Compiling failed with exitcode 1, compiler output:\nvalidator.cpp:4:35: error: expected ';' before 'inf'"
+                                }
+                            ],
+                        }
+                    ),
+                }
+
+        with (
+            patch.object(config.judgehost_task_service, "enabled", return_value=True),
+            patch.object(config.judgehost_task_service, "auth_token_configured", return_value=True),
+            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1}),
+            patch.object(config.invocation_backend_service, "compile_only_submission", return_value="r-cchk-test"),
+            patch.object(config.db, "fetch_one", side_effect=_fake_fetch_one),
+            patch("app.impl.problem.compile_check.workspace_testlib_header", return_value=None),
+            patch("app.impl.problem.compile_check.time.sleep", return_value=None),
+        ):
+            msg = judgehost_compile_check_error(
+                problem=self.problem,
+                user=self.user,
+                workspace=Path("."),
+                source_path="validators/validator.cpp",
+                source_content="int main(){\n",
+                invocation_source="problem.validator.save_source",
+            )
+        self.assertIn("validator.cpp:4:35: error: expected ';' before 'inf'", msg)
+
+    def test_judgehost_compile_check_reads_summary_after_backend_wait_failure(self) -> None:
+        summary_json = json.dumps(
+            {
+                "error": "Compiling failed with exitcode 1, compiler output:",
+                "compile_diagnostics": [
+                    {
+                        "message": "validator.cpp: In function 'int main(int, char**)':\nvalidator.cpp:4:35: error: expected ';' before 'inf'"
+                    }
+                ],
+            }
+        )
+        with (
+            patch.object(config.judgehost_task_service, "enabled", return_value=True),
+            patch.object(config.judgehost_task_service, "auth_token_configured", return_value=True),
+            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1}),
+            patch.object(
+                config.invocation_backend_service,
+                "compile_only_submission",
+                side_effect=RuntimeError("Compiling failed with exitcode 1, compiler output:"),
+            ),
+            patch.object(config.db, "fetch_one", return_value={"status": "failed", "summary_json": summary_json}),
+            patch("app.impl.problem.compile_check.workspace_testlib_header", return_value=None),
+        ):
+            msg = judgehost_compile_check_error(
+                problem=self.problem,
+                user=self.user,
+                workspace=Path("."),
+                source_path="validators/validator.cpp",
+                source_content="int main(){\n",
+                invocation_source="problem.validator.save_source",
+            )
+        self.assertIn("validator.cpp:4:35: error: expected ';' before 'inf'", msg)
+
+    def test_preview_run_uses_sample_build_failed_flash_for_sample_sync_failure(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        preview_id = self.random_id("p-preview-sample-sync-failed")
+        artifact_path = self._artifact_root(preview_id)
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        config.db.execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,artifact_path,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "failed",
+                "",
+                "",
+                json.dumps(
+                    {
+                        "error": "sample build failed (b-123): validator failed",
+                        "failed_stage": "sample_sync",
+                    }
+                ),
+                str(artifact_path),
+            ],
+        )
+        with patch.object(config.preview_service, "compile_preview", return_value=preview_id):
+            resp = app.impl.preview.api.preview_run(self.problem, self.user, page="statement")
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(
+            f"/problems/{self.problem}/{self.user}/statement?preview_id={preview_id}",
+            resp.headers.get("location", ""),
+        )
+        self.assertIn("sample build failed.", _flash_messages_from_response(resp))
+
+    def test_preview_page_shows_full_sample_build_failure_detail(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        preview_id = self.random_id("p-preview-sample-sync-detail")
+        artifact_path = self._artifact_root(preview_id)
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        (artifact_path / "logs").mkdir(parents=True, exist_ok=True)
+        (artifact_path / "logs" / "latex.log").write_text(
+            "sample build failed (b-old): validator failed on tests/spec.json entry 1\n",
+            encoding="utf-8",
+        )
+        config.db.execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,artifact_path,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "failed",
+                "",
+                "",
+                json.dumps(
+                    {
+                        "error": "sample build failed (b-123): main correct solution RE on 001.in: judge verdict RE",
+                        "failed_stage": "sample_sync",
+                    }
+                ),
+                str(artifact_path),
+            ],
+        )
+        resp = app.impl.preview.api.preview_page(
+            _request(
+                f"/problems/{self.problem}/{self.user}/statement",
+                f"preview_id={preview_id}",
+            ),
+            self.problem,
+            self.user,
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Sample build failed.", html)
+        self.assertIn("sample build failed (b-123): main correct solution RE on 001.in: judge verdict RE", html)
+        self.assertNotIn("Open full latex.log", html)
+        self.assertNotIn("sample build failed (b-old): validator failed on tests/spec.json entry 1", html)
+
     def test_preview_worker_propagates_exception(self) -> None:
         with patch.object(config.preview_service, "compile_preview", side_effect=RuntimeError("preview failed")):
             resp = app.impl.preview.api.preview_run(self.problem, self.user, page="statement")
@@ -91,6 +287,3 @@ class TestBackendMinimal(SmokeBase):
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_runs_build_status'"
         )
         self.assertIsNotNone(row)
-
-
-

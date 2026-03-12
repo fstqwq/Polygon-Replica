@@ -150,7 +150,7 @@ def domjudge_config_from_constants(constants: object) -> dict[str, object]:
         "script_timelimit": compile_timeout,
         "script_memory_limit": int(compile_mem_mb * 1024),
         "script_filesize_limit": int(compile_output_kb),
-        "timelimit_overshoot": "1s",
+        "timelimit_overshoot": "1s|100%",
     }
 
 

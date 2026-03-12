@@ -1,0 +1,47 @@
+#!/bin/sh
+set -e
+
+DEST="$1" ; shift
+MEMLIMIT="$1" ; shift
+MAIN="${ENTRY_POINT:-${1:-}}"
+ENTRY_POINT_VALUE="${ENTRY_POINT:-}"
+if [ -z "$MAIN" ]; then
+    echo "Error: python compile entry point is missing" >&2
+    exit 1
+fi
+
+PY=""
+for cand in pypy3 python3 python; do
+    if command -v "$cand" >/dev/null 2>&1; then
+        PY="$cand"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "Error: python interpreter not found (tried: pypy3, python3, python)" >&2
+    exit 1
+fi
+
+if [ -z "$ENTRY_POINT_VALUE" ]; then
+    echo "Info: detected entry_point: $MAIN"
+fi
+
+"$PY"{{PYTHON_COMPILE_FLAG_SUFFIX}} -m py_compile "$MAIN"
+EXITCODE=$?
+[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+rm -f -- *.pyc
+rm -rf -- __pycache__
+
+if [ ! -r "$MAIN" ]; then
+    echo "Error: main source file '$MAIN' is not readable" >&2
+    exit 1
+fi
+
+cat > "$DEST" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+chmod a+x "$DEST"
+
+exit 0

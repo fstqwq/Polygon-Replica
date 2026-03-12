@@ -3,6 +3,7 @@
 {% block content %}
 <h1 class="page-title">Validator</h1>
 {% include "_flash_message.html" %}
+{% set editor_error = message if message_level == 'error' else '' %}
 <section>
     <h2>Validator Editor</h2>
     <p><strong>{{ "File path" if validator_status.repo_source_exists else "New file" }}:</strong> <code>{{ repo_source }}</code></p>
@@ -15,7 +16,8 @@
       content_char_limit,
       "Save Validator Source",
       "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/validator/create-template",
-      "Create Validator Template"
+      "Create Validator Template",
+      editor_error
     ) }}
     {% else %}
     {{ create_template_form(

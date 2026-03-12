@@ -212,23 +212,19 @@
       <tr>
         <td title="{{ row.test_name }}">
           {% if row.has_detail %}
-          <a class="linkish invocation-test-toggle" href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}">{{ row.test_name }}</a>
+          <a class="linkish invocation-test-toggle" href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}">{{ row.display_name or row.test_name }}</a>
           {% else %}
-          {{ row.test_name }}
-          {% endif %}
-          {% if row.gen_stage and row.gen_stage.show %}
-          <span class="invocation-stage-chip invocation-stage-chip-{{ row.gen_stage.kind }}" {% if row.gen_stage.title %}title="{{ row.gen_stage.title }}"{% endif %}>GEN {{ row.gen_stage.short }}</span>
+          {{ row.display_name or row.test_name }}
           {% endif %}
         </td>
         {% for cell in row.cells %}
         {% set col = detail_columns[loop.index0] %}
         <td class="invocation-cell invocation-cell-{{ cell.kind }}">
           {% if row.has_detail %}
-          <a class="linkish invocation-cell-toggle invocation-cell-link" href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="invocation-cell-code">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="invocation-cell-meta">{{ cell.metrics }}</span>{% endif %}{% if cell.main_stage and cell.main_stage.show %}<span class="invocation-stage-chip invocation-stage-chip-{{ cell.main_stage.kind }}" {% if cell.main_stage.title %}title="{{ cell.main_stage.title }}"{% endif %}>MAIN {{ cell.main_stage.short }}</span>{% endif %}</a>
+          <a class="linkish invocation-cell-toggle invocation-cell-link" href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="invocation-cell-code">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="invocation-cell-meta">{{ cell.metrics }}</span>{% endif %}</a>
           {% else %}
           <span class="invocation-cell-code">{{ cell.short }}</span>
           {% if cell.metrics and cell.metrics != '-' %}<span class="invocation-cell-meta">{{ cell.metrics }}</span>{% endif %}
-          {% if cell.main_stage and cell.main_stage.show %}<span class="invocation-stage-chip invocation-stage-chip-{{ cell.main_stage.kind }}" {% if cell.main_stage.title %}title="{{ cell.main_stage.title }}"{% endif %}>MAIN {{ cell.main_stage.short }}</span>{% endif %}
           {% endif %}
         </td>
         {% endfor %}

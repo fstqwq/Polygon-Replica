@@ -1,14 +1,8 @@
 #!/bin/sh
-set -eu
-
-# C++ compile wrapper-script for 'compile.sh'.
-# See that script for syntax and more info.
+set -e
 
 DEST="$1" ; shift
 MEMLIMIT="$1" ; shift
 MAIN="$1"
-
-# Add -DONLINE_JUDGE or -DDOMJUDGE below if you want it make easier for teams
-# to do local debugging.
 
 exec {{CPP_COMPILE_CMD}} -I. "$MAIN" -o "$DEST"

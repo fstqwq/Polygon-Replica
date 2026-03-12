@@ -9,6 +9,7 @@ ET = xml.etree.ElementTree
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
@@ -559,13 +560,10 @@ class PolygonPackageImportService:
         return rel.as_posix()
 
     def _write_maintained_testlib(self, workspace: Path) -> str:
-        upstream_rel = Path("third_party") / "upstream" / "testlib" / "testlib.h"
-        upstream = _find_file_upwards(Path(__file__), upstream_rel)
         target_rel = Path("third_party") / "testlib" / "testlib.h"
-        if upstream is None:
-            raise ValueError(f"missing maintained testlib: {upstream_rel.as_posix()}")
+        upstream = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3])
         self._write_bytes(workspace, target_rel, upstream.read_bytes())
-        return upstream_rel.as_posix()
+        return "third_party/upstream/testlib/testlib.h"
 
     def _import_components(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path, meta: dict[str, object]) -> dict[str, object]:
         build_cfg = _safe_read_json(workspace / "config" / "build.json")

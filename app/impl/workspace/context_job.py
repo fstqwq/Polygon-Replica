@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 import uuid
 
+from app.db import now_iso
 from app.impl.runtime.config import config
 
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
 from .artifact import assert_workspace_build_access
 from .context_operation import audit, dedupe_preserve_order, parse_summary_json
+from .context_operation import list_solution_entries, resolve_build_accepted_solution_source
 from .context_run_detail import normalize_run_id_token
 from .context_ui import page_ctx
 from .context_verification import (
@@ -105,6 +107,121 @@ def _invocation_submission_parallelism(target_count: int) -> int:
         host_count = 1
     estimate = max(1, host_count * fetch_batch_size)
     return max(1, min(safe_total, 32, estimate))
+
+
+def _find_buildsolve_run(
+    problem_id: int,
+    workspace_id: int,
+    build_id: str,
+    accepted_source_path: str,
+) -> tuple[dict[str, object] | None, dict | None]:
+    safe_build_id = str(build_id or "").strip()
+    safe_source = str(accepted_source_path or "").strip()
+    if not safe_build_id:
+        return (None, None)
+    rows = config.db.fetch_all(
+        """
+        SELECT id,build_id,build_ref,mode,status,summary_json,artifact_path,created_at,finished_at
+        FROM runs
+        WHERE problem_id=? AND workspace_id=? AND build_id=?
+        ORDER BY created_at DESC
+        LIMIT 256
+        """,
+        [int(problem_id), int(workspace_id), safe_build_id],
+    )
+    for row in rows:
+        row_dict = dict(row)
+        summary_obj = parse_summary_json(row_dict.get("summary_json"), f"buildsolve/{row_dict.get('id')}")
+        if not isinstance(summary_obj, dict):
+            continue
+        invocation_block = summary_obj.get("invocation")
+        invocation_source = str(invocation_block.get("source") or "").strip().lower() if isinstance(invocation_block, dict) else ""
+        if invocation_source != "build.solve":
+            continue
+        source_path = str(summary_obj.get("source") or "").strip()
+        if safe_source and source_path and source_path != safe_source:
+            continue
+        return (row_dict, summary_obj)
+    return (None, None)
+
+
+def _materialize_reused_buildsolve_run(
+    *,
+    problem_id: int,
+    workspace_id: int,
+    run_id: str,
+    mode: str,
+    buildsolve_row: dict[str, object],
+    buildsolve_summary: dict,
+    invocation_id: str,
+    invocation_run_ids: list[str],
+    expected_behavior: str,
+) -> tuple[dict[str, object] | None, dict | None]:
+    safe_run_id = normalize_run_id_token(run_id)
+    if not safe_run_id:
+        return (None, None)
+    safe_mode = str(mode or "").strip() or "pass-fail"
+    now_text = now_iso()
+    encoded_summary = json.dumps(buildsolve_summary)
+    finished_at = str(buildsolve_row.get("finished_at") or "").strip()
+    status = str(buildsolve_row.get("status") or "running").strip() or "running"
+    existing = config.db.fetch_one(
+        "SELECT id FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_run_id, int(problem_id), int(workspace_id)],
+    )
+    params = [
+        str(buildsolve_row.get("build_id") or ""),
+        str(buildsolve_row.get("build_ref") or ""),
+        safe_mode,
+        status,
+        encoded_summary,
+        str(buildsolve_row.get("artifact_path") or ""),
+    ]
+    if existing is None:
+        config.db.execute(
+            """
+            INSERT INTO runs(id,problem_id,workspace_id,build_id,build_ref,mode,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                safe_run_id,
+                int(problem_id),
+                int(workspace_id),
+                *params,
+                now_text,
+                finished_at or now_text,
+            ],
+        )
+    else:
+        config.db.execute(
+            """
+            UPDATE runs
+            SET build_id=?,build_ref=?,mode=?,status=?,summary_json=?,artifact_path=?,finished_at=?
+            WHERE id=? AND problem_id=? AND workspace_id=?
+            """,
+            [
+                *params,
+                finished_at or now_text,
+                safe_run_id,
+                int(problem_id),
+                int(workspace_id),
+            ],
+        )
+    _annotate_run_invocation_result(
+        problem_id,
+        workspace_id,
+        safe_run_id,
+        invocation_id=invocation_id,
+        invocation_run_ids=invocation_run_ids,
+        expected_behavior=expected_behavior,
+        invocation_source="verification.start",
+    )
+    row = config.db.fetch_one(
+        "SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_run_id, int(problem_id), int(workspace_id)],
+    )
+    summary_obj = parse_summary_json(row["summary_json"] if row is not None else None, f"verification/{safe_run_id}")
+    return (dict(row) if row is not None else None, summary_obj if isinstance(summary_obj, dict) else {})
 
 def _run_execute_batch_worker(
     problem: str,
@@ -412,15 +529,42 @@ def _run_verification_start_worker(
         verification_details['build_error'] = ''
         verification_details['build_failed_step'] = ''
         verification_details['build_failed_test'] = ''
+        accepted_source_path = ''
+        try:
+            solution_entries, _truncated = list_solution_entries(workspace_path)
+            accepted_source_path = str(
+                resolve_build_accepted_solution_source(workspace_path, solution_entries)
+            ).strip()
+        except Exception:
+            accepted_source_path = ''
+        buildsolve_row: dict[str, object] | None = None
+        buildsolve_summary: dict | None = None
+        if accepted_source_path:
+            buildsolve_row, buildsolve_summary = _find_buildsolve_run(
+                problem_id,
+                workspace_id,
+                build_id,
+                accepted_source_path,
+            )
         target_specs: list[dict[str, object]] = []
         for index, target in enumerate(targets):
+            source_path = str(target.get('path') or '').strip()
+            expected_behavior = normalize_expected_behavior(str(target.get('expected_behavior') or 'unknown'))
+            reuse_buildsolve = bool(
+                accepted_source_path
+                and buildsolve_row is not None
+                and buildsolve_summary is not None
+                and expected_behavior == 'accepted'
+                and source_path == accepted_source_path
+            )
             target_specs.append(
                 {
                     'index': int(index),
                     'target': target,
-                    'source_path': str(target.get('path') or '').strip(),
-                    'expected_behavior': normalize_expected_behavior(str(target.get('expected_behavior') or 'unknown')),
+                    'source_path': source_path,
+                    'expected_behavior': expected_behavior,
                     'requested_run_id': normalize_run_id_token(target.get('run_id')),
+                    'reuse_buildsolve': reuse_buildsolve,
                 }
             )
         solution_results_by_index: dict[int, dict[str, object]] = {}
@@ -524,6 +668,33 @@ def _run_verification_start_worker(
                         summary_obj = parse_summary_json(run_row['summary_json'] if run_row is not None else None, f'verification/{requested_run_id}')
                         _store_target_result(spec, current_run_id=requested_run_id, run_row=run_row, summary_obj=summary_obj)
                         continue
+                    if bool(spec.get('reuse_buildsolve')):
+                        if buildsolve_row is None or not isinstance(buildsolve_summary, dict):
+                            raise RuntimeError('build.solve result missing for accepted solution reuse')
+                        submission_run_id = requested_run_id or _allocate_run_id()
+                        if isinstance(target_ref, dict):
+                            target_ref['run_id'] = submission_run_id
+                        if submission_run_id and submission_run_id not in run_ids:
+                            run_ids.append(submission_run_id)
+                        run_ids = dedupe_preserve_order(run_ids)
+                        run_row, summary_obj = _materialize_reused_buildsolve_run(
+                            problem_id=problem_id,
+                            workspace_id=workspace_id,
+                            run_id=submission_run_id,
+                            mode=verification_mode,
+                            buildsolve_row=buildsolve_row,
+                            buildsolve_summary=dict(buildsolve_summary),
+                            invocation_id=invocation_id,
+                            invocation_run_ids=run_ids,
+                            expected_behavior=expected_behavior,
+                        )
+                        _store_target_result(
+                            spec,
+                            current_run_id=submission_run_id,
+                            run_row=run_row,
+                            summary_obj=summary_obj,
+                        )
+                        continue
                     submission_run_id = requested_run_id or _allocate_run_id()
                     if isinstance(target_ref, dict):
                         target_ref['run_id'] = submission_run_id
@@ -619,6 +790,8 @@ def _run_verification_start_worker(
                 continue
             expected_behavior = normalize_expected_behavior(str(item.get('expected_behavior') or spec.get('expected_behavior') or 'unknown'))
             if expected_behavior != 'accepted':
+                continue
+            if bool(spec.get('reuse_buildsolve')):
                 continue
             if bool(item.get('matched')):
                 continue
@@ -927,7 +1100,7 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
             name=f'export-{thread_name}',
             fn=_runner,
             queue_name='export',
-            backend=config.sandbox_backend.name,
+            backend=config.invocation_backend_service.active_backend_name(),
             dedupe_key=f'export:{key}',
             job_type='export',
         )

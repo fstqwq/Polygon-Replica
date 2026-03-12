@@ -1,0 +1,41 @@
+#!/bin/sh
+
+DEST="$1" ; shift
+MEMLIMIT="$1" ; shift
+SRC="$1"
+MAINSOURCE="$SRC"
+
+MEMSTACK=65536
+MEMJVM=65536
+MEMRESERVED=$((MEMSTACK + MEMJVM))
+MEMLIMITJAVA=$((MEMLIMIT - MEMRESERVED))
+
+if [ $MEMLIMITJAVA -le 0 ]; then
+	echo "internal-error: total memory $MEMLIMIT KiB <= $MEMJVM + $MEMSTACK = $MEMRESERVED KiB reserved for JVM and stack leaves none for heap."
+	exit 1
+fi
+
+if [ -z "$ENTRY_POINT" ]; then
+	[ -n "$DEBUG" ] && echo "Info: no ENTRY_POINT provided, assuming 'Main'."
+	MAINCLASS="Main"
+	echo "Info: detected entry_point: $MAINCLASS"
+else
+	MAINCLASS="$ENTRY_POINT"
+fi
+
+{{JAVA_COMPILE_CMD}} "$SRC"
+EXITCODE=$?
+[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+
+javap "$MAINCLASS" > /dev/null
+EXITCODE=$?
+[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+
+cat > "$DEST" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+chmod a+x "$DEST"
+
+exit 0

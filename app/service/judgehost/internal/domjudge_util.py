@@ -680,7 +680,9 @@ class JudgehostDomjudgeUtilsMixin:
                 out.append(token)
         return out
 
-    def _domjudge_toolchain_cmd_digest(self, source_name: str) -> str:
+    def _domjudge_toolchain_cmd_digest(self, source_name: str, *, manual_validate_only: bool = False) -> str:
+        if bool(manual_validate_only):
+            return compile_command_digest("skip.compile", [])
         language, _exts = self._domjudge_language_extensions(source_name)
         if language == "java":
             command = domjudge_text(getattr(self._constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
@@ -729,7 +731,15 @@ class JudgehostDomjudgeUtilsMixin:
             raise RuntimeError(f"unresolved judgehost script template tokens: {joined}")
         return rendered
 
-    def _domjudge_compile_script(self, source_name: str) -> bytes:
+    def _domjudge_compile_script(
+        self,
+        source_name: str,
+        *,
+        manual_validate_only: bool = False,
+        compile_only: bool = False,
+    ) -> bytes:
+        if bool(manual_validate_only):
+            return self._domjudge_load_script_asset("skip.compile").encode("utf-8")
         language, _exts = self._domjudge_language_extensions(source_name)
         compiler = domjudge_text(getattr(self._constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
         java_compiler = domjudge_text(getattr(self._constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
@@ -753,13 +763,13 @@ class JudgehostDomjudgeUtilsMixin:
         if java_compile_flags:
             java_compile_cmd += f" {java_compile_flags}"
         python_compile_flag_suffix = f" {python_compile_flags}" if python_compile_flags else ""
-        script_name = "cpp.compile"
+        script_name = "cpp.compile-only" if bool(compile_only) else "cpp.compile"
         values = {"CPP_COMPILE_CMD": cpp_compile_cmd}
         if language == "java":
-            script_name = "java.compile"
+            script_name = "java.compile-only" if bool(compile_only) else "java.compile"
             values = {"JAVA_COMPILE_CMD": java_compile_cmd}
         elif language == "py":
-            script_name = "python.compile"
+            script_name = "python.compile-only" if bool(compile_only) else "python.compile"
             values = {
                 "PYTHON_COMPILE_FLAG_SUFFIX": python_compile_flag_suffix,
             }
@@ -769,13 +779,18 @@ class JudgehostDomjudgeUtilsMixin:
 
     def _domjudge_cpp_executable_build_script(self, source_name: str, *, role: str) -> bytes:
         compiler = domjudge_text(getattr(self._constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
-        safe_source = domjudge_path_name(source_name, default="interactor.cpp")
+        safe_source = shlex.quote(domjudge_path_name(source_name, default="interactor.cpp"))
         safe_role = domjudge_text(role, default="executable")
-        return (
-            "#!/bin/sh\n"
-            f"# Auto-generated build script for {safe_role} by Polygon2DOMjudge\n"
-            f"{shlex.quote(compiler)} -Wall -DDOMJUDGE -O2 {shlex.quote(safe_source)} -std=gnu++20 -o run\n"
-        ).encode("utf-8")
+        template = self._domjudge_load_script_asset("cpp.executable.build")
+        rendered = self._domjudge_render_script_template(
+            template,
+            {
+                "ROLE": safe_role,
+                "CPP_EXECUTABLE_BUILD_CMD": f"{shlex.quote(compiler)} -Wall -DDOMJUDGE -O2",
+                "SOURCE_NAME": safe_source,
+            },
+        )
+        return rendered.encode("utf-8")
 
     def _domjudge_task_kind(
         self,
@@ -835,11 +850,12 @@ class JudgehostDomjudgeUtilsMixin:
         solve_mode: bool = False,
         compile_only: bool = False,
         generate_mode: bool = False,
+        manual_validate_only: bool = False,
     ) -> bytes:
         _ = bool(solve_mode)
         if interactive:
             return self._domjudge_load_script_asset("interactive.run").encode("utf-8")
-        if bool(compile_only):
+        if bool(compile_only) or bool(manual_validate_only):
             script_name = "skip.run"
         elif bool(generate_mode):
             script_name = "generate.run"

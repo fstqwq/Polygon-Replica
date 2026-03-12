@@ -3209,6 +3209,12 @@ section.invocation-header-section {
   overflow-wrap: anywhere;
 }
 
+.component-editor-error {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 body.popup-open,
 body.confirm-open {
   overflow: hidden;

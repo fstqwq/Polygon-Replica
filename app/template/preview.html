@@ -89,9 +89,9 @@
     {% endif %}
     {% if preview_compile_failed %}
     <div class="flash">
-      <strong>Compile failed.</strong>
-      {% if compile_error_summary %}
-      <span>{{ compile_error_summary }}</span>
+      <strong>{{ preview_failure_title }}</strong>
+      {% if preview_failure_detail %}
+      <pre class="preview-log">{{ preview_failure_detail }}</pre>
       {% endif %}
       {% if latex_log_href %}
       <a href="{{ latex_log_href }}" target="_blank" rel="noopener">Open full latex.log</a>

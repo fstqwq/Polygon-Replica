@@ -10,8 +10,7 @@ from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
 from app.service.platform.fs.layout import FsManager
-from app.service.sandbox.base import ExecSpec, SandboxBackend
-from app.service.sandbox.native_backend import NativeSandboxBackend
+from app.service.platform.hashing import sha256_file
 from app.service.problem.test_spec import (
     load_tests_spec,
     parse_gen_command_tokens,
@@ -27,7 +26,7 @@ from app.service.build.cache import (
     canonical_digest,
     ensure_build_paths,
 )
-from app.service.build.diagnostic import collect_diagnostics, compact_single_line, judge_backend_compile_detail
+from app.service.build.diagnostic import collect_diagnostics, judge_backend_compile_detail
 from app.service.build.judge_solve import solve_with_judge_backend
 from app.service.build.pipeline import effective_compile_jobs, wait_build_terminal_status
 from app.service.build.runner import run_build
@@ -94,7 +93,6 @@ class Build:
         workspace_service: WorkspaceService,
         artifacts: ArtifactService,
         toolchain: ToolchainService,
-        sandbox_backend: SandboxBackend | None = None,
         constants: RuntimeValues | None = None,
         async_task_cache_service: AsyncTaskCacheService | None = None,
     ):
@@ -102,7 +100,7 @@ class Build:
         self.workspace_service = workspace_service
         self.artifacts = artifacts
         self.toolchain = toolchain
-        self.sandbox = sandbox_backend or NativeSandboxBackend()
+        self.execution_backend_name = "domjudge-judgehost"
         self.default_exec_memory_mb = 1024
         self.default_exec_process_limit = 64
         self.default_exec_output_kb = 65536
@@ -209,33 +207,6 @@ class Build:
 
     def _normalize_problem_mode(self, raw: object, default: str = "pass-fail") -> str:
         return normalize_problem_mode(raw, default)
-
-    def _sandbox_exec(
-        self,
-        cmd: list[str],
-        timeout_sec: int,
-        *,
-        cwd: Path | None = None,
-        stdin_path: Path | None = None,
-        stdout_path: Path | None = None,
-        env: dict[str, str] | None = None,
-    ) -> tuple[int, str, str, bool]:
-        result = self.sandbox.run(
-            ExecSpec(
-                command=cmd,
-                cwd=cwd,
-                timeout_sec=max(1, int(timeout_sec)),
-                stdin_path=stdin_path,
-                stdout_path=stdout_path,
-                env=env,
-                memory_mb=self.default_exec_memory_mb,
-                process_limit=self.default_exec_process_limit,
-                output_kb=self.default_exec_output_kb,
-            )
-        )
-        if result.timed_out:
-            return -1, result.stdout, result.stderr, True
-        return int(result.returncode or 0), result.stdout, result.stderr, False
 
     def _resolve_standard_checker_source(self, checker_standard: str) -> Path | None:
         return resolve_standard_checker_source(
@@ -408,51 +379,6 @@ class Build:
             diagnostics.extend(self._collect_diagnostics(snapshot, ""))
         return diagnostics
 
-    def _validator_ok(self, returncode: int) -> bool:
-        return returncode in {0, 42}
-
-    def _checker_ok(self, returncode: int) -> bool:
-        return int(returncode) == 42
-
-    def _checker_feedback_message(self, feedback_dir: Path) -> str:
-        for name in ("judgemessage.txt", "teammessage.txt", "checker.log"):
-            candidate = feedback_dir / name
-            try:
-                if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
-                    text = candidate.read_text(encoding="utf-8", errors="replace").strip()
-                    if text:
-                        return compact_single_line(text, 220)
-            except OSError:
-                continue
-        return ""
-
-    def _run_checker_with_submission_output(
-        self,
-        checker: Path,
-        checker_args: list[str],
-        test_input: Path,
-        expected_answer: Path,
-        submission_output_text: str,
-        run_root: Path,
-    ) -> tuple[int, bool, str]:
-        run_root.mkdir(parents=True, exist_ok=True)
-        submission_output = run_root / "submission.out"
-        feedback_dir = run_root / "feedback"
-        feedback_dir.mkdir(parents=True, exist_ok=True)
-        submission_output.write_text(str(submission_output_text or ""), encoding="utf-8")
-        rc, out, err, timed_out = self._sandbox_exec(
-            [str(checker), str(test_input), str(expected_answer), str(feedback_dir), *checker_args],
-            timeout_sec=30,
-            stdin_path=submission_output,
-            cwd=run_root,
-        )
-        message = self._checker_feedback_message(feedback_dir)
-        if not message:
-            stream = compact_single_line((str(out or "") + "\n" + str(err or "")).strip(), 220)
-            if stream:
-                message = stream
-        return int(rc), bool(timed_out), message
-
     def _manual_test_sources(self, snapshot: Path) -> list[Path]:
         return manual_test_sources(snapshot)
 
@@ -480,6 +406,47 @@ class Build:
     def _canonical_digest(payload: object) -> str:
         return canonical_digest(payload)
 
+    def _build_source_tree_entries(self, source_root: Path) -> list[dict[str, object]]:
+        include_dirs = (
+            "checkers",
+            "generators",
+            "interactors",
+            "solutions",
+            "tests",
+            "validators",
+            "third_party/testlib",
+        )
+        entries: list[dict[str, object]] = []
+        seen: set[str] = set()
+
+        def _add_file(path: Path) -> None:
+            try:
+                rel = path.relative_to(source_root).as_posix()
+            except Exception:
+                return
+            if rel in seen:
+                return
+            seen.add(rel)
+            try:
+                stat = path.stat()
+            except OSError:
+                return
+            entries.append(
+                {
+                    "path": rel,
+                    "size": int(stat.st_size),
+                    "sha256": sha256_file(path),
+                }
+            )
+
+        for rel_dir in include_dirs:
+            root = (source_root / rel_dir).resolve()
+            if not root.exists() or not root.is_dir():
+                continue
+            for path in sorted(p for p in root.rglob("*") if p.is_file()):
+                _add_file(path)
+        return entries
+
     def _generation_params_digest(self, source_root: Path, *, sample_only: bool) -> str:
         build_cfg = self._load_build_config(source_root)
         runtime_cfg = self._load_problem_runtime_config(source_root)
@@ -490,11 +457,12 @@ class Build:
             tests_spec_rows = []
         return self._canonical_digest(
             {
-                "schema": "v1",
+                "schema": "v2",
                 "sample_only": bool(sample_only),
                 "build_config": build_cfg,
                 "runtime_config": runtime_cfg,
                 "tests_spec_rows": tests_spec_rows,
+                "source_tree": self._build_source_tree_entries(source_root),
             }
         )
 

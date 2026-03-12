@@ -159,7 +159,7 @@ def _runtime_backend_profile() -> dict[str, str]:
         and (now - float(_RUNTIME_BACKEND_CACHE_TS)) <= _RUNTIME_BACKEND_CACHE_TTL_SEC
     ):
         return dict(_RUNTIME_BACKEND_CACHE)
-    sandbox_name = _sanitize_runtime_profile_value(getattr(config.sandbox_backend, "name", ""), "n/a")
+    sandbox_name = _sanitize_runtime_profile_value(getattr(config.preview_sandbox_backend, "name", ""), "n/a")
     sandbox_count = "1" if sandbox_name != "n/a" else "0"
     judgehost_enabled = False
     hosts_online = 0

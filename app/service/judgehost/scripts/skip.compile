@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+DEST="$1"
+cat >"$DEST" <<'EOF'
+#!/bin/sh
+EOF
+chmod 755 "$DEST"

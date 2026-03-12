@@ -8,6 +8,8 @@ import unittest
 import uuid
 from pathlib import Path
 
+from app.service.platform.testlib_source import maintained_testlib_header
+
 
 _TESTSUITE_BASE = Path("./var")
 _TESTSUITE_ROOT = _TESTSUITE_BASE / f"testsuite-{uuid.uuid4().hex[:8]}"
@@ -208,7 +210,7 @@ class SmokeBase(unittest.TestCase):
                 path.write_text(content, encoding="utf-8")
         testlib = ws / "third_party/testlib/testlib.h"
         if not testlib.exists():
-            testlib.write_text("// testlib placeholder\n", encoding="utf-8")
+            testlib.write_bytes(maintained_testlib_header(repo_root=Path(__file__).resolve().parents[1]).read_bytes())
         return ws
 
     def random_id(self, prefix: str) -> str:

@@ -165,6 +165,12 @@ def generator_status_context(workspace: Path) -> dict:
             repo_source = rel
             repo_exists = True
             break
+    if not repo_source:
+        for rel in generator_candidates:
+            if workspace_rel_file_exists(workspace, rel):
+                repo_source = rel
+                repo_exists = True
+                break
     if not repo_source and configured_sources:
         repo_source = configured_sources[0]
     if not repo_source:
@@ -177,9 +183,10 @@ def generator_status_context(workspace: Path) -> dict:
     has_declared_or_discovered = bool(all_sources)
     source_rows: list[dict[str, object]] = []
     for rel in all_sources:
-        source_rows.append({'path': rel, 'exists': workspace_rel_file_exists(workspace, rel), 'configured': rel in configured_set})
-    if not source_rows:
-        source_rows.append({'path': repo_source, 'exists': bool(repo_exists), 'configured': False})
+        exists = workspace_rel_file_exists(workspace, rel)
+        if not exists:
+            continue
+        source_rows.append({'path': rel, 'exists': exists, 'configured': rel in configured_set})
     if repo_exists:
         mode = 'repository'
         display = _source_basename_label(repo_source)

@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -e
 TESTIN="$1"
 TESTANS="$2"
 FEEDBACK="$3"
@@ -7,6 +7,12 @@ shift 3
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 mkdir -p "$FEEDBACK"
 TEAMOUT="$FEEDBACK/team.out"
+VALIDATE_INPUT=0
+
+if [ "${1:-}" = "--validate-input" ]; then
+  VALIDATE_INPUT=1
+  shift
+fi
 
 pick_teamout_src() {
   for cand in "$@"; do
@@ -27,14 +33,18 @@ pick_teamout_src() {
 }
 
 TEAMOUT_SRC=""
-if TEAMOUT_SRC="$(pick_teamout_src "$@")"; then
-  cat "$TEAMOUT_SRC" >"$TEAMOUT" 2>/dev/null || true
-fi
-if [ ! -s "$TEAMOUT" ]; then
-  cat >"$TEAMOUT" || true
-fi
-if [ ! -s "$TEAMOUT" ] && [ -r "$FEEDBACK/program.out" ] && [ ! -d "$FEEDBACK/program.out" ]; then
-  cat "$FEEDBACK/program.out" >"$TEAMOUT" 2>/dev/null || true
+if [ "$VALIDATE_INPUT" -eq 1 ]; then
+  cat "$TESTIN" >"$TEAMOUT" 2>/dev/null || true
+else
+  if TEAMOUT_SRC="$(pick_teamout_src "$@")"; then
+    cat "$TEAMOUT_SRC" >"$TEAMOUT" 2>/dev/null || true
+  fi
+  if [ ! -s "$TEAMOUT" ]; then
+    cat >"$TEAMOUT" || true
+  fi
+  if [ ! -s "$TEAMOUT" ] && [ -r "$FEEDBACK/program.out" ] && [ ! -d "$FEEDBACK/program.out" ]; then
+    cat "$FEEDBACK/program.out" >"$TEAMOUT" 2>/dev/null || true
+  fi
 fi
 
 VALIDATOR_BIN="$HERE/validator"

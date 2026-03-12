@@ -3,17 +3,17 @@
 {% block content %}
 <h1 class="page-title">Generators</h1>
 {% include "_flash_message.html" %}
+{% set editor_error = message if message_level == 'error' else '' %}
 
 <div class="grid">
   <section>
     <h2>Generators List</h2>
     <table>
-      <tr><th>Path</th><th>Used in Build</th><th>Status</th></tr>
+      <tr><th>Path</th><th>Used in Build</th></tr>
       {% for row in source_rows %}
       <tr>
         <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators?path={{ row.path }}"><code>{{ row.path }}</code></a></td>
         <td>{{ "used" if row.configured else "unused" }}</td>
-        <td>{{ "ready" if row.exists else "missing" }}</td>
       </tr>
       {% endfor %}
     </table>
@@ -29,16 +29,21 @@
 
   <section>
     <h2>Generator Editor</h2>
+    {% if selected_exists or editor_error %}
     <p><strong>{{ "File path" if selected_exists else "New file" }}:</strong> <code>{{ selected_source }}</code></p>
-    {% if selected_exists %}
     {{ source_editor_form(
       "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/generators/save-source",
       selected_source,
       repo_content,
       repo_content_truncated,
       content_char_limit,
-      "Save Generator Source"
+      "Save Generator Source",
+      '',
+      '',
+      editor_error
     ) }}
+    {% else %}
+    <p class="muted">Create a generator template or pick an existing generator file to edit.</p>
     {% endif %}
   </section>
 </div>

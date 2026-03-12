@@ -2,6 +2,7 @@
 {% block content %}
 <h1 class="page-title">Solution Editor</h1>
 {% include "_flash_message.html" %}
+{% set editor_error = message if message_level == 'error' else '' %}
 
 {% set expected_value = selected_entry.expected_behavior if selected_entry else "unknown" %}
 {% set expected_class = "tag-select-expected" %}
@@ -39,7 +40,7 @@
       <button id="solution-save-submit" type="submit">Save Source</button>
       <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions?path={{ selected }}">Back to Solution Files</a>
     </div>
-    <p id="solution-save-error" class="danger" hidden></p>
+    <p id="solution-save-error" class="danger component-editor-error"{% if not editor_error %} hidden{% endif %}>{{ editor_error }}</p>
   </form>
 </section>
 {% endblock %}

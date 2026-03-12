@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import base64
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from pathlib import Path
 import random
@@ -12,10 +11,12 @@ import uuid
 
 from app.db import now_iso
 from app.service.platform.process import run_cmd
+from app.service.platform.testlib_source import workspace_testlib_header
 from app.service.build.diagnostic import compact_single_line, normalize_diagnostics_for_db
 from app.service.build.source import resolve_source
 from app.service.build.summary import summary_for_db
 from app.service.build.test_spec import tests_spec_answer_source
+from app.service.run.runtime import RUN_TEST_NAME_RE
 
 CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
@@ -309,10 +310,12 @@ def run_build(
             for name, source, _output in compile_targets
             if isinstance(source, Path)
         }
+        shared_testlib_blob: bytes | None = None
+        resolved_testlib = workspace_testlib_header(snapshot)
+        if resolved_testlib is not None:
+            shared_testlib_blob = resolved_testlib.read_bytes()
 
-        compile_plan = [(name, source, output) for name, source, output in compile_targets if source is not None]
-        compile_jobs = self._effective_compile_jobs(build_cfg.get("compile_jobs", 0), len(compile_plan))
-        compile_results: dict[str, tuple[bool, str, str, str]] = {}
+        compile_jobs = 0
         compile_backend = getattr(self, "_judgehost_task_service", None)
         if compile_backend is None:
             raise RuntimeError("judge backend unavailable for build compile")
@@ -332,22 +335,6 @@ def run_build(
                     if message:
                         return message
             return str(summary.get("error") or "").strip()
-
-        def _run_summary_output_ref(summary: dict) -> str:
-            tests_obj = summary.get("tests")
-            tests = tests_obj if isinstance(tests_obj, list) else []
-            for row in tests:
-                if not isinstance(row, dict):
-                    continue
-                passes_obj = row.get("passes")
-                passes = passes_obj if isinstance(passes_obj, list) else []
-                for pass_row in passes:
-                    if not isinstance(pass_row, dict):
-                        continue
-                    output_ref = str(pass_row.get("output_ref") or pass_row.get("output_artifact") or "").strip()
-                    if output_ref:
-                        return output_ref
-            return ""
 
         def _run_summary_work_root(summary: dict) -> Path | None:
             judgehost_obj = summary.get("judgehost")
@@ -467,58 +454,63 @@ def run_build(
             return result_map
 
         def _run_generator_inputs_via_judgehost(
-            *, generator_source: Path, args_list: list[list[str]]
-        ) -> list[tuple[int, str]]:
-            safe_args_list = [[str(item or "") for item in (args or [])] for args in args_list]
-            if not safe_args_list:
-                return []
+            *,
+            source_name: str,
+            source_bytes: bytes,
+            tests_payload: list[dict[str, str]],
+            extra_sources_b64: dict[str, str] | None = None,
+            manual_validate_only: bool = False,
+        ) -> dict[str, tuple[int, str]]:
+            safe_source_name = Path(str(source_name or "").strip() or "submission.cpp").name
+            normalized_tests: list[dict[str, str]] = []
+            for row in tests_payload:
+                if not isinstance(row, dict):
+                    continue
+                test_name = Path(str(row.get("name") or "").strip()).name
+                if not RUN_TEST_NAME_RE.fullmatch(test_name):
+                    continue
+                normalized_tests.append(
+                    {
+                        "name": test_name,
+                        "input_b64": str(row.get("input_b64") or ""),
+                        "answer_name": str(row.get("answer_name") or f"{Path(test_name).stem}.ans"),
+                        "answer_b64": str(row.get("answer_b64") or ""),
+                    }
+                )
+            if not normalized_tests:
+                return {}
             run_id = f"r-bg-{uuid.uuid4().hex[:12]}"
             invocation_id = f"inv-buildgen-{build_id[:12]}-{uuid.uuid4().hex[:8]}"
-            source_bytes = generator_source.read_bytes()
             validator_source = compile_source_by_name.get("validator")
             sources_payload: dict[str, str] = {}
             binaries_payload: dict[str, str] = {}
-
-            testlib_blob: bytes | None = None
-            workspace_testlib = (snapshot / "third_party" / "testlib" / "testlib.h").resolve()
-            if workspace_testlib.exists() and workspace_testlib.is_file():
-                testlib_blob = workspace_testlib.read_bytes()
-            else:
-                upstream_testlib = (
-                    Path(__file__).resolve().parents[3] / "third_party" / "upstream" / "testlib" / "testlib.h"
-                ).resolve()
-                if upstream_testlib.exists() and upstream_testlib.is_file():
-                    testlib_blob = upstream_testlib.read_bytes()
+            submission_extra_sources_payload: dict[str, str] = {}
 
             if isinstance(validator_source, Path) and validator_source.exists() and validator_source.is_file():
                 sources_payload["validator.cpp"] = base64.b64encode(validator_source.read_bytes()).decode("ascii")
-                if testlib_blob is not None:
-                    sources_payload["testlib.h"] = base64.b64encode(testlib_blob).decode("ascii")
+                if shared_testlib_blob is not None:
+                    sources_payload["testlib.h"] = base64.b64encode(shared_testlib_blob).decode("ascii")
+            if isinstance(extra_sources_b64, dict):
+                for raw_name, raw_blob in extra_sources_b64.items():
+                    safe_name = Path(str(raw_name or "").strip()).name
+                    if not safe_name:
+                        continue
+                    submission_extra_sources_payload[safe_name] = str(raw_blob or "")
+                    if safe_name in sources_payload:
+                        continue
+                    sources_payload[safe_name] = str(raw_blob or "")
 
-            tests_payload: list[dict[str, str]] = []
-            for case_index, args in enumerate(safe_args_list, start=1):
-                command_payload = " ".join(
-                    ['"$SUBMISSION_BIN"', *[shlex.quote(str(item or "")) for item in args]]
-                ).strip()
-                if not command_payload:
-                    command_payload = '"$SUBMISSION_BIN"'
-                case_name = f"{case_index:03d}.in"
-                tests_payload.append(
-                    {
-                        "name": case_name,
-                        "input_b64": base64.b64encode((command_payload + "\n").encode("utf-8")).decode("ascii"),
-                        "answer_name": f"{case_index:03d}.ans",
-                        "answer_b64": "",
-                    }
-                )
+            checker_args: list[str] = []
+            if manual_validate_only:
+                checker_args.append("--validate-input")
 
             prepared_payload: dict[str, object] = {
                 "build_payload": {
-                    "tests": tests_payload,
+                    "tests": normalized_tests,
                     "run_config_json": json.dumps(
                         {
                             "checker_mode": "testlib",
-                            "checker_args": [],
+                            "checker_args": checker_args,
                             "max_passes": 1,
                             "time_limit_ms": 30000,
                             "memory_limit_mb": int(runtime_cfg.get("memory_limit_mb", 1024)),
@@ -532,13 +524,10 @@ def run_build(
                     },
                     "binaries_b64": binaries_payload,
                     "sources_b64": sources_payload,
-                }
+                },
+                "extra_sources_b64": submission_extra_sources_payload,
+                "manual_validate_only": bool(manual_validate_only),
             }
-
-            if generator_source.suffix.lower() in CPP_EXTENSIONS and testlib_blob is not None:
-                prepared_payload["extra_sources_b64"] = {
-                    "testlib.h": base64.b64encode(testlib_blob).decode("ascii")
-                }
 
             task_id = compile_backend.enqueue_task(
                 problem=problem,
@@ -547,7 +536,7 @@ def run_build(
                 mode=problem_mode,
                 submission_path=None,
                 upload_content=source_bytes,
-                upload_filename=generator_source.name,
+                upload_filename=safe_source_name,
                 run_id=run_id,
                 selected_tests=[],
                 invocation_id=invocation_id,
@@ -564,7 +553,10 @@ def run_build(
                 [waited_run_id],
             )
             if run_row is None:
-                return [(1, "judge backend generate result missing") for _ in safe_args_list]
+                return {
+                    row["name"]: (1, "judge backend generate result missing")
+                    for row in normalized_tests
+                }
             run_status = str(run_row["status"] or "").strip().lower()
             summary_obj: dict = {}
             raw_summary = str(run_row["summary_json"] or "").strip()
@@ -577,13 +569,13 @@ def run_build(
                     summary_obj = {}
             if run_status and run_status != "ok":
                 detail = str(summary_obj.get("error") or "").strip() or f"judge backend run status is {run_status}"
-                return [(1, detail) for _ in safe_args_list]
+                return {row["name"]: (1, detail) for row in normalized_tests}
             run_root = Path(str(run_row["artifact_path"] or "")).resolve()
             work_root_hint = _run_summary_work_root(summary_obj)
             test_result_map = _run_summary_test_result_map(summary_obj)
-            results: list[tuple[int, str]] = []
-            for case_index in range(1, len(safe_args_list) + 1):
-                case_name = f"{case_index:03d}.in"
+            results: dict[str, tuple[int, str]] = {}
+            for row in normalized_tests:
+                case_name = str(row.get("name") or "").strip()
                 case_result = test_result_map.get(case_name, {})
                 verdict = str(case_result.get("verdict") or "").strip().upper()
                 if verdict and verdict != "OK":
@@ -594,7 +586,10 @@ def run_build(
                         detail = str(summary_obj.get("error") or "").strip()
                     if not detail:
                         detail = f"judge verdict {verdict}"
-                    results.append((1, detail))
+                    results[case_name] = (1, detail)
+                    continue
+                if manual_validate_only:
+                    results[case_name] = (0, "")
                     continue
                 output_ref = str(case_result.get("output_ref") or "").strip()
                 output_blob: bytes | None = None
@@ -604,224 +599,37 @@ def run_build(
                     except Exception:
                         output_blob = None
                 if output_blob is None:
-                    fallback = (run_root / f"{case_index:03d}.out").resolve()
+                    fallback = (run_root / f"{Path(case_name).stem}.out").resolve()
                     if fallback.exists() and fallback.is_file() and (not fallback.is_symlink()):
                         output_blob = fallback.read_bytes()
                 if output_blob is None:
                     detail = str(case_result.get("feedback") or "").strip() or str(summary_obj.get("error") or "").strip()
                     if not detail:
                         detail = "judge backend did not produce generated input output"
-                    results.append((1, detail))
+                    results[case_name] = (1, detail)
                     continue
-                results.append((0, output_blob.decode("utf-8", errors="replace")))
+                results[case_name] = (0, output_blob.decode("utf-8", errors="replace"))
             return results
 
-        def _materialize_noncpp_target(*, source: Path, output: Path, source_bytes: bytes, artifact_bytes: bytes | None) -> None:
-            suffix = source.suffix.lower()
-            output.parent.mkdir(parents=True, exist_ok=True)
-            if suffix == ".py":
-                launcher = artifact_bytes if artifact_bytes else (
-                    "#!/bin/sh\n"
-                    "set -eu\n"
-                    "HERE=\"$(CDPATH= cd -- \"$(dirname \"$0\")\" && pwd)\"\n"
-                    "SCRIPT_NAME=\"$(basename \"$0\").py\"\n"
-                    "PY=\"\"\n"
-                    "if command -v python3 >/dev/null 2>&1; then\n"
-                    "  PY=\"python3\"\n"
-                    "elif command -v python >/dev/null 2>&1; then\n"
-                    "  PY=\"python\"\n"
-                    "elif command -v pypy3 >/dev/null 2>&1; then\n"
-                    "  PY=\"pypy3\"\n"
-                    "fi\n"
-                    "if [ -z \"$PY\" ]; then\n"
-                    "  echo \"python interpreter not found\" >&2\n"
-                    "  exit 1\n"
-                    "fi\n"
-                    "export HOME=/does/not/exist\n"
-                    "exec \"$PY\" \"$HERE/$SCRIPT_NAME\" \"$@\"\n"
-                ).encode("utf-8")
-                output.write_bytes(launcher)
-                output.chmod(0o755)
-                output.with_name(f"{output.name}.py").write_bytes(source_bytes)
-                return
-            if suffix == ".java":
-                source_text = source_bytes.decode("utf-8", errors="replace")
-                class_match = re.search(
-                    r"^[ \t]*public[ \t]+class[ \t]+([A-Za-z_][A-Za-z0-9_]*)",
-                    source_text,
-                    flags=re.MULTILINE,
-                )
-                java_name = f"{class_match.group(1)}.java" if class_match else source.name
-                java_source = output.with_name(java_name)
-                java_source.write_bytes(source_bytes)
-                launcher = (
-                    "#!/bin/sh\n"
-                    "set -eu\n"
-                    "HERE=\"$(CDPATH= cd -- \"$(dirname \"$0\")\" && pwd)\"\n"
-                    f"exec java \"$HERE/{java_name}\" \"$@\"\n"
-                )
-                output.write_text(launcher, encoding="utf-8")
-                output.chmod(0o755)
-                return
-            raise RuntimeError(f"unsupported source language: {suffix or '(no extension)'}")
-
-        def _compile_via_judgehost_target(name: str, source: Path, output: Path) -> tuple[bool, str, str, str]:
-            source_bytes = source.read_bytes()
-            run_id = f"r-bc-{uuid.uuid4().hex[:12]}"
-            invocation_id = f"inv-buildcompile-{build_id[:12]}-{uuid.uuid4().hex[:8]}"
-            prepared_payload: dict[str, object] | None = None
-            if source.suffix.lower() in CPP_EXTENSIONS:
-                extra_sources: dict[str, str] = {}
-                workspace_testlib = (snapshot / "third_party" / "testlib" / "testlib.h").resolve()
-                if workspace_testlib.exists() and workspace_testlib.is_file():
-                    extra_sources["testlib.h"] = base64.b64encode(workspace_testlib.read_bytes()).decode("ascii")
-                else:
-                    upstream_testlib = (
-                        Path(__file__).resolve().parents[3] / "third_party" / "upstream" / "testlib" / "testlib.h"
-                    ).resolve()
-                    if upstream_testlib.exists() and upstream_testlib.is_file():
-                        extra_sources["testlib.h"] = base64.b64encode(upstream_testlib.read_bytes()).decode("ascii")
-                if extra_sources:
-                    prepared_payload = {"extra_sources_b64": extra_sources}
-            if prepared_payload is not None:
-                task_id = compile_backend.enqueue_compile_only_task(
-                    problem=problem,
-                    username=username,
-                    build_id=build_id,
-                    upload_content=source_bytes,
-                    upload_filename=source.name,
-                    run_id=run_id,
-                    invocation_id=invocation_id,
-                    invocation_run_ids=[run_id],
-                    expected_behavior="compile",
-                    invocation_source="build.compile",
-                    prepared_payload=prepared_payload,
-                )
-            else:
-                task_id = compile_backend.enqueue_compile_only_task(
-                    problem=problem,
-                    username=username,
-                    build_id=build_id,
-                    upload_content=source_bytes,
-                    upload_filename=source.name,
-                    run_id=run_id,
-                    invocation_id=invocation_id,
-                    invocation_run_ids=[run_id],
-                    expected_behavior="compile",
-                    invocation_source="build.compile",
-                )
-            waited_run_id = str(compile_backend.wait_for_task(task_id, timeout_sec=None) or run_id).strip() or run_id
-            run_row = self.db.fetch_one(
-                "SELECT status,summary_json,artifact_path FROM runs WHERE id=?",
-                [waited_run_id],
-            )
-            if run_row is None:
-                return (False, "", "judge backend compile result missing", "judgehost")
-            run_status = str(run_row["status"] or "").strip().lower()
-            summary_obj: dict = {}
-            raw_summary = str(run_row["summary_json"] or "").strip()
-            if raw_summary:
-                try:
-                    parsed = json.loads(raw_summary)
-                    if isinstance(parsed, dict):
-                        summary_obj = parsed
-                except Exception:
-                    summary_obj = {}
-            if run_status and run_status != "ok":
-                failure_text = str(summary_obj.get("error") or "").strip() or "judge backend compile failed"
-                return (False, "", failure_text, "judgehost")
-            compile_error = _first_compile_message(summary_obj)
-            verdict = _run_summary_verdict(summary_obj)
-            if verdict == "CE":
-                return (False, "", compile_error or f"compile failed: {name}", "judgehost")
-            if verdict and verdict != "OK":
-                return (False, "", compile_error or f"compile failed: {name} ({verdict})", "judgehost")
-
-            output_blob: bytes | None = None
-            output_ref = _run_summary_output_ref(summary_obj)
-            work_root_hint = _run_summary_work_root(summary_obj)
-            if output_ref:
-                try:
-                    output_blob = compile_backend.resolve_artifact_blob(output_ref, work_root=work_root_hint)
-                except Exception:
-                    output_blob = None
-            if output_blob is None:
-                run_root = Path(str(run_row["artifact_path"] or "")).resolve()
-                fallback = (run_root / "001.out").resolve()
-                if fallback.exists() and fallback.is_file() and (not fallback.is_symlink()):
-                    output_blob = fallback.read_bytes()
-
-            if source.suffix.lower() in CPP_EXTENSIONS:
-                if not output_blob:
-                    return (False, "", "missing compile artifact", "judgehost")
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_bytes(output_blob)
-                output.chmod(0o755)
-            else:
-                _materialize_noncpp_target(
-                    source=source,
-                    output=output,
-                    source_bytes=source_bytes,
-                    artifact_bytes=output_blob,
-                )
-            return (True, "", "", "judgehost")
-
-        if (not verification_pipeline) and compile_plan:
-            with ThreadPoolExecutor(max_workers=compile_jobs) as pool:
-                future_map = {
-                    pool.submit(_compile_via_judgehost_target, name, source, output): name
-                    for name, source, output in compile_plan
-                }
-                for future in as_completed(future_map):
-                    name = future_map[future]
-                    compile_results[name] = future.result()
-
-        compiled_bins: dict[str, Path] = {}
         compile_log_path = logs_dir / "compile.log"
         with compile_log_path.open("w", encoding="utf-8") as clog:
-            clog.write(f"compile_jobs={compile_jobs}\n")
-            if verification_pipeline:
-                clog.write("compile_strategy=source-only (verification pipeline)\n")
+            clog.write("compile_jobs=0\n")
+            clog.write("compile_strategy=judgehost-source-only\n")
             for name, source, output in compile_targets:
                 if source is None:
                     clog.write(f"[{name}] missing source\n\n")
                     continue
                 clog.write(f"[{name}] source={source}\n")
-                if verification_pipeline:
-                    clog.write("compile skipped: verification pipeline uses judgehost generate/solve task model\n\n")
-                    continue
-                ok, out, err, toolchain_digest = compile_results[name]
-                diagnostics.extend(
-                    self._append_compile_streams(
-                        clog,
-                        snapshot,
-                        out,
-                        err,
-                    )
-                )
-                clog.write("\n")
-                if not ok:
-                    raise RuntimeError(f"compile failed: {name}")
-                compiled_bins[name] = output
+                clog.write("compile skipped: build uses judgehost source-only generate/solve task model\n\n")
 
-        if verification_pipeline:
-            if build_cfg.get("require_validator", True) and (compile_source_by_name.get("validator") is None):
-                raise RuntimeError("validator source is required")
-            if build_cfg.get("require_checker", True) and (compile_source_by_name.get("checker") is None):
-                raise RuntimeError("checker source is required")
-            if compile_source_by_name.get("accepted_solution") is None:
-                raise RuntimeError("accepted solution source is required")
-            if interactive_mode and (compile_source_by_name.get("interactor") is None):
-                raise RuntimeError("interactor source is required for interactive mode")
-        else:
-            if build_cfg.get("require_validator", True) and "validator" not in compiled_bins:
-                raise RuntimeError("validator source is required")
-            if build_cfg.get("require_checker", True) and "checker" not in compiled_bins:
-                raise RuntimeError("checker source is required")
-            if "accepted_solution" not in compiled_bins:
-                raise RuntimeError("accepted solution source is required")
-            if interactive_mode and "interactor" not in compiled_bins:
-                raise RuntimeError("interactor source is required for interactive mode")
+        if build_cfg.get("require_validator", True) and (compile_source_by_name.get("validator") is None):
+            raise RuntimeError("validator source is required")
+        if build_cfg.get("require_checker", True) and (compile_source_by_name.get("checker") is None):
+            raise RuntimeError("checker source is required")
+        if compile_source_by_name.get("accepted_solution") is None:
+            raise RuntimeError("accepted solution source is required")
+        if interactive_mode and (compile_source_by_name.get("interactor") is None):
+            raise RuntimeError("interactor source is required for interactive mode")
 
         steps.append({"step": "compile", "status": "ok", "log": "logs/compile.log"})
 
@@ -834,19 +642,8 @@ def run_build(
         generated_count = 0
         generate_log_path = logs_dir / "generate.log"
         with generate_log_path.open("w", encoding="utf-8") as glog:
+            planned_rows: list[dict[str, object]] = []
             if tests_spec_entries is not None:
-                gen_batch_args_by_source: dict[Path, list[list[str]]] = {}
-                for planned in tests_spec_runtime:
-                    if str(planned.get("kind") or "") != "gen":
-                        continue
-                    target_name = str(planned.get("target_name") or "")
-                    planned_source = generator_source_by_name.get(target_name)
-                    if planned_source is None:
-                        continue
-                    planned_args = [str(item or "") for item in (planned.get("args") or [])]
-                    gen_batch_args_by_source.setdefault(planned_source, []).append(planned_args)
-                gen_batch_results_by_source: dict[Path, list[tuple[int, str]]] = {}
-                gen_batch_next_index_by_source: dict[Path, int] = {}
                 glog.write("tests_source=tests/spec.json\n")
                 for row in tests_spec_runtime:
                     kind = str(row.get("kind") or "")
@@ -860,34 +657,36 @@ def run_build(
                     file_index = int(row.get("index") or counter) if sample_only else counter
                     dst = artifact_paths.tests / f"{file_index:03d}.in"
                     if kind == "manual":
-                        input_text = str(row.get("input") or "")
-                        dst.write_text(input_text, encoding="utf-8")
-                        test_files.append(dst)
-                        manual_count += 1
-                        tests_meta.append(
+                        input_bytes = str(row.get("input") or "").encode("utf-8")
+                        planned_rows.append(
                             {
-                                "index": file_index,
                                 "kind": "manual",
-                                "id": test_id,
-                                "sample": is_sample,
-                                "sample_input_custom": bool(custom_sample_input),
-                                "sample_output_custom": bool(custom_sample_output),
-                                "sample_output_validate": bool(custom_sample_output_validate),
-                                "desc": f"manual {test_id}" if test_id else "manual",
-                                "source": str(row.get("source_rel") or "tests/spec.json"),
+                                "dst": dst,
+                                "input_bytes": input_bytes,
+                                "tests_meta": {
+                                    "index": file_index,
+                                    "kind": "manual",
+                                    "id": test_id,
+                                    "sample": is_sample,
+                                    "sample_input_custom": bool(custom_sample_input),
+                                    "sample_output_custom": bool(custom_sample_output),
+                                    "sample_output_validate": bool(custom_sample_output_validate),
+                                    "desc": f"manual {test_id}" if test_id else "manual",
+                                    "source": str(row.get("source_rel") or "tests/spec.json"),
+                                },
+                                "log_prefix": f"manual id={test_id} index={row.get('index')}",
+                                "error_context": f"tests/spec.json entry {row.get('index')} (id={test_id})",
+                                "custom_sample_row": {
+                                    "id": test_id,
+                                    "sample_input": custom_sample_input,
+                                    "sample_output": custom_sample_output,
+                                    "sample_output_validate": custom_sample_output_validate,
+                                }
+                                if is_sample and custom_sample_output
+                                else None,
+                                "answer_source": tests_spec_answer_source(snapshot, test_id),
                             }
                         )
-                        if is_sample and custom_sample_output:
-                            custom_sample_rows_by_test[dst.name] = {
-                                "id": test_id,
-                                "sample_input": custom_sample_input,
-                                "sample_output": custom_sample_output,
-                                "sample_output_validate": custom_sample_output_validate,
-                            }
-                        answer_source = tests_spec_answer_source(snapshot, test_id)
-                        if answer_source is not None:
-                            source_answer_by_test[dst.name] = answer_source
-                        glog.write(f"manual id={test_id} index={row.get('index')} -> {dst.name}\n")
                         if not sample_only:
                             counter += 1
                         continue
@@ -901,77 +700,69 @@ def run_build(
                             f"generator source is required for tests/spec.json entry {row.get('index')}"
                         )
                     args = [str(x) for x in row.get("args") or []]
-                    if gen_source not in gen_batch_results_by_source:
-                        planned_args_list = list(gen_batch_args_by_source.get(gen_source) or [])
-                        gen_batch_results_by_source[gen_source] = _run_generator_inputs_via_judgehost(
-                            generator_source=gen_source,
-                            args_list=planned_args_list,
-                        )
-                        gen_batch_next_index_by_source[gen_source] = 0
-                    next_index = int(gen_batch_next_index_by_source.get(gen_source, 0))
-                    batched_results = list(gen_batch_results_by_source.get(gen_source) or [])
-                    if 0 <= next_index < len(batched_results):
-                        rc, output_or_err = batched_results[next_index]
-                    else:
-                        rc, output_or_err = (1, "judge backend generate result missing")
-                    gen_batch_next_index_by_source[gen_source] = next_index + 1
-                    glog.write(
-                        f"gen id={test_id} index={row.get('index')} source={row.get('source_rel')} cmd={row.get('cmd')} batch_index={next_index + 1} rc={rc}\n{output_or_err if rc != 0 else ''}\n"
-                    )
-                    if rc != 0:
-                        dst.unlink(missing_ok=True)
-                        failing_test = dst.name
-                        raise RuntimeError(
-                            f"generator failed on tests/spec.json entry {row.get('index')} (id={test_id}): {output_or_err}"
-                        )
-                    dst.write_text(output_or_err, encoding="utf-8")
-                    test_files.append(dst)
-                    generated_count += 1
                     desc = str(row.get("cmd") or "").strip() or "gen"
-                    tests_meta.append(
+                    command_payload = " ".join(
+                        ['"$SUBMISSION_BIN"', *[shlex.quote(str(item or "")) for item in args]]
+                    ).strip()
+                    if not command_payload:
+                        command_payload = '"$SUBMISSION_BIN"'
+                    planned_rows.append(
                         {
-                            "index": file_index,
                             "kind": "gen",
-                            "id": test_id,
-                            "sample": is_sample,
-                            "sample_input_custom": bool(custom_sample_input),
-                            "sample_output_custom": bool(custom_sample_output),
-                            "sample_output_validate": bool(custom_sample_output_validate),
-                            "desc": desc,
-                            "command": str(row.get("cmd") or "").strip(),
-                            "source": str(row.get("source_rel") or "").strip(),
-                            "payload_source": str(row.get("payload_rel") or "").strip(),
+                            "dst": dst,
+                            "generator_source": gen_source,
+                            "command_payload": command_payload,
+                            "tests_meta": {
+                                "index": file_index,
+                                "kind": "gen",
+                                "id": test_id,
+                                "sample": is_sample,
+                                "sample_input_custom": bool(custom_sample_input),
+                                "sample_output_custom": bool(custom_sample_output),
+                                "sample_output_validate": bool(custom_sample_output_validate),
+                                "desc": desc,
+                                "command": str(row.get("cmd") or "").strip(),
+                                "source": str(row.get("source_rel") or "").strip(),
+                                "payload_source": str(row.get("payload_rel") or "").strip(),
+                            },
+                            "log_prefix": f"gen id={test_id} index={row.get('index')} source={row.get('source_rel')} cmd={row.get('cmd')}",
+                            "error_context": f"tests/spec.json entry {row.get('index')} (id={test_id})",
+                            "custom_sample_row": {
+                                "id": test_id,
+                                "sample_input": custom_sample_input,
+                                "sample_output": custom_sample_output,
+                                "sample_output_validate": custom_sample_output_validate,
+                            }
+                            if is_sample and custom_sample_output
+                            else None,
+                            "answer_source": tests_spec_answer_source(snapshot, test_id),
                         }
                     )
-                    if is_sample and custom_sample_output:
-                        custom_sample_rows_by_test[dst.name] = {
-                            "id": test_id,
-                            "sample_input": custom_sample_input,
-                            "sample_output": custom_sample_output,
-                            "sample_output_validate": custom_sample_output_validate,
-                        }
-                    answer_source = tests_spec_answer_source(snapshot, test_id)
-                    if answer_source is not None:
-                        source_answer_by_test[dst.name] = answer_source
                     if not sample_only:
                         counter += 1
             else:
                 tests = self._manual_test_sources(snapshot)
                 for t in tests:
                     dst = artifact_paths.tests / f"{counter:03d}.in"
-                    shutil.copy2(t, dst)
-                    test_files.append(dst)
-                    manual_count += 1
                     try:
                         source_rel = str(t.relative_to(snapshot)).replace("\\", "/")
                     except ValueError:
                         source_rel = str(t.name)
-                    tests_meta.append(
+                    planned_rows.append(
                         {
-                            "index": counter,
                             "kind": "manual",
-                            "desc": f"manual: {source_rel}",
-                            "source": source_rel,
+                            "dst": dst,
+                            "input_bytes": t.read_bytes(),
+                            "tests_meta": {
+                                "index": counter,
+                                "kind": "manual",
+                                "desc": f"manual: {source_rel}",
+                                "source": source_rel,
+                            },
+                            "log_prefix": f"manual source={source_rel}",
+                            "error_context": source_rel,
+                            "custom_sample_row": None,
+                            "answer_source": None,
                         }
                     )
                     counter += 1
@@ -990,41 +781,122 @@ def run_build(
                     runs = int(build_cfg.get("generator_runs", 3))
                     generator_args = [str(x) for x in build_cfg.get("generator_args", [])]
                     for gen_index, source_label, gen_source in generator_execs:
-                        args_batch = [list(generator_args) for _ in range(max(0, runs))]
-                        batched_results = _run_generator_inputs_via_judgehost(
-                            generator_source=gen_source,
-                            args_list=args_batch,
-                        )
                         for i in range(runs):
                             dst = artifact_paths.tests / f"{counter:03d}.in"
-                            if i < len(batched_results):
-                                rc, output_or_err = batched_results[i]
-                            else:
-                                rc, output_or_err = (1, "judge backend generate result missing")
-                            glog.write(
-                                f"generator={gen_index} source={source_label} case={i + 1} rc={rc}\n{output_or_err if rc != 0 else ''}\n"
-                            )
-                            if rc != 0:
-                                dst.unlink(missing_ok=True)
-                                failing_test = dst.name
-                                raise RuntimeError(
-                                    f"generator failed on generator={gen_index} case={i + 1}: {output_or_err}"
-                                )
-                            dst.write_text(output_or_err, encoding="utf-8")
-                            test_files.append(dst)
-                            generated_count += 1
                             desc = f"gen: {source_label}"
                             if generator_args:
                                 desc = f"{desc} {' '.join(generator_args)}"
-                            tests_meta.append(
+                            command_payload = " ".join(
+                                ['"$SUBMISSION_BIN"', *[shlex.quote(str(item or "")) for item in generator_args]]
+                            ).strip()
+                            if not command_payload:
+                                command_payload = '"$SUBMISSION_BIN"'
+                            planned_rows.append(
                                 {
-                                    "index": counter,
                                     "kind": "gen",
-                                    "desc": desc,
-                                    "source": source_label,
+                                    "dst": dst,
+                                    "generator_source": gen_source,
+                                    "command_payload": command_payload,
+                                    "tests_meta": {
+                                        "index": counter,
+                                        "kind": "gen",
+                                        "desc": desc,
+                                        "source": source_label,
+                                    },
+                                    "log_prefix": f"generator={gen_index} source={source_label} case={i + 1}",
+                                    "error_context": f"generator={gen_index} case={i + 1}",
+                                    "custom_sample_row": None,
+                                    "answer_source": None,
                                 }
                             )
                             counter += 1
+
+            manual_batch_payload: list[dict[str, str]] = []
+            manual_batch_rows: list[dict[str, object]] = []
+            gen_batch_payloads_by_source: dict[Path, list[dict[str, str]]] = {}
+            gen_batch_rows_by_source: dict[Path, list[dict[str, object]]] = {}
+            for planned in planned_rows:
+                dst = planned["dst"]
+                if not isinstance(dst, Path):
+                    continue
+                if str(planned.get("kind") or "") == "manual":
+                    manual_batch_rows.append(planned)
+                    manual_batch_payload.append(
+                        {
+                            "name": dst.name,
+                            "input_b64": base64.b64encode(bytes(planned.get("input_bytes") or b"")).decode("ascii"),
+                            "answer_name": f"{dst.stem}.ans",
+                            "answer_b64": "",
+                        }
+                    )
+                    continue
+                gen_source = planned.get("generator_source")
+                if not isinstance(gen_source, Path):
+                    continue
+                gen_batch_rows_by_source.setdefault(gen_source, []).append(planned)
+                gen_batch_payloads_by_source.setdefault(gen_source, []).append(
+                    {
+                        "name": dst.name,
+                        "input_b64": base64.b64encode(
+                            (str(planned.get("command_payload") or "") + "\n").encode("utf-8")
+                        ).decode("ascii"),
+                        "answer_name": f"{dst.stem}.ans",
+                        "answer_b64": "",
+                    }
+                )
+
+            manual_results_by_name: dict[str, tuple[int, str]] = {}
+            if manual_batch_payload:
+                manual_results_by_name = _run_generator_inputs_via_judgehost(
+                    source_name="manual_validate.cpp",
+                    source_bytes=b"int main(){return 0;}\n",
+                    tests_payload=manual_batch_payload,
+                    manual_validate_only=True,
+                )
+
+            gen_results_by_name: dict[str, tuple[int, str]] = {}
+            for gen_source, payload_rows in gen_batch_payloads_by_source.items():
+                extra_sources_b64: dict[str, str] = {}
+                if gen_source.suffix.lower() in CPP_EXTENSIONS and shared_testlib_blob is not None:
+                    extra_sources_b64["testlib.h"] = base64.b64encode(shared_testlib_blob).decode("ascii")
+                source_results = _run_generator_inputs_via_judgehost(
+                    source_name=gen_source.name,
+                    source_bytes=gen_source.read_bytes(),
+                    tests_payload=payload_rows,
+                    extra_sources_b64=extra_sources_b64,
+                    manual_validate_only=False,
+                )
+                gen_results_by_name.update(source_results)
+
+            for planned in planned_rows:
+                dst = planned["dst"]
+                if not isinstance(dst, Path):
+                    continue
+                kind = str(planned.get("kind") or "")
+                result_map = manual_results_by_name if kind == "manual" else gen_results_by_name
+                rc, output_or_err = result_map.get(dst.name, (1, "judge backend generate result missing"))
+                glog.write(f"{planned.get('log_prefix')} -> {dst.name} rc={rc}\n")
+                if rc != 0:
+                    if output_or_err:
+                        glog.write(str(output_or_err) + "\n")
+                    dst.unlink(missing_ok=True)
+                    failing_test = dst.name
+                    action = "validator failed on" if kind == "manual" else "generator failed on"
+                    raise RuntimeError(f"{action} {planned.get('error_context')}: {output_or_err}")
+                if kind == "manual":
+                    dst.write_bytes(bytes(planned.get("input_bytes") or b""))
+                    manual_count += 1
+                else:
+                    dst.write_text(str(output_or_err or ""), encoding="utf-8")
+                    generated_count += 1
+                test_files.append(dst)
+                tests_meta.append(dict(planned.get("tests_meta") or {}))
+                custom_sample_row = planned.get("custom_sample_row")
+                if isinstance(custom_sample_row, dict):
+                    custom_sample_rows_by_test[dst.name] = dict(custom_sample_row)
+                answer_source = planned.get("answer_source")
+                if isinstance(answer_source, Path):
+                    source_answer_by_test[dst.name] = answer_source
             glog.write(f"manual_tests={manual_count}\n")
             glog.write(f"generated_tests={generated_count}\n")
             glog.write(f"total_tests={len(test_files)}\n")
@@ -1039,7 +911,8 @@ def run_build(
 
         current_step = "validate"
         with (logs_dir / "validate.log").open("w", encoding="utf-8") as vlog:
-            vlog.write("validation is performed in judgehost generate pipeline; local native validator execution disabled\n")
+            vlog.write("input validation is recorded in judgehost build.generate-input runs\n")
+            vlog.write(f"validated_tests={len(test_files)}\n")
         steps.append({"step": "validate", "status": "ok", "log": "logs/validate.log"})
 
         current_step = "solve"
@@ -1173,13 +1046,13 @@ def run_build(
             "checker_args": [str(x) for x in build_cfg.get("checker_args", [])],
             "checker_standard": str(build_cfg.get("checker_standard", "")),
             "max_passes": int(build_cfg.get("max_passes", 16)),
-            "sandbox_backend": self.sandbox.name,
+            "sandbox_backend": self.execution_backend_name,
             "sandbox_memory_mb": self.default_exec_memory_mb,
             "sandbox_process_limit": self.default_exec_process_limit,
             "sandbox_output_kb": self.default_exec_output_kb,
             "generation_params_digest": str(generation_params_digest or "").strip().lower(),
             "toolchain_cmd_digest": str(toolchain_cmd_digest or "").strip().lower(),
-            "verification_pipeline": bool(verification_pipeline),
+            "verification_pipeline": False,
         }
         # Small runner-focused config sidecar avoids full manifest reads on run setup hot paths.
         (logs_dir / "run_config.json").write_text(json.dumps(generation_params, indent=2), encoding="utf-8")

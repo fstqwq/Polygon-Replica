@@ -208,6 +208,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn("Generators", html)
         self.assertIn("Generators List", html)
         self.assertIn("Used in Build", html)
+        self.assertNotIn("<th>Status</th>", html)
         self.assertIn("Create Generator Template", html)
         self.assertIn("generators/create-template", html)
         self.assertIn('id="generator-create-path"', html)
@@ -292,6 +293,158 @@ class TestUIComponents(UIBaseSuite):
 
         cfg_after = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual([str(x) for x in cfg_after.get("generator_sources", [])], [rel])
+
+    def test_validator_editor_renders_inline_compile_error_below_editor(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = "validators/validator.cpp"
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        page = validator_page(
+            _request_with_cookie(
+                "/problems/alice/sample/alice/validator",
+                _flash_cookie_header("compile check failed: validators/validator.cpp: syntax error"),
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('data-component-editor-error="1"', html)
+        self.assertIn("compile check failed: validators/validator.cpp: syntax error", html)
+
+    def test_checker_editor_renders_inline_compile_error_even_without_existing_repo_file(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = "checkers/checker.cpp"
+        target = ws / rel
+        if target.exists():
+            target.unlink()
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps({"checker_standard": "std::wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
+
+        page = checker_page(
+            _request_with_cookie(
+                "/problems/alice/sample/alice/checker",
+                _flash_cookie_header("compile check failed: checkers/checker.cpp: syntax error"),
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('data-component-editor-error="1"', html)
+        self.assertIn("compile check failed: checkers/checker.cpp: syntax error", html)
+        self.assertIn("Save Checker Source", html)
+
+    def test_validator_editor_renders_multiline_compile_error_detail(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = "validators/validator.cpp"
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        message = (
+            "compile check failed: validators/validator.cpp: Compiling failed with exitcode 1, compiler output:\n"
+            "validator.cpp:4:35: error: expected ';' before 'inf'"
+        )
+        page = validator_page(
+            _request_with_cookie(
+                "/problems/alice/sample/alice/validator",
+                _flash_cookie_header(message),
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('data-component-editor-error="1"', html)
+        self.assertIn("Compiling failed with exitcode 1, compiler output:", html)
+        self.assertIn("validator.cpp:4:35: error: expected", html)
+        self.assertIn("before &#39;inf&#39;", html)
+
+    def test_generator_editor_renders_inline_compile_error_below_editor(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = "generators/gen.cpp"
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps({"generator_sources": [rel]}, indent=2) + "\n", encoding="utf-8")
+
+        page = generators_page(
+            _request_with_cookie(
+                "/problems/alice/sample/alice/generators",
+                _flash_cookie_header("compile check failed: generators/gen.cpp: syntax error"),
+                f"path={quote_plus(rel)}",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('data-component-editor-error="1"', html)
+        self.assertIn("compile check failed: generators/gen.cpp: syntax error", html)
+
+    def test_generator_editor_renders_inline_compile_error_even_without_existing_file(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = "generators/gen.cpp"
+        target = ws / rel
+        if target.exists():
+            target.unlink()
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps({"generator_sources": []}, indent=2) + "\n", encoding="utf-8")
+
+        page = generators_page(
+            _request_with_cookie(
+                "/problems/alice/sample/alice/generators",
+                _flash_cookie_header("compile check failed: generators/gen.cpp: syntax error"),
+                f"path={quote_plus(rel)}",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('data-component-editor-error="1"', html)
+        self.assertIn("compile check failed: generators/gen.cpp: syntax error", html)
+        self.assertIn("Save Generator Source", html)
+
+    def test_generators_page_hides_missing_configured_sources_and_fake_default_editor_path(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        missing_rel = "generators/generator.cpp"
+        existing_rel = "generators/keep.cpp"
+        missing_abs = ws / missing_rel
+        if missing_abs.exists():
+            missing_abs.unlink()
+        existing_abs = ws / existing_rel
+        existing_abs.parent.mkdir(parents=True, exist_ok=True)
+        existing_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(
+            json.dumps({"generator_sources": [missing_rel, existing_rel]}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        page = generators_page(_request("/problems/alice/sample/alice/generators"), "alice/sample", "alice")
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn(existing_rel, html)
+        self.assertNotIn('<code>generators/generator.cpp</code></a></td>', html)
+        self.assertNotIn("<th>Status</th>", html)
+        self.assertNotIn("<td>ready</td>", html)
+        self.assertNotIn("<td>missing</td>", html)
+        self.assertIn("<strong>File path:</strong> <code>generators/keep.cpp</code>", html)
+        self.assertNotIn("<strong>New file:</strong> <code>generators/generator.cpp</code>", html)
+
+        resp = general_page(_request("/problems/alice/sample/alice/general"), "alice/sample", "alice")
+        self.assertEqual(resp.status_code, 200)
+        general_html = resp.body.decode("utf-8", errors="replace")
+        self.assertRegex(
+            general_html,
+            r'data-page="generators"[\s\S]*?<span class="submenu-status[^"]*">\s*1 file, 0 used\s*</span>',
+        )
 
     def test_generators_nav_status_uses_singular_file_word_for_one_configured_source(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -609,6 +762,28 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn('data-top-event="1"', toast_html)
         self.assertIn('data-event-id="', toast_html)
         self.assertIn("solution source saved", toast_html)
+
+    def test_solutions_editor_renders_inline_compile_error_below_editor(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        target_rel = "solutions/editor_inline_error.cpp"
+        source_abs = ws / target_rel
+        source_abs.parent.mkdir(parents=True, exist_ok=True)
+        source_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        page = solutions_editor_page(
+            _request_with_cookie(
+                "/problems/alice/sample/alice/solutions/editor",
+                _flash_cookie_header("compile check failed: solutions/editor_inline_error.cpp: syntax error"),
+                f"path={quote_plus(target_rel)}",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('id="solution-save-error"', html)
+        self.assertNotIn('id="solution-save-error" class="danger component-editor-error" hidden', html)
+        self.assertIn("compile check failed: solutions/editor_inline_error.cpp: syntax error", html)
 
     def test_solutions_save_source_rejects_compile_error_and_keeps_previous_content(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

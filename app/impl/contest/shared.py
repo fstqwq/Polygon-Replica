@@ -936,7 +936,7 @@ def _queue_contest_job(
         name=f"contest-{job_type}-{contest_id}",
         fn=_runner,
         queue_name=f"contest-{job_type}",
-        backend=config.sandbox_backend.name,
+        backend=config.invocation_backend_service.active_backend_name(),
         dedupe_key=f"contest:{contest_id}:{job_type}",
         job_type=f"contest-{job_type}",
     )

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+DEST="$1" ; shift
+MEMLIMIT="$1" ; shift
+MAIN="$1"
+TMPDEST="${DEST}.compiled"
+
+{{CPP_COMPILE_CMD}} -I. "$MAIN" -o "$TMPDEST"
+rm -f "$TMPDEST"
+cat > "$DEST" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod a+x "$DEST"

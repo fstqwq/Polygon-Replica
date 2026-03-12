@@ -132,7 +132,6 @@ PREVIEW_TEX_TIMEOUT_SEC = 120
 PREVIEW_TEX_MEMORY_MB = 1024
 PREVIEW_TEX_PROCESS_LIMIT = 64
 PREVIEW_TEX_OUTPUT_KB = 131072
-SANDBOX_ROOT_SWITCH_TOOL = "bwrap"
 PASSWORD_FORM_CSRF_SECRET = ""
 
 CORE_SOURCE_TARGETS = [
@@ -335,7 +334,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "JUDGEHOST_MAX_TEST_PAYLOAD_BYTES": {"type": "int", "min": 1024, "max": 268435456, "description": "Per-test payload byte cap for embedded input/answer data."},
     "JUDGEHOST_INCLUDE_BUILD_PAYLOAD": {"type": "bool", "description": "Include selected test payload and checker binaries in judgehost task payload."},
     "JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES": {"type": "int", "min": 1024, "max": 134217728, "description": "Per-binary payload byte cap for embedded checker/interactor."},
-    "SANDBOX_ROOT_SWITCH_TOOL": {"type": "str", "description": "Root-switch tool for native sandbox startup probe (for example: bwrap).", "restart_required": True, "impact": "restart"},
 }
 
 # Explicitly reference dynamically-consumed defaults so dead-code scanners
