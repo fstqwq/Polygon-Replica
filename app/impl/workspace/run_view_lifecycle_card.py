@@ -5,8 +5,12 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.impl.auth.public import parse_iso_utc
 from app.impl.runtime.config import config
+from app.service.verification import (
+    load_verification_record,
+    load_verification_summary,
+    verification_stage_summary,
+)
 
 from .artifact import (
     artifact_root,
@@ -23,10 +27,7 @@ from .run_lifecycle import (
     verification_failed_build_step_id,
     verification_step_title,
 )
-from .context_operation import (
-    dedupe_preserve_order,
-    parse_summary_json,
-)
+from .context_operation import dedupe_preserve_order
 from .context_run_detail import (
     normalize_run_id_token,
     normalize_run_test_name_token,
@@ -35,89 +36,26 @@ from app.service.platform.process import is_canonical_artifact_id
 
 _C = config.constants
 
-def _run_verification_details_from_audit(problem_id: int, actor_user_id: int, invocation_id: str, limit: int=240) -> dict[str, object]:
-    safe_invocation_id = normalize_run_id_token(invocation_id)
-    if not safe_invocation_id:
+def load_verification_detail_snapshot(problem_id: int, verification_id: str) -> dict[str, object]:
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if not safe_verification_id:
         return {}
-    rows = config.db.fetch_all(
-        "\n        SELECT details_json,created_at\n        FROM audit_log\n        WHERE problem_id=? AND actor_user_id=? AND action='verification.start'\n        ORDER BY created_at DESC\n        LIMIT ?\n        ",
-        [int(problem_id), int(actor_user_id), max(40, int(limit))],
-    )
-    matched_verification: dict[str, object] = {}
-    matched_verification_created = ''
-    for row in rows:
-        details: dict[str, object] = {}
-        try:
-            payload = json.loads(str(row['details_json'] or '{}'))
-            if isinstance(payload, dict):
-                details = payload
-        except Exception:
-            details = {}
-        if normalize_run_id_token(details.get('invocation_id')) != safe_invocation_id:
-            continue
-        matched_verification = details
-        matched_verification_created = str(row['created_at'] or '').strip()
-        break
-    cancel_rows = config.db.fetch_all(
-        """
-        SELECT details_json,created_at
-        FROM audit_log
-        WHERE problem_id=? AND actor_user_id=? AND action='run.cancel'
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        [int(problem_id), int(actor_user_id), max(40, int(limit))],
-    )
-    matched_cancel: dict[str, object] = {}
-    matched_cancel_created = ''
-    for row in cancel_rows:
-        details: dict[str, object] = {}
-        try:
-            payload = json.loads(str(row['details_json'] or '{}'))
-            if isinstance(payload, dict):
-                details = payload
-        except Exception:
-            details = {}
-        if normalize_run_id_token(details.get('invocation_id')) != safe_invocation_id:
-            continue
-        matched_cancel = details
-        matched_cancel_created = str(row['created_at'] or '').strip()
-        break
-    if matched_cancel:
-        use_cancel = False
-        if not matched_verification:
-            use_cancel = True
-        else:
-            cancel_ts = parse_iso_utc(matched_cancel_created)
-            verification_ts = parse_iso_utc(matched_verification_created)
-            if verification_ts is None:
-                use_cancel = True
-            elif cancel_ts is not None:
-                use_cancel = cancel_ts >= verification_ts
-            else:
-                use_cancel = True
-        if use_cancel:
-            merged_details: dict[str, object] = dict(matched_verification) if isinstance(matched_verification, dict) else {}
-            merged_details['invocation_id'] = safe_invocation_id
-            merged_details['status'] = 'failed'
-            merged_details['cancelled'] = True
-            cancel_reason = str(matched_cancel.get('reason') or '').strip() or 'verification cancelled by user'
-            if cancel_reason:
-                merged_details['error'] = cancel_reason
-            if not isinstance(merged_details.get('run_ids'), list):
-                cancel_run_ids = matched_cancel.get('run_ids')
-                if isinstance(cancel_run_ids, list):
-                    merged_details['run_ids'] = [str(item or '').strip() for item in cancel_run_ids if normalize_run_id_token(item)]
-            return {
-                'details': merged_details,
-                'created_at': matched_cancel_created or matched_verification_created,
-            }
-    if matched_verification:
-        return {
-            'details': matched_verification,
-            'created_at': matched_verification_created,
-        }
-    return {}
+    verification_row = load_verification_record(config.db, safe_verification_id)
+    if verification_row is None or int(verification_row['problem_id'] or 0) != int(problem_id):
+        return {}
+    details = load_verification_summary(config.db, safe_verification_id)
+    if not isinstance(details, dict) or not details:
+        return {}
+    snapshot = dict(details)
+    snapshot.setdefault('verification_id', safe_verification_id)
+    row_status = str(verification_row['status'] or '').strip()
+    if row_status:
+        snapshot['status'] = row_status
+    snapshot.setdefault('finished_at', str(verification_row['finished_at'] or '').strip())
+    return {
+        'details': snapshot,
+        'created_at': str(verification_row['created_at'] or '').strip(),
+    }
 
 def _run_lifecycle_status_label(status: str) -> str:
     return run_lifecycle_status_label(status)
@@ -210,7 +148,12 @@ def _verification_tests_meta_stats(problem_slug: str, build_id: str) -> dict[str
         })
     return stats
 
-def _verification_validate_stats(problem_slug: str, build_id: str) -> dict[str, object]:
+def load_verification_stage_summary(verification_details: dict[str, object], stage_key: str) -> dict[str, object]:
+    if not isinstance(verification_details, dict) or not verification_details:
+        return {}
+    return verification_stage_summary(verification_details, stage_key)
+
+def _verification_validate_stats(verification_details: dict[str, object]) -> dict[str, object]:
     stats: dict[str, object] = {
         'loaded': False,
         'truncated': False,
@@ -219,51 +162,30 @@ def _verification_validate_stats(problem_slug: str, build_id: str) -> dict[str, 
         'failed': 0,
         'timed_out': 0,
     }
-    safe_problem = str(problem_slug or '').strip()
-    safe_build_id = str(build_id or '').strip()
-    if (not safe_problem) or (not is_canonical_artifact_id(safe_build_id)):
+    summary_obj = load_verification_stage_summary(verification_details, 'generate_input')
+    tests_rows = summary_obj.get('tests')
+    tests = tests_rows if isinstance(tests_rows, list) else []
+    if not tests:
         return stats
-    rows = config.db.fetch_all(
-        """
-        SELECT summary_json
-        FROM runs
-        WHERE build_id=?
-        ORDER BY created_at DESC
-        LIMIT 256
-        """,
-        [safe_build_id],
-    )
-    seen: set[str] = set()
     total = 0
     ok_count = 0
     failed_count = 0
     timed_out_count = 0
-    for row in rows:
-        summary_obj = parse_summary_json(row['summary_json'], f'verify-validate/{safe_build_id}')
-        if not isinstance(summary_obj, dict):
+    for item in tests:
+        if not isinstance(item, dict):
             continue
-        invocation_obj = summary_obj.get('invocation')
-        invocation_source = str(invocation_obj.get('source') or '').strip().lower() if isinstance(invocation_obj, dict) else ''
-        if invocation_source != 'build.generate-input':
+        test_name = str(item.get('test') or '').strip()
+        if not _C.RUN_TEST_NAME_RE.fullmatch(test_name):
             continue
-        tests_obj = summary_obj.get('tests')
-        tests_rows = tests_obj if isinstance(tests_obj, list) else []
-        for item in tests_rows:
-            if not isinstance(item, dict):
-                continue
-            test_name = str(item.get('test') or '').strip()
-            if (not _C.RUN_TEST_NAME_RE.fullmatch(test_name)) or (test_name in seen):
-                continue
-            seen.add(test_name)
-            total += 1
-            verdict = str(item.get('verdict') or '').strip().upper()
-            timed_out = verdict.startswith('TL') or bool(item.get('timed_out'))
-            if timed_out:
-                timed_out_count += 1
-            if verdict in {'OK', 'AC'} and not timed_out:
-                ok_count += 1
-            else:
-                failed_count += 1
+        total += 1
+        verdict = str(item.get('verdict') or '').strip().upper()
+        timed_out = verdict.startswith('TL') or bool(item.get('timed_out'))
+        if timed_out:
+            timed_out_count += 1
+        if verdict in {'OK', 'AC'} and not timed_out:
+            ok_count += 1
+        else:
+            failed_count += 1
     if total <= 0:
         return stats
     stats.update({

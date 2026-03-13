@@ -5,8 +5,6 @@ from app.impl.run_export.context import (
     dedupe_preserve_order,
     normalize_optional_component_source_path_safe,
     normalize_run_id_token,
-    run_invocation_scope_run_ids,
-    run_source_labels_from_audit,
     config,
     is_canonical_artifact_id,
     json,
@@ -14,6 +12,8 @@ from app.impl.run_export.context import (
     quote_plus,
     run_cmd,
 )
+from app.impl.workspace.context_operation import parse_summary_json
+from app.service.verification import load_verification_summary, verification_source_paths
 def _count_label(count: int, singular: str, plural: str | None = None) -> str:
     safe_count = max(0, int(count))
     token = singular if safe_count == 1 else (plural if plural is not None else f"{singular}s")
@@ -149,7 +149,11 @@ def _build_runtime_progress(
             return result
         if solve_log.exists() and solve_log.is_file() and (not solve_log.is_symlink()):
             if tests_total > 0:
-                result["detail"] = f"generate outputs {min(outputs_generated, tests_total)}/{tests_total}"
+                completed_outputs = min(outputs_generated, tests_total)
+                if completed_outputs >= tests_total:
+                    result["detail"] = f"generated outputs {completed_outputs}/{tests_total}"
+                else:
+                    result["detail"] = f"generate outputs {completed_outputs}/{tests_total}"
             else:
                 result["detail"] = "generate outputs running"
             result["log_href"] = _log_href("solve.log")
@@ -200,100 +204,44 @@ def _verification_href_for_build(
     safe_build_id = str(build_id or "").strip()
     if (not safe_build_id) or (not is_canonical_artifact_id(safe_build_id)):
         return ""
-    rows = config.db.fetch_all(
+    verification_rows = config.db.fetch_all(
         """
-        SELECT id,summary_json
-        FROM runs
+        SELECT id,status
+        FROM verifications
         WHERE problem_id=? AND build_id=?
         ORDER BY created_at DESC
         LIMIT 80
         """,
         [int(problem_id), safe_build_id],
     )
-    for row in rows:
-        summary = _summary_object(row["summary_json"] if row is not None else None)
-        invocation = summary.get("invocation")
-        if not isinstance(invocation, dict):
+    for row in verification_rows:
+        status_token = str(row["status"] or "").strip().lower()
+        if status_token not in {"queued", "pending", "running", "ok", "failed"}:
             continue
-        source = str(invocation.get("source") or "").strip().lower()
-        if source not in {"verification.start", "sidebar"}:
-            continue
-        invocation_id = normalize_run_id_token(str(invocation.get("id") or ""))
-        if not invocation_id:
-            continue
-        return f"/problems/{problem_slug}/{username}/run/details?invocation_id={quote_plus(invocation_id)}"
+        verification_id = normalize_run_id_token(row["id"])
+        if verification_id:
+            return f"/problems/{problem_slug}/{username}/run/details?verification_id={quote_plus(verification_id)}"
     return ""
 
-def _detail_invocation_id(detail_ctx: dict[str, object]) -> str:
-    columns = detail_ctx.get("detail_columns")
-    if not isinstance(columns, list):
-        return ""
-    for col in columns:
-        if not isinstance(col, dict):
-            continue
-        summary = col.get("summary")
-        if not isinstance(summary, dict):
-            continue
-        invocation = summary.get("invocation")
-        if not isinstance(invocation, dict):
-            continue
-        token = normalize_run_id_token(str(invocation.get("id") or ""))
-        if token:
-            return token
-    return ""
+def _detail_verification_id(detail_ctx: dict[str, object]) -> str:
+    return normalize_run_id_token(detail_ctx.get("verification_id"))
 
-def _rerun_solution_paths_from_invocation(
+def _rerun_solution_paths_from_verification(
     *,
     problem_id: int,
     workspace_id: int,
     actor_user_id: int,
     workspace: Path,
-    invocation_id: str,
+    verification_id: str,
 ) -> list[str]:
-    safe_invocation_id = normalize_run_id_token(invocation_id)
-    if not safe_invocation_id:
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if not safe_verification_id:
         return []
-    run_ids = run_invocation_scope_run_ids(
-        problem_id,
-        workspace_id,
-        safe_invocation_id,
-        actor_user_id=actor_user_id,
-    )
-    run_ids = dedupe_preserve_order(
-        [normalize_run_id_token(item) for item in run_ids if normalize_run_id_token(item)]
-    )
-    if not run_ids:
+    verification_summary = load_verification_summary(config.db, safe_verification_id)
+    if not isinstance(verification_summary, dict) or not verification_summary:
         return []
-    summary_by_run: dict[str, dict[str, object]] = {}
-    placeholders = ",".join(("?" for _ in run_ids))
-    rows = config.db.fetch_all(
-        f"""
-        SELECT id,summary_json
-        FROM runs
-        WHERE problem_id=? AND workspace_id=? AND id IN ({placeholders})
-        """,
-        [int(problem_id), int(workspace_id), *run_ids],
-    )
-    for row in rows:
-        run_id = normalize_run_id_token(row["id"] if row is not None else "")
-        if not run_id:
-            continue
-        summary_by_run[run_id] = _summary_object(row["summary_json"] if row is not None else "")
-    try:
-        audit_sources = run_source_labels_from_audit(
-            int(problem_id),
-            int(actor_user_id),
-            run_ids,
-            limit=max(240, len(run_ids) * 8),
-        )
-    except Exception:
-        audit_sources = {}
     out: list[str] = []
-    for run_id in run_ids:
-        summary = summary_by_run.get(run_id) or {}
-        source_rel = str(summary.get("source") or "").strip()
-        if not source_rel:
-            source_rel = str(audit_sources.get(run_id) or "").strip()
+    for source_rel in verification_source_paths(verification_summary):
         safe_solution = normalize_optional_component_source_path_safe(
             source_rel,
             "solutions",

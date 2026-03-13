@@ -26,7 +26,6 @@ from app.service.platform.hashing import (
     sha256_hex_of_hashes,
 )
 from app.service.platform.judge_fs_index import JudgeFsIndexService  
-from app.service.run.api import Run  
 from app.service.run.runtime import RUN_TEST_NAME_RE  
 from app.setting import Settings  
 
@@ -74,7 +73,7 @@ from ..runtime import (
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-_INVOCATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_VERIFICATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _DOMJUDGE_SUBMIT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DOMJUDGE_CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DOMJUDGE_PROTOCOL_TRACE_RE = re.compile(r"\[\s*[0-9]+(?:\.[0-9]+)?s/[0-9]+\]")

@@ -40,10 +40,9 @@ def solve_with_judge_backend(
     ans_dir: Path,
     solve_jobs: int = 1,
     source_answer_by_test: dict[str, Path] | None = None,
+    stage_result_out: dict[str, object] | None = None,
 ) -> dict[str, dict[str, object]]:
-    service = self._judgehost_task_service
-    if service is None:
-        raise RuntimeError("judge backend service is unavailable")
+    service = self.judgehost_task_service
     selected_tests = [str(p.name) for p in test_files if RUN_TEST_NAME_RE.fullmatch(str(p.name))]
     if not selected_tests:
         return {}
@@ -99,6 +98,7 @@ def solve_with_judge_backend(
                 out.append(chunk)
         return out
 
+    verification_id = f"ver-buildsolve-{build_id}-{uuid.uuid4().hex[:8]}"
     plans: list[dict[str, object]] = []
     for idx, chunk in enumerate(_split_chunks(list(selected_tests), effective_parallelism)):
         plans.append(
@@ -110,16 +110,15 @@ def solve_with_judge_backend(
         )
     if not plans:
         return solve_results
-    invocation_run_ids = [
+    verification_run_ids = [
         str(plan.get("run_id") or "").strip()
         for plan in plans
         if str(plan.get("run_id") or "").strip()
     ]
-    build_invocation_id = f"inv-buildsolve-{build_id}-{uuid.uuid4().hex[:8]}"
 
-    def _submit_and_wait_chunk(plan: dict[str, object]) -> str:
+    def _submit_and_wait_chunk(plan: dict[str, object]) -> dict[str, object]:
         chunk = [str(item or "").strip() for item in list(plan.get("tests") or []) if str(item or "").strip()]
-        solve_run_id = str(plan.get("run_id") or "").strip() or f"r-buildsolve-{uuid.uuid4().hex[:12]}"
+        run_id = str(plan.get("run_id") or "").strip() or f"r-buildsolve-{uuid.uuid4().hex[:12]}"
         task_id = service.enqueue_task(
             problem=problem,
             username=username,
@@ -128,15 +127,22 @@ def solve_with_judge_backend(
             submission_path=accepted_source_rel,
             upload_content=None,
             upload_filename=None,
-            run_id=solve_run_id,
+            run_id=run_id,
             selected_tests=chunk,
-            invocation_id=build_invocation_id,
-            invocation_run_ids=list(invocation_run_ids),
+            verification_id=verification_id,
+            verification_run_ids=list(verification_run_ids),
             expected_behavior="accepted",
-            invocation_source="build.solve",
+            verification_source="build.solve",
             task_kind="solve",
+            persist_verification_run=False,
         )
-        return str(service.wait_for_task(task_id, timeout_sec=None) or solve_run_id).strip() or solve_run_id
+        result = service.wait_for_task_result(task_id, timeout_sec=None)
+        if str(result.get("task_status") or "").strip().lower() == service.STATUS_FAILED:
+            detail = str(result.get("error") or "").strip() or "judge backend task failed"
+            raise RuntimeError(detail)
+        if not str(result.get("run_id") or "").strip():
+            result["run_id"] = run_id
+        return result
 
     def _summary_work_root(summary_obj: dict[str, Any]) -> Path | None:
         judgehost_obj = summary_obj.get("judgehost")
@@ -162,25 +168,28 @@ def solve_with_judge_backend(
         except Exception:
             return None
 
-    def _consume_chunk_result(chunk: list[str], run_id: str) -> tuple[bool, str]:
-        run_row = self.db.fetch_one("SELECT status,artifact_path,summary_json FROM runs WHERE id=?", [run_id])
-        if run_row is None:
-            msg = f"judge backend result missing for run {run_id}"
+    def _consume_chunk_result(chunk: list[str], task_result: dict[str, object]) -> tuple[bool, str]:
+        run_id = str(task_result.get("run_id") or "").strip()
+        summary_obj = dict(task_result.get("summary") or {})
+        artifact_path = str(task_result.get("artifact_path") or "").strip()
+        run_status = str(task_result.get("status") or "").strip().lower()
+        if isinstance(stage_result_out, dict):
+            stage_result_out.clear()
+            stage_result_out.update(
+                {
+                    "verification_source": "build.solve",
+                    "status": run_status or "ok",
+                    "artifact_path": artifact_path,
+                    "run_id": run_id,
+                    "summary": dict(summary_obj),
+                }
+            )
+        if (not run_id) and (not summary_obj):
+            msg = "judge backend result missing"
             for name in chunk:
                 solve_results[name] = self._solve_result_error(msg, verdict="FL")
             return (False, chunk[0] if chunk else "")
-
-        run_status = str(run_row["status"] or "").strip().lower()
-        run_root = Path(str(run_row["artifact_path"] or "")).resolve()
-        summary_obj: dict[str, Any] = {}
-        raw_summary = str(run_row["summary_json"] or "").strip()
-        if raw_summary:
-            try:
-                parsed = json.loads(raw_summary)
-                if isinstance(parsed, dict):
-                    summary_obj = parsed
-            except Exception:
-                summary_obj = {}
+        run_root = Path(artifact_path).resolve() if artifact_path else Path()
         work_root_hint = _summary_work_root(summary_obj)
         tests_summary = summary_obj.get("tests")
         tests_rows = [row for row in tests_summary if isinstance(row, dict)] if isinstance(tests_summary, list) else []
@@ -266,12 +275,11 @@ def solve_with_judge_backend(
             output_ref = str(output_ref_by_test.get(test_name) or "").strip()
             if output_ref:
                 output_blob: bytes | None = None
-                judgehost = self._judgehost_task_service
-                if judgehost is not None:
-                    try:
-                        output_blob = judgehost.resolve_artifact_blob(output_ref, work_root=work_root_hint)
-                    except Exception:
-                        output_blob = None
+                judgehost = self.judgehost_task_service
+                try:
+                    output_blob = judgehost.resolve_artifact_blob(output_ref, work_root=work_root_hint)
+                except Exception:
+                    output_blob = None
                 if (output_blob is None) and (not output_ref.startswith("cache://")):
                     source_ref = (run_root / output_ref).resolve()
                     if source_ref.exists() and source_ref.is_file() and (not source_ref.is_symlink()):
@@ -335,16 +343,16 @@ def solve_with_judge_backend(
     if len(plans) <= 1:
         plan = plans[0]
         chunk = [str(item or "").strip() for item in list(plan.get("tests") or []) if str(item or "").strip()]
-        run_id = str(plan.get("run_id") or "").strip() or f"r-buildsolve-{uuid.uuid4().hex[:12]}"
+        task_result: dict[str, object] | None = None
         try:
-            run_id = _submit_and_wait_chunk(plan)
+            task_result = _submit_and_wait_chunk(plan)
         except Exception as exc:
             detail = str(exc or "").strip() or "judge backend task failed"
             for name in chunk:
                 solve_results[name] = self._solve_result_error(detail, verdict="FL")
             _mark_remaining_chunks(1, chunk[0] if chunk else "")
             return solve_results
-        ok, failed_test = _consume_chunk_result(chunk, run_id)
+        ok, failed_test = _consume_chunk_result(chunk, task_result or {})
         if not ok:
             _mark_remaining_chunks(1, failed_test)
         return solve_results
@@ -370,9 +378,13 @@ def solve_with_judge_backend(
                 plan = plans[idx]
                 fallback_run_id = str(plan.get("run_id") or "").strip() or f"r-buildsolve-{uuid.uuid4().hex[:12]}"
                 try:
-                    run_id = str(future.result() or "").strip() or fallback_run_id
+                    task_result = future.result()
                     chunk = [str(item or "").strip() for item in list(plan.get("tests") or []) if str(item or "").strip()]
-                    ok, failed_test = _consume_chunk_result(chunk, run_id)
+                    if not isinstance(task_result, dict):
+                        task_result = {"run_id": fallback_run_id}
+                    if not str(task_result.get("run_id") or "").strip():
+                        task_result["run_id"] = fallback_run_id
+                    ok, failed_test = _consume_chunk_result(chunk, task_result)
                     if not ok:
                         _mark_unresolved_tests(failed_test)
                         for pending in inflight:
@@ -404,4 +416,3 @@ def solve_with_judge_backend(
         if test_name not in solve_results:
             solve_results[test_name] = self._solve_result_error("judge backend result missing", verdict="FL")
     return solve_results
-

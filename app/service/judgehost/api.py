@@ -6,7 +6,8 @@ import threading
 from app.db import DB
 from app.runtime_value import RuntimeValues
 from app.service.platform.judge_fs_index import JudgeFsIndexService
-from app.service.run.api import Run
+from app.service.platform.fs.layout import FsManager
+from app.service.repository.workspace import WorkspaceService
 from app.setting import Settings
 
 from .internal.core import JudgehostCoreMixin
@@ -15,6 +16,8 @@ from .internal.domjudge_result import JudgehostDomjudgeResultsMixin
 from .internal.domjudge_util import JudgehostDomjudgeUtilsMixin
 from .internal.enqueue import JudgehostEnqueueMixin
 from .internal.queue import JudgehostQueueMixin
+
+JUDGEHOST_BACKEND_NAME = "domjudge-judgehost"
 
 
 class Judgehost(
@@ -25,6 +28,7 @@ class Judgehost(
     JudgehostDomjudgeDispatchMixin,
     JudgehostDomjudgeResultsMixin,
 ):
+    BACKEND_NAME = JUDGEHOST_BACKEND_NAME
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
     STATUS_COMPLETED = "completed"
@@ -37,13 +41,15 @@ class Judgehost(
     def __init__(
         self,
         db: DB,
-        run_service: Run,
+        workspace_service: WorkspaceService,
+        fs_manager: FsManager,
         settings: Settings,
         constants: RuntimeValues,
         judge_fs_index_service: JudgeFsIndexService | None = None,
     ) -> None:
         self.db = db
-        self._run_service = run_service
+        self._workspace_service = workspace_service
+        self._fs_manager = fs_manager
         self._settings = settings
         self._constants = constants
         self._lock = threading.Lock()
@@ -78,4 +84,114 @@ class Judgehost(
         self._init_domdb_schema()
         self._judge_fs_index_service = judge_fs_index_service
         self.apply_runtime_values(constants)
+
+    @classmethod
+    def backend_name(cls) -> str:
+        return cls.BACKEND_NAME
+
+    def backend_status(self) -> dict[str, object]:
+        status = self.status()
+        queue = status.get("queue") if isinstance(status, dict) else {}
+        queue_text = ""
+        if isinstance(queue, dict):
+            queue_text = f"queue queued={int(queue.get('queued', 0))}, leased={int(queue.get('leased', 0))}"
+        ready = bool(self.enabled() and self.auth_token_configured())
+        if not self.enabled():
+            detail = "judgehost service disabled"
+        elif not self.auth_token_configured():
+            detail = "set JUDGEHOST_API_TOKEN in system config"
+        else:
+            detail = f"judgehost queue ready ({queue_text})".strip()
+        return {
+            "configured": self.BACKEND_NAME,
+            "active": self.BACKEND_NAME,
+            "available": [
+                {
+                    "name": self.BACKEND_NAME,
+                    "ready": ready,
+                    "detail": detail,
+                }
+            ],
+        }
+
+    def run_submission(
+        self,
+        *,
+        problem: str,
+        username: str,
+        build_id: str,
+        submission_path: str | None = None,
+        mode: str = "pass-fail",
+        upload_content: bytes | None = None,
+        upload_filename: str | None = None,
+        upload_stream=None,
+        run_id: str | None = None,
+        selected_tests: list[str] | None = None,
+        verification_id: str = "",
+        verification_run_ids: list[str] | None = None,
+        verification_source: str = "run.execute",
+        expected_behavior: str | None = None,
+        task_kind: str = "",
+        force_recompile: bool = False,
+        prepared_payload: dict[str, object] | None = None,
+    ) -> str:
+        if not self.enabled():
+            raise RuntimeError("judgehost backend is disabled")
+        if not self.auth_token_configured():
+            raise RuntimeError("judgehost backend token is missing")
+        if upload_stream is not None:
+            raise RuntimeError("judgehost backend does not support upload_stream")
+        task_id = self.enqueue_task(
+            problem=problem,
+            username=username,
+            build_id=build_id,
+            mode=mode,
+            submission_path=submission_path,
+            upload_content=upload_content,
+            upload_filename=upload_filename,
+            run_id=run_id,
+            selected_tests=selected_tests,
+            verification_id=str(verification_id or ""),
+            verification_run_ids=list(verification_run_ids or []),
+            expected_behavior=str(expected_behavior or "unknown"),
+            verification_source=str(verification_source or "run.execute"),
+            task_kind=str(task_kind or ""),
+            force_recompile=bool(force_recompile),
+            prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,
+        )
+        return self.wait_for_task(task_id, timeout_sec=None)
+
+    def compile_only_submission(
+        self,
+        *,
+        problem: str,
+        username: str,
+        build_id: str,
+        upload_content: bytes,
+        upload_filename: str,
+        run_id: str | None = None,
+        verification_id: str = "",
+        verification_run_ids: list[str] | None = None,
+        verification_source: str = "compile.only",
+        expected_behavior: str = "compile",
+        prepared_payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        if not self.enabled():
+            raise RuntimeError("judgehost backend is disabled")
+        if not self.auth_token_configured():
+            raise RuntimeError("judgehost backend token is missing")
+        task_id = self.enqueue_compile_only_task(
+            problem=problem,
+            username=username,
+            build_id=build_id,
+            upload_content=bytes(upload_content),
+            upload_filename=str(upload_filename or "submission.cpp"),
+            run_id=str(run_id or ""),
+            verification_id=str(verification_id or ""),
+            verification_run_ids=list(verification_run_ids or []),
+            expected_behavior=str(expected_behavior or "compile"),
+            verification_source=str(verification_source or "compile.only"),
+            prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,
+        )
+        return self.wait_for_task_result(task_id, timeout_sec=None)
 

@@ -6,7 +6,7 @@
 </div>
 {% include "_flash_message.html" %}
 {% if runs %}
-<table class="invocation-list-table">
+<table class="verification-list-table">
   <tr>
     <th>Run time</th>
     <th>Solutions</th>
@@ -15,9 +15,9 @@
     <th>Actions</th>
   </tr>
   {% for r in runs %}
-  <tr class="{{ 'invocation-row-failed' if r.is_failed else '' }}">
+  <tr class="{{ 'verification-row-failed' if r.is_failed else '' }}">
     <td>
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?invocation_id={{ r.id }}">{{ r.created_at | local_time }}</a>
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?verification_id={{ r.id }}">{{ r.created_at | local_time }}</a>
     </td>
     <td>
       {{ r.source_display }}
@@ -37,16 +37,16 @@
       <span>{{ r.status_upper }}</span>
       {% endif %}
     </td>
-    <td class="invocation-actions">
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?invocation_id={{ r.id }}">View</a>
+    <td class="verification-actions">
+      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?verification_id={{ r.id }}">View</a>
       {% if r.has_running %}
-      <form class="inline-form invocation-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/cancel">
-        <input type="hidden" name="invocation_id" value="{{ r.id }}" />
+      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/cancel">
+        <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger" data-submit-form="1">Cancel</a>
       </form>
       {% endif %}
       {% if r.rerun_solution_paths %}
-      <a class="invocation-inline-action linkish" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_invocation_id={{ r.id }}&force_recompile=1">Rejudge</a>
+      <a class="verification-inline-action linkish" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
       {% endif %}
     </td>
   </tr>

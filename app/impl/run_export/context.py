@@ -16,7 +16,7 @@ from app.db import now_iso
 from app.impl.auth.public import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.public import (
-    allocate_invocation_id,
+    allocate_verification_id,
     allocate_run_id,
     assert_workspace_artifact_access,
     assert_workspace_build_access,
@@ -31,21 +31,20 @@ from app.impl.workspace.public import (
     normalize_problem_mode,
     normalize_run_id_token,
     normalize_run_test_name_token,
-    parse_run_detail_ids,
-    parse_run_detail_invocation_id,
+    parse_verification_detail_id,
     parse_run_test_names,
     read_problem_config,
     record_async_run_failure,
     require_write_access,
-    run_invocation_scope_run_ids,
     run_list_rows,
     run_solution_options_context,
-    run_source_labels_from_audit,
     run_test_options_context,
+    verification_record_run_ids,
     safe_artifact_path,
     safe_run_artifact_path,
     start_export_job,
     start_run_execute_batch,
+    workspace_verification_id_for_run,
     workspace_run_artifact_root,
     page_ctx,
 )
@@ -79,8 +78,6 @@ def _select_importer(package_format: str):
     if token == "icpc":
         return _ICPC_IMPORTER
     raise ValueError(f"unsupported package format: {package_format}")
-
-
 
 
 

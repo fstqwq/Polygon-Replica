@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from app.impl.auth.internal.dependency import (
     Path,
@@ -212,7 +212,7 @@ def _runtime_backend_profile() -> dict[str, str]:
 
 def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str) -> None:
     safe_table = str(table_name or "").strip()
-    if safe_table not in {"builds", "previews", "runs", "contest_jobs"}:
+    if safe_table not in {"builds", "previews", "verifications", "contest_jobs"}:
         return
     try:
         rows = config.db.fetch_all(
@@ -234,6 +234,8 @@ def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str)
             summary_obj = {}
         summary_obj["cancelled"] = True
         summary_obj["cancel_reason"] = reason
+        summary_obj["status"] = "failed"
+        summary_obj["finished_at"] = now_text
         if not str(summary_obj.get("error") or "").strip():
             summary_obj["error"] = reason
         try:
@@ -250,11 +252,11 @@ def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str)
 
 
 def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
-    run_ids: list[str] = []
+    inflight_entries: list[dict[str, str]] = []
     service = getattr(config, "judgehost_task_service", None)
     if service is not None:
         try:
-            run_ids = list(service.startup_cancel_inflight_tasks(reason=reason))
+            inflight_entries = list(service.startup_cancel_inflight_tasks(reason=reason))
         except Exception as exc:
             warnings.warn(f"startup judgehost inflight scan failed: {exc}", RuntimeWarning)
     if service is not None:
@@ -262,153 +264,72 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
             service.cancel_all_domjudge_inflight()
         except Exception as exc:
             warnings.warn(f"startup judgehost job/case cancel failed: {exc}", RuntimeWarning)
-    if not run_ids:
+    if not inflight_entries:
         return
-    placeholders = ",".join(("?" for _ in run_ids))
     try:
-        run_rows = config.db.fetch_all(
-            f"SELECT id,summary_json,status FROM runs WHERE id IN ({placeholders})",
-            [*run_ids],
+        from app.service.verification import (
+            load_verification_run,
+            load_verification_record,
+            load_verification_summary,
+            save_verification_run_summary,
         )
     except Exception as exc:
-        warnings.warn(f"startup judgehost run scan failed: {exc}", RuntimeWarning)
+        warnings.warn(f"startup verification inflight import failed: {exc}", RuntimeWarning)
         return
-    for run_row in run_rows:
-        run_id = str(run_row["id"] or "").strip()
-        if not run_id:
+    for item in inflight_entries:
+        verification_id = str(item.get("verification_id") or "").strip()
+        run_id = str(item.get("run_id") or "").strip()
+        if not verification_id or not run_id:
             continue
-        status = str(run_row["status"] or "").strip().lower()
+        verification_row_raw = load_verification_record(config.db, verification_id)
+        verification_row = dict(verification_row_raw) if verification_row_raw is not None else None
+        if verification_row is None:
+            continue
+        status = str(verification_row.get("status") or "").strip().lower()
         if status not in {"running", "queued", "pending"}:
             continue
-        summary_obj: dict[str, object] = {}
-        try:
-            parsed = json.loads(str(run_row["summary_json"] or "").strip() or "{}")
-            if isinstance(parsed, dict):
-                summary_obj = dict(parsed)
-        except Exception:
-            summary_obj = {}
+        verification_summary = load_verification_summary(config.db, verification_id)
+        run_row = load_verification_run(
+            config.db,
+            verification_id=verification_id,
+            run_id=run_id,
+        )
+        run_summary = run_row.get("summary") if isinstance(run_row, dict) else None
+        summary_obj = dict(run_summary) if isinstance(run_summary, dict) else {}
         summary_obj["cancelled"] = True
         summary_obj["cancel_reason"] = reason
         if not str(summary_obj.get("error") or "").strip():
             summary_obj["error"] = reason
+        build_id = str(summary_obj.get("build_id") or verification_row.get("build_id") or "").strip()
+        source_label = str(summary_obj.get("source") or "").strip() or run_id
+        source_paths_obj = verification_summary.get("source_paths")
+        source_paths = list(source_paths_obj) if isinstance(source_paths_obj, list) else ([source_label] if source_label else [])
         try:
-            config.db.execute(
-                """
-                UPDATE runs
-                SET status='failed', summary_json=?, finished_at=COALESCE(finished_at, ?)
-                WHERE id=?
-                """,
-                [json.dumps(summary_obj), now_text, run_id],
+            save_verification_run_summary(
+                config.db,
+                config.fs_manager,
+                verification_id=verification_id,
+                problem_id=int(verification_row.get("problem_id") or 0),
+                workspace_id=int(verification_row.get("workspace_id") or 0) if verification_row.get("workspace_id") is not None else None,
+                build_id=build_id,
+                kind=str(verification_row.get("kind") or "verification").strip() or "verification",
+                mode=str(summary_obj.get("mode") or verification_summary.get("mode") or "pass-fail").strip() or "pass-fail",
+                verification_source=str(verification_summary.get("verification_source") or "run.execute").strip() or "run.execute",
+                source_paths=source_paths,
+                run_id=run_id,
+                run_status="failed",
+                source_label=source_label,
+                expected_behavior=str(run_row.get("expected_behavior") or summary_obj.get("expected_behavior") or "unknown").strip() or "unknown",
+                run_summary=summary_obj,
+                artifact_path=str(run_row.get("artifact_path") or "").strip(),
+                error_text=str(summary_obj.get("error") or "").strip(),
+                finished=True,
             )
         except Exception as exc:
-            warnings.warn(f"startup run cancel failed for {run_id}: {exc}", RuntimeWarning)
-
-
-def _startup_normalize_run_token(raw: object) -> str:
-    token = str(raw or "").strip()
-    if not token:
-        return ""
-    token = token.split("?", 1)[0].split("#", 1)[0].strip()
-    if not token:
-        return ""
-    if "/" in token:
-        token = token.rsplit("/", 1)[-1].strip()
-    return token
-
-
-def _startup_collect_invocation_run_ids(details: dict[str, object]) -> list[str]:
-    values: list[str] = []
-    primary = _startup_normalize_run_token(details.get("run_id"))
-    if primary:
-        values.append(primary)
-    raw_run_ids = details.get("run_ids")
-    if isinstance(raw_run_ids, list):
-        for raw in raw_run_ids:
-            token = _startup_normalize_run_token(raw)
-            if token:
-                values.append(token)
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for token in values:
-        if token in seen:
-            continue
-        seen.add(token)
-        deduped.append(token)
-    return deduped
-
-
-def _startup_cancel_audit_inflight(reason: str, *, now_text: str) -> None:
-    try:
-        rows = config.db.fetch_all(
-            """
-            SELECT id,actor_user_id,problem_id,action,details_json
-            FROM audit_log
-            WHERE action IN ('run.execute', 'verification.start', 'run.cancel')
-            ORDER BY created_at DESC, id DESC
-            """
-        )
-    except Exception as exc:
-        warnings.warn(f"startup audit inflight scan failed: {exc}", RuntimeWarning)
-        return
-    seen: set[tuple[int, int, str]] = set()
-    pending_cancel_rows: list[tuple[int | None, int | None, dict[str, object]]] = []
-    for row in rows:
-        details: dict[str, object] = {}
-        try:
-            parsed = json.loads(str(row["details_json"] or "").strip() or "{}")
-            if isinstance(parsed, dict):
-                details = dict(parsed)
-        except Exception:
-            details = {}
-        invocation_id = _startup_normalize_run_token(details.get("invocation_id"))
-        if not invocation_id:
-            continue
-        try:
-            actor_user_id = int(row["actor_user_id"]) if row["actor_user_id"] is not None else None
-        except Exception:
-            actor_user_id = None
-        try:
-            problem_id = int(row["problem_id"]) if row["problem_id"] is not None else None
-        except Exception:
-            problem_id = None
-        scope_key = (int(problem_id or -1), int(actor_user_id or -1), invocation_id)
-        if scope_key in seen:
-            continue
-        seen.add(scope_key)
-        action_token = str(row["action"] or "").strip().lower()
-        if action_token == "run.cancel":
-            continue
-        status_token = str(details.get("status") or "").strip().lower()
-        if status_token not in {"running", "queued", "pending"}:
-            continue
-        invocation_run_ids = _startup_collect_invocation_run_ids(details)
-        cancel_details: dict[str, object] = {
-            "invocation_id": invocation_id,
-            "run_ids": invocation_run_ids,
-            "run_count": len(invocation_run_ids),
-            "cancelled_runs": 0,
-            "cancelled_tasks": 0,
-            "cancelled_builds": 0,
-            "reason": reason,
-        }
-        pending_cancel_rows.append((actor_user_id, problem_id, cancel_details))
-    for actor_user_id, problem_id, cancel_details in pending_cancel_rows:
-        try:
-            config.db.execute(
-                """
-                INSERT INTO audit_log(actor_user_id, problem_id, action, details_json, created_at)
-                VALUES(?, ?, 'run.cancel', ?, ?)
-                """,
-                [
-                    actor_user_id,
-                    problem_id,
-                    json.dumps(cancel_details),
-                    now_text,
-                ],
+            warnings.warn(
+                f"startup verification cancel failed for {verification_id}/{run_id}: {exc}",
+                RuntimeWarning,
             )
-        except Exception as exc:
-            invocation_id = str(cancel_details.get("invocation_id") or "").strip()
-            warnings.warn(f"startup audit inflight cancel failed for {invocation_id}: {exc}", RuntimeWarning)
 
 
 def _startup_clear_all_caches() -> None:
@@ -449,17 +370,15 @@ def _startup_reset_runtime_state() -> None:
     cancel_reason = "cancelled on service startup"
     _startup_cancel_summary_rows("builds", cancel_reason, now_text=now_text)
     _startup_cancel_summary_rows("previews", cancel_reason, now_text=now_text)
-    _startup_cancel_summary_rows("runs", cancel_reason, now_text=now_text)
     _startup_cancel_summary_rows("contest_jobs", cancel_reason, now_text=now_text)
     _startup_cancel_judgehost_inflight(cancel_reason, now_text=now_text)
-    _startup_cancel_audit_inflight(cancel_reason, now_text=now_text)
+    _startup_cancel_summary_rows("verifications", cancel_reason, now_text=now_text)
     _startup_clear_all_caches()
 
 
 def startup() -> None:
     config.db.init()
     _startup_reset_runtime_state()
-    config.invocation_backend_service.refresh()
     config.worker_queue_service.start()
 
 
@@ -468,5 +387,4 @@ def shutdown() -> None:
         config.worker_queue_service.stop()
     except Exception as exc:
         warnings.warn(f"shutdown worker queue stop failed: {exc}", RuntimeWarning)
-
 

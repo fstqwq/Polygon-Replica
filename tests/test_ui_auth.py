@@ -834,7 +834,6 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("/problems/alice/settings/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(int(config.system_config_service.get("RUN_EXEC_MEMORY_MB")), update_value)
         self.assertEqual(int(config.constants.RUN_EXEC_MEMORY_MB), update_value)
-        self.assertEqual(int(config.run_service.default_run_memory_mb), update_value)
 
     def test_settings_config_category_page_renders_token_generate_button(self) -> None:
         db.execute("UPDATE users SET is_system_admin=0")
@@ -904,7 +903,7 @@ class TestUIAuth(UIBaseSuite):
         payload = json.loads(resp.body.decode("utf-8", errors="replace"))
         self.assertIn("hosts", payload)
         self.assertIn("hosts_online", payload)
-        self.assertIn("invocation_backend", payload)
+        self.assertIn("verification_backend", payload)
         hosts = payload.get("hosts") or []
         self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-admin-snapshot" for item in hosts))
 
@@ -939,56 +938,6 @@ class TestUIAuth(UIBaseSuite):
         )
         self.assertEqual(valid.status_code, 303)
         self.assertIn("/problems/alice/minimal-spanning-tree/alice/statement", valid.headers.get("location", ""))
-
-    def test_startup_reset_writes_run_cancel_for_audit_only_inflight_invocation(self) -> None:
-        problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", ["alice/sample"])
-        self.assertIsNotNone(problem_row)
-        user_row = db.fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
-        self.assertIsNotNone(user_row)
-        problem_id = int(problem_row["id"])
-        actor_user_id = int(user_row["id"])
-        invocation_id = f"inv-startup-audit-only-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-startup-audit-only-{uuid.uuid4().hex[:8]}"
-
-        db.execute(
-            """
-            INSERT INTO audit_log(actor_user_id, problem_id, action, details_json, created_at)
-            VALUES(?, ?, 'verification.start', ?, ?)
-            """,
-            [
-                actor_user_id,
-                problem_id,
-                json.dumps(
-                    {
-                        "invocation_id": invocation_id,
-                        "run_ids": [run_id],
-                        "status": "running",
-                        "mode": "pass-fail",
-                    }
-                ),
-                "2026-03-06T00:00:00+00:00",
-            ],
-        )
-
-        api._startup_cancel_audit_inflight("cancelled on service startup", now_text="2026-03-06T00:00:01+00:00")
-
-        cancel_row = db.fetch_one(
-            """
-            SELECT details_json
-            FROM audit_log
-            WHERE actor_user_id=? AND problem_id=? AND action='run.cancel'
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-            """,
-            [actor_user_id, problem_id],
-        )
-        self.assertIsNotNone(cancel_row)
-        details = json.loads(str(cancel_row["details_json"] or "{}"))
-        self.assertEqual(str(details.get("invocation_id") or ""), invocation_id)
-        self.assertEqual(details.get("run_ids"), [run_id])
-        self.assertEqual(int(details.get("run_count") or 0), 1)
-        self.assertEqual(str(details.get("reason") or ""), "cancelled on service startup")
-
 
 
 

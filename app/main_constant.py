@@ -10,10 +10,10 @@ RUN_DETAIL_TEST_LIST_LIMIT = 200
 RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT = 200
 RUN_TEST_FEEDBACK_FILE_LIST_LIMIT = 32
 RUN_DETAIL_PREVIEW_MAX_BYTES = 256
-RUN_INVOCATION_LIST_SCAN_FACTOR = 8
-RUN_INVOCATION_LIST_SUMMARY_ROW_CHAR_LIMIT = 65536
-RUN_INVOCATION_LIST_SUMMARY_TOTAL_CHAR_BUDGET = 4194304
-RUN_INVOCATION_LIST_SUMMARY_MAX_ROWS = 256
+RUN_VERIFICATION_LIST_SCAN_FACTOR = 8
+RUN_VERIFICATION_LIST_SUMMARY_ROW_CHAR_LIMIT = 65536
+RUN_VERIFICATION_LIST_SUMMARY_TOTAL_CHAR_BUDGET = 4194304
+RUN_VERIFICATION_LIST_SUMMARY_MAX_ROWS = 256
 RUN_TEST_SELECTOR_LIMIT = 600
 PREVIEW_LOG_REF_LIST_LIMIT = 200
 STATEMENT_EDITOR_CHAR_LIMIT = 262144
@@ -250,10 +250,10 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max diagnostics shown in run details."},
     "RUN_TEST_FEEDBACK_FILE_LIST_LIMIT": {"type": "int", "min": 1, "max": 1024, "description": "Max feedback files listed per test."},
     "RUN_DETAIL_PREVIEW_MAX_BYTES": {"type": "int", "min": 32, "max": 65536, "description": "Max preview bytes for artifact snippets."},
-    "RUN_INVOCATION_LIST_SCAN_FACTOR": {"type": "int", "min": 1, "max": 64, "description": "Run list scan multiplier over page size."},
-    "RUN_INVOCATION_LIST_SUMMARY_ROW_CHAR_LIMIT": {"type": "int", "min": 256, "max": 2097152, "description": "Per-row summary char cap."},
-    "RUN_INVOCATION_LIST_SUMMARY_TOTAL_CHAR_BUDGET": {"type": "int", "min": 1024, "max": 16777216, "description": "Total summary char budget in run list."},
-    "RUN_INVOCATION_LIST_SUMMARY_MAX_ROWS": {"type": "int", "min": 1, "max": 2048, "description": "Max summary rows shown for invocations."},
+    "RUN_VERIFICATION_LIST_SCAN_FACTOR": {"type": "int", "min": 1, "max": 64, "description": "Verification list scan multiplier over page size."},
+    "RUN_VERIFICATION_LIST_SUMMARY_ROW_CHAR_LIMIT": {"type": "int", "min": 256, "max": 2097152, "description": "Per-row verification summary char cap."},
+    "RUN_VERIFICATION_LIST_SUMMARY_TOTAL_CHAR_BUDGET": {"type": "int", "min": 1024, "max": 16777216, "description": "Total verification summary char budget in run list."},
+    "RUN_VERIFICATION_LIST_SUMMARY_MAX_ROWS": {"type": "int", "min": 1, "max": 2048, "description": "Max summary rows shown for verifications."},
     "RUN_TEST_SELECTOR_LIMIT": {"type": "int", "min": 1, "max": 10000, "description": "Max test options shown in run form."},
     "PREVIEW_LOG_REF_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max statement log references parsed."},
     "STATEMENT_EDITOR_CHAR_LIMIT": {"type": "int", "min": 2048, "max": 4194304, "description": "Statement editor content limit."},
@@ -321,7 +321,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "WORKER_QUEUE_DURABLE_HISTORY_LIMIT": {"type": "int", "min": 256, "max": 200000, "description": "Worker durable event replay limit.", "restart_required": True, "impact": "restart"},
     "WORKER_QUEUE_DURABLE_LOG": {"type": "str", "description": "Worker durable event log file path (empty uses default cache path).", "restart_required": True, "impact": "restart"},
     "DB_SQL_TRACE_ENABLED": {"type": "bool", "description": "Enable per-statement SQLite trace logging (heavy; for debugging only).", "restart_required": False, "impact": "runtime"},
-    "JUDGEHOST_ENABLE": {"type": "bool", "description": "Enable DOMserver-like judgehost queue APIs for invocation execution."},
+    "JUDGEHOST_ENABLE": {"type": "bool", "description": "Enable DOMserver-like judgehost queue APIs for verification execution."},
     "JUDGEHOST_API_TOKEN": {"type": "str", "ascii": "visible", "description": "Bearer token for judgehost API authentication."},
     "JUDGEHOST_API_USERNAME": {"type": "str", "ascii": "visible", "description": "Basic-auth username for DOMjudge judgehost compatibility API."},
     "JUDGEHOST_FETCH_BATCH_SIZE": {"type": "int", "min": 1, "max": 128, "description": "Default max tasks returned per judgehost fetch."},

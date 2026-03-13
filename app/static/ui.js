@@ -693,45 +693,32 @@
   }
 
   function initRunDetailsToggle() {
-    var table = document.querySelector(".invocation-detail-table");
+    var table = document.querySelector(".verification-detail-table");
     if (!table) return;
-    var toggles = table.querySelectorAll(".invocation-test-toggle[data-test-name], .invocation-cell-toggle[data-test-name]");
+    var toggles = table.querySelectorAll(".verification-test-toggle[data-test-name], .verification-cell-toggle[data-test-name]");
     if (!toggles.length) return;
     var popupTitle = document.getElementById("run-test-detail-popup-title");
     var popupContent = document.getElementById("run-test-detail-popup-content");
     if (!popupTitle || !popupContent) return;
-    var detailFetchBase = String(table.getAttribute("data-run-details-fragment") || "").trim();
-    var invocationId = String(table.getAttribute("data-invocation-id") || "").trim();
-    var runIds = String(table.getAttribute("data-run-ids") || "")
-      .split(",")
-      .map(function (item) {
-        return String(item || "").trim();
-      })
-      .filter(function (item) {
-        return item.length > 0;
-      });
+      var detailFetchBase = String(table.getAttribute("data-run-details-fragment") || "").trim();
+      var verificationId = String(table.getAttribute("data-verification-id") || "").trim();
 
-    function detailUrlForTest(testName) {
-      var safeTest = String(testName || "").trim();
-      if (!detailFetchBase || !safeTest) return "";
-      var params = new URLSearchParams();
-      params.set("test", safeTest);
-      if (invocationId) {
-        params.set("invocation_id", invocationId);
-      } else {
-        runIds.forEach(function (runId) {
-          params.append("run_id", runId);
-        });
+      function detailUrlForTest(testName) {
+        var safeTest = String(testName || "").trim();
+        if (!detailFetchBase || !safeTest) return "";
+        if (!verificationId) return "";
+        var params = new URLSearchParams();
+        params.set("test", safeTest);
+        params.set("verification_id", verificationId);
+        var query = params.toString();
+        if (!query) return "";
+        return detailFetchBase + (detailFetchBase.indexOf("?") >= 0 ? "&" : "?") + query;
       }
-      var query = params.toString();
-      if (!query) return "";
-      return detailFetchBase + (detailFetchBase.indexOf("?") >= 0 ? "&" : "?") + query;
-    }
 
     function renderLoading(message) {
       popupContent.innerHTML = "";
       var tip = document.createElement("p");
-      tip.className = "muted invocation-detail-loading";
+      tip.className = "muted verification-detail-loading";
       tip.textContent = String(message || "Loading details...");
       popupContent.appendChild(tip);
     }
@@ -755,12 +742,12 @@
       }
       var wrapper = document.createElement("div");
       wrapper.innerHTML = fullHtml;
-      var solutionList = wrapper.querySelector(".invocation-solution-list");
+      var solutionList = wrapper.querySelector(".verification-solution-list");
       if (!solutionList) {
         popupContent.innerHTML = fullHtml;
         return;
       }
-      var cards = Array.prototype.slice.call(solutionList.querySelectorAll(".invocation-solution-card[data-run-id]"));
+      var cards = Array.prototype.slice.call(solutionList.querySelectorAll(".verification-solution-card[data-run-id]"));
       var matchedCard = null;
       cards.forEach(function (card) {
         if (String(card.getAttribute("data-run-id") || "").trim() === safeRunId) {

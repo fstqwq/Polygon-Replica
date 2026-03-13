@@ -51,17 +51,30 @@ class FsManager:
             directory.mkdir(parents=True, exist_ok=True)
         return paths
 
-    def prepare_run_root(self, run_id: str) -> Path:
-        path = self.resolve_run_root(run_id)
+    def prepare_verification_root(self, verification_id: str) -> Path:
+        path = self.resolve_verification_root(verification_id)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def resolve_run_root(self, run_id: str) -> Path:
-        safe_run_id = self._normalize_token(run_id, field_name="run_id")
+    def resolve_verification_root(self, verification_id: str) -> Path:
+        safe_verification_id = self._normalize_token(verification_id, field_name="verification_id")
         base = self.run_root.resolve()
-        target = (base / safe_run_id).resolve()
+        target = (base / safe_verification_id).resolve()
         if target != base and base not in target.parents:
-            raise ValueError("run_id escapes run_root")
+            raise ValueError("verification_id escapes run_root")
+        return target
+
+    def prepare_verification_run_root(self, verification_id: str, run_id: str) -> Path:
+        path = self.resolve_verification_run_root(verification_id, run_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def resolve_verification_run_root(self, verification_id: str, run_id: str) -> Path:
+        root = self.resolve_verification_root(verification_id)
+        safe_run_id = self._normalize_token(run_id, field_name="run_id")
+        target = (root / "runs" / safe_run_id).resolve()
+        if root not in target.parents:
+            raise ValueError("run_id escapes verification root")
         return target
 
     def _normalize_build_ref(self, build_ref: str) -> str:

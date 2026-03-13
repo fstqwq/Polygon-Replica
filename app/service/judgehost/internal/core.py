@@ -38,7 +38,7 @@ class JudgehostCoreMixin:
                     run_config_json TEXT NOT NULL,
                     compare_config_json TEXT NOT NULL,
                     expected_behavior TEXT NOT NULL DEFAULT 'unknown',
-                    invocation_source TEXT NOT NULL DEFAULT 'run.execute',
+                    verification_source TEXT NOT NULL DEFAULT 'run.execute',
                     force_recompile INTEGER NOT NULL DEFAULT 0,
                     lease_owner TEXT,
                     compile_success INTEGER,

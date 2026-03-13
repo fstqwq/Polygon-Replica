@@ -3,7 +3,7 @@ from __future__ import annotations
 from .shared import (
     Path,
     RUN_TEST_NAME_RE,
-    _INVOCATION_ID_RE,
+    _VERIFICATION_ID_RE,
     _RUN_ID_RE,
     base64,
     domjudge_executable_hash,
@@ -13,11 +13,66 @@ from .shared import (
     time,
     uuid,
 )
-from app.service.run.summary import summary_for_db
 from app.service.platform.testlib_source import workspace_testlib_header
+from app.service.verification import (
+    VERIFICATION_KIND_VERIFICATION,
+    save_verification_run_summary,
+)
 
 
 class JudgehostEnqueueMixin:
+    @staticmethod
+    def _verification_kind(verification_source: str) -> str:
+        return VERIFICATION_KIND_VERIFICATION
+
+    @staticmethod
+    def _verification_id(run_id: str, verification_id: str) -> str:
+        token = str(verification_id or "").strip()
+        if _VERIFICATION_ID_RE.fullmatch(token):
+            return token
+        return f"ver-{str(run_id or '').strip()}"
+
+    def _ensure_verification_run(
+        self,
+        *,
+        problem: str,
+        username: str,
+        build_id: str,
+        verification_id: str,
+        run_id: str,
+        mode: str,
+        source_label: str,
+        expected_behavior: str,
+        verification_source: str,
+        task_kind: str,
+        summary: dict[str, object],
+    ) -> str:
+        ctx = self._workspace_service.workspace_context(problem, username, include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        run_root = self._fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()
+        merged = save_verification_run_summary(
+            self.db,
+            self._fs_manager,
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=str(build_id or "").strip(),
+            kind=self._verification_kind(verification_source),
+            mode=str(mode or "").strip() or "pass-fail",
+            verification_source=str(verification_source or "run.execute").strip() or "run.execute",
+            source_paths=[source_label] if source_label else [],
+            run_id=run_id,
+            run_status="running",
+            source_label=source_label,
+            expected_behavior=expected_behavior,
+            run_summary=dict(summary or {}),
+            artifact_path=str(run_root),
+            task_kind=str(task_kind or "").strip(),
+            finished=False,
+        )
+        return str(merged.get("status") or "running").strip().lower() or "running"
+
     def _collect_build_payload(
         self,
         *,
@@ -33,7 +88,7 @@ class JudgehostEnqueueMixin:
         build_ref = str(build_row["build_ref"] or "").strip().lower() if build_row is not None else ""
         if not build_ref:
             return {}
-        artifact_root = self._run_service.fs_manager.build_paths(build_ref).root.resolve()
+        artifact_root = self._fs_manager.build_paths(build_ref).root.resolve()
         if not artifact_root.exists() or (not artifact_root.is_dir()):
             return {}
         tests_dir = (artifact_root / "tests").resolve()
@@ -249,16 +304,16 @@ class JudgehostEnqueueMixin:
         upload_content: bytes | None,
         upload_filename: str | None,
         selected_tests: list[str],
-        invocation_id: str,
-        invocation_run_ids: list[str],
+        verification_id: str,
+        verification_run_ids: list[str],
         expected_behavior: str,
-        invocation_source: str,
+        verification_source: str,
         run_id: str,
         task_kind: str = "",
         force_recompile: bool = False,
         compile_only: bool = False,
     ) -> dict[str, object]:
-        ctx = self._run_service.workspace_service.workspace_context(problem, username, include_recent=False)
+        ctx = self._workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(str(ctx["workspace"]["path"]))
 
         source_bytes: bytes
@@ -288,13 +343,13 @@ class JudgehostEnqueueMixin:
         safe_task_kind = self._domjudge_task_kind(
             {
                 "task_kind": task_kind,
-                "invocation_source": invocation_source,
+                "verification_source": verification_source,
                 "compile_only": bool(compile_only),
             }
         )
         legacy_compile_only = safe_task_kind == self._TASK_KIND_COMPILE_ONLY
         return {
-            "type": "invocation.run",
+            "type": "verification.run",
             "run_id": run_id,
             "problem": problem,
             "username": username,
@@ -305,10 +360,10 @@ class JudgehostEnqueueMixin:
             "source_label": source_label,
             "source_b64": base64.b64encode(source_bytes).decode("ascii"),
             "selected_tests": list(selected_tests),
-            "invocation_id": invocation_id,
-            "invocation_run_ids": list(invocation_run_ids),
+            "verification_id": verification_id,
+            "verification_run_ids": list(verification_run_ids),
             "expected_behavior": expected_behavior,
-            "invocation_source": invocation_source,
+            "verification_source": verification_source,
             "task_kind": safe_task_kind,
             "force_recompile": bool(force_recompile),
             "compile_only": bool(legacy_compile_only),
@@ -552,10 +607,10 @@ class JudgehostEnqueueMixin:
         upload_filename: str | None,
         run_id: str,
         selected_tests: list[str] | None,
-        invocation_id: str,
-        invocation_run_ids: list[str] | None,
+        verification_id: str,
+        verification_run_ids: list[str] | None,
         expected_behavior: str,
-        invocation_source: str,
+        verification_source: str,
         task_kind: str = "",
         force_recompile: bool = False,
         compile_only: bool = False,
@@ -563,9 +618,9 @@ class JudgehostEnqueueMixin:
         selected = [str(item or "").strip() for item in (selected_tests or [])]
         selected = [item for item in selected if RUN_TEST_NAME_RE.fullmatch(item)]
         selected = list(dict.fromkeys(selected))
-        inv_run_ids = [str(item or "").strip() for item in (invocation_run_ids or [])]
-        inv_run_ids = [item for item in inv_run_ids if _RUN_ID_RE.fullmatch(item)]
-        inv_run_ids = list(dict.fromkeys(inv_run_ids))
+        verification_run_id_list = [str(item or "").strip() for item in (verification_run_ids or [])]
+        verification_run_id_list = [item for item in verification_run_id_list if _RUN_ID_RE.fullmatch(item)]
+        verification_run_id_list = list(dict.fromkeys(verification_run_id_list))
         safe_run_id = self._normalize_run_id(run_id)
         payload = self._build_task_payload(
             problem=problem,
@@ -576,10 +631,10 @@ class JudgehostEnqueueMixin:
             upload_content=upload_content,
             upload_filename=upload_filename,
             selected_tests=selected,
-            invocation_id=invocation_id,
-            invocation_run_ids=inv_run_ids,
+            verification_id=verification_id,
+            verification_run_ids=verification_run_id_list,
             expected_behavior=expected_behavior,
-            invocation_source=invocation_source,
+            verification_source=verification_source,
             task_kind=task_kind,
             run_id=safe_run_id,
             force_recompile=bool(force_recompile),
@@ -596,17 +651,17 @@ class JudgehostEnqueueMixin:
         mode: str,
         source_label: str,
         selected_tests: list[str],
-        invocation_id: str,
-        invocation_run_ids: list[str],
+        verification_id: str,
+        verification_run_ids: list[str],
         expected_behavior: str,
-        invocation_source: str,
+        verification_source: str,
         task_kind: str = "",
         compile_only: bool = False,
     ) -> dict[str, object]:
         safe_task_kind = self._domjudge_task_kind(
             {
                 "task_kind": task_kind,
-                "invocation_source": invocation_source,
+                "verification_source": verification_source,
                 "compile_only": bool(compile_only),
             }
         )
@@ -615,14 +670,13 @@ class JudgehostEnqueueMixin:
             "source": source_label,
             "selected_tests": list(selected_tests),
             "selected_tests_count": len(selected_tests),
-            "invocation_source": str(invocation_source or "").strip() or "run.execute",
+            "verification_source": str(verification_source or "").strip() or "run.execute",
             "task_kind": safe_task_kind,
             "tests": [],
             "compile_log": "",
             "compile_diagnostics": [],
             "toolchain_digest": "judgehost",
-            "sandbox_backend": getattr(self._run_service, "execution_backend_name", "domjudge-judgehost"),
-            "invocation_backend": "domjudge-judgehost",
+            "sandbox_backend": self.BACKEND_NAME,
             "limits": {},
             "usage": {},
             "judgehost": {
@@ -632,91 +686,7 @@ class JudgehostEnqueueMixin:
         }
         if safe_task_kind == self._TASK_KIND_COMPILE_ONLY:
             summary["compile_only"] = True
-        safe_invocation_id = str(invocation_id or "").strip()
-        if _INVOCATION_ID_RE.fullmatch(safe_invocation_id):
-            safe_ids: list[str] = []
-            for raw in invocation_run_ids:
-                token = str(raw or "").strip()
-                if not _RUN_ID_RE.fullmatch(token):
-                    continue
-                if token in safe_ids:
-                    continue
-                safe_ids.append(token)
-            if run_id not in safe_ids:
-                safe_ids.append(run_id)
-            summary["invocation"] = {
-                "id": safe_invocation_id,
-                "source": str(invocation_source or "run.execute").strip() or "run.execute",
-                "run_ids": safe_ids,
-                "expected_behavior": str(expected_behavior or "unknown").strip() or "unknown",
-                "completed": False,
-            }
         return summary
-
-    def _ensure_run_row(
-        self,
-        *,
-        problem: str,
-        username: str,
-        build_id: str,
-        run_id: str,
-        mode: str,
-        summary: dict[str, object],
-    ) -> str:
-        ctx = self._run_service.workspace_service.workspace_context(problem, username, include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_row = self._db_fetch_one("SELECT build_ref FROM builds WHERE id=?", [str(build_id or "").strip()])
-        build_ref = str(build_row["build_ref"] or "").strip().lower() if build_row is not None else ""
-        run_root = self._run_service.fs_manager.prepare_run_root(run_id).resolve()
-        now_text = now_iso()
-        existing = self._db_fetch_one("SELECT id FROM runs WHERE id=?", [run_id])
-        encoded = summary_for_db(
-            summary,
-            tests_limit=self._run_service.DB_SUMMARY_TESTS_LIMIT,
-            diagnostics_limit=self._run_service.DB_SUMMARY_DIAGNOSTICS_LIMIT,
-            feedback_files_limit=self._run_service.DB_SUMMARY_FEEDBACK_FILES_LIMIT,
-            diagnostic_message_limit=self._run_service.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
-        )
-        if existing is None:
-            self._db_execute(
-                """
-                INSERT INTO runs(id,problem_id,workspace_id,build_id,build_ref,mode,status,summary_json,artifact_path,created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    run_id,
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    build_ref,
-                    mode,
-                    "running",
-                    encoded,
-                    str(run_root),
-                    now_text,
-                ],
-            )
-        else:
-            self._db_execute(
-                """
-                UPDATE runs
-                SET problem_id=?,workspace_id=?,build_id=?,build_ref=?,mode=?,status=?,summary_json=?,artifact_path=?,finished_at=NULL
-                WHERE id=?
-                """,
-                [
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    build_ref,
-                    mode,
-                    "running",
-                    encoded,
-                    str(run_root),
-                    run_id,
-                ],
-            )
-        return str(run_root)
 
     def enqueue_task(
         self,
@@ -728,24 +698,28 @@ class JudgehostEnqueueMixin:
         submission_path: str | None,
         upload_content: bytes | None,
         upload_filename: str | None,
-        run_id: str,
+        run_id: str | None = None,
         selected_tests: list[str] | None,
-        invocation_id: str,
-        invocation_run_ids: list[str] | None,
+        verification_id: str = "",
+        verification_run_ids: list[str] | None = None,
         expected_behavior: str,
-        invocation_source: str,
+        verification_source: str,
         task_kind: str = "",
         force_recompile: bool = False,
         compile_only: bool = False,
+        persist_verification_run: bool = True,
         prepared_payload: dict[str, object] | None = None,
     ) -> str:
-        safe_run_id = self._normalize_run_id(run_id)
+        safe_run_id = self._normalize_run_id(run_id or verification_id)
+        safe_verification_id = str(verification_id or safe_run_id).strip()
         selected = [str(item or "").strip() for item in (selected_tests or [])]
         selected = [item for item in selected if RUN_TEST_NAME_RE.fullmatch(item)]
         selected = list(dict.fromkeys(selected))
-        inv_run_ids = [str(item or "").strip() for item in (invocation_run_ids or [])]
-        inv_run_ids = [item for item in inv_run_ids if _RUN_ID_RE.fullmatch(item)]
-        inv_run_ids = list(dict.fromkeys(inv_run_ids))
+        verification_run_id_list = [str(item or "").strip() for item in (verification_run_ids or [])]
+        verification_run_id_list = [item for item in verification_run_id_list if _RUN_ID_RE.fullmatch(item)]
+        verification_run_id_list = list(dict.fromkeys(verification_run_id_list))
+        if not verification_run_id_list:
+            verification_run_id_list = [safe_run_id]
         payload = self._build_task_payload(
             problem=problem,
             username=username,
@@ -755,10 +729,10 @@ class JudgehostEnqueueMixin:
             upload_content=upload_content,
             upload_filename=upload_filename,
             selected_tests=selected,
-            invocation_id=invocation_id,
-            invocation_run_ids=inv_run_ids,
+            verification_id=safe_verification_id,
+            verification_run_ids=verification_run_id_list,
             expected_behavior=expected_behavior,
-            invocation_source=invocation_source,
+            verification_source=verification_source,
             task_kind=task_kind,
             run_id=safe_run_id,
             force_recompile=bool(force_recompile),
@@ -774,13 +748,16 @@ class JudgehostEnqueueMixin:
         payload["mode"] = mode
         payload["submission_path"] = str(submission_path or "")
         payload["selected_tests"] = list(selected)
-        payload["invocation_id"] = invocation_id
-        payload["invocation_run_ids"] = list(inv_run_ids)
+        payload["verification_id"] = safe_verification_id
+        payload["verification_run_ids"] = list(verification_run_id_list)
         payload["expected_behavior"] = expected_behavior
-        payload["invocation_source"] = invocation_source
+        payload["verification_source"] = verification_source
         payload["task_kind"] = safe_task_kind
         payload["force_recompile"] = bool(force_recompile)
         payload["compile_only"] = bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY)
+        safe_verification_id = str(verification_id or self._verification_id(safe_run_id, safe_verification_id)).strip()
+        payload["verification_id"] = safe_verification_id
+        payload["run_id"] = safe_run_id
         task_id = ""
         summary: dict[str, object] | None = None
         while True:
@@ -803,10 +780,10 @@ class JudgehostEnqueueMixin:
                         mode=mode,
                         source_label=source_label,
                         selected_tests=selected,
-                        invocation_id=invocation_id,
-                        invocation_run_ids=inv_run_ids,
+                        verification_id=safe_verification_id,
+                        verification_run_ids=verification_run_id_list,
                         expected_behavior=expected_behavior,
-                        invocation_source=invocation_source,
+                        verification_source=verification_source,
                         task_kind=safe_task_kind,
                         compile_only=bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY),
                     )
@@ -818,9 +795,12 @@ class JudgehostEnqueueMixin:
                         "username": str(username),
                         "build_id": str(build_id),
                         "mode": str(mode),
+                        "verification_id": safe_verification_id,
+                        "run_id": safe_run_id,
                         "status": self.STATUS_ENQUEUING,
                         "payload": dict(payload),
                         "result": {},
+                        "persist_verification_run": bool(persist_verification_run),
                         "error_text": "",
                         "lease_owner": "",
                         "lease_expires_at": "",
@@ -828,6 +808,7 @@ class JudgehostEnqueueMixin:
                         "updated_at": now_text,
                         "completed_at": "",
                         "attempt_count": 0,
+                        "summary": dict(summary),
                     }
                     self._task_id_by_run[safe_run_id] = task_id
                     break
@@ -837,23 +818,29 @@ class JudgehostEnqueueMixin:
         if summary is None or not task_id:
             raise RuntimeError("failed to allocate judgehost task")
 
-        try:
-            self._ensure_run_row(
-                problem=problem,
-                username=username,
-                build_id=build_id,
-                run_id=safe_run_id,
-                mode=mode,
-                summary=summary,
-            )
-        except Exception:
-            with self._state_lock:
-                row = self._tasks_by_id.get(task_id)
-                if row is not None and str(row.get("status") or "").strip().lower() == self.STATUS_ENQUEUING:
-                    self._tasks_by_id.pop(task_id, None)
-                    if self._task_id_by_run.get(safe_run_id) == task_id:
-                        self._task_id_by_run.pop(safe_run_id, None)
-            raise
+        if bool(persist_verification_run):
+            try:
+                self._ensure_verification_run(
+                    problem=problem,
+                    username=username,
+                    build_id=build_id,
+                    verification_id=safe_verification_id,
+                    run_id=safe_run_id,
+                    mode=mode,
+                    source_label=str(payload.get("source_label") or payload.get("source_name") or "upload"),
+                    expected_behavior=expected_behavior,
+                    verification_source=verification_source,
+                    task_kind=safe_task_kind,
+                    summary=summary,
+                )
+            except Exception:
+                with self._state_lock:
+                    row = self._tasks_by_id.get(task_id)
+                    if row is not None and str(row.get("status") or "").strip().lower() == self.STATUS_ENQUEUING:
+                        self._tasks_by_id.pop(task_id, None)
+                        if self._task_id_by_run.get(safe_run_id) == task_id:
+                            self._task_id_by_run.pop(safe_run_id, None)
+                raise
 
         self._domjudge_try_prequeue_cache_finalize(
             task_id=task_id,
@@ -876,10 +863,10 @@ class JudgehostEnqueueMixin:
         upload_content: bytes,
         upload_filename: str,
         run_id: str,
-        invocation_id: str,
-        invocation_run_ids: list[str] | None = None,
+        verification_id: str,
+        verification_run_ids: list[str] | None = None,
         expected_behavior: str = "compile",
-        invocation_source: str = "compile.only",
+        verification_source: str = "compile.only",
         prepared_payload: dict[str, object] | None = None,
     ) -> str:
         return self.enqueue_task(
@@ -892,12 +879,12 @@ class JudgehostEnqueueMixin:
             upload_filename=str(upload_filename or "submission.cpp"),
             run_id=run_id,
             selected_tests=[],
-            invocation_id=str(invocation_id or ""),
-            invocation_run_ids=list(invocation_run_ids or [run_id]),
+            verification_id=str(verification_id or ""),
+            verification_run_ids=list(verification_run_ids or [run_id]),
             expected_behavior=str(expected_behavior or "compile"),
-            invocation_source=str(invocation_source or "compile.only"),
+            verification_source=str(verification_source or "compile.only"),
             task_kind=self._TASK_KIND_COMPILE_ONLY,
             compile_only=True,
+            persist_verification_run=False,
             prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,
         )
-

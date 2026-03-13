@@ -147,7 +147,7 @@ def checker_save_source(problem: str, user: str, path: str=Form('checkers/checke
                 workspace=workspace,
                 source_path=target,
                 source_content=content,
-                invocation_source='problem.checker.save_source',
+                verification_source='problem.checker.save_source',
             )
             if compile_check_error:
                 if target_existed_before:

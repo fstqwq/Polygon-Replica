@@ -14,12 +14,10 @@ from app.service.build.api import Build
 from app.service.export.api import ExportService
 from app.service.repository.git import GitService
 from app.service.platform.judge_fs_index import JudgeFsIndexService
-from app.service.runtime.invocation_backend import InvocationBackendService
 from app.service.judgehost.api import Judgehost
 from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.preview import PreviewService
-from app.service.run.api import Run
 from app.service.platform.system_config import SystemConfigService
 from app.service.problem import test_spec
 from app.service.runtime import toolchain
@@ -39,12 +37,9 @@ class RuntimeConfig:
     fs_manager: FsManager = field(init=False)
     artifact_service: ArtifactService = field(init=False)
     preview_sandbox_backend: SandboxBackend = field(init=False)
-    toolchain_service: toolchain.ToolchainService = field(init=False)
     build_service: Build = field(init=False)
     preview_service: PreviewService = field(init=False)
-    run_service: Run = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
-    invocation_backend_service: InvocationBackendService = field(init=False)
     export_service: ExportService = field(init=False)
     async_task_cache_service: AsyncTaskCacheService = field(init=False)
     judge_fs_index_service: JudgeFsIndexService = field(init=False)
@@ -86,10 +81,8 @@ class RuntimeConfig:
         test_spec.apply_runtime_values(self.constants)
         toolchain.apply_runtime_values(self.constants)
         workspace.apply_runtime_values(self.constants)
-        self.toolchain_service.apply_runtime_values(self.constants)
         self.build_service.apply_runtime_values(self.constants)
         self.preview_service.apply_runtime_values(self.constants)
-        self.run_service.apply_runtime_values(self.constants)
         self.judgehost_task_service.apply_runtime_values(self.constants)
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
         return runtime_overrides
@@ -112,15 +105,19 @@ class RuntimeConfig:
         self.fs_manager = FsManager(self.settings.artifacts_root, self.settings.run_root)
         self.artifact_service = ArtifactService(self.settings.artifacts_root)
         self.preview_sandbox_backend = TexSandboxBackend()
-        self.toolchain_service = toolchain.ToolchainService(
-            self.settings.cache_root,
-            constants=self.constants,
+        self.judgehost_task_service = Judgehost(
+            self.db,
+            self.workspace_service,
+            self.fs_manager,
+            self.settings,
+            self.constants,
+            judge_fs_index_service=self.judge_fs_index_service,
         )
         self.build_service = Build(
             self.db,
             self.workspace_service,
             self.artifact_service,
-            self.toolchain_service,
+            self.judgehost_task_service,
             constants=self.constants,
             async_task_cache_service=self.async_task_cache_service,
         )
@@ -132,26 +129,6 @@ class RuntimeConfig:
             sandbox_backend=self.preview_sandbox_backend,
             constants=self.constants,
             async_task_cache_service=self.async_task_cache_service,
-        )
-        self.run_service = Run(
-            self.db,
-            self.workspace_service,
-            self.toolchain_service,
-            constants=self.constants,
-        )
-        self.judgehost_task_service = Judgehost(
-            self.db,
-            self.run_service,
-            self.settings,
-            self.constants,
-            judge_fs_index_service=self.judge_fs_index_service,
-        )
-        self.invocation_backend_service = InvocationBackendService(
-            self.run_service,
-            judgehost_task_service=self.judgehost_task_service,
-        )
-        self.build_service.bind_runtime_services(
-            judgehost_task_service=self.judgehost_task_service,
         )
         self.export_service = ExportService(self.db, self.settings.artifacts_root, self.settings.workspace_root)
         durable_log_raw = str(self.constants.WORKER_QUEUE_DURABLE_LOG or "").strip()

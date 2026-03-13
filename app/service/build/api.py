@@ -4,7 +4,7 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
@@ -15,7 +15,7 @@ from app.service.problem.test_spec import (
     load_tests_spec,
     parse_gen_command_tokens,
 )
-from app.service.runtime.toolchain import ToolchainService
+from app.service.runtime.toolchain import current_cpp_command_digest
 from app.service.repository.workspace import WorkspaceService
 
 from app.service.build.cache import (
@@ -55,16 +55,6 @@ CHECKER_TESTLIB_EXIT_CXXFLAGS = [
     "-DPE_EXIT_CODE=43",
 ]
 
-
-def can_use_judge_backend_for_solve(*, judgehost_service: Any) -> bool:
-    if judgehost_service is None:
-        return False
-    try:
-        return bool(judgehost_service.enabled() and judgehost_service.auth_token_configured())
-    except Exception:
-        return False
-
-
 def solve_result_ok() -> dict[str, object]:
     return {"rc": 0, "worker_error": "", "timed_out": False, "stderr": "", "verdict": "AC"}
 
@@ -92,14 +82,13 @@ class Build:
         db: DB,
         workspace_service: WorkspaceService,
         artifacts: ArtifactService,
-        toolchain: ToolchainService,
+        judgehost_task_service: Judgehost,
         constants: RuntimeValues | None = None,
         async_task_cache_service: AsyncTaskCacheService | None = None,
     ):
         self.db = db
         self.workspace_service = workspace_service
         self.artifacts = artifacts
-        self.toolchain = toolchain
         self.execution_backend_name = "domjudge-judgehost"
         self.default_exec_memory_mb = 1024
         self.default_exec_process_limit = 64
@@ -107,24 +96,12 @@ class Build:
         self.wall_time_slack_pass_fail_sec = 1
         self.wall_time_slack_multi_pass_sec = 15
         self.wall_time_slack_interactive_sec = 15
-        self._judgehost_task_service: Judgehost | None = None
+        self.judgehost_task_service = judgehost_task_service
         self._async_task_cache_service = async_task_cache_service
         self._build_inflight_lock = threading.RLock()
         self._build_inflight: dict[str, str] = {}
         self.fs_manager = FsManager(self.workspace_service.settings.artifacts_root, self.workspace_service.settings.run_root)
         self.apply_runtime_values(constants or build_runtime_values())
-
-    def bind_runtime_services(
-        self,
-        *,
-        judgehost_task_service: Judgehost | None = None,
-    ) -> None:
-        self._judgehost_task_service = judgehost_task_service
-
-    def _can_use_judge_backend_for_solve(self) -> bool:
-        return can_use_judge_backend_for_solve(
-            judgehost_service=self._judgehost_task_service,
-        )
 
     @staticmethod
     def _solve_result_ok() -> dict[str, object]:
@@ -149,6 +126,7 @@ class Build:
         ans_dir: Path,
         solve_jobs: int = 1,
         source_answer_by_test: dict[str, Path] | None = None,
+        stage_result_out: dict[str, object] | None = None,
     ) -> dict[str, dict[str, object]]:
         return solve_with_judge_backend(
             self,
@@ -161,6 +139,7 @@ class Build:
             ans_dir=ans_dir,
             solve_jobs=solve_jobs,
             source_answer_by_test=source_answer_by_test,
+            stage_result_out=stage_result_out,
         )
 
 
@@ -468,7 +447,7 @@ class Build:
 
     def _toolchain_cmd_digest(self) -> str:
         try:
-            token = str(self.toolchain.current_cpp_command_digest() or "").strip().lower()
+            token = str(current_cpp_command_digest() or "").strip().lower()
         except Exception:
             token = ""
         return token
@@ -620,7 +599,6 @@ class Build:
         ref: str | None = None,
         *,
         sample_only: bool = False,
-        verification_pipeline: bool = False,
     ) -> str:
         return run_build(
             self,
@@ -629,7 +607,6 @@ class Build:
             commit=commit,
             ref=ref,
             sample_only=sample_only,
-            verification_pipeline=verification_pipeline,
         )
 
 

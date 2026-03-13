@@ -3,11 +3,11 @@ import json
 import os
 import re
 from pathlib import Path
-from app.impl.auth.public import parse_iso_utc
 from app.impl.runtime.config import config
 from app.main_util import preserve_error_text
 from app.service.platform.hashing import quick_fp_digest
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification import load_verification_summary, verification_run_ids
 from .run_display import run_actual_failed_codes, run_actual_short
 _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     # Each expected behavior is evaluated by:
@@ -366,84 +366,48 @@ def _verification_stale_reason(changed_components: list[str], *, head_changed: b
 def _verification_status_context(
     problem_id: int,
     actor_user_id: int,
+    workspace_id: int,
     workspace_head: str,
     workspace_dirty: bool,
     workspace_path: Path | str | None=None,
 ) -> dict:
-    row = config.db.fetch_one("\n        SELECT details_json,created_at\n        FROM audit_log\n        WHERE problem_id=? AND actor_user_id=? AND action='verification.start'\n        ORDER BY created_at DESC\n        LIMIT 1\n        ", [problem_id, actor_user_id])
+    _ = actor_user_id
+    row = config.db.fetch_one(
+        """
+        SELECT id,build_id,status,summary_json,created_at,finished_at
+        FROM verifications
+        WHERE problem_id=? AND workspace_id=? AND kind='verification'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        [int(problem_id), int(workspace_id)],
+    )
     if row is None:
         return {'mode': 'none', 'display': 'none', 'last_status': 'none', 'run_id': '', 'run_ids': '', 'build_id': '', 'error': '', 'created_at': '', 'stale': False, 'stale_reason': ''}
-    details: dict = {}
-    try:
-        parsed = json.loads(str(row['details_json'] or '{}'))
-        if isinstance(parsed, dict):
-            details = parsed
-    except Exception:
+    verification_id = normalize_run_id_token(row['id'])
+    details = load_verification_summary(config.db, verification_id)
+    if not isinstance(details, dict):
         details = {}
-    last_status = str(details.get('status') or '').strip().lower()
-    if last_status not in {'pass', 'failed', 'running'}:
+    row_status = str(row['status'] or '').strip().lower()
+    status_token = row_status or str(details.get('status') or '').strip().lower()
+    if status_token in {'pass', 'ok', 'passed'}:
+        last_status = 'pass'
+    elif status_token in {'queued', 'pending', 'running'}:
+        last_status = 'running'
+    else:
         last_status = 'failed'
-    run_id = normalize_run_id_token(details.get('run_id'))
-    run_ids: list[str] = []
-    raw_run_ids = details.get('run_ids')
-    if isinstance(raw_run_ids, list):
-        for item in raw_run_ids:
-            token = normalize_run_id_token(str(item or ''))
-            if token:
-                run_ids.append(token)
-    elif isinstance(raw_run_ids, str):
-        for item in str(raw_run_ids).split(','):
-            token = normalize_run_id_token(item)
-            if token:
-                run_ids.append(token)
-    run_ids = dedupe_preserve_order(run_ids)
-    if run_id and run_id not in run_ids:
-        run_ids.insert(0, run_id)
-    if not run_id and run_ids:
-        run_id = run_ids[0]
-    cancel_reason = ''
-    cancel_created_at = ''
-    cancel_rows = config.db.fetch_all(
-        """
-        SELECT details_json,created_at
-        FROM audit_log
-        WHERE problem_id=? AND actor_user_id=? AND action='run.cancel'
-        ORDER BY created_at DESC
-        LIMIT 240
-        """,
-        [int(problem_id), int(actor_user_id)],
+    run_ids = dedupe_preserve_order(
+        [
+            token
+            for token in (
+                normalize_run_id_token(run_id)
+                for run_id in verification_run_ids(details)
+            )
+            if token
+        ]
     )
-    for cancel_row in cancel_rows:
-        cancel_details: dict = {}
-        try:
-            cancel_payload = json.loads(str(cancel_row['details_json'] or '{}'))
-            if isinstance(cancel_payload, dict):
-                cancel_details = cancel_payload
-        except Exception:
-            cancel_details = {}
-        cancel_invocation_id = normalize_run_id_token(cancel_details.get('invocation_id'))
-        if not cancel_invocation_id:
-            continue
-        if cancel_invocation_id == normalize_run_id_token(details.get('invocation_id')):
-            cancel_reason = str(cancel_details.get('reason') or '').strip() or 'verification cancelled by user'
-            cancel_created_at = str(cancel_row['created_at'] or '').strip()
-            break
-    verification_created_at = str(row['created_at'] or '').strip()
-    cancelled_after_start = False
-    if cancel_created_at:
-        cancel_ts = parse_iso_utc(cancel_created_at)
-        verification_ts = parse_iso_utc(verification_created_at)
-        if verification_ts is None:
-            cancelled_after_start = True
-        elif cancel_ts is not None:
-            cancelled_after_start = cancel_ts >= verification_ts
-        else:
-            cancelled_after_start = True
-    if cancelled_after_start:
-        details['status'] = 'failed'
-        if cancel_reason:
-            details['error'] = cancel_reason
-        last_status = 'failed'
+    run_id = run_ids[0] if run_ids else ''
+    verification_created_at = str(details.get('created_at') or row['created_at'] or '').strip()
     recorded_signature = str(details.get('verification_signature') or '').strip()
     recorded_signature_details: dict[str, str] = {}
     raw_recorded_details = details.get('verification_signature_details')
@@ -492,13 +456,17 @@ def _verification_status_context(
     elif not error_text and unmatched_hint:
         error_text = unmatched_hint
     mode = 'stale' if stale else last_status
-    if cancelled_after_start:
-        mode = 'failed'
-        stale = False
     stale_reason = _verification_stale_reason(changed_components, head_changed=head_changed, dirty_changed=dirty_changed) if stale else ''
-    created_at_value = cancel_created_at if cancelled_after_start and cancel_created_at else verification_created_at
-    if cancelled_after_start and cancel_reason:
-        error_text = cancel_reason
-    return {'mode': mode, 'display': mode, 'last_status': last_status, 'run_id': run_id, 'run_ids': ','.join(run_ids), 'build_id': str(details.get('build_id') or '').strip(), 'error': error_text, 'created_at': created_at_value, 'stale': stale, 'stale_reason': stale_reason}
-
+    return {
+        'mode': mode,
+        'display': mode,
+        'last_status': last_status,
+        'run_id': run_id,
+        'run_ids': ','.join(run_ids),
+        'build_id': str(details.get('build_id') or row['build_id'] or '').strip(),
+        'error': error_text,
+        'created_at': verification_created_at,
+        'stale': stale,
+        'stale_reason': stale_reason,
+    }
 

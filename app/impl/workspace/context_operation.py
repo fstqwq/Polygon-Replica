@@ -239,8 +239,8 @@ def files_back_target(problem: str, user: str, source: str, source_id: str) -> t
         return (f'{base}/statement', 'Statement')
     if source == 'run':
         if source_id:
-            return (f'{base}/run/details?run_id={quote_plus(source_id)}', 'Invocations')
-        return (f'{base}/run', 'Invocations')
+            return (f'{base}/run/details?verification_id={quote_plus(source_id)}', 'Verifications')
+        return (f'{base}/run', 'Verifications')
     if source == 'export':
         return (f'{base}/export', 'Packages')
     if source == 'workspace':

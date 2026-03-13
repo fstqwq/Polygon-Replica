@@ -118,7 +118,7 @@ def generator_save_source(problem: str, user: str, path: str=Form('generators/ge
                 workspace=workspace,
                 source_path=target,
                 source_content=content,
-                invocation_source='problem.generator.save_source',
+                verification_source='problem.generator.save_source',
             )
             if compile_check_error:
                 if target_existed_before:

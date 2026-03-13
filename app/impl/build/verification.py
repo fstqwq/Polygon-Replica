@@ -3,7 +3,7 @@
 from app.impl.preview.shared import (
     Form,
     Path,
-    allocate_invocation_id,
+    allocate_verification_id,
     allocate_run_id,
     audit,
     redirect_response,
@@ -23,8 +23,9 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
     workspace = Path(ctx['workspace']['path'])
     workspace_head = str(ctx['workspace'].get('head_commit') or '').strip()
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
-    invocation_id = allocate_invocation_id()
-    verification_details: dict[str, object] = {'status': 'running', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'invocation_id': invocation_id, 'run_id': '', 'run_ids': [], 'run_count': 0, 'invocation_backend': config.invocation_backend_service.active_backend_name(), 'error': ''}
+    verification_id = allocate_verification_id()
+    backend_name = config.judgehost_task_service.backend_name()
+    verification_details: dict[str, object] = {'status': 'running', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'verification_id': verification_id, 'verification_backend': backend_name, 'error': ''}
     msg = 'verification running'
     try:
         solution_options, accepted_source, _ = run_solution_options_context(workspace)
@@ -56,9 +57,6 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
             planned_run_ids.append(run_token)
         verification_details['submission_paths'] = [str(item.get('path') or '') for item in targets]
         verification_details['solution_count'] = len(targets)
-        verification_details['run_ids'] = planned_run_ids
-        verification_details['run_count'] = len(planned_run_ids)
-        verification_details['run_id'] = planned_run_ids[0] if planned_run_ids else ''
         started = start_verification_job(
             problem,
             user,
@@ -68,7 +66,7 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
             workspace_head=workspace_head,
             workspace_dirty=workspace_dirty,
             targets=targets,
-            invocation_id=invocation_id,
+            verification_id=verification_id,
             initial_details=verification_details,
             workspace_path=workspace,
         )

@@ -13,7 +13,7 @@ from starlette.background import BackgroundTask
 from app.impl.auth.public import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.public import (
-    allocate_invocation_id,
+    allocate_verification_id,
     allocate_run_id,
     artifact_root,
     audit,

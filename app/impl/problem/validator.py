@@ -87,7 +87,7 @@ def validator_save_source(problem: str, user: str, path: str=Form('validators/va
                 workspace=workspace,
                 source_path=target,
                 source_content=content,
-                invocation_source='problem.validator.save_source',
+                verification_source='problem.validator.save_source',
             )
             if compile_check_error:
                 if target_existed_before:

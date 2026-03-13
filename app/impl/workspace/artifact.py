@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -8,6 +9,7 @@ from fastapi.responses import FileResponse
 from app.impl.runtime.config import config
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
+from app.service.verification import list_verification_rows, verification_run_ids
 
 from .revision import git_commit_count
 
@@ -136,21 +138,47 @@ def export_download_filename(ctx: dict, build_id: str, stored_filename: str) -> 
     return f"{problem_slug}-{revision_display}.zip"
 
 
+def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
+    safe_run_id = str(run_id or "").strip()
+    if not safe_run_id:
+        return ""
+    verification_rows = list_verification_rows(
+        config.db,
+        problem_id=int(ctx["problem"]["id"]),
+        workspace_id=int(ctx["workspace"]["id"]),
+        limit=512,
+    )
+    verification_id = ""
+    for row in verification_rows:
+        summary_raw = str(row.get("summary_json") or "").strip()
+        if not summary_raw:
+            continue
+        try:
+            summary = json.loads(summary_raw)
+        except Exception:
+            summary = {}
+        if not isinstance(summary, dict):
+            continue
+        if safe_run_id not in verification_run_ids(summary):
+            continue
+        verification_id = str(row.get("id") or "").strip()
+        if verification_id:
+            break
+    return verification_id
+
+
 def workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
     safe_run_id = str(run_id or "").strip()
-    row = config.db.fetch_one(
-        "SELECT id FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_run_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="run not found in workspace")
-    try:
-        root = config.fs_manager.resolve_run_root(safe_run_id).resolve()
-    except Exception:
-        raise HTTPException(status_code=404, detail="run artifact directory not found")
-    if (not root.exists()) or (not root.is_dir()) or root.is_symlink():
-        raise HTTPException(status_code=404, detail="run artifact directory not found")
-    return root
+    verification_id = workspace_verification_id_for_run(ctx, safe_run_id)
+    if verification_id:
+        try:
+            root = config.fs_manager.resolve_verification_run_root(verification_id, safe_run_id).resolve()
+        except Exception:
+            raise HTTPException(status_code=404, detail="run artifact directory not found")
+        if (not root.exists()) or (not root.is_dir()) or root.is_symlink():
+            raise HTTPException(status_code=404, detail="run artifact directory not found")
+        return root
+    raise HTTPException(status_code=404, detail="run not found in workspace")
 
 
 def safe_run_artifact_path(ctx: dict, run_id: str, rel: str) -> Path:
@@ -208,7 +236,6 @@ def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
     if row is not None:
         return
     raise HTTPException(status_code=404, detail="artifact not found in workspace")
-
 
 
 

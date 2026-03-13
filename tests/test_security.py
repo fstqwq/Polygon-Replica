@@ -537,20 +537,39 @@ class TestSecurity(SmokeBase):
 
     def _insert_invalid_run_root_row(self, run_id: str, root: Path, *, problem: str = "alice/sample", user: str = "alice") -> None:
         ctx = workspace_service.workspace_context(problem, user, include_recent=False)
+        verification_id = f"ver-{run_id}"
         db.execute(
             """
-            INSERT INTO runs(id,problem_id,workspace_id,build_id,mode,status,summary_json,artifact_path,created_at,finished_at)
+            INSERT INTO verifications(id,problem_id,workspace_id,build_id,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
             [
-                run_id,
+                verification_id,
                 int(ctx["problem"]["id"]),
                 int(ctx["workspace"]["id"]),
                 "pending",
-                "pass-fail",
+                "run",
                 "ok",
-                "{}",
-                str(root),
+                json.dumps(
+                    {
+                        "kind": "run",
+                        "mode": "pass-fail",
+                        "status": "ok",
+                        "runs_order": [run_id],
+                        "runs": {
+                            run_id: {
+                                "key": run_id,
+                                "status": "ok",
+                                "source_label": run_id,
+                                "expected_behavior": "unknown",
+                                "artifact_path": str(root),
+                                "task_kind": "",
+                                "summary": {},
+                            }
+                        },
+                    }
+                ),
+                str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
                 "2026-02-28T00:00:00Z",
                 "2026-02-28T00:00:01Z",
             ],
@@ -558,7 +577,7 @@ class TestSecurity(SmokeBase):
 
     def test_run_artifact_file_rejects_path_traversal(self) -> None:
         run_id = f"r-sec-run-{uuid.uuid4().hex[:8]}"
-        run_root = config.fs_manager.prepare_run_root(run_id).resolve()
+        run_root = config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()
         (run_root / "stdout.txt").write_text("ok\n", encoding="utf-8")
         self._insert_invalid_run_root_row(run_id, run_root)
         with self.assertRaises(HTTPException) as denied:
@@ -568,7 +587,7 @@ class TestSecurity(SmokeBase):
 
     def test_run_artifact_file_blocks_compile_log_download(self) -> None:
         run_id = f"r-sec-ce-{uuid.uuid4().hex[:8]}"
-        run_root = config.fs_manager.prepare_run_root(run_id).resolve()
+        run_root = config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()
         (run_root / "compile.log").write_text("compile error\n", encoding="utf-8")
         self._insert_invalid_run_root_row(run_id, run_root)
         with self.assertRaises(HTTPException) as denied:
@@ -594,7 +613,7 @@ class TestSecurity(SmokeBase):
             )
         self.assertEqual(resp.status_code, 303)
         location = str(resp.headers.get("location", "") or "")
-        self.assertIn("/problems/alice/sample/alice/run/details?invocation_id=", location)
+        self.assertIn("/problems/alice/sample/alice/run/details?verification_id=", location)
         targets = captured.get("targets")
         self.assertIsInstance(targets, list)
         self.assertTrue(targets)

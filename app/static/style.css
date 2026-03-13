@@ -1644,23 +1644,23 @@ tbody tr:nth-child(odd) td {
 }
 
 .table-row-dirty td,
-.invocation-row-failed td {
+.verification-row-failed td {
   background: #fef2f2 !important;
 }
 
-.invocation-list-table td {
+.verification-list-table td {
   vertical-align: middle;
 }
 
-.invocation-actions {
+.verification-actions {
   white-space: nowrap;
 }
 
-.invocation-inline-action {
+.verification-inline-action {
   margin-left: 8px;
 }
 
-.invocation-detail-topline {
+.verification-detail-topline {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1668,28 +1668,28 @@ tbody tr:nth-child(odd) td {
   margin: 2px 0 8px;
 }
 
-section.invocation-header-section {
+section.verification-header-section {
   border: 0;
   background: transparent;
   padding: 0;
 }
 
-.run-details-page.run-details-page-compact section.invocation-header-section {
+.run-details-page.run-details-page-compact section.verification-header-section {
   padding: 0 10px;
 }
 
-.invocation-detail-actions {
+.verification-detail-actions {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
 }
 
-.invocation-detail-topline .invocation-inline-action {
+.verification-detail-topline .verification-inline-action {
   margin-left: 0;
 }
 
-.invocation-detail-meta {
+.verification-detail-meta {
   white-space: nowrap;
 }
 
@@ -2071,47 +2071,47 @@ section.invocation-header-section {
   color: #64748b;
 }
 
-.invocation-expected-notes {
+.verification-expected-notes {
   display: grid;
   gap: 2px;
 }
 
-.invocation-detail-wrap {
+.verification-detail-wrap {
   width: 100%;
   max-width: none;
   overflow-x: auto;
   overflow-y: hidden;
 }
 
-.run-details-page.run-details-page-compact .invocation-detail-wrap {
+.run-details-page.run-details-page-compact .verification-detail-wrap {
   width: auto;
   min-width: 0;
   overflow: visible;
 }
 
-.run-details-page.run-details-page-compact .invocation-detail-table {
+.run-details-page.run-details-page-compact .verification-detail-table {
   min-width: 980px;
 }
 
-.invocation-detail-table {
+.verification-detail-table {
   width: max-content;
   min-width: max(100%, 980px);
   table-layout: fixed;
 }
 
-.invocation-detail-table col.invocation-col-test {
+.verification-detail-table col.verification-col-test {
   width: 72px;
 }
 
-.invocation-detail-table col.invocation-col-solution {
+.verification-detail-table col.verification-col-solution {
   width: 74px;
 }
 
-.invocation-detail-table > thead > tr > th,
-.invocation-detail-table > tbody > tr > th,
-.invocation-detail-table > tbody > tr > td,
-.invocation-detail-table > tfoot > tr > th,
-.invocation-detail-table > tfoot > tr > td {
+.verification-detail-table > thead > tr > th,
+.verification-detail-table > tbody > tr > th,
+.verification-detail-table > tbody > tr > td,
+.verification-detail-table > tfoot > tr > th,
+.verification-detail-table > tfoot > tr > td {
   text-align: center;
   white-space: nowrap;
   overflow-wrap: normal;
@@ -2119,21 +2119,21 @@ section.invocation-header-section {
   padding: 4px 5px;
 }
 
-.invocation-detail-table > thead > tr > th:first-child,
-.invocation-detail-table > tbody > tr > th:first-child,
-.invocation-detail-table > tbody > tr > td:first-child,
-.invocation-detail-table > tfoot > tr > th:first-child,
-.invocation-detail-table > tfoot > tr > td:first-child {
+.verification-detail-table > thead > tr > th:first-child,
+.verification-detail-table > tbody > tr > th:first-child,
+.verification-detail-table > tbody > tr > td:first-child,
+.verification-detail-table > tfoot > tr > th:first-child,
+.verification-detail-table > tfoot > tr > td:first-child {
   text-align: left;
   width: 72px;
 }
 
-.invocation-detail-result-row > th {
+.verification-detail-result-row > th {
   font-size: 10px;
   font-weight: 500;
 }
 
-.invocation-result-line {
+.verification-result-line {
   display: block;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -2141,92 +2141,92 @@ section.invocation-header-section {
   line-height: 1.25;
 }
 
-.invocation-detail-summary-row > th,
-.invocation-detail-summary-row > td {
+.verification-detail-summary-row > th,
+.verification-detail-summary-row > td {
   background: #f8fafc;
 }
 
-.invocation-summary-verdict {
+.verification-summary-verdict {
   font-weight: 700;
   line-height: 1.2;
 }
 
-.invocation-summary-metric {
+.verification-summary-metric {
   font-size: 10px;
   line-height: 1.2;
   color: var(--muted);
 }
 
-.invocation-detail-table.invocation-detail-table-regular {
+.verification-detail-table.verification-detail-table-regular {
   width: 100%;
   min-width: 0;
   table-layout: auto;
 }
 
-.run-details-page .invocation-detail-wrap.invocation-detail-wrap-regular {
+.run-details-page .verification-detail-wrap.verification-detail-wrap-regular {
   width: 100%;
   max-width: none;
   overflow-x: auto;
   overflow-y: hidden;
 }
 
-.run-details-page .invocation-detail-table.invocation-detail-table-regular {
+.run-details-page .verification-detail-table.verification-detail-table-regular {
   width: 100%;
   min-width: 0;
   table-layout: auto;
 }
 
-.invocation-detail-table.invocation-detail-table-regular col.invocation-col-test {
+.verification-detail-table.verification-detail-table-regular col.verification-col-test {
   width: 140px;
 }
 
-.invocation-detail-table.invocation-detail-table-regular col.invocation-col-solution {
+.verification-detail-table.verification-detail-table-regular col.verification-col-solution {
   width: auto;
 }
 
-.invocation-detail-table.invocation-detail-table-regular > thead > tr > th,
-.invocation-detail-table.invocation-detail-table-regular > tbody > tr > th,
-.invocation-detail-table.invocation-detail-table-regular > tbody > tr > td,
-.invocation-detail-table.invocation-detail-table-regular > tfoot > tr > th,
-.invocation-detail-table.invocation-detail-table-regular > tfoot > tr > td {
+.verification-detail-table.verification-detail-table-regular > thead > tr > th,
+.verification-detail-table.verification-detail-table-regular > tbody > tr > th,
+.verification-detail-table.verification-detail-table-regular > tbody > tr > td,
+.verification-detail-table.verification-detail-table-regular > tfoot > tr > th,
+.verification-detail-table.verification-detail-table-regular > tfoot > tr > td {
   font-size: 12px;
   padding: 6px 8px;
 }
 
-.invocation-detail-table.invocation-detail-table-regular > thead > tr > th:first-child,
-.invocation-detail-table.invocation-detail-table-regular > tbody > tr > th:first-child,
-.invocation-detail-table.invocation-detail-table-regular > tbody > tr > td:first-child,
-.invocation-detail-table.invocation-detail-table-regular > tfoot > tr > th:first-child,
-.invocation-detail-table.invocation-detail-table-regular > tfoot > tr > td:first-child {
+.verification-detail-table.verification-detail-table-regular > thead > tr > th:first-child,
+.verification-detail-table.verification-detail-table-regular > tbody > tr > th:first-child,
+.verification-detail-table.verification-detail-table-regular > tbody > tr > td:first-child,
+.verification-detail-table.verification-detail-table-regular > tfoot > tr > th:first-child,
+.verification-detail-table.verification-detail-table-regular > tfoot > tr > td:first-child {
   width: 140px;
 }
 
-.invocation-detail-table.invocation-detail-table-regular .invocation-cell-code {
+.verification-detail-table.verification-detail-table-regular .verification-cell-code {
   font-size: 12px;
 }
 
-.invocation-detail-table.invocation-detail-table-regular .invocation-cell-meta {
+.verification-detail-table.verification-detail-table-regular .verification-cell-meta {
   font-size: 11px;
 }
 
-.invocation-detail-table.invocation-detail-table-regular .invocation-summary-metric {
+.verification-detail-table.verification-detail-table-regular .verification-summary-metric {
   font-size: 11px;
 }
 
-.run-details-page.run-details-page-compact .invocation-detail-table > thead > tr:first-child > th {
+.run-details-page.run-details-page-compact .verification-detail-table > thead > tr:first-child > th {
   text-align: left;
 }
 
-.run-details-page.run-details-page-compact .invocation-detail-table > thead > tr:first-child > th .invocation-col-title-link {
+.run-details-page.run-details-page-compact .verification-detail-table > thead > tr:first-child > th .verification-col-title-link {
   display: block;
 }
 
-.invocation-col-title-link {
+.verification-col-title-link {
   display: inline-block;
   max-width: 100%;
 }
 
-.invocation-col-title {
+.verification-col-title {
   display: -webkit-box;
   max-width: 100%;
   line-height: 1.2;
@@ -2239,38 +2239,38 @@ section.invocation-header-section {
   text-overflow: ellipsis;
 }
 
-.invocation-cell {
+.verification-cell {
   font-weight: 700;
 }
 
-.invocation-detail-table td.invocation-cell-ok {
+.verification-detail-table td.verification-cell-ok {
   background: #ecfdf5;
   color: var(--ok);
 }
 
-.invocation-detail-table td.invocation-cell-fail {
+.verification-detail-table td.verification-cell-fail {
   background: #fef2f2;
   color: var(--danger);
 }
 
-.invocation-detail-table td.invocation-cell-expected-nonac {
+.verification-detail-table td.verification-cell-expected-nonac {
   background: #eff6ff;
   color: #1d4ed8;
 }
 
-.invocation-detail-table td.invocation-cell-neutral {
+.verification-detail-table td.verification-cell-neutral {
   background: #f9fafb;
   color: var(--muted);
 }
 
-.invocation-detail-table th.invocation-col-unexpected,
-.invocation-detail-table td.invocation-col-unexpected {
+.verification-detail-table th.verification-col-unexpected,
+.verification-detail-table td.verification-col-unexpected {
   background: #fef2f2;
   color: var(--danger);
 }
 
-.invocation-test-toggle,
-.invocation-cell-toggle {
+.verification-test-toggle,
+.verification-cell-toggle {
   display: block;
   width: 100%;
   text-align: center;
@@ -2279,20 +2279,20 @@ section.invocation-header-section {
   overflow-wrap: normal;
 }
 
-.invocation-test-toggle {
+.verification-test-toggle {
   display: inline-block;
   width: auto;
   text-align: left;
 }
 
-.invocation-cell-code {
+.verification-cell-code {
   display: inline;
   font-size: 11px;
   font-weight: 700;
   line-height: 1.1;
 }
 
-.invocation-cell-meta {
+.verification-cell-meta {
   display: inline;
   margin-left: 2px;
   font-size: 10px;
@@ -2303,22 +2303,22 @@ section.invocation-header-section {
   white-space: nowrap;
 }
 
-.invocation-cell-link {
+.verification-cell-link {
   color: inherit;
   text-decoration: none;
 }
 
-.invocation-cell-link:hover {
+.verification-cell-link:hover {
   text-decoration: underline;
 }
 
-.invocation-detail-popup {
+.verification-detail-popup {
   width: min(1560px, calc(100vw - 10px));
   height: auto;
   max-height: calc(100vh - 10px);
 }
 
-.invocation-detail-popup .ui-popup-content {
+.verification-detail-popup .ui-popup-content {
   display: block;
   min-width: 0;
   min-height: 0;
@@ -2326,11 +2326,11 @@ section.invocation-header-section {
   overflow: auto;
 }
 
-.invocation-detail-popup .ui-popup-content > * + * {
+.verification-detail-popup .ui-popup-content > * + * {
   margin-top: 10px;
 }
 
-.invocation-detail-popup .ui-popup-title {
+.verification-detail-popup .ui-popup-title {
   min-width: 0;
   max-width: 100%;
   display: -webkit-box;
@@ -2365,12 +2365,12 @@ section.invocation-header-section {
   padding: 1px 6px;
 }
 
-.invocation-solution-list {
+.verification-solution-list {
   display: grid;
   gap: 8px;
 }
 
-.invocation-solution-card {
+.verification-solution-card {
   border: 1px solid var(--line);
   background: #fff;
   padding: 8px;
@@ -2378,7 +2378,7 @@ section.invocation-header-section {
   gap: 6px;
 }
 
-.invocation-solution-head {
+.verification-solution-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2386,7 +2386,7 @@ section.invocation-header-section {
   flex-wrap: wrap;
 }
 
-.invocation-solution-title {
+.verification-solution-title {
   min-width: 0;
   max-width: 100%;
   display: -webkit-box;
@@ -2400,55 +2400,55 @@ section.invocation-header-section {
   text-overflow: ellipsis;
 }
 
-.invocation-solution-verdict {
+.verification-solution-verdict {
   font-weight: 700;
   font-size: 12px;
 }
 
-.invocation-solution-metrics-table {
+.verification-solution-metrics-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 12px;
 }
 
-.invocation-solution-metrics-table col.invocation-metrics-col-time {
+.verification-solution-metrics-table col.verification-metrics-col-time {
   width: 134px;
 }
 
-.invocation-solution-metrics-table col.invocation-metrics-col-memory {
+.verification-solution-metrics-table col.verification-metrics-col-memory {
   width: 96px;
 }
 
-.invocation-solution-metrics-table col.invocation-metrics-col-feedback {
+.verification-solution-metrics-table col.verification-metrics-col-feedback {
   width: auto;
 }
 
-.invocation-solution-metrics-table th,
-.invocation-solution-metrics-table td {
+.verification-solution-metrics-table th,
+.verification-solution-metrics-table td {
   border: 1px solid var(--line);
   padding: 4px 6px;
   text-align: left;
   overflow-wrap: anywhere;
 }
 
-.invocation-solution-metrics-table th {
+.verification-solution-metrics-table th {
   background: #f8fafc;
   color: var(--muted);
   font-weight: 600;
 }
 
-.invocation-feedback-cell {
+.verification-feedback-cell {
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.invocation-solution-output {
+.verification-solution-output {
   display: grid;
   gap: 4px;
 }
 
-.invocation-transcript-preview {
+.verification-transcript-preview {
   border: 1px solid var(--line);
   background: #f8fafc;
   border-radius: 6px;
@@ -2457,30 +2457,30 @@ section.invocation-header-section {
   gap: 6px;
 }
 
-.invocation-transcript-head {
+.verification-transcript-head {
   font-size: 12px;
 }
 
-.invocation-transcript-list {
+.verification-transcript-list {
   display: grid;
   gap: 4px;
   max-height: 180px;
   overflow: auto;
 }
 
-.invocation-transcript-row {
+.verification-transcript-row {
   display: flex;
 }
 
-.invocation-transcript-row-left {
+.verification-transcript-row-left {
   justify-content: flex-start;
 }
 
-.invocation-transcript-row-right {
+.verification-transcript-row-right {
   justify-content: flex-end;
 }
 
-.invocation-transcript-bubble {
+.verification-transcript-bubble {
   display: inline-block;
   max-width: 88%;
   padding: 4px 8px;
@@ -2493,15 +2493,15 @@ section.invocation-header-section {
   background: #fff;
 }
 
-.invocation-transcript-row-left .invocation-transcript-bubble {
+.verification-transcript-row-left .verification-transcript-bubble {
   background: #ecfeff;
 }
 
-.invocation-transcript-row-right .invocation-transcript-bubble {
+.verification-transcript-row-right .verification-transcript-bubble {
   background: #eef2ff;
 }
 
-.invocation-solution-output-head {
+.verification-solution-output-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2509,11 +2509,11 @@ section.invocation-header-section {
   flex-wrap: wrap;
 }
 
-.invocation-solution-output-head > a {
+.verification-solution-output-head > a {
   width: fit-content;
 }
 
-.invocation-test-preview-grid {
+.verification-test-preview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 8px;
@@ -2521,14 +2521,14 @@ section.invocation-header-section {
   min-width: 0;
 }
 
-.invocation-preview-card {
+.verification-preview-card {
   border: 1px solid var(--line);
   background: #fff;
   padding: 6px;
   min-width: 0;
 }
 
-.invocation-preview-head {
+.verification-preview-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2536,7 +2536,7 @@ section.invocation-header-section {
   margin-bottom: 4px;
 }
 
-.invocation-preview-content {
+.verification-preview-content {
   margin: 0;
   border: 1px solid var(--line);
   background: #f8fafc;
@@ -2549,12 +2549,12 @@ section.invocation-header-section {
   overflow: auto;
 }
 
-.invocation-empty-text {
+.verification-empty-text {
   color: #6b7280;
   font-style: italic;
 }
 
-.invocation-output-preview {
+.verification-output-preview {
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -2667,7 +2667,7 @@ section.invocation-header-section {
   white-space: nowrap;
 }
 
-.invocation-stage-chip {
+.verification-stage-chip {
   display: inline-flex;
   align-items: center;
   margin-left: 6px;
@@ -2682,19 +2682,19 @@ section.invocation-header-section {
   vertical-align: middle;
 }
 
-.invocation-stage-chip-ok {
+.verification-stage-chip-ok {
   border-color: #22c55e;
   background: #dcfce7;
   color: #166534;
 }
 
-.invocation-stage-chip-fail {
+.verification-stage-chip-fail {
   border-color: #ef4444;
   background: #fee2e2;
   color: #991b1b;
 }
 
-.invocation-stage-chip-neutral {
+.verification-stage-chip-neutral {
   border-color: #9ca3af;
   background: #f3f4f6;
   color: #6b7280;

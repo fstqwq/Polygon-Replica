@@ -117,7 +117,6 @@ run_page = _api_attr("run_page")
 run_new_page = _api_attr("run_new_page")
 run_details_page = _api_attr("run_details_page")
 run_details_test_fragment = _api_attr("run_details_test_fragment")
-run_service = config.run_service
 run_execute = _api_attr("run_execute")
 verification_start = _api_attr("verification_start")
 contests_root_create = _api_attr("contests_root_create")

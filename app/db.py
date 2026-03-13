@@ -6,6 +6,7 @@ import re
 import sqlite3
 import threading
 import time
+import json
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -206,13 +207,12 @@ CREATE TABLE IF NOT EXISTS previews (
     FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
 );
 
-CREATE TABLE IF NOT EXISTS runs (
+CREATE TABLE IF NOT EXISTS verifications (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
     workspace_id INTEGER,
     build_id TEXT NOT NULL,
-    build_ref TEXT,
-    mode TEXT NOT NULL,
+    kind TEXT NOT NULL,
     status TEXT NOT NULL,
     summary_json TEXT,
     artifact_path TEXT NOT NULL,
@@ -277,10 +277,10 @@ CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, 
 CREATE INDEX IF NOT EXISTS idx_previews_problem_workspace_created ON previews(problem_id, workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_workspace_created ON previews(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_source_status_created ON previews(problem_id, source_commit, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_runs_problem_created ON runs(problem_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_runs_problem_workspace_created ON runs(problem_id, workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_runs_build_status ON runs(build_id, status);
-CREATE INDEX IF NOT EXISTS idx_runs_build_ref_status ON runs(build_ref, status);
+CREATE INDEX IF NOT EXISTS idx_verifications_problem_created ON verifications(problem_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_created ON verifications(problem_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_verifications_build_status ON verifications(build_id, status);
+CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status);
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_build_created ON exports(build_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_build_ref_created ON exports(build_ref, created_at DESC);
@@ -418,7 +418,9 @@ class DB:
         self._migrate_build_ref_columns(conn)
         self._migrate_system_config(conn)
         self._migrate_contest_schema(conn)
-        self._migrate_runs_build_status_index(conn)
+        self._migrate_verifications_status_index(conn)
+        self._migrate_verifications_schema(conn)
+        self._migrate_drop_runs_table(conn)
 
     def _migrate_users_auth_columns(self, conn: sqlite3.Connection) -> None:
         cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -524,21 +526,6 @@ class DB:
             conn.execute("ALTER TABLE builds ADD COLUMN build_ref TEXT NOT NULL DEFAULT ''")
         conn.execute("UPDATE builds SET build_ref=id WHERE COALESCE(TRIM(build_ref), '') = ''")
 
-        run_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
-        if "build_ref" not in run_cols:
-            conn.execute("ALTER TABLE runs ADD COLUMN build_ref TEXT")
-        conn.execute(
-            """
-            UPDATE runs
-            SET build_ref = (
-                SELECT b.build_ref
-                FROM builds b
-                WHERE b.id = runs.build_id
-            )
-            WHERE COALESCE(TRIM(build_ref), '') = ''
-            """
-        )
-
         export_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
         if "build_ref" not in export_cols:
             conn.execute("ALTER TABLE exports ADD COLUMN build_ref TEXT")
@@ -555,7 +542,6 @@ class DB:
         )
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_builds_build_ref ON builds(build_ref)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_build_ref_status ON runs(build_ref, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_build_ref_created ON exports(build_ref, created_at DESC)")
 
     def _migrate_system_config(self, conn: sqlite3.Connection) -> None:
@@ -574,8 +560,57 @@ class DB:
             "CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC)"
         )
 
-    def _migrate_runs_build_status_index(self, conn: sqlite3.Connection) -> None:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_build_status ON runs(build_id, status)")
+    def _migrate_verifications_status_index(self, conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_build_status ON verifications(build_id, status)")
+
+    def _migrate_verifications_schema(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='verifications'"
+        ).fetchone()
+        create_sql = str(row[0] or "") if row is not None else ""
+        if create_sql and "FOREIGN KEY(build_id) REFERENCES builds(id)" in create_sql:
+            conn.execute("ALTER TABLE verifications RENAME TO verifications_old")
+            conn.execute(
+                """
+                CREATE TABLE verifications (
+                    id TEXT PRIMARY KEY,
+                    problem_id INTEGER NOT NULL,
+                    workspace_id INTEGER,
+                    build_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    summary_json TEXT,
+                    artifact_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    FOREIGN KEY(problem_id) REFERENCES problems(id),
+                    FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO verifications(
+                    id,problem_id,workspace_id,build_id,kind,status,summary_json,artifact_path,created_at,finished_at
+                )
+                SELECT
+                    id,problem_id,workspace_id,build_id,kind,status,summary_json,artifact_path,created_at,finished_at
+                FROM verifications_old
+                """
+            )
+            conn.execute("DROP TABLE verifications_old")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_problem_created ON verifications(problem_id, created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_created ON verifications(problem_id, workspace_id, created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_build_status ON verifications(build_id, status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status)")
+
+    def _migrate_drop_runs_table(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
+        ).fetchone()
+        if row is None:
+            return
+        conn.execute("DROP TABLE runs")
 
     @staticmethod
     def _contest_index_label(seq: int) -> str:

@@ -796,7 +796,7 @@ class JudgehostDomjudgeUtilsMixin:
         self,
         payload: dict[str, object] | None = None,
         *,
-        invocation_source: str | None = None,
+        verification_source: str | None = None,
         compile_only: object | None = None,
     ) -> str:
         payload_obj = payload if isinstance(payload, dict) else {}
@@ -804,9 +804,9 @@ class JudgehostDomjudgeUtilsMixin:
         if explicit in self._TASK_KIND_SET:
             return explicit
         source = str(
-            invocation_source
-            if invocation_source is not None
-            else payload_obj.get("invocation_source") or ""
+            verification_source
+            if verification_source is not None
+            else payload_obj.get("verification_source") or ""
         ).strip().lower()
         legacy_compile_only = self._domjudge_bool(
             compile_only if compile_only is not None else payload_obj.get("compile_only"),
@@ -822,18 +822,18 @@ class JudgehostDomjudgeUtilsMixin:
         self,
         payload: dict[str, object] | None = None,
         *,
-        invocation_source: str | None = None,
+        verification_source: str | None = None,
         compile_only: object | None = None,
     ) -> tuple[bool, bool, bool]:
         payload_obj = payload if isinstance(payload, dict) else {}
         source = str(
-            invocation_source
-            if invocation_source is not None
-            else payload_obj.get("invocation_source") or ""
+            verification_source
+            if verification_source is not None
+            else payload_obj.get("verification_source") or ""
         ).strip().lower()
         kind = self._domjudge_task_kind(
             payload_obj,
-            invocation_source=invocation_source,
+            verification_source=verification_source,
             compile_only=compile_only,
         )
         solve_main_mode = source in {"build.solve", "solve.main"}

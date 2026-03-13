@@ -4,114 +4,130 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
+from app.db import DB
 from tests.common import SmokeBase
 from tests.ui_support import _flash_messages_from_response, _request
 import app.impl.preview.api
 import app.impl.workspace.api
 from app.impl.runtime.config import config
-from app.impl.problem.compile_check import _summary_needs_compile_detail, judgehost_compile_check_error
+from app.impl.problem.compile_check import judgehost_compile_check_error
 
 
 class TestBackendMinimal(SmokeBase):
-    def test_compile_check_waits_for_real_compile_diagnostics_when_error_is_generic_header(self) -> None:
-        self.assertTrue(
-            _summary_needs_compile_detail(
-                {"error": "Compiling failed with exitcode 1, compiler output:"}
-            )
-        )
-        self.assertFalse(
-            _summary_needs_compile_detail(
-                {
-                    "error": "Compiling failed with exitcode 1, compiler output:",
-                    "compile_diagnostics": [{"message": "validator.cpp:4: error: expected ';'"}],
-                }
-            )
-        )
+    def test_db_init_drops_runs_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "migration-probe.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE runs (
+                        id TEXT PRIMARY KEY,
+                        problem_id INTEGER NOT NULL,
+                        workspace_id INTEGER,
+                        build_id TEXT NOT NULL,
+                        mode TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        summary_json TEXT,
+                        artifact_path TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        finished_at TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE verifications (
+                        id TEXT PRIMARY KEY,
+                        problem_id INTEGER NOT NULL,
+                        workspace_id INTEGER,
+                        build_id TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        summary_json TEXT,
+                        artifact_path TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        finished_at TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO verifications(
+                        id,problem_id,workspace_id,build_id,kind,status,summary_json,artifact_path,created_at,finished_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    [
+                        "ver-current",
+                        1,
+                        1,
+                        "b-1",
+                        "verification",
+                        "running",
+                        json.dumps(
+                            {
+                                "kind": "verification",
+                                "status": "running",
+                                "runs_order": ["r-one"],
+                                "runs": {
+                                    "r-one": {
+                                        "run_id": "r-one",
+                                        "status": "running",
+                                        "source_label": "solutions/ac.cpp",
+                                        "summary": {"source": "solutions/ac.cpp", "tests": []},
+                                    }
+                                },
+                            }
+                        ),
+                        str(Path(tmpdir) / "ver-current"),
+                        "2026-03-13T00:00:00Z",
+                        None,
+                    ],
+                )
+                conn.commit()
 
-    def test_judgehost_compile_check_waits_for_terminal_status_and_full_diagnostics(self) -> None:
-        rows = iter(
-            [
-                {"status": "running", "summary_json": "{}"},
-                {
-                    "status": "running",
-                    "summary_json": json.dumps({"error": "Compiling failed with exitcode 1, compiler output:"}),
-                },
-                {
-                    "status": "failed",
-                    "summary_json": json.dumps(
-                        {
-                            "error": "Compiling failed with exitcode 1, compiler output:",
-                            "compile_diagnostics": [
-                                {
-                                    "message": "Compiling failed with exitcode 1, compiler output:\nvalidator.cpp:4:35: error: expected ';' before 'inf'"
-                                }
-                            ],
-                        }
-                    ),
-                },
-            ]
-        )
+            probe = DB(db_path)
+            probe.init()
 
-        def _fake_fetch_one(_sql, _params):
-            try:
-                return next(rows)
-            except StopIteration:
-                return {
-                    "status": "failed",
-                    "summary_json": json.dumps(
-                        {
-                            "error": "Compiling failed with exitcode 1, compiler output:",
-                            "compile_diagnostics": [
-                                {
-                                    "message": "Compiling failed with exitcode 1, compiler output:\nvalidator.cpp:4:35: error: expected ';' before 'inf'"
-                                }
-                            ],
-                        }
-                    ),
-                }
+            with probe.conn() as conn:
+                runs_row = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
+                ).fetchone()
+                self.assertIsNone(runs_row)
+                kept = conn.execute(
+                    "SELECT kind,summary_json FROM verifications WHERE id=?",
+                    ["ver-current"],
+                ).fetchone()
+                self.assertIsNotNone(kept)
+                self.assertEqual(str(kept["kind"] or ""), "verification")
+                payload = json.loads(str(kept["summary_json"] or "{}"))
+                self.assertEqual(str(payload.get("kind") or ""), "verification")
+                self.assertIn("runs", payload)
+                self.assertIn("runs_order", payload)
 
-        with (
-            patch.object(config.judgehost_task_service, "enabled", return_value=True),
-            patch.object(config.judgehost_task_service, "auth_token_configured", return_value=True),
-            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1}),
-            patch.object(config.invocation_backend_service, "compile_only_submission", return_value="r-cchk-test"),
-            patch.object(config.db, "fetch_one", side_effect=_fake_fetch_one),
-            patch("app.impl.problem.compile_check.workspace_testlib_header", return_value=None),
-            patch("app.impl.problem.compile_check.time.sleep", return_value=None),
-        ):
-            msg = judgehost_compile_check_error(
-                problem=self.problem,
-                user=self.user,
-                workspace=Path("."),
-                source_path="validators/validator.cpp",
-                source_content="int main(){\n",
-                invocation_source="problem.validator.save_source",
-            )
-        self.assertIn("validator.cpp:4:35: error: expected ';' before 'inf'", msg)
-
-    def test_judgehost_compile_check_reads_summary_after_backend_wait_failure(self) -> None:
-        summary_json = json.dumps(
-            {
-                "error": "Compiling failed with exitcode 1, compiler output:",
-                "compile_diagnostics": [
-                    {
-                        "message": "validator.cpp: In function 'int main(int, char**)':\nvalidator.cpp:4:35: error: expected ';' before 'inf'"
-                    }
-                ],
-            }
-        )
+    def test_judgehost_compile_check_reads_full_diagnostics_from_transient_task_result(self) -> None:
         with (
             patch.object(config.judgehost_task_service, "enabled", return_value=True),
             patch.object(config.judgehost_task_service, "auth_token_configured", return_value=True),
             patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1}),
             patch.object(
-                config.invocation_backend_service,
+                config.judgehost_task_service,
                 "compile_only_submission",
-                side_effect=RuntimeError("Compiling failed with exitcode 1, compiler output:"),
+                return_value={
+                    "status": "failed",
+                    "error": "Compiling failed with exitcode 1, compiler output:",
+                    "summary": {
+                        "error": "Compiling failed with exitcode 1, compiler output:",
+                        "compile_diagnostics": [
+                            {
+                                "message": "Compiling failed with exitcode 1, compiler output:\nvalidator.cpp:4:35: error: expected ';' before 'inf'"
+                            }
+                        ],
+                    },
+                },
             ),
-            patch.object(config.db, "fetch_one", return_value={"status": "failed", "summary_json": summary_json}),
             patch("app.impl.problem.compile_check.workspace_testlib_header", return_value=None),
         ):
             msg = judgehost_compile_check_error(
@@ -120,9 +136,31 @@ class TestBackendMinimal(SmokeBase):
                 workspace=Path("."),
                 source_path="validators/validator.cpp",
                 source_content="int main(){\n",
-                invocation_source="problem.validator.save_source",
+                verification_source="problem.validator.save_source",
             )
         self.assertIn("validator.cpp:4:35: error: expected ';' before 'inf'", msg)
+
+    def test_judgehost_compile_check_surfaces_backend_failure_when_result_is_missing(self) -> None:
+        with (
+            patch.object(config.judgehost_task_service, "enabled", return_value=True),
+            patch.object(config.judgehost_task_service, "auth_token_configured", return_value=True),
+            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1}),
+            patch.object(
+                config.judgehost_task_service,
+                "compile_only_submission",
+                side_effect=RuntimeError("Compiling failed with exitcode 1, compiler output:"),
+            ),
+            patch("app.impl.problem.compile_check.workspace_testlib_header", return_value=None),
+        ):
+            msg = judgehost_compile_check_error(
+                problem=self.problem,
+                user=self.user,
+                workspace=Path("."),
+                source_path="validators/validator.cpp",
+                source_content="int main(){\n",
+                verification_source="problem.validator.save_source",
+            )
+        self.assertIn("Compiling failed with exitcode 1, compiler output:", msg)
 
     def test_preview_run_uses_sample_build_failed_flash_for_sample_sync_failure(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -282,8 +320,8 @@ class TestBackendMinimal(SmokeBase):
         self.assertIsNotNone(row)
         self.assertEqual(int(row["c"] or 0), 0)
 
-    def test_db_schema_has_runs_build_status_index(self) -> None:
+    def test_db_schema_has_verifications_build_status_index(self) -> None:
         row = config.db.fetch_one(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_runs_build_status'"
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_verifications_build_status'"
         )
         self.assertIsNotNone(row)

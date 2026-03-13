@@ -41,6 +41,9 @@ Active project docs live at repository root:
 - `PROGRESS.md`
 
 ## Refactor Rule
+
+Never consider backwards compatibility. Always prefer risky refactor and code removal over maintaining old code. If the code is not needed, remove it. If the code is needed but can be improved, refactor it. If the code is needed and cannot be improved, keep it as is.
+
 - For files larger than 1000 lines, consider refactor to split into smaller files.
 - Use subdirectories or even subsubdirectories as needed to maintain a clean structure.
 - Any refactor must define responsibility boundaries and invariants first.

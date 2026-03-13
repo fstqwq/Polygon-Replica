@@ -2,6 +2,7 @@
 
 import errno
 import fcntl
+import json
 import os
 import shutil
 import sqlite3
@@ -18,6 +19,7 @@ from app.service.platform.testlib_source import maintained_testlib_header
 from app.setting import Settings
 from app.service.statement.render import seed_statement_sources
 from app.service.platform.process import run_cmd
+from app.service.verification import verification_run_ids
 
 PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
 USERNAME_RULE_MESSAGE: str = "invalid username"
@@ -515,12 +517,12 @@ class WorkspaceService:
             )
             if active_preview is not None and self._is_active_status(active_preview["status"]):
                 raise ValueError("workspace has active preview jobs")
-            active_run = self.db.fetch_one(
-                "SELECT id,status FROM runs WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+            active_verification = self.db.fetch_one(
+                "SELECT id,status FROM verifications WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
                 [workspace_id],
             )
-            if active_run is not None and self._is_active_status(active_run["status"]):
-                raise ValueError("workspace has active invocation jobs")
+            if active_verification is not None and self._is_active_status(active_verification["status"]):
+                raise ValueError("workspace has active verification jobs")
 
         workspace_path = self._assert_safe_delete_target(
             workspace_path,
@@ -571,7 +573,7 @@ class WorkspaceService:
                 UNION ALL
                 SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
                 UNION ALL
-                SELECT 'run' AS kind,id,status,created_at FROM runs WHERE problem_id=?
+                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=?
             )
             ORDER BY created_at DESC
             LIMIT 64
@@ -619,11 +621,30 @@ class WorkspaceService:
         )
 
         def _tx(conn: sqlite3.Connection) -> list[str]:
-            run_rows = conn.execute("SELECT id FROM runs WHERE problem_id=?", [problem_id]).fetchall()
-            collected_run_ids = [str(row["id"] or "").strip() for row in run_rows if row is not None]
+            verification_rows = conn.execute(
+                "SELECT id,summary_json FROM verifications WHERE problem_id=?",
+                [problem_id],
+            ).fetchall()
+            collected_run_ids: list[str] = []
+            for row in verification_rows:
+                if row is None:
+                    continue
+                raw = str(row["summary_json"] or "").strip()
+                if not raw:
+                    continue
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    parsed = {}
+                if not isinstance(parsed, dict):
+                    continue
+                for token in verification_run_ids(parsed):
+                    safe_token = str(token or "").strip()
+                    if safe_token and safe_token not in collected_run_ids:
+                        collected_run_ids.append(safe_token)
             conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM exports WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM runs WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM verifications WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM builds WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM workspaces WHERE problem_id=?", [problem_id])

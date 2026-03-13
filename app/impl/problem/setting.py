@@ -134,7 +134,7 @@ def settings_judgehost_snapshot(user: str):
     if not isinstance(payload, dict):
         payload = {}
     payload = dict(payload)
-    payload["invocation_backend"] = config.invocation_backend_service.status()
+    payload["verification_backend"] = config.judgehost_task_service.backend_status()
     return JSONResponse(payload)
 
 def settings_judgehost_host_action(

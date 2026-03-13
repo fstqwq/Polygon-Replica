@@ -141,6 +141,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
         ctx['verification_status'] = _verification_status_context(
             int(ctx['problem']['id']),
             int(ctx['user']['id']),
+            int(ctx['workspace']['id']),
             workspace_head,
             workspace_dirty,
             workspace_path=workspace_path,

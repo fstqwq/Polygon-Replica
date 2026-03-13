@@ -122,7 +122,6 @@ build_service = config.build_service
 db = config.db
 export_service = config.export_service
 preview_service = config.preview_service
-run_service = config.run_service
 workspace_service = config.workspace_service
 
 

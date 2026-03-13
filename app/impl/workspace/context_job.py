@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
@@ -9,6 +9,15 @@ from app.db import now_iso
 from app.impl.runtime.config import config
 
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification import (
+    VERIFICATION_KIND_VERIFICATION,
+    create_verification_record,
+    load_verification_run,
+    load_verification_summary,
+    save_verification_summary,
+    save_verification_run_summary,
+    verification_stage_results,
+)
 
 from .artifact import assert_workspace_build_access
 from .context_operation import audit, dedupe_preserve_order, parse_summary_json
@@ -26,36 +35,40 @@ from .export_dispatch import export_workspace_key
 from .problem_config import normalize_problem_mode, read_problem_config
 from .verification_dispatch import verification_workspace_key
 from .context_job_helper import (
+    BuildFailureError,
     _allocate_run_id,
-    _annotate_run_invocation_result,
+    annotate_verification_run_result,
     _ensure_implicit_build,
     record_async_run_failure,
 )
 
 _C = config.constants
+_BACKEND_NAME = config.judgehost_task_service.backend_name()
 
 
 def _run_marked_cancelled(problem_id: int, workspace_id: int, run_id: str) -> bool:
     safe_run_id = str(run_id or '').strip()
     if not safe_run_id:
         return False
-    row = config.db.fetch_one('SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?', [safe_run_id, int(problem_id), int(workspace_id)])
-    if row is None:
-        return False
-    status = str(row['status'] or '').strip().lower()
-    if status != 'failed':
-        return False
-    summary_obj = parse_summary_json(row['summary_json'], f'cancel/{safe_run_id}')
-    if not isinstance(summary_obj, dict):
-        return False
-    if bool(summary_obj.get('cancelled')):
-        return True
-    error_text = str(summary_obj.get('error') or '').strip().lower()
-    return 'cancelled by user' in error_text
+    verification_row, verification_summary = _load_execution_result(
+        problem_id=int(problem_id),
+        workspace_id=int(workspace_id),
+        verification_id=f'ver-{safe_run_id}',
+        run_id=safe_run_id,
+    )
+    if verification_row is not None:
+        status = str(verification_row.get('status') or '').strip().lower()
+        if status == 'failed' and isinstance(verification_summary, dict):
+            if bool(verification_summary.get('cancelled')):
+                return True
+            error_text = str(verification_summary.get('error') or '').strip().lower()
+            if 'cancelled by user' in error_text:
+                return True
+    return False
 
-def _invocation_marked_cancelled(problem_id: int, actor_user_id: int, invocation_id: str, *, limit: int = 240) -> bool:
-    safe_invocation_id = normalize_run_id_token(invocation_id)
-    if not safe_invocation_id:
+def _verification_marked_cancelled(problem_id: int, actor_user_id: int, verification_id: str, *, limit: int = 240) -> bool:
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if not safe_verification_id:
         return False
     rows = config.db.fetch_all(
         """
@@ -75,11 +88,11 @@ def _invocation_marked_cancelled(problem_id: int, actor_user_id: int, invocation
                 details = payload
         except Exception:
             details = {}
-        if normalize_run_id_token(details.get('invocation_id')) == safe_invocation_id:
+        if normalize_run_id_token(details.get('verification_id')) == safe_verification_id:
             return True
     return False
 
-def _invocation_submission_parallelism(target_count: int) -> int:
+def _verification_submission_parallelism(target_count: int) -> int:
     safe_total = max(0, int(target_count))
     if safe_total <= 1:
         return 1
@@ -119,30 +132,168 @@ def _find_buildsolve_run(
     safe_source = str(accepted_source_path or "").strip()
     if not safe_build_id:
         return (None, None)
-    rows = config.db.fetch_all(
-        """
-        SELECT id,build_id,build_ref,mode,status,summary_json,artifact_path,created_at,finished_at
-        FROM runs
-        WHERE problem_id=? AND workspace_id=? AND build_id=?
-        ORDER BY created_at DESC
-        LIMIT 256
-        """,
-        [int(problem_id), int(workspace_id), safe_build_id],
+    row_raw = config.db.fetch_one(
+        "SELECT id,status,summary_json,artifact_path,created_at,finished_at FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_build_id, int(problem_id), int(workspace_id)],
     )
-    for row in rows:
-        row_dict = dict(row)
-        summary_obj = parse_summary_json(row_dict.get("summary_json"), f"buildsolve/{row_dict.get('id')}")
-        if not isinstance(summary_obj, dict):
+    row = dict(row_raw) if row_raw is not None else None
+    if row is None:
+        return (None, None)
+    build_summary = parse_summary_json(row.get("summary_json"), f"buildsolve/{safe_build_id}")
+    if not isinstance(build_summary, dict):
+        return (None, None)
+    stage_results_obj = build_summary.get("stage_results")
+    stage_results = stage_results_obj if isinstance(stage_results_obj, dict) else {}
+    solve_stage = stage_results.get("solve_main")
+    if not isinstance(solve_stage, dict):
+        return (None, None)
+    run_summary = dict(solve_stage)
+    source_path = str(run_summary.get("source") or "").strip()
+    if safe_source and source_path and source_path != safe_source:
+        return (None, None)
+    row_dict = {
+        "id": f"buildsolve-{safe_build_id}",
+        "build_id": safe_build_id,
+        "kind": "verification",
+        "status": str(run_summary.get("status") or row.get("status") or "").strip(),
+        "summary_json": json.dumps(run_summary),
+        "artifact_path": str(run_summary.get("artifact_path") or row.get("artifact_path") or ""),
+        "created_at": str(row.get("created_at") or "").strip(),
+        "finished_at": str(row.get("finished_at") or "").strip(),
+    }
+    return (row_dict, run_summary)
+
+
+def _merge_build_stage_context(
+    *,
+    problem_id: int,
+    workspace_id: int,
+    build_id: str,
+    verification_details: dict[str, object],
+) -> None:
+    safe_build_id = str(build_id or "").strip()
+    if not safe_build_id:
+        verification_details.pop("stage_results", None)
+        return
+    build_row = config.db.fetch_one(
+        "SELECT status,summary_json FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_build_id, int(problem_id), int(workspace_id)],
+    )
+    build_summary = parse_summary_json(build_row["summary_json"], f"verification/build/{safe_build_id}") if build_row is not None else {}
+    if build_row is not None:
+        build_status = str(build_row["status"] or "").strip().lower()
+        if build_status:
+            verification_details["build_status"] = build_status
+    if isinstance(build_summary, dict):
+        verification_details["build_error"] = str(build_summary.get("error") or "").strip()
+        verification_details["build_failed_step"] = str(build_summary.get("failed_step") or "").strip()
+        verification_details["build_failed_test"] = str(build_summary.get("failed_test") or "").strip()
+        stage_results = verification_stage_results(build_summary)
+        if stage_results:
+            verification_details["stage_results"] = stage_results
+        else:
+            verification_details.pop("stage_results", None)
+
+
+def _load_execution_result(
+    *,
+    problem_id: int,
+    workspace_id: int,
+    verification_id: str,
+    run_id: str,
+) -> tuple[dict[str, object] | None, dict | None]:
+    safe_run_id = normalize_run_id_token(run_id)
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if safe_verification_id and safe_run_id:
+        run_row = load_verification_run(
+            config.db,
+            verification_id=safe_verification_id,
+            run_id=safe_run_id,
+        )
+        if isinstance(run_row, dict) and run_row:
+            run_summary = run_row.get("summary")
+            summary_obj = dict(run_summary) if isinstance(run_summary, dict) else {}
+            return (
+                {
+                    "id": safe_run_id,
+                    "build_id": str(summary_obj.get("build_id") or "").strip(),
+                    "mode": str(summary_obj.get("mode") or "").strip() or "pass-fail",
+                    "status": str(run_row.get("status") or "running").strip().lower() or "running",
+                    "summary_json": json.dumps(summary_obj),
+                    "artifact_path": str(run_row.get("artifact_path") or "").strip(),
+                    "created_at": "",
+                    "finished_at": str(summary_obj.get("finished_at") or "").strip(),
+                },
+                summary_obj,
+            )
+    return (None, {})
+
+
+def _seed_verification_runs(
+    *,
+    problem_id: int,
+    workspace_id: int,
+    verification_id: str,
+    build_id: str,
+    mode: str,
+    verification_source: str,
+    targets: list[dict[str, object]],
+    default_task_kind: str,
+) -> None:
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if not safe_verification_id:
+        return
+    safe_build_id = str(build_id or "").strip() or _C.RUN_PLACEHOLDER_BUILD_ID
+    safe_mode = str(mode or "").strip() or "pass-fail"
+    safe_source = str(verification_source or "").strip() or "run.execute"
+    for target in targets:
+        run_id = normalize_run_id_token(target.get("run_id"))
+        if not run_id:
             continue
-        invocation_block = summary_obj.get("invocation")
-        invocation_source = str(invocation_block.get("source") or "").strip().lower() if isinstance(invocation_block, dict) else ""
-        if invocation_source != "build.solve":
+        existing = load_verification_run(
+            config.db,
+            verification_id=safe_verification_id,
+            run_id=run_id,
+        )
+        if isinstance(existing, dict) and existing:
             continue
-        source_path = str(summary_obj.get("source") or "").strip()
-        if safe_source and source_path and source_path != safe_source:
-            continue
-        return (row_dict, summary_obj)
-    return (None, None)
+        source_label = (
+            str(target.get("source_label") or "").strip()
+            or str(target.get("path") or "").strip()
+            or str(target.get("submission_path") or "").strip()
+            or run_id
+        )
+        expected_behavior = normalize_expected_behavior(str(target.get("expected_behavior") or "unknown"))
+        task_kind = str(target.get("task_kind") or default_task_kind or "").strip()
+        run_root = config.fs_manager.prepare_verification_run_root(safe_verification_id, run_id).resolve()
+        run_root.mkdir(parents=True, exist_ok=True)
+        save_verification_run_summary(
+            config.db,
+            config.fs_manager,
+            verification_id=safe_verification_id,
+            problem_id=int(problem_id),
+            workspace_id=int(workspace_id),
+            build_id=safe_build_id,
+            kind=VERIFICATION_KIND_VERIFICATION,
+            mode=safe_mode,
+            verification_source=safe_source,
+            source_paths=[source_label] if source_label else [],
+            run_id=run_id,
+            run_status="queued",
+            source_label=source_label,
+            expected_behavior=expected_behavior,
+            run_summary={
+                "build_id": safe_build_id,
+                "mode": safe_mode,
+                "source": source_label,
+                "tests": [],
+                "compile_diagnostics": [],
+                "error": "",
+            },
+            artifact_path=str(run_root),
+            task_kind=task_kind,
+            finished=False,
+        )
 
 
 def _materialize_reused_buildsolve_run(
@@ -153,75 +304,53 @@ def _materialize_reused_buildsolve_run(
     mode: str,
     buildsolve_row: dict[str, object],
     buildsolve_summary: dict,
-    invocation_id: str,
-    invocation_run_ids: list[str],
+    verification_id: str,
+    verification_run_ids: list[str],
     expected_behavior: str,
 ) -> tuple[dict[str, object] | None, dict | None]:
     safe_run_id = normalize_run_id_token(run_id)
     if not safe_run_id:
         return (None, None)
     safe_mode = str(mode or "").strip() or "pass-fail"
-    now_text = now_iso()
-    encoded_summary = json.dumps(buildsolve_summary)
     finished_at = str(buildsolve_row.get("finished_at") or "").strip()
     status = str(buildsolve_row.get("status") or "running").strip() or "running"
-    existing = config.db.fetch_one(
-        "SELECT id FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_run_id, int(problem_id), int(workspace_id)],
+    verification_id = normalize_run_id_token(verification_id) or f"ver-{safe_run_id}"
+    safe_build_id = str(buildsolve_row.get("build_id") or "").strip()
+    save_verification_run_summary(
+        config.db,
+        config.fs_manager,
+        verification_id=verification_id,
+        problem_id=int(problem_id),
+        workspace_id=int(workspace_id),
+        build_id=safe_build_id,
+        kind=VERIFICATION_KIND_VERIFICATION,
+        mode=safe_mode,
+        verification_source="verification.start",
+        source_paths=[str(buildsolve_summary.get("source") or "").strip()] if str(buildsolve_summary.get("source") or "").strip() else [],
+        run_id=safe_run_id,
+        run_status=status,
+        source_label=str(buildsolve_summary.get("source") or "").strip() or safe_run_id,
+        expected_behavior=expected_behavior,
+        run_summary=dict(buildsolve_summary),
+        artifact_path=str(buildsolve_row.get("artifact_path") or ""),
+        task_kind="solve",
+        error_text=str(buildsolve_summary.get("error") or "").strip(),
+        finished=status.lower() not in {"queued", "pending", "running"},
     )
-    params = [
-        str(buildsolve_row.get("build_id") or ""),
-        str(buildsolve_row.get("build_ref") or ""),
-        safe_mode,
-        status,
-        encoded_summary,
-        str(buildsolve_row.get("artifact_path") or ""),
-    ]
-    if existing is None:
-        config.db.execute(
-            """
-            INSERT INTO runs(id,problem_id,workspace_id,build_id,build_ref,mode,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                safe_run_id,
-                int(problem_id),
-                int(workspace_id),
-                *params,
-                now_text,
-                finished_at or now_text,
-            ],
-        )
-    else:
-        config.db.execute(
-            """
-            UPDATE runs
-            SET build_id=?,build_ref=?,mode=?,status=?,summary_json=?,artifact_path=?,finished_at=?
-            WHERE id=? AND problem_id=? AND workspace_id=?
-            """,
-            [
-                *params,
-                finished_at or now_text,
-                safe_run_id,
-                int(problem_id),
-                int(workspace_id),
-            ],
-        )
-    _annotate_run_invocation_result(
+    annotate_verification_run_result(
         problem_id,
         workspace_id,
         safe_run_id,
-        invocation_id=invocation_id,
-        invocation_run_ids=invocation_run_ids,
+        verification_id=verification_id,
         expected_behavior=expected_behavior,
-        invocation_source="verification.start",
+        verification_source="verification.start",
     )
-    row = config.db.fetch_one(
-        "SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_run_id, int(problem_id), int(workspace_id)],
+    return _load_execution_result(
+        problem_id=int(problem_id),
+        workspace_id=int(workspace_id),
+        verification_id=verification_id,
+        run_id=safe_run_id,
     )
-    summary_obj = parse_summary_json(row["summary_json"] if row is not None else None, f"verification/{safe_run_id}")
-    return (dict(row) if row is not None else None, summary_obj if isinstance(summary_obj, dict) else {})
 
 def _run_execute_batch_worker(
     problem: str,
@@ -230,8 +359,8 @@ def _run_execute_batch_worker(
     requested_build_id: str,
     run_mode: str,
     targets: list[dict[str, object]],
-    invocation_id: str,
-    invocation_run_ids: list[str],
+    verification_id: str,
+    verification_run_ids: list[str],
     selected_test_names: list[str],
     force_recompile: bool = False,
 ) -> None:
@@ -241,7 +370,11 @@ def _run_execute_batch_worker(
         problem_id = int(ctx['problem']['id'])
         workspace_id = int(ctx['workspace']['id'])
         if not resolved_build_id:
-            resolved_build_id, _ = _ensure_implicit_build(problem, user, ctx=ctx, force=False)
+            try:
+                resolved_build_id, _ = _ensure_implicit_build(problem, user, ctx=ctx, force=False)
+            except BuildFailureError as build_exc:
+                resolved_build_id = str(build_exc.build_id or '').strip() or resolved_build_id
+                raise
         if not resolved_build_id:
             raise RuntimeError('tests generation did not produce a runnable build')
         assert_workspace_build_access(ctx, resolved_build_id)
@@ -257,15 +390,24 @@ def _run_execute_batch_worker(
                 source_label=str(target.get('source_label') or ''),
                 error=err,
                 build_id=failed_build_id,
-                invocation_id=invocation_id,
-                invocation_run_ids=invocation_run_ids,
+                verification_id=verification_id,
                 expected_behavior=str(target.get('expected_behavior') or 'unknown'),
                 synthesize_failed_tests=False,
                 failure_stage='build',
                 execution_skipped=True,
             )
         return
-    parallelism = _invocation_submission_parallelism(len(targets))
+    _seed_verification_runs(
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        verification_id=verification_id,
+        build_id=resolved_build_id,
+        mode=run_mode,
+        verification_source="run.execute",
+        targets=targets,
+        default_task_kind="solve",
+    )
+    parallelism = _verification_submission_parallelism(len(targets))
 
     def _prepare_target_submission(target: dict[str, object]) -> tuple[dict[str, object], dict[str, object]] | None:
         run_id = str(target.get('run_id') or '').strip()
@@ -298,10 +440,10 @@ def _run_execute_batch_worker(
             'upload_content': upload_content,
             'upload_filename': upload_filename,
             'run_id': run_id,
-            'invocation_id': invocation_id,
-            'invocation_run_ids': invocation_run_ids,
+            'verification_id': verification_id,
+            'verification_run_ids': verification_run_ids,
             'expected_behavior': expected_behavior,
-            'invocation_source': 'run.execute',
+            'verification_source': 'run.execute',
             'task_kind': 'solve',
         }
         if force_recompile:
@@ -318,14 +460,13 @@ def _run_execute_batch_worker(
         expected_behavior = normalize_expected_behavior(str(meta.get('expected_behavior') or 'unknown'))
         if error is None:
             annotate_run_id = normalize_run_id_token(returned_run_id) or run_id
-            _annotate_run_invocation_result(
+            annotate_verification_run_result(
                 problem_id,
                 workspace_id,
                 annotate_run_id,
-                invocation_id=invocation_id,
-                invocation_run_ids=invocation_run_ids,
+                verification_id=verification_id,
                 expected_behavior=expected_behavior,
-                invocation_source='run.execute',
+                verification_source='run.execute',
             )
             return
         if _run_marked_cancelled(problem_id, workspace_id, run_id):
@@ -338,8 +479,7 @@ def _run_execute_batch_worker(
             source_label=source_label,
             error=str(error),
             build_id=resolved_build_id,
-            invocation_id=invocation_id,
-            invocation_run_ids=invocation_run_ids,
+            verification_id=verification_id,
             expected_behavior=expected_behavior,
         )
 
@@ -350,7 +490,7 @@ def _run_execute_batch_worker(
                 continue
             meta, submission_kwargs = prepared
             try:
-                returned_run_id = str(config.invocation_backend_service.run_submission(**submission_kwargs) or '').strip()
+                returned_run_id = str(config.judgehost_task_service.run_submission(**submission_kwargs) or '').strip()
                 _handle_submission_outcome(meta, returned_run_id=returned_run_id, error=None)
             except Exception as exc:
                 _handle_submission_outcome(meta, error=exc)
@@ -367,7 +507,7 @@ def _run_execute_batch_worker(
                     if prepared is None:
                         continue
                     meta, submission_kwargs = prepared
-                    future = pool.submit(config.invocation_backend_service.run_submission, **submission_kwargs)
+                    future = pool.submit(config.judgehost_task_service.run_submission, **submission_kwargs)
                     inflight[future] = meta
 
             _pump_submit()
@@ -389,12 +529,12 @@ def start_run_execute_batch(
     requested_build_id: str,
     run_mode: str,
     targets: list[dict[str, object]],
-    invocation_id: str,
-    invocation_run_ids: list[str],
+    verification_id: str,
+    verification_run_ids: list[str],
     selected_test_names: list[str],
     force_recompile: bool = False,
 ) -> bool:
-    batch_id = str(invocation_id or targets[0].get('run_id') or 'invocation').strip() if targets else 'invocation'
+    batch_id = str(verification_id or targets[0].get('run_id') or 'verification').strip() if targets else 'verification'
     worker_ref: list[object] = [None]
 
     def _runner() -> None:
@@ -405,8 +545,8 @@ def start_run_execute_batch(
                 requested_build_id=requested_build_id,
                 run_mode=run_mode,
                 targets=targets,
-                invocation_id=invocation_id,
-                invocation_run_ids=invocation_run_ids,
+                verification_id=verification_id,
+                verification_run_ids=verification_run_ids,
                 selected_test_names=selected_test_names,
                 force_recompile=bool(force_recompile),
             )
@@ -418,8 +558,8 @@ def start_run_execute_batch(
     worker, queued, _submit_reason = config.worker_queue_service.submit(
         name=f'run-execute-{batch_id}',
         fn=_runner,
-        queue_name='invocation',
-        backend=config.invocation_backend_service.active_backend_name(),
+        queue_name='run',
+        backend=_BACKEND_NAME,
         job_type='run',
     )
     worker_ref[0] = worker
@@ -441,17 +581,19 @@ def _run_verification_start_worker(
     workspace_head: str,
     workspace_dirty: bool,
     targets: list[dict[str, str]],
-    invocation_id: str,
+    verification_id: str,
     verification_signature: str='',
     verification_signature_details: dict[str, str] | None=None,
 ) -> None:
     planned_run_ids: list[str] = []
     for target in targets:
         token = normalize_run_id_token(target.get('run_id'))
+        if not token:
+            token = _allocate_run_id()
+        target['run_id'] = token
         if token and token not in planned_run_ids:
             planned_run_ids.append(token)
     run_ids: list[str] = list(planned_run_ids)
-    run_id = run_ids[0] if run_ids else ''
     build_id = _C.RUN_PLACEHOLDER_BUILD_ID
     verification_mode = str(_C.GENERAL_CONFIG_DEFAULTS['mode'])
     ws_row = config.db.fetch_one('SELECT path FROM workspaces WHERE id=? AND problem_id=?', [int(workspace_id), int(problem_id)])
@@ -462,18 +604,61 @@ def _run_verification_start_worker(
             verification_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
         except Exception:
             verification_mode = str(_C.GENERAL_CONFIG_DEFAULTS['mode'])
-    verification_details: dict[str, object] = {'status': 'failed', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'submission_paths': [str(item.get('path') or '') for item in targets], 'solution_count': len(targets), 'invocation_id': invocation_id, 'run_id': run_id, 'run_ids': list(run_ids), 'run_count': len(run_ids), 'invocation_backend': config.invocation_backend_service.active_backend_name(), 'error': ''}
+    verification_details: dict[str, object] = {'status': 'failed', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'submission_paths': [str(item.get('path') or '') for item in targets], 'solution_count': len(targets), 'verification_id': verification_id, 'verification_backend': _BACKEND_NAME, 'error': ''}
     verification_details['mode'] = verification_mode
     if verification_signature:
         verification_details['verification_signature'] = verification_signature
     if isinstance(verification_signature_details, dict) and verification_signature_details:
         verification_details['verification_signature_details'] = dict(verification_signature_details)
 
+    def _persist_verification_details(*, finished: bool=False) -> None:
+        if not verification_id:
+            return
+        status_token = str(verification_details.get('status') or 'running').strip().lower()
+        table_status = 'running'
+        if status_token in {'pass', 'ok', 'passed'}:
+            table_status = 'ok'
+        elif status_token not in {'', 'queued', 'pending', 'running'}:
+            table_status = 'failed'
+        summary_payload = dict(verification_details)
+        summary_payload['verification_id'] = verification_id
+        summary_payload['updated_at'] = now_iso()
+        try:
+            existing_summary = load_verification_summary(config.db, verification_id)
+            if not isinstance(existing_summary, dict):
+                existing_summary = {}
+            merged_summary = dict(existing_summary)
+            merged_summary.update(summary_payload)
+            create_verification_record(
+                config.db,
+                config.fs_manager,
+                verification_id=verification_id,
+                problem_id=int(problem_id),
+                workspace_id=int(workspace_id),
+                build_id=str(build_id or _C.RUN_PLACEHOLDER_BUILD_ID).strip() or _C.RUN_PLACEHOLDER_BUILD_ID,
+                kind=VERIFICATION_KIND_VERIFICATION,
+                status=table_status,
+                summary=merged_summary,
+            )
+            save_verification_summary(
+                config.db,
+                verification_id=verification_id,
+                status=table_status,
+                summary=merged_summary,
+                finished=bool(finished),
+            )
+        except Exception:
+            pass
+
+    verification_details['status'] = 'running'
+    _persist_verification_details(finished=False)
+
     def _backfill_missing_verification_runs(
         error_text: str,
         *,
         build_for_failure: str,
         execution_skipped_for_missing: bool=False,
+        synthesized_test_names: list[str] | None = None,
     ) -> None:
         safe_error = str(error_text or '').strip() or 'verification failed'
         safe_build_for_failure = str(build_for_failure or _C.RUN_PLACEHOLDER_BUILD_ID).strip() or _C.RUN_PLACEHOLDER_BUILD_ID
@@ -483,11 +668,12 @@ def _run_verification_start_worker(
                 continue
             if token not in run_ids:
                 run_ids.append(token)
-            existing = config.db.fetch_one(
-                'SELECT id FROM runs WHERE id=? AND problem_id=? AND workspace_id=?',
-                [token, int(problem_id), int(workspace_id)],
+            existing = load_verification_run(
+                config.db,
+                verification_id=verification_id,
+                run_id=token,
             )
-            if existing is not None:
+            if isinstance(existing, dict) and existing:
                 continue
             record_async_run_failure(
                 problem,
@@ -497,18 +683,21 @@ def _run_verification_start_worker(
                 source_label=str(target.get('path') or ''),
                 error=safe_error,
                 build_id=safe_build_for_failure,
-                invocation_id=invocation_id,
-                invocation_run_ids=run_ids,
+                verification_id=verification_id,
                 expected_behavior=str(target.get('expected_behavior') or 'unknown'),
-                invocation_source='verification.start',
-                synthesize_failed_tests=not bool(execution_skipped_for_missing),
+                verification_source='verification.start',
+                synthesize_failed_tests=bool(synthesized_test_names) or (not bool(execution_skipped_for_missing)),
                 failure_stage='build' if execution_skipped_for_missing else '',
                 execution_skipped=bool(execution_skipped_for_missing),
+                synthesized_test_names=list(synthesized_test_names or []),
             )
         deduped = dedupe_preserve_order(run_ids)
         run_ids.clear()
         run_ids.extend(deduped)
 
+    buildsolve_row: dict[str, object] | None = None
+    buildsolve_summary: dict | None = None
+    accepted_source_path = ''
     try:
         if ws_row is None:
             raise RuntimeError('workspace metadata missing')
@@ -516,12 +705,97 @@ def _run_verification_start_worker(
         if (not workspace_path.exists()) or (not workspace_path.is_dir()) or workspace_path.is_symlink():
             raise RuntimeError('workspace path is unavailable')
         local_ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-        build_id, _implicit_created = _ensure_implicit_build(
-            problem,
-            user,
-            ctx=local_ctx,
-            for_verification=True,
-        )
+        try:
+            build_id, _implicit_created = _ensure_implicit_build(
+                problem,
+                user,
+                ctx=local_ctx,
+                for_verification=True,
+            )
+        except BuildFailureError as build_exc:
+            build_id = str(build_exc.build_id or '').strip() or _C.RUN_PLACEHOLDER_BUILD_ID
+            verification_details['build_id'] = build_id
+            verification_details['build_status'] = str(build_exc.status or 'failed').strip().lower() or 'failed'
+            verification_details['source_commit'] = str(workspace_head or '').strip()
+            verification_details['source_ref'] = str(workspace_head or '').strip()
+            verification_details['build_error'] = str(build_exc.reason or str(build_exc)).strip()
+            verification_details['build_failed_step'] = ''
+            verification_details['build_failed_test'] = str(build_exc.failed_test or '').strip()
+            _merge_build_stage_context(
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                build_id=build_id,
+                verification_details=verification_details,
+            )
+            try:
+                solution_entries, _truncated = list_solution_entries(workspace_path)
+                accepted_source_path = str(
+                    resolve_build_accepted_solution_source(workspace_path, solution_entries)
+                ).strip()
+            except Exception:
+                accepted_source_path = ''
+            if accepted_source_path:
+                buildsolve_row, buildsolve_summary = _find_buildsolve_run(
+                    problem_id,
+                    workspace_id,
+                    build_id,
+                    accepted_source_path,
+                )
+            known_failed_tests: list[str] = []
+            if isinstance(buildsolve_summary, dict):
+                for item in buildsolve_summary.get('tests') or []:
+                    if not isinstance(item, dict):
+                        continue
+                    test_name = str(item.get('test') or '').strip()
+                    if test_name and test_name not in known_failed_tests:
+                        known_failed_tests.append(test_name)
+            stage_results_obj = verification_details.get('stage_results')
+            stage_results = stage_results_obj if isinstance(stage_results_obj, dict) else {}
+            if not known_failed_tests:
+                generate_stage = stage_results.get('generate_input')
+                if isinstance(generate_stage, dict):
+                    for item in generate_stage.get('tests') or []:
+                        if not isinstance(item, dict):
+                            continue
+                        test_name = str(item.get('test') or '').strip()
+                        if test_name and test_name not in known_failed_tests:
+                            known_failed_tests.append(test_name)
+            for target in targets:
+                source_path = str(target.get('path') or '').strip()
+                expected_behavior = normalize_expected_behavior(str(target.get('expected_behavior') or 'unknown'))
+                if (
+                    accepted_source_path
+                    and source_path == accepted_source_path
+                    and expected_behavior == 'accepted'
+                    and buildsolve_row is not None
+                    and isinstance(buildsolve_summary, dict)
+                ):
+                    materialized_run_id = normalize_run_id_token(target.get('run_id')) or _allocate_run_id()
+                    target['run_id'] = materialized_run_id
+                    if materialized_run_id not in run_ids:
+                        run_ids.append(materialized_run_id)
+                    _materialize_reused_buildsolve_run(
+                        problem_id=problem_id,
+                        workspace_id=workspace_id,
+                        run_id=materialized_run_id,
+                        mode=verification_mode,
+                        buildsolve_row=buildsolve_row,
+                        buildsolve_summary=dict(buildsolve_summary),
+                        verification_id=verification_id,
+                        verification_run_ids=run_ids,
+                        expected_behavior=expected_behavior,
+                    )
+            _backfill_missing_verification_runs(
+                str(build_exc),
+                build_for_failure=build_id,
+                execution_skipped_for_missing=True,
+                synthesized_test_names=known_failed_tests,
+            )
+            verification_details['status'] = 'failed'
+            verification_details['error'] = str(build_exc)
+            _persist_verification_details(finished=True)
+            audit(actor_user_id, problem_id, 'verification.start', verification_details)
+            return
         verification_details['build_id'] = build_id
         verification_details['build_status'] = 'ok'
         verification_details['source_commit'] = str(workspace_head or '').strip()
@@ -529,7 +803,13 @@ def _run_verification_start_worker(
         verification_details['build_error'] = ''
         verification_details['build_failed_step'] = ''
         verification_details['build_failed_test'] = ''
-        accepted_source_path = ''
+        _merge_build_stage_context(
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=build_id,
+            verification_details=verification_details,
+        )
+        _persist_verification_details(finished=False)
         try:
             solution_entries, _truncated = list_solution_entries(workspace_path)
             accepted_source_path = str(
@@ -537,8 +817,6 @@ def _run_verification_start_worker(
             ).strip()
         except Exception:
             accepted_source_path = ''
-        buildsolve_row: dict[str, object] | None = None
-        buildsolve_summary: dict | None = None
         if accepted_source_path:
             buildsolve_row, buildsolve_summary = _find_buildsolve_run(
                 problem_id,
@@ -567,19 +845,37 @@ def _run_verification_start_worker(
                     'reuse_buildsolve': reuse_buildsolve,
                 }
             )
+        _seed_verification_runs(
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            verification_id=verification_id,
+            build_id=build_id,
+            mode=verification_mode,
+            verification_source='verification.start',
+            targets=[
+                {
+                    'run_id': str(spec.get('requested_run_id') or ''),
+                    'path': str(spec.get('source_path') or ''),
+                    'expected_behavior': str(spec.get('expected_behavior') or 'unknown'),
+                    'task_kind': 'solve',
+                }
+                for spec in target_specs
+            ],
+            default_task_kind='solve',
+        )
         solution_results_by_index: dict[int, dict[str, object]] = {}
         cancel_reason = 'verification cancelled by user'
         cancel_requested = False
 
-        def _invocation_cancel_requested() -> bool:
+        def _verification_cancel_requested() -> bool:
             nonlocal cancel_requested
             if cancel_requested:
                 return True
-            if _invocation_marked_cancelled(problem_id, actor_user_id, invocation_id):
+            if _verification_marked_cancelled(problem_id, actor_user_id, verification_id):
                 cancel_requested = True
             return cancel_requested
 
-        parallelism = _invocation_submission_parallelism(len(target_specs))
+        parallelism = _verification_submission_parallelism(len(target_specs))
         with ThreadPoolExecutor(max_workers=max(1, parallelism)) as pool:
             inflight: dict[object, dict[str, object]] = {}
             next_index = 0
@@ -620,16 +916,18 @@ def _run_verification_start_worker(
                     expected_behavior = normalize_expected_behavior(str(spec.get('expected_behavior') or 'unknown'))
                     requested_run_id = normalize_run_id_token(spec.get('requested_run_id'))
                     target_ref = spec.get('target')
-                    if _invocation_cancel_requested():
+                    if _verification_cancel_requested():
                         cancel_run_id = requested_run_id or _allocate_run_id()
                         if isinstance(target_ref, dict):
                             target_ref['run_id'] = cancel_run_id
                         if cancel_run_id not in run_ids:
                             run_ids.append(cancel_run_id)
                         run_ids = dedupe_preserve_order(run_ids)
-                        run_row = config.db.fetch_one(
-                            'SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?',
-                            [cancel_run_id, problem_id, workspace_id],
+                        run_row, summary_obj = _load_execution_result(
+                            problem_id=problem_id,
+                            workspace_id=workspace_id,
+                            verification_id=verification_id,
+                            run_id=cancel_run_id,
                         )
                         if not _run_marked_cancelled(problem_id, workspace_id, cancel_run_id):
                             record_async_run_failure(
@@ -640,22 +938,19 @@ def _run_verification_start_worker(
                                 source_label=source_path,
                                 error=cancel_reason,
                                 build_id=build_id,
-                                invocation_id=invocation_id,
-                                invocation_run_ids=run_ids,
+                                verification_id=verification_id,
                                 expected_behavior=expected_behavior,
-                                invocation_source='verification.start',
+                                verification_source='verification.start',
                                 synthesize_failed_tests=False,
                                 failure_stage='cancel',
                                 execution_skipped=True,
                             )
-                            run_row = config.db.fetch_one(
-                                'SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?',
-                                [cancel_run_id, problem_id, workspace_id],
+                            run_row, summary_obj = _load_execution_result(
+                                problem_id=problem_id,
+                                workspace_id=workspace_id,
+                                verification_id=verification_id,
+                                run_id=cancel_run_id,
                             )
-                        summary_obj = parse_summary_json(
-                            run_row['summary_json'] if run_row is not None else None,
-                            f'verification/{cancel_run_id}',
-                        )
                         _store_target_result(spec, current_run_id=cancel_run_id, run_row=run_row, summary_obj=summary_obj)
                         continue
                     if requested_run_id and _run_marked_cancelled(problem_id, workspace_id, requested_run_id):
@@ -664,8 +959,12 @@ def _run_verification_start_worker(
                         if requested_run_id not in run_ids:
                             run_ids.append(requested_run_id)
                         run_ids = dedupe_preserve_order(run_ids)
-                        run_row = config.db.fetch_one('SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?', [requested_run_id, problem_id, workspace_id])
-                        summary_obj = parse_summary_json(run_row['summary_json'] if run_row is not None else None, f'verification/{requested_run_id}')
+                        run_row, summary_obj = _load_execution_result(
+                            problem_id=problem_id,
+                            workspace_id=workspace_id,
+                            verification_id=verification_id,
+                            run_id=requested_run_id,
+                        )
                         _store_target_result(spec, current_run_id=requested_run_id, run_row=run_row, summary_obj=summary_obj)
                         continue
                     if bool(spec.get('reuse_buildsolve')):
@@ -684,8 +983,8 @@ def _run_verification_start_worker(
                             mode=verification_mode,
                             buildsolve_row=buildsolve_row,
                             buildsolve_summary=dict(buildsolve_summary),
-                            invocation_id=invocation_id,
-                            invocation_run_ids=run_ids,
+                            verification_id=verification_id,
+                            verification_run_ids=run_ids,
                             expected_behavior=expected_behavior,
                         )
                         _store_target_result(
@@ -701,19 +1000,19 @@ def _run_verification_start_worker(
                     if submission_run_id and submission_run_id not in run_ids:
                         run_ids.append(submission_run_id)
                     run_ids = dedupe_preserve_order(run_ids)
-                    invocation_run_ids_snapshot = list(run_ids)
+                    verification_run_ids_snapshot = list(run_ids)
                     future = pool.submit(
-                        config.invocation_backend_service.run_submission,
+                        config.judgehost_task_service.run_submission,
                         problem=problem,
                         username=user,
                         build_id=build_id,
                         submission_path=source_path,
                         mode=verification_mode,
                         run_id=submission_run_id,
-                        invocation_id=invocation_id,
-                        invocation_run_ids=invocation_run_ids_snapshot,
+                        verification_id=verification_id,
+                        verification_run_ids=verification_run_ids_snapshot,
                         expected_behavior=expected_behavior,
-                        invocation_source='verification.start',
+                        verification_source='verification.start',
                         task_kind='solve',
                     )
                     inflight[future] = spec
@@ -740,10 +1039,14 @@ def _run_verification_start_worker(
                         run_ids = dedupe_preserve_order(run_ids)
                         if isinstance(target_ref, dict):
                             target_ref['run_id'] = current_run_id
-                        run_row = config.db.fetch_one('SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?', [current_run_id, problem_id, workspace_id])
+                        run_row, summary_obj = _load_execution_result(
+                            problem_id=problem_id,
+                            workspace_id=workspace_id,
+                            verification_id=verification_id,
+                            run_id=current_run_id,
+                        )
                         if run_row is None:
                             raise RuntimeError('run metadata missing after submission')
-                        summary_obj = parse_summary_json(run_row['summary_json'] if run_row is not None else None, f'verification/{current_run_id}')
                     except Exception as target_exc:
                         fallback_run_id = normalize_run_id_token(current_run_id) or requested_run_id
                         if fallback_run_id:
@@ -762,13 +1065,16 @@ def _run_verification_start_worker(
                                     source_label=source_path,
                                     error=str(target_exc),
                                     build_id=build_id,
-                                    invocation_id=invocation_id,
-                                    invocation_run_ids=run_ids,
+                                    verification_id=verification_id,
                                     expected_behavior=expected_behavior,
-                                    invocation_source='verification.start',
+                                    verification_source='verification.start',
                                 )
-                            run_row = config.db.fetch_one('SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?', [fallback_run_id, problem_id, workspace_id])
-                            summary_obj = parse_summary_json(run_row['summary_json'] if run_row is not None else None, f'verification/{fallback_run_id}')
+                            run_row, summary_obj = _load_execution_result(
+                                problem_id=problem_id,
+                                workspace_id=workspace_id,
+                                verification_id=verification_id,
+                                run_id=fallback_run_id,
+                            )
                         else:
                             summary_obj = {'error': str(target_exc)}
                     _store_target_result(spec, current_run_id=current_run_id, run_row=run_row, summary_obj=summary_obj)
@@ -801,7 +1107,7 @@ def _run_verification_start_worker(
             retry_specs.append(spec)
 
         for spec in retry_specs:
-            if _invocation_cancel_requested():
+            if _verification_cancel_requested():
                 break
             spec_index = int(spec.get('index') or 0)
             previous_item = solution_results_by_index.get(spec_index)
@@ -813,17 +1119,17 @@ def _run_verification_start_worker(
             retry_run_id = _allocate_run_id()
             try:
                 submitted_run_id = str(
-                    config.invocation_backend_service.run_submission(
+                    config.judgehost_task_service.run_submission(
                         problem=problem,
                         username=user,
                         build_id=build_id,
                         submission_path=source_path,
                         mode=verification_mode,
                         run_id=retry_run_id,
-                        invocation_id=invocation_id,
-                        invocation_run_ids=list(run_ids),
+                        verification_id=verification_id,
+                        verification_run_ids=list(run_ids),
                         expected_behavior='accepted',
-                        invocation_source='verification.start',
+                        verification_source='verification.start',
                         task_kind='solve',
                     )
                     or ''
@@ -831,16 +1137,14 @@ def _run_verification_start_worker(
                 normalized_submitted = normalize_run_id_token(submitted_run_id)
                 if normalized_submitted:
                     retry_run_id = normalized_submitted
-                run_row = config.db.fetch_one(
-                    'SELECT status,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?',
-                    [retry_run_id, problem_id, workspace_id],
+                run_row, summary_obj = _load_execution_result(
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    verification_id=verification_id,
+                    run_id=retry_run_id,
                 )
                 if run_row is None:
                     continue
-                summary_obj = parse_summary_json(
-                    run_row['summary_json'] if run_row is not None else None,
-                    f'verification/{retry_run_id}',
-                )
                 _store_target_result(spec, current_run_id=retry_run_id, run_row=run_row, summary_obj=summary_obj)
                 if isinstance(target_ref, dict):
                     target_ref['run_id'] = retry_run_id
@@ -873,21 +1177,25 @@ def _run_verification_start_worker(
                     str(item.get('error') or ''),
                 )
             solution_results.append(item)
-        run_id = run_ids[0] if run_ids else ''
-        verification_details['run_id'] = run_id
-        verification_details['run_ids'] = list(run_ids)
         verification_details['solutions'] = solution_results
-        verification_details['run_count'] = len(run_ids)
         passed = bool(solution_results) and all((bool(item.get('matched')) for item in solution_results))
         verification_details['status'] = 'pass' if passed else 'failed'
         if not passed and first_reason:
             verification_details['error'] = first_reason
+        _persist_verification_details(finished=False)
         for item in solution_results:
             current_run_id = str(item.get('run_id') or '').strip()
             if not current_run_id:
                 continue
             expected_behavior = normalize_expected_behavior(str(item.get('expected_behavior') or 'unknown'))
-            annotated = _annotate_run_invocation_result(problem_id, workspace_id, current_run_id, invocation_id=invocation_id, invocation_run_ids=run_ids, expected_behavior=expected_behavior, invocation_source='verification.start')
+            annotated = annotate_verification_run_result(
+                problem_id,
+                workspace_id,
+                current_run_id,
+                verification_id=verification_id,
+                expected_behavior=expected_behavior,
+                verification_source='verification.start',
+            )
             item['matched'] = bool(annotated.get('matched'))
             item['completed'] = bool(annotated.get('completed'))
             item['passed_all_tests'] = bool(annotated.get('passed_all_tests'))
@@ -904,13 +1212,7 @@ def _run_verification_start_worker(
                 )
                 if reason_first:
                     verification_details['error'] = reason_first
-        if run_id:
-            run_row = config.db.fetch_one('SELECT summary_json FROM runs WHERE id=?', [run_id])
-            run_summary_obj = parse_summary_json(run_row['summary_json'] if run_row is not None else None, f'verification/{run_id}/status')
-            if not isinstance(run_summary_obj, dict):
-                run_summary_obj = {}
-            run_summary_obj['verification'] = {'source': 'sidebar', 'status': verification_details['status'], 'steps': verification_details['steps'], 'build_id': build_id, 'submission_paths': verification_details.get('submission_paths', []), 'run_ids': run_ids, 'source_commit': verification_details.get('source_commit', ''), 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty}
-            config.db.execute('UPDATE runs SET summary_json=? WHERE id=?', [json.dumps(run_summary_obj), run_id])
+        _persist_verification_details(finished=True)
     except Exception as exc:
         safe_build_status = str(verification_details.get('build_status') or '').strip().lower()
         build_stage_failed = safe_build_status in {'failed', 'error', 'missing'} or str(exc).strip().lower().startswith('build failed')
@@ -921,10 +1223,7 @@ def _run_verification_start_worker(
         )
         verification_details['status'] = 'failed'
         verification_details['error'] = str(exc)
-    run_id = run_ids[0] if run_ids else ''
-    verification_details['run_id'] = run_id
-    verification_details['run_ids'] = list(run_ids)
-    verification_details['run_count'] = len(run_ids)
+        _persist_verification_details(finished=True)
     audit(actor_user_id, problem_id, 'verification.start', verification_details)
 
 def start_verification_job(
@@ -937,7 +1236,7 @@ def start_verification_job(
     workspace_head: str,
     workspace_dirty: bool,
     targets: list[dict[str, str]],
-    invocation_id: str,
+    verification_id: str,
     initial_details: dict[str, object] | None=None,
     workspace_path: Path | str | None=None,
 ) -> bool:
@@ -980,7 +1279,7 @@ def start_verification_job(
                 workspace_head=workspace_head,
                 workspace_dirty=workspace_dirty,
                 targets=targets,
-                invocation_id=invocation_id,
+                verification_id=verification_id,
                 verification_signature=verification_signature,
                 verification_signature_details=verification_signature_details,
             )
@@ -990,13 +1289,13 @@ def start_verification_job(
                 with config.verification_lock:
                     config.verification_workers.discard(worker)
                     config.verification_inflight.discard(key)
-    thread_name = invocation_id if invocation_id else key.replace(':', '-')
+    thread_name = verification_id if verification_id else key.replace(':', '-')
     try:
         worker, queued, submit_reason = config.worker_queue_service.submit(
             name=f'verification-{thread_name}',
             fn=_runner,
             queue_name='verification',
-            backend=config.invocation_backend_service.active_backend_name(),
+            backend=_BACKEND_NAME,
             dedupe_key=f'verification:{key}',
             job_type='verification',
         )
@@ -1100,7 +1399,7 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
             name=f'export-{thread_name}',
             fn=_runner,
             queue_name='export',
-            backend=config.invocation_backend_service.active_backend_name(),
+            backend=_BACKEND_NAME,
             dedupe_key=f'export:{key}',
             job_type='export',
         )
@@ -1121,7 +1420,6 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
             config.export_inflight.discard(key)
         raise
     return True
-
 
 
 

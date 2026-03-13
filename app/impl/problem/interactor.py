@@ -86,7 +86,7 @@ def interactor_save_source(problem: str, user: str, path: str=Form('interactors/
                 workspace=workspace,
                 source_path=target,
                 source_content=content,
-                invocation_source='problem.interactor.save_source',
+                verification_source='problem.interactor.save_source',
             )
             if compile_check_error:
                 if target_existed_before:

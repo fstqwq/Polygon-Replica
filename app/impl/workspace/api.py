@@ -15,7 +15,7 @@ from app.impl.workspace.context_verification import (
     _verification_sources_signature_details,
 )
 from app.impl.workspace.public import (  
-    allocate_invocation_id,
+    allocate_verification_id,
     allocate_run_id,
     artifact_root,
     assert_workspace_artifact_access,
@@ -60,8 +60,7 @@ from app.impl.workspace.public import (
     normalize_source_id,
     page_ctx,
     parse_line_param,
-    parse_run_detail_ids,
-    parse_run_detail_invocation_id,
+    parse_verification_detail_id,
     parse_run_test_names,
     parse_summary_json,
     problem_owner_count,
@@ -77,10 +76,10 @@ from app.impl.workspace.public import (
     require_write_access,
     resolve_build_accepted_solution_source,
     resolve_standard_checker_path,
-    run_invocation_scope_run_ids,
+    verification_record_run_ids,
+    verification_run_ids,
     run_list_rows,
     run_solution_options_context,
-    run_source_labels_from_audit,
     run_test_options_context,
     safe_artifact_path,
     safe_run_artifact_path,
@@ -105,6 +104,7 @@ from app.impl.workspace.public import (
     workspace_access_context,
     workspace_rel_file_exists,
     workspace_revision_info,
+    workspace_verification_id_for_run,
     workspace_run_artifact_root,
     write_build_config,
     write_tests_spec,
@@ -114,8 +114,5 @@ from app.impl.workspace.run_view_detail import (
 )
 from app.impl.workspace.run_view_list import (  
     _run_cell_kind,
-    run_invocation_scope_run_ids,
     run_list_rows,
 )
-
-

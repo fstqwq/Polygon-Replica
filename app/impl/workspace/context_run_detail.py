@@ -301,28 +301,13 @@ def parse_run_test_names(raw_values: object) -> list[str]:
             result.append(token)
     return dedupe_preserve_order(result)
 
-def parse_run_detail_ids(request: Request) -> list[str]:
-    values: list[str] = []
-    for raw in request.query_params.getlist('run_id'):
-        token = normalize_run_id_token(raw)
-        if token:
-            values.append(token)
-    for csv_raw in request.query_params.getlist('run_ids'):
-        text = str(csv_raw or '').strip()
-        if not text:
-            continue
-        for part in text.split(','):
-            token = normalize_run_id_token(part)
-            if token:
-                values.append(token)
-    return dedupe_preserve_order(values)
-
-def parse_run_detail_invocation_id(request: Request) -> str:
-    for raw in request.query_params.getlist('invocation_id'):
+def parse_verification_detail_id(request: Request) -> str:
+    for raw in request.query_params.getlist('verification_id'):
         token = normalize_run_id_token(raw)
         if token:
             return token
     return ''
+
 
 def _run_source_from_summary(summary: dict | None) -> str:
     if not isinstance(summary, dict):
@@ -354,7 +339,7 @@ def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace
         return {'paths': [], 'query': '', 'unavailable_reason': 'no reusable solutions source'}
     statuses = [str(item.get('status') or '').strip().lower() for item in entries if isinstance(item, dict)]
     if any((status in {'running', 'queued', 'pending'} for status in statuses)):
-        return {'paths': [], 'query': '', 'unavailable_reason': 'invocation still running'}
+        return {'paths': [], 'query': '', 'unavailable_reason': 'verification still running'}
     reusable_paths: list[str] = []
     unavailable_reasons: list[str] = []
     all_reusable = True
@@ -382,7 +367,7 @@ def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace
         'unavailable_reason': _summarize_rejudge_unavailable_reason(unavailable_reasons),
     }
 
-def _run_invocation_status_summary(entries: list[dict[str, object]]) -> dict[str, object]:
+def _verification_status_summary(entries: list[dict[str, object]]) -> dict[str, object]:
     statuses = [str(item.get('status') or '').strip().lower() for item in entries if isinstance(item, dict)]
     has_running = any((status in {'running', 'queued', 'pending'} for status in statuses))
     matched_count = sum((1 for item in entries if isinstance(item, dict) and bool(item.get('matched'))))
@@ -399,7 +384,5 @@ def _run_invocation_status_summary(entries: list[dict[str, object]]) -> dict[str
         'matched_count': matched_count,
         'total_count': total_count,
     }
-
-
 
 

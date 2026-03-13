@@ -19,6 +19,7 @@ from app.impl.run_export.context import (
     is_canonical_artifact_id,
     page_ctx,
     quote_plus,
+    workspace_verification_id_for_run,
 )
 
 
@@ -117,7 +118,8 @@ def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
             except Exception:
                 pass
             safe_run_id = normalize_run_id_token(run_id)
-            target = f"/problems/{problem}/{user}/run/details?run_id={safe_run_id or quote_plus(str(run_id or '').strip())}"
+            verification_id = workspace_verification_id_for_run(ctx, safe_run_id)
+            target = f"/problems/{problem}/{user}/run/details?verification_id={quote_plus(verification_id or str(run_id or '').strip())}"
             return redirect_response(
                 target,
                 status_code=303,

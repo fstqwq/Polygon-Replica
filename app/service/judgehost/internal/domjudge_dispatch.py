@@ -171,7 +171,7 @@ class JudgehostDomjudgeDispatchMixin:
             ),
         )
         max_passes = configured_max_passes if mode == "multi-pass" else 1
-        invocation_source = self._domjudge_lower_text(payload.get("invocation_source"))
+        verification_source = self._domjudge_lower_text(payload.get("verification_source"))
         expected_behavior = self._domjudge_lower_text(payload.get("expected_behavior"))
         force_recompile = self._domjudge_bool(payload.get("force_recompile"), default=False)
         contest_id = self._domjudge_contest_id(payload.get("problem"))
@@ -425,7 +425,7 @@ class JudgehostDomjudgeDispatchMixin:
                 INSERT INTO judgehost_domjudge_jobs(
                     task_id,run_id,submit_id,contest_id,mode,source_name,source_path,work_root,
                     compile_hash,run_hash,compare_hash,source_hash,compile_config_json,run_config_json,compare_config_json,
-                    expected_behavior,invocation_source,force_recompile,
+                    expected_behavior,verification_source,force_recompile,
                     lease_owner,status,created_at,updated_at
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
@@ -446,7 +446,7 @@ class JudgehostDomjudgeDispatchMixin:
                     json.dumps(run_config, ensure_ascii=False, separators=(",", ":")),
                     json.dumps(compare_config, ensure_ascii=False, separators=(",", ":")),
                     expected_behavior,
-                    invocation_source,
+                    verification_source,
                     1 if force_recompile else 0,
                     hostname,
                     "leased",
@@ -540,8 +540,8 @@ class JudgehostDomjudgeDispatchMixin:
 
         force_recompile = bool(int(job_row["force_recompile"] or 0))
         expected_behavior = self._domjudge_lower_text(job_row["expected_behavior"], default="unknown")
-        invocation_source = self._domjudge_lower_text(job_row["invocation_source"])
-        solve_mode = invocation_source in {"build.solve", "solve.main"}
+        verification_source = self._domjudge_lower_text(job_row["verification_source"])
+        solve_mode = verification_source in {"build.solve", "solve.main"}
         compile_only = expected_behavior == "compile"
 
         case_key_hash, case_signature = self._domjudge_case_cache_ref(
@@ -727,7 +727,7 @@ class JudgehostDomjudgeDispatchMixin:
             job_row = self._db_fetch_one(
                 """
                 SELECT submit_id,contest_id,task_id,source_name,compile_config_json,run_config_json,compare_config_json,
-                       compile_hash,run_hash,compare_hash,source_hash,expected_behavior,invocation_source,force_recompile,work_root,run_id
+                       compile_hash,run_hash,compare_hash,source_hash,expected_behavior,verification_source,force_recompile,work_root,run_id
                 FROM judgehost_domjudge_jobs
                 WHERE job_id=?
                 """,
@@ -983,10 +983,7 @@ class JudgehostDomjudgeDispatchMixin:
                             payload={
                                 "run_status": "failed",
                                 "error": error_text,
-                                "summary": {
-                                    "error": error_text,
-                                    "invocation_backend": "domjudge-judgehost",
-                                },
+                                "summary": {"error": error_text},
                             },
                         )
                     except Exception as report_exc:

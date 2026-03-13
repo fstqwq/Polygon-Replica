@@ -8,7 +8,7 @@ from app.impl.run_export.context import (
     Request,
     UploadFile,
     _C,
-    allocate_invocation_id,
+    allocate_verification_id,
     allocate_run_id,
     assert_workspace_build_access,
     audit,
@@ -20,18 +20,16 @@ from app.impl.run_export.context import (
     normalize_problem_mode,
     normalize_run_id_token,
     normalize_run_test_name_token,
-    parse_run_detail_ids,
-    parse_run_detail_invocation_id,
+    parse_verification_detail_id,
     parse_run_test_names,
     read_problem_config,
     record_async_run_failure,
     redirect_response,
     require_write_access,
-    run_invocation_scope_run_ids,
     run_list_rows,
     run_solution_options_context,
-    run_source_labels_from_audit,
     run_test_options_context,
+    verification_record_run_ids,
     start_run_execute_batch,
     template_response,
     config,
@@ -41,32 +39,75 @@ from app.impl.run_export.context import (
     now_iso,
     page_ctx,
     quote_plus,
-    upload_compile_check_error,
-    workspace_source_compile_check_error,
 )
 from app.impl.run_export.query import (
-    _detail_invocation_id,
-    _rerun_solution_paths_from_invocation,
+    _detail_verification_id,
+    _rerun_solution_paths_from_verification,
     _run_detail_use_compact_layout,
     _summary_object,
 )
-def _mark_run_cancelled(run_id: str, reason: str) -> None:
+from app.service.verification import (
+    VERIFICATION_KIND_VERIFICATION,
+    load_verification_run,
+    load_verification_record,
+    load_verification_summary,
+    save_verification_run_summary,
+)
+def _mark_run_cancelled(
+    problem_id: int,
+    workspace_id: int,
+    verification_id: str,
+    run_id: str,
+    reason: str,
+) -> None:
     safe_run_id = normalize_run_id_token(run_id)
-    if not safe_run_id:
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if (not safe_run_id) or (not safe_verification_id):
         return
-    row = config.db.fetch_one("SELECT summary_json FROM runs WHERE id=?", [safe_run_id])
-    summary = _summary_object(row["summary_json"] if row is not None else None)
+    verification_row_raw = load_verification_record(config.db, safe_verification_id)
+    verification_row = dict(verification_row_raw) if verification_row_raw is not None else None
+    if verification_row is None:
+        return
+    verification_summary = load_verification_summary(config.db, safe_verification_id)
+    run_row = load_verification_run(
+        config.db,
+        verification_id=safe_verification_id,
+        run_id=safe_run_id,
+    )
+    summary = {}
+    if isinstance(run_row, dict):
+        run_summary = run_row.get("summary")
+        if isinstance(run_summary, dict):
+            summary = dict(run_summary)
     summary["cancelled"] = True
     summary["cancel_reason"] = str(reason or "").strip()
     if not str(summary.get("error") or "").strip():
         summary["error"] = str(reason or "").strip()
-    config.db.execute(
-        """
-        UPDATE runs
-        SET status='failed', summary_json=?, finished_at=?
-        WHERE id=?
-        """,
-        [json.dumps(summary), now_iso(), safe_run_id],
+    build_id = str(summary.get("build_id") or verification_row.get("build_id") or "").strip()
+    mode = str(summary.get("mode") or verification_summary.get("mode") or "pass-fail").strip() or "pass-fail"
+    verification_source = str(verification_summary.get("verification_source") or "run.execute").strip() or "run.execute"
+    source_label = str(summary.get("source") or "").strip() or safe_run_id
+    source_paths_obj = verification_summary.get("source_paths")
+    source_paths = list(source_paths_obj) if isinstance(source_paths_obj, list) else ([source_label] if source_label else [])
+    save_verification_run_summary(
+        config.db,
+        config.fs_manager,
+        verification_id=safe_verification_id,
+        problem_id=int(problem_id),
+        workspace_id=int(workspace_id),
+        build_id=build_id,
+        kind=str(verification_row.get("kind") or VERIFICATION_KIND_VERIFICATION).strip() or VERIFICATION_KIND_VERIFICATION,
+        mode=mode,
+        verification_source=verification_source,
+        source_paths=source_paths,
+        run_id=safe_run_id,
+        run_status="failed",
+        source_label=source_label,
+        expected_behavior=str(run_row.get("expected_behavior") or summary.get("expected_behavior") or "unknown").strip() or "unknown",
+        run_summary=summary,
+        artifact_path=str(run_row.get("artifact_path") or "").strip(),
+        error_text=str(summary.get("error") or "").strip(),
+        finished=True,
     )
 
 def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
@@ -90,37 +131,16 @@ def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
 
     return affected
 
-def _finalize_cancelled_builds(run_ids: list[str], reason: str) -> int:
-    safe_run_ids = dedupe_preserve_order([normalize_run_id_token(item) for item in run_ids if normalize_run_id_token(item)])
-    if not safe_run_ids:
-        return 0
-    placeholders = ",".join(("?" for _ in safe_run_ids))
-    build_rows = config.db.fetch_all(
-        f"""
-        SELECT DISTINCT build_id
-        FROM runs
-        WHERE id IN ({placeholders})
-        """,
-        [*safe_run_ids],
-    )
-    build_ids: list[str] = []
-    for row in build_rows:
-        if row is None:
-            continue
-        token = str(row["build_id"] or "").strip()
-        if not token:
-            continue
-        if token == str(_C.RUN_PLACEHOLDER_BUILD_ID):
-            continue
-        if token not in build_ids:
-            build_ids.append(token)
-    if not build_ids:
+def _finalize_cancelled_builds(build_ids: list[str], reason: str) -> int:
+    safe_build_ids = dedupe_preserve_order([str(item or "").strip() for item in build_ids if str(item or "").strip()])
+    safe_build_ids = [token for token in safe_build_ids if token != str(_C.RUN_PLACEHOLDER_BUILD_ID)]
+    if not safe_build_ids:
         return 0
     now_text = now_iso()
     cancelled_count = 0
     service = getattr(config, "judgehost_task_service", None)
     cancel_reason = str(reason or "").strip() or "verification cancelled by user"
-    for build_id in build_ids:
+    for build_id in safe_build_ids:
         active_task_count = 0
         if service is not None:
             try:
@@ -151,14 +171,8 @@ def _finalize_cancelled_builds(run_ids: list[str], reason: str) -> int:
                 UPDATE builds
                 SET status='failed', summary_json=?, finished_at=COALESCE(finished_at, ?)
                 WHERE id=? AND status IN ('running','queued','pending')
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM runs
-                      WHERE build_id=?
-                        AND status IN ('running','queued','pending')
-                  )
                 """,
-                [json.dumps(summary), now_text, build_id, build_id],
+                [json.dumps(summary), now_text, build_id],
             )
             try:
                 return int(cursor.rowcount or 0)
@@ -175,28 +189,16 @@ def run_page(request: Request, problem: str, user: str):
     _, general_cfg, _ = read_problem_config(workspace)
     execute_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
     workspace_id = int(ctx['workspace']['id'])
-    requested_invocation_id = parse_run_detail_invocation_id(request)
-    requested_detail_ids = parse_run_detail_ids(request)
-    detail_scope_run_ids: list[str] = []
-    if requested_invocation_id:
-        detail_scope_run_ids = run_invocation_scope_run_ids(
-            int(ctx['problem']['id']),
-            workspace_id,
-            requested_invocation_id,
-            actor_user_id=int(ctx['user']['id']),
-        )
-    elif requested_detail_ids:
-        detail_scope_run_ids = requested_detail_ids
-    if requested_invocation_id or requested_detail_ids:
+    requested_verification_id = parse_verification_detail_id(request)
+    if requested_verification_id:
         detail_ctx = build_run_detail_context(
             ctx,
-            detail_scope_run_ids,
             execute_mode,
-            requested_invocation_id=requested_invocation_id,
+            requested_verification_id=requested_verification_id,
         )
-        cancel_invocation_id = requested_invocation_id or _detail_invocation_id(detail_ctx)
-        detail_ctx["cancel_invocation_id"] = cancel_invocation_id
-        detail_ctx["cancel_available"] = bool(cancel_invocation_id and detail_ctx.get("detail_running"))
+        cancel_verification_id = requested_verification_id or _detail_verification_id(detail_ctx)
+        detail_ctx["cancel_verification_id"] = cancel_verification_id
+        detail_ctx["cancel_available"] = bool(cancel_verification_id and detail_ctx.get("detail_running"))
         detail_table_compact = _run_detail_use_compact_layout(detail_ctx)
         detail_ctx["detail_table_compact"] = detail_table_compact
         detail_page_ctx = dict(ctx)
@@ -219,15 +221,18 @@ def run_new_page(request: Request, problem: str, user: str):
         if normalized:
             selected_solution_paths.append(normalized)
     selected_solution_paths = dedupe_preserve_order(selected_solution_paths)
-    rerun_invocation_id = normalize_run_id_token(request.query_params.get("rerun_invocation_id"))
+    rerun_verification_id = normalize_run_id_token(
+        request.query_params.get("verification_id")
+        or request.query_params.get("rerun_verification_id")
+    )
     force_recompile = str(request.query_params.get("force_recompile") or "").strip().lower() in {"1", "true", "yes", "on"}
-    if (not selected_solution_paths) and rerun_invocation_id:
-        selected_solution_paths = _rerun_solution_paths_from_invocation(
+    if (not selected_solution_paths) and rerun_verification_id:
+        selected_solution_paths = _rerun_solution_paths_from_verification(
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=workspace_id,
             actor_user_id=int(ctx["user"]["id"]),
             workspace=workspace,
-            invocation_id=rerun_invocation_id,
+            verification_id=rerun_verification_id,
         )
     if not selected_solution_paths and default_submission_path:
         selected_solution_paths = [default_submission_path]
@@ -258,27 +263,15 @@ def run_details_page(request: Request, problem: str, user: str):
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
     execute_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
-    requested_invocation_id = parse_run_detail_invocation_id(request)
-    requested_detail_ids = parse_run_detail_ids(request)
-    detail_scope_run_ids: list[str] = []
-    if requested_invocation_id:
-        detail_scope_run_ids = run_invocation_scope_run_ids(
-            int(ctx['problem']['id']),
-            int(ctx['workspace']['id']),
-            requested_invocation_id,
-            actor_user_id=int(ctx['user']['id']),
-        )
-    elif requested_detail_ids:
-        detail_scope_run_ids = requested_detail_ids
+    requested_verification_id = parse_verification_detail_id(request)
     detail_ctx = build_run_detail_context(
         ctx,
-        detail_scope_run_ids,
         execute_mode,
-        requested_invocation_id=requested_invocation_id,
+        requested_verification_id=requested_verification_id,
     )
-    cancel_invocation_id = requested_invocation_id or _detail_invocation_id(detail_ctx)
-    detail_ctx["cancel_invocation_id"] = cancel_invocation_id
-    detail_ctx["cancel_available"] = bool(cancel_invocation_id and detail_ctx.get("detail_running"))
+    cancel_verification_id = requested_verification_id or _detail_verification_id(detail_ctx)
+    detail_ctx["cancel_verification_id"] = cancel_verification_id
+    detail_ctx["cancel_available"] = bool(cancel_verification_id and detail_ctx.get("detail_running"))
     detail_table_compact = _run_detail_use_compact_layout(detail_ctx)
     detail_ctx["detail_table_compact"] = detail_table_compact
     detail_page_ctx = dict(ctx)
@@ -292,18 +285,7 @@ def run_details_test_fragment(request: Request, problem: str, user: str):
     _, general_cfg, _ = read_problem_config(workspace)
     execute_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
 
-    requested_invocation_id = parse_run_detail_invocation_id(request)
-    requested_detail_ids = parse_run_detail_ids(request)
-    detail_scope_run_ids: list[str] = []
-    if requested_invocation_id:
-        detail_scope_run_ids = run_invocation_scope_run_ids(
-            int(ctx['problem']['id']),
-            int(ctx['workspace']['id']),
-            requested_invocation_id,
-            actor_user_id=int(ctx['user']['id']),
-        )
-    elif requested_detail_ids:
-        detail_scope_run_ids = requested_detail_ids
+    requested_verification_id = parse_verification_detail_id(request)
 
     test_name = normalize_run_test_name_token(request.query_params.get('test'))
     if not test_name:
@@ -311,9 +293,8 @@ def run_details_test_fragment(request: Request, problem: str, user: str):
 
     detail_ctx = build_run_detail_context(
         ctx,
-        detail_scope_run_ids,
         execute_mode,
-        requested_invocation_id=requested_invocation_id,
+        requested_verification_id=requested_verification_id,
         include_row_details=True,
         detail_test_name=test_name,
     )
@@ -337,11 +318,11 @@ def run_details_test_fragment(request: Request, problem: str, user: str):
     )
     return response
 
-def run_cancel(problem: str, user: str, invocation_id: str = Form("")):
+def run_cancel(problem: str, user: str, verification_id: str = Form("")):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
     require_write_access(ctx)
-    safe_invocation_id = normalize_run_id_token(invocation_id)
-    if not safe_invocation_id:
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if not safe_verification_id:
         return redirect_response(
             f"/problems/{problem}/{user}/run",
             status_code=303,
@@ -350,48 +331,47 @@ def run_cancel(problem: str, user: str, invocation_id: str = Form("")):
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
     actor_user_id = int(ctx["user"]["id"])
-    invocation_run_ids = run_invocation_scope_run_ids(
+    verification_run_ids = verification_record_run_ids(
         problem_id,
         workspace_id,
-        safe_invocation_id,
-        actor_user_id=actor_user_id,
+        safe_verification_id,
     )
-    invocation_run_ids = dedupe_preserve_order(
-        [normalize_run_id_token(item) for item in invocation_run_ids if normalize_run_id_token(item)]
+    verification_run_ids = dedupe_preserve_order(
+        [normalize_run_id_token(item) for item in verification_run_ids if normalize_run_id_token(item)]
     )
-    details_url = f"/problems/{problem}/{user}/run/details?invocation_id={quote_plus(safe_invocation_id)}"
-    if not invocation_run_ids:
+    details_url = f"/problems/{problem}/{user}/run/details?verification_id={quote_plus(safe_verification_id)}"
+    if not verification_run_ids:
         return redirect_response(details_url, status_code=303, message="verification not found")
     reason = "verification cancelled by user"
-    try:
-        source_hints = run_source_labels_from_audit(
-            problem_id,
-            actor_user_id,
-            invocation_run_ids,
-            limit=max(240, len(invocation_run_ids) * 8),
-        )
-    except Exception:
-        source_hints = {}
-
     cancelled_runs = 0
-    for run_token in invocation_run_ids:
-        row = config.db.fetch_one(
-            "SELECT status,build_id,summary_json FROM runs WHERE id=? AND problem_id=? AND workspace_id=?",
-            [run_token, problem_id, workspace_id],
+    verification_summary = load_verification_summary(config.db, safe_verification_id)
+    build_ids: list[str] = []
+    top_build_id = str(verification_summary.get("build_id") or "").strip() if isinstance(verification_summary, dict) else ""
+    if top_build_id:
+        build_ids.append(top_build_id)
+    for run_token in verification_run_ids:
+        run_row = load_verification_run(
+            config.db,
+            verification_id=safe_verification_id,
+            run_id=run_token,
         )
-        status_text = str(row["status"] or "").strip().lower() if row is not None else "missing"
+        run_summary = run_row.get("summary") if isinstance(run_row, dict) else None
+        summary_obj = dict(run_summary) if isinstance(run_summary, dict) else {}
+        status_text = str(run_row.get("status") or "").strip().lower() if isinstance(run_row, dict) else "missing"
         if status_text in {"ok", "failed"}:
-            summary_done = _summary_object(row["summary_json"] if row is not None else None)
-            if not bool(summary_done.get("cancelled")):
+            if not bool(summary_obj.get("cancelled")):
                 continue
-        build_id = str(row["build_id"] or "").strip() if row is not None else ""
+        build_id = str(summary_obj.get("build_id") or "").strip()
         if not build_id:
             build_id = str(_C.RUN_PLACEHOLDER_BUILD_ID)
-        summary_obj = _summary_object(row["summary_json"] if row is not None else None)
         source_label = str(summary_obj.get("source") or "").strip()
         if not source_label:
-            source_label = str(source_hints.get(run_token) or "").strip() or "verification"
-        if row is None:
+            source_label = str(run_row.get("source_label") or "").strip() if isinstance(run_row, dict) else ""
+        if not source_label:
+            source_label = "verification"
+        if build_id and build_id != str(_C.RUN_PLACEHOLDER_BUILD_ID) and build_id not in build_ids:
+            build_ids.append(build_id)
+        if not isinstance(run_row, dict) or not run_row:
             record_async_run_failure(
                 problem,
                 user,
@@ -400,23 +380,22 @@ def run_cancel(problem: str, user: str, invocation_id: str = Form("")):
                 source_label=source_label,
                 error=reason,
                 build_id=build_id,
-                invocation_id=safe_invocation_id,
-                invocation_run_ids=invocation_run_ids,
+                verification_id=safe_verification_id,
                 expected_behavior="unknown",
-                invocation_source="run.execute",
+                verification_source="run.execute",
                 synthesize_failed_tests=False,
                 failure_stage="cancel",
                 execution_skipped=True,
             )
-        _mark_run_cancelled(run_token, reason)
+        _mark_run_cancelled(problem_id, workspace_id, safe_verification_id, run_token, reason)
         cancelled_runs += 1
 
-    cancelled_tasks = _cancel_judgehost_tasks(invocation_run_ids, reason)
-    cancelled_builds = _finalize_cancelled_builds(invocation_run_ids, reason)
+    cancelled_tasks = _cancel_judgehost_tasks(verification_run_ids, reason)
+    cancelled_builds = _finalize_cancelled_builds(build_ids, reason)
     cancel_details: dict[str, object] = {
-        "invocation_id": safe_invocation_id,
-        "run_ids": invocation_run_ids,
-        "run_count": len(invocation_run_ids),
+        "verification_id": safe_verification_id,
+        "run_ids": verification_run_ids,
+        "run_count": len(verification_run_ids),
         "cancelled_runs": cancelled_runs,
         "cancelled_tasks": cancelled_tasks,
         "cancelled_builds": cancelled_builds,
@@ -424,7 +403,7 @@ def run_cancel(problem: str, user: str, invocation_id: str = Form("")):
     }
     audit(actor_user_id, problem_id, "run.cancel", cancel_details)
     if cancelled_runs > 0 or cancelled_tasks > 0:
-        msg = f"cancel requested ({cancelled_runs}/{len(invocation_run_ids)} runs)"
+        msg = f"cancel requested ({cancelled_runs}/{len(verification_run_ids)} runs)"
     else:
         msg = "verification already finished"
     return redirect_response(details_url, status_code=303, message=msg)
@@ -492,41 +471,13 @@ def run_execute(
             seen_targets.add(key)
             deduped_targets.append((target_submission_path, target_is_upload))
         execution_targets = deduped_targets
-        use_local_compile_check = False
-        if use_local_compile_check and uploaded and isinstance(upload_content, (bytes, bytearray)):
-            compile_check_error = upload_compile_check_error(
-                workspace,
-                upload_filename,
-                bytes(upload_content),
-                compile_program=config.toolchain_service.compile_program,
-                cxxflags=list(config.run_service.SUBMISSION_CPP_CXXFLAGS),
-            )
-            if compile_check_error:
-                msg = f'upload compile check failed: {compile_check_error}'
-                return redirect_response(f'/problems/{problem}/{user}/run/new', status_code=303, message=msg)
-        if use_local_compile_check:
-            for target_submission_path, target_is_upload in execution_targets:
-                if target_is_upload:
-                    continue
-                solution_path = str(target_submission_path or '').strip()
-                if not solution_path:
-                    continue
-                compile_check_error = workspace_source_compile_check_error(
-                    workspace,
-                    solution_path,
-                    compile_program=config.toolchain_service.compile_program,
-                    cxxflags=list(config.run_service.SUBMISSION_CPP_CXXFLAGS),
-                )
-                if compile_check_error:
-                    msg = f'compile check failed: {compile_check_error}'
-                    return redirect_response(f'/problems/{problem}/{user}/run/new', status_code=303, message=msg)
         requested_build_id = str(build_id or '').strip()
         if requested_build_id:
             assert_workspace_build_access(ctx, requested_build_id)
         run_ids: list[str] = []
         resolved_submission_paths: list[str] = []
         background_targets: list[dict[str, object]] = []
-        invocation_id = allocate_invocation_id()
+        verification_id = allocate_verification_id()
         for target_submission_path, target_is_upload in execution_targets:
             run_id = allocate_run_id()
             run_ids.append(run_id)
@@ -542,7 +493,7 @@ def run_execute(
             background_targets.append({'run_id': run_id, 'submission_path': target_submission_path or '', 'upload_content': upload_content if target_is_upload else None, 'upload_filename': upload_filename if target_is_upload else '', 'source_label': source_label, 'expected_behavior': normalize_expected_behavior(expected_behavior)})
         primary_run_id = run_ids[0] if run_ids else ''
         run_execute_details: dict[str, object] = {
-            'invocation_id': invocation_id,
+            'verification_id': verification_id,
             'run_id': primary_run_id,
             'run_ids': run_ids,
             'run_count': len(run_ids),
@@ -553,7 +504,7 @@ def run_execute(
             'uploaded': uploaded,
             'mode': run_mode,
             'implicit_build_generated': not bool(requested_build_id),
-            'invocation_backend': config.invocation_backend_service.active_backend_name(),
+            'verification_backend': config.judgehost_task_service.backend_name(),
             'async': True,
             'status': 'queued',
             'force_recompile': bool(force_recompile_flag),
@@ -566,8 +517,8 @@ def run_execute(
                 requested_build_id=requested_build_id,
                 run_mode=run_mode,
                 targets=background_targets,
-                invocation_id=invocation_id,
-                invocation_run_ids=run_ids,
+                verification_id=verification_id,
+                verification_run_ids=run_ids,
                 selected_test_names=selected_test_names,
                 force_recompile=bool(force_recompile_flag),
             )
@@ -590,7 +541,7 @@ def run_execute(
         message_text = '; '.join(message_parts)
         if primary_run_id:
             return redirect_response(
-                f'/problems/{problem}/{user}/run/details?invocation_id={quote_plus(invocation_id)}',
+                f'/problems/{problem}/{user}/run/details?verification_id={quote_plus(verification_id)}',
                 status_code=303,
                 message=message_text,
             )
@@ -598,5 +549,4 @@ def run_execute(
     finally:
         if submission_upload is not None:
             submission_upload.file.close()
-
 

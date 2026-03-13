@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .shared import (
+    Path,
     datetime,
     domjudge_buildsolve_progress,
     domjudge_case_progress_for_runs,
@@ -12,7 +13,7 @@ from .shared import (
     time,
     timezone,
 )
-from app.service.run.summary import summary_for_db
+from app.service.verification import load_verification_run, save_verification_run_summary
 
 
 class JudgehostQueueMixin:
@@ -176,20 +177,63 @@ class JudgehostQueueMixin:
             )
             return True
 
-    def _load_run_summary(self, run_id: str) -> dict[str, object]:
-        row = self._db_fetch_one("SELECT summary_json FROM runs WHERE id=?", [run_id])
-        if row is None:
+    def _load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
+        safe_run_id = str(run_id or "").strip()
+        if not safe_run_id:
             return {}
-        raw = str(row["summary_json"] or "").strip()
-        if not raw:
-            return {}
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return {}
-        if isinstance(parsed, dict):
-            return parsed
+        safe_verification_id = str(verification_id or "").strip()
+        if safe_verification_id:
+            run_row = load_verification_run(
+                self.db,
+                verification_id=safe_verification_id,
+                run_id=safe_run_id,
+            )
+            if isinstance(run_row, dict):
+                summary_obj = run_row.get("summary")
+                if isinstance(summary_obj, dict):
+                    return dict(summary_obj)
+        run_row = load_verification_run(
+            self.db,
+            verification_id=f"ver-{safe_run_id}",
+            run_id=safe_run_id,
+        )
+        if isinstance(run_row, dict):
+            summary_obj = run_row.get("summary")
+            if isinstance(summary_obj, dict):
+                return dict(summary_obj)
+        row = None
+        with self._state_lock:
+            task_id = str(self._task_id_by_run.get(safe_run_id) or "").strip()
+            if task_id:
+                task_row = self._tasks_by_id.get(task_id)
+                if isinstance(task_row, dict):
+                    row = dict(task_row)
+        if isinstance(row, dict):
+            task_verification_id = str(row.get("verification_id") or "").strip()
+            task_run_id = str(row.get("run_id") or "").strip() or safe_run_id
+            if (
+                task_run_id != safe_run_id
+                or task_verification_id != safe_verification_id
+            ):
+                summary_obj = self._load_run_summary(task_run_id, task_verification_id)
+                if summary_obj:
+                    return summary_obj
+            cached = row.get("summary")
+            if isinstance(cached, dict):
+                return dict(cached)
         return {}
+
+    @staticmethod
+    def _summary_error_text(summary_obj: dict[str, object]) -> str:
+        diagnostics_obj = summary_obj.get("compile_diagnostics")
+        diagnostics = diagnostics_obj if isinstance(diagnostics_obj, list) else []
+        for item in diagnostics:
+            if not isinstance(item, dict):
+                continue
+            message = str(item.get("message") or "").strip()
+            if message:
+                return message
+        return str(summary_obj.get("error") or "").strip()
 
     def report_result(self, *, task_id: str, hostname: str, payload: dict[str, object]) -> dict[str, object]:
         safe_task_id = str(task_id or "").strip()
@@ -222,14 +266,22 @@ class JudgehostQueueMixin:
             if lease_owner and lease_owner != safe_host:
                 raise RuntimeError("judgehost task lease owner mismatch")
             run_id = str(row.get("run_id") or "").strip()
+            verification_id = str(row.get("verification_id") or "").strip()
+            run_id = str(row.get("run_id") or "").strip() or run_id
             prev_status = current_status
             prev_lease_owner = lease_owner
             prev_lease_expires_at = str(row.get("lease_expires_at") or "").strip()
+            prev_error_text = str(row.get("error_text") or "").strip()
+            prev_result = dict(row.get("result") or {})
+            prev_summary = dict(row.get("summary") or {})
+            persist_verification_run = bool(row.get("persist_verification_run", True))
             row["status"] = self.STATUS_REPORTING
             row["updated_at"] = now_iso()
 
         try:
-            existing_summary = self._load_run_summary(run_id)
+            existing_summary = self._load_run_summary(run_id, verification_id)
+            if not existing_summary:
+                existing_summary = dict(prev_summary)
             summary = payload_obj.get("summary")
             if isinstance(summary, dict):
                 summary_obj: dict[str, object] = dict(summary)
@@ -245,21 +297,12 @@ class JudgehostQueueMixin:
                 summary_obj["limits"] = dict(existing_summary.get("limits") or {})
             if "usage" not in summary_obj:
                 summary_obj["usage"] = dict(existing_summary.get("usage") or {})
-            if "invocation_backend" not in summary_obj:
-                summary_obj["invocation_backend"] = "domjudge-judgehost"
             if run_status != "ok":
                 if error_text:
                     summary_obj["error"] = error_text
                 elif "error" not in summary_obj:
                     summary_obj["error"] = "judgehost reported failure"
-
-            invocation_obj = existing_summary.get("invocation")
-            if isinstance(invocation_obj, dict):
-                inv = dict(invocation_obj)
-                inv["completed"] = True
-                summary_obj.setdefault("invocation", inv)
-                if isinstance(summary_obj.get("invocation"), dict):
-                    summary_obj["invocation"]["completed"] = True
+            summary_obj["status"] = run_status
 
             judgehost_block = dict(summary_obj.get("judgehost") or {})
             judgehost_block["task_id"] = safe_task_id
@@ -267,22 +310,19 @@ class JudgehostQueueMixin:
             judgehost_block["status"] = task_status
             summary_obj["judgehost"] = judgehost_block
 
-            encoded_summary = summary_for_db(
-                summary_obj,
-                tests_limit=self._run_service.DB_SUMMARY_TESTS_LIMIT,
-                diagnostics_limit=self._run_service.DB_SUMMARY_DIAGNOSTICS_LIMIT,
-                feedback_files_limit=self._run_service.DB_SUMMARY_FEEDBACK_FILES_LIMIT,
-                diagnostic_message_limit=self._run_service.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
-            )
+            if (not error_text) and run_status != "ok":
+                error_text = self._summary_error_text(summary_obj) or "judgehost task failed"
+
             finished_at = now_iso()
-            self._db_execute(
-                """
-                UPDATE runs
-                SET status=?, summary_json=?, finished_at=?
-                WHERE id=?
-                """,
-                [run_status, encoded_summary, finished_at, run_id],
-            )
+            if persist_verification_run:
+                self._ensure_verification_result(
+                    row=row,
+                    verification_id=verification_id,
+                    run_id=run_id,
+                    run_status=run_status,
+                    summary_obj=summary_obj,
+                    error_text=error_text,
+                )
         except Exception:
             with self._state_lock:
                 row = self._tasks_by_id.get(safe_task_id)
@@ -290,6 +330,9 @@ class JudgehostQueueMixin:
                     row["status"] = prev_status
                     row["lease_owner"] = prev_lease_owner
                     row["lease_expires_at"] = prev_lease_expires_at
+                    row["error_text"] = prev_error_text
+                    row["result"] = dict(prev_result)
+                    row["summary"] = dict(prev_summary)
                     row["updated_at"] = now_iso()
             raise
 
@@ -298,6 +341,8 @@ class JudgehostQueueMixin:
             if row is not None:
                 row["status"] = task_status
                 row["result"] = dict(payload_obj)
+                row["summary"] = dict(summary_obj)
+                row["run_status"] = run_status
                 row["error_text"] = error_text
                 row["lease_owner"] = safe_host
                 row["lease_expires_at"] = ""
@@ -309,18 +354,75 @@ class JudgehostQueueMixin:
             task_id=safe_task_id,
             run_id=run_id,
         )
-        try:
-            artifact_path = self._run_service.fs_manager.prepare_run_root(run_id).resolve()
-            artifact_path.mkdir(parents=True, exist_ok=True)
-            (artifact_path / "summary.json").write_text(
-                json.dumps(summary_obj, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            logger.warning("failed to persist judgehost summary artifact for run %s: %s", run_id, exc)
-        return {"task_id": safe_task_id, "run_id": run_id, "status": run_status}
+        run_artifact_path = ""
+        if persist_verification_run and verification_id and run_id:
+            try:
+                run_root = self._fs_manager.prepare_verification_run_root(
+                    verification_id,
+                    run_id,
+                ).resolve()
+                (run_root / "summary.json").write_text(
+                    json.dumps(summary_obj, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                run_artifact_path = str(run_root)
+            except Exception:
+                run_artifact_path = ""
+        return {
+            "task_id": safe_task_id,
+            "verification_id": verification_id,
+            "run_id": run_id,
+            "artifact_path": run_artifact_path,
+            "status": run_status,
+            "summary": summary_obj,
+        }
 
-    def wait_for_task(self, task_id: str, timeout_sec: float | None = None) -> str:
+    def _ensure_verification_result(
+        self,
+        *,
+        row: dict[str, object],
+        verification_id: str,
+        run_id: str,
+        run_status: str,
+        summary_obj: dict[str, object],
+        error_text: str,
+    ) -> None:
+        safe_verification_id = str(verification_id or "").strip()
+        safe_run_id = str(run_id or "").strip()
+        if not safe_verification_id or not safe_run_id:
+            return
+        problem_slug = str(row.get("problem_slug") or "").strip()
+        username = str(row.get("username") or "").strip()
+        if (not problem_slug) or (not username):
+            return
+        ctx = self._workspace_service.workspace_context(problem_slug, username, include_recent=False)
+        run_root = self._fs_manager.prepare_verification_run_root(safe_verification_id, safe_run_id).resolve()
+        run_root.mkdir(parents=True, exist_ok=True)
+        payload_obj = row.get("payload")
+        payload = payload_obj if isinstance(payload_obj, dict) else {}
+        verification_source = str(payload.get("verification_source") or "").strip() or "run.execute"
+        save_verification_run_summary(
+            self.db,
+            self._fs_manager,
+            verification_id=safe_verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            build_id=str(row.get("build_id") or "").strip(),
+            kind="verification",
+            mode=str(row.get("mode") or "").strip() or "pass-fail",
+            verification_source=verification_source,
+            source_paths=[str(summary_obj.get("source") or "").strip()] if str(summary_obj.get("source") or "").strip() else [],
+            run_id=safe_run_id,
+            run_status=run_status,
+            source_label=str(summary_obj.get("source") or "").strip() or safe_run_id,
+            expected_behavior=str(payload.get("expected_behavior") or "unknown").strip() or "unknown",
+            run_summary=summary_obj,
+            artifact_path=str(run_root),
+            task_kind=str(payload.get("task_kind") or "").strip(),
+            error_text=str(error_text or "").strip(),
+        )
+
+    def wait_for_task_result(self, task_id: str, timeout_sec: float | None = None) -> dict[str, object]:
         safe_task_id = str(task_id or "").strip()
         if not safe_task_id:
             raise RuntimeError("judgehost task id is required")
@@ -331,15 +433,41 @@ class JudgehostQueueMixin:
             if row is None:
                 raise RuntimeError("judgehost task disappeared")
             status = str(row.get("status") or "").strip().lower()
-            run_id = str(row.get("run_id") or "").strip()
-            if status == self.STATUS_COMPLETED:
-                return run_id
-            if status == self.STATUS_FAILED:
-                detail = str(row.get("error_text") or "").strip() or "judgehost task failed"
-                raise RuntimeError(detail)
+            if status in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
+                verification_id = str(row.get("verification_id") or "").strip()
+                run_id = str(row.get("run_id") or "").strip()
+                artifact_path = ""
+                if verification_id and run_id:
+                    try:
+                        artifact_path = str(
+                            self._fs_manager.prepare_verification_run_root(
+                                verification_id,
+                                run_id,
+                            ).resolve()
+                        )
+                    except Exception:
+                        artifact_path = ""
+                return {
+                    "task_id": safe_task_id,
+                    "verification_id": verification_id,
+                    "run_id": run_id,
+                    "artifact_path": artifact_path,
+                    "status": str(row.get("run_status") or status).strip().lower(),
+                    "task_status": status,
+                    "error": str(row.get("error_text") or "").strip(),
+                    "summary": dict(row.get("summary") or {}),
+                }
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
             time.sleep(self._wait_poll_sec)
+
+    def wait_for_task(self, task_id: str, timeout_sec: float | None = None) -> str:
+        result = self.wait_for_task_result(task_id, timeout_sec=timeout_sec)
+        task_status = str(result.get("task_status") or "").strip().lower()
+        if task_status == self.STATUS_FAILED:
+            detail = str(result.get("error") or "").strip() or "judgehost task failed"
+            raise RuntimeError(detail)
+        return str(result.get("run_id") or "").strip()
 
     def _host_status_rows(self) -> tuple[list[dict[str, object]], int]:
         now_dt = datetime.now(timezone.utc)
@@ -554,18 +682,29 @@ class JudgehostQueueMixin:
                     count += 1
         return count
 
-    def startup_cancel_inflight_tasks(self, *, reason: str) -> list[str]:
+    def startup_cancel_inflight_tasks(self, *, reason: str) -> list[dict[str, str]]:
         safe_reason = str(reason or "").strip() or "startup reset"
         now_text = now_iso()
-        run_ids: list[str] = []
+        entries: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
         with self._state_lock:
             for row in self._tasks_by_id.values():
                 status = str(row.get("status") or "").strip().lower()
                 if status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
                     continue
                 run_id = str(row.get("run_id") or "").strip()
-                if run_id and run_id not in run_ids:
-                    run_ids.append(run_id)
+                verification_id = str(row.get("verification_id") or "").strip()
+                run_id = str(row.get("run_id") or "").strip() or run_id
+                entry_key = (verification_id, run_id)
+                if verification_id and run_id and entry_key not in seen:
+                    seen.add(entry_key)
+                    entries.append(
+                        {
+                            "run_id": run_id,
+                            "verification_id": verification_id,
+                            "run_id": run_id,
+                        }
+                    )
                 row["status"] = self.STATUS_FAILED
                 row["result"] = {"cancelled": True, "reason": safe_reason, "error": safe_reason}
                 row["error_text"] = safe_reason
@@ -573,7 +712,7 @@ class JudgehostQueueMixin:
                 row["lease_expires_at"] = ""
                 row["updated_at"] = now_text
                 row["completed_at"] = now_text
-        return run_ids
+        return entries
 
     def forget_problem_tasks(self, problem_slug: str) -> int:
         safe_problem = str(problem_slug or "").strip()
@@ -730,4 +869,3 @@ class JudgehostQueueMixin:
                 return int(cur.rowcount or 0)
             except Exception:
                 return 0
-

@@ -1,51 +1,18 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from app.impl.runtime.config import config
+from app.service.verification import load_verification_summary, verification_run_ids as verification_summary_run_ids
 
 from .run_view_detail import build_run_detail_context
-from .run_view_lifecycle_builder import _build_verification_lifecycle_card
-from .run_view_lifecycle_card import (
-    _normalize_verification_step_id,
-    _run_domjudge_case_cells,
-    _run_domjudge_verdict_from_runresult,
-    _run_lifecycle_current_step,
-    _run_lifecycle_current_step_fields,
-    _run_lifecycle_status_label,
-    _run_test_count_from_summary,
-    _run_verification_details_from_audit,
-    _verification_buildsolve_case_progress,
-    _verification_failed_build_step_id,
-    _verification_judgehost_case_progress,
-    _verification_output_stats,
-    _verification_run_test_progress,
-    _verification_selected_tests_count,
-    _verification_step_title,
-    _verification_tests_meta_stats,
-    _verification_validate_stats,
-)
-from .run_view_list import (
-    _earliest_iso_timestamp,
-    _effective_run_timeout_ms,
-    _latest_iso_timestamp,
-    _run_actual_display,
-    _run_actual_short,
-    _run_cell_kind,
-    _run_cpu_wall_ms_text,
-    _run_error_display,
-    _run_expected_behavior_from_summary,
-    _run_invocation_block,
-    _run_invocation_id_from_summary,
-    _run_invocation_maps_from_audit,
-    _run_invocation_run_ids_from_summary,
-    run_invocation_scope_run_ids,
-    _run_invocation_source_from_summary,
-    _run_is_main_correct_invocation_source,
-    _run_list_hydrate_invocation_members,
-    run_list_rows,
-    _run_memory_mb_text,
-    _run_pending_invocations_from_audit,
-    run_source_labels_from_audit,
-    _run_test_answer_name,
-    _run_test_sort_key,
-    _run_timeout_ms_from_summary,
-    _run_verdict_short,
-    _wall_time_slack_sec_for_mode,
-)
+from .run_view_list import run_list_rows
+
+
+def verification_record_run_ids(problem_id: int, workspace_id: int, verification_id: str) -> list[str]:
+    summary = load_verification_summary(config.db, verification_id)
+    if not isinstance(summary, dict):
+        return []
+    return verification_summary_run_ids(summary)
+
+
+def verification_run_ids(problem_id: int, workspace_id: int, verification_id: str) -> list[str]:
+    return verification_record_run_ids(problem_id, workspace_id, verification_id)

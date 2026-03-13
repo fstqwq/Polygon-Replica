@@ -29,7 +29,7 @@ from .context_run_detail import (
     _run_detail_preview_from_path,
     _run_detail_preview_is_noise,
     _run_detail_preview_unavailable,
-    _run_invocation_status_summary,
+    _verification_status_summary,
     _run_rejudge_context_for_entries,
     _run_source_from_summary,
 )
@@ -51,8 +51,16 @@ from app.service.platform.process import is_canonical_artifact_id
 from app.impl.workspace.run_view_lifecycle_builder import _build_verification_lifecycle_card
 from app.impl.workspace.run_view_lifecycle_card import (
     _run_domjudge_case_cells,
-    _run_verification_details_from_audit,
+    load_verification_detail_snapshot,
     _verification_tests_meta_stats,
+)
+from app.service.verification import (
+    load_verification_record,
+    load_verification_summary,
+    verification_run,
+    verification_run_ids,
+    verification_stage_summary,
+    verification_source_paths,
 )
 from app.impl.workspace.run_view_list import (
     _effective_run_timeout_ms,
@@ -63,11 +71,9 @@ from app.impl.workspace.run_view_list import (
     _run_cpu_wall_ms_text,
     _run_error_display,
     _run_expected_behavior_from_summary,
-    _run_invocation_id_from_summary,
-    _run_invocation_source_from_summary,
-    _run_is_main_correct_invocation_source,
+    _verification_source_from_summary,
+    _is_main_correct_verification_source,
     _run_memory_mb_text,
-    run_source_labels_from_audit,
     _run_test_answer_name,
     _run_test_sort_key,
     _run_timeout_ms_from_summary,
@@ -78,10 +84,9 @@ _C = config.constants
 
 def build_run_detail_context(
     ctx: dict,
-    run_ids: list[str],
     execute_mode: str,
     *,
-    requested_invocation_id: str = '',
+    requested_verification_id: str = '',
     include_row_details: bool = False,
     detail_test_name: str = '',
 ) -> dict:
@@ -100,29 +105,52 @@ def build_run_detail_context(
         )
     except Exception:
         fallback_timeout_ms = 0
-    selected_ids = [token for token in run_ids if token]
-    rows_by_id: dict[str, dict] = {}
-    if selected_ids:
-        placeholders = ','.join(('?' for _ in selected_ids))
-        rows = config.db.fetch_all(f'\n            SELECT id,build_id,mode,status,summary_json,created_at,finished_at\n            FROM runs\n            WHERE workspace_id=? AND id IN ({placeholders})\n            ', [workspace_id, *selected_ids])
-        for row in rows:
-            run_id = str(row['id'] or '').strip()
-            if run_id:
-                rows_by_id[run_id] = dict(row)
-    audit_source_labels: dict[str, str] = {}
-    try:
-        audit_source_labels = run_source_labels_from_audit(problem_id, actor_user_id, selected_ids, limit=max(240, len(selected_ids) * 8))
-    except Exception:
-        audit_source_labels = {}
-    invocation_id_hint = normalize_run_id_token(requested_invocation_id)
-    verification_audit_row: dict[str, object] = {}
+    selected_ids: list[str] = []
+    verification_run_rows: dict[str, dict[str, object]] = {}
+    verification_id_hint = normalize_run_id_token(requested_verification_id)
     verification_details: dict[str, object] = {}
-    if invocation_id_hint:
-        verification_audit_row = _run_verification_details_from_audit(problem_id, actor_user_id, invocation_id_hint)
-        details_obj = verification_audit_row.get('details')
-        if isinstance(details_obj, dict):
-            verification_details = details_obj
-    invocation_created_at = str(verification_audit_row.get('created_at') or '').strip() if isinstance(verification_audit_row, dict) else ''
+    verification_record_raw = load_verification_record(config.db, verification_id_hint) if verification_id_hint else None
+    verification_record = dict(verification_record_raw) if verification_record_raw is not None else None
+    if verification_record is not None and int(verification_record.get('workspace_id') or 0) == workspace_id:
+        persisted_summary = load_verification_summary(config.db, verification_id_hint)
+        if isinstance(persisted_summary, dict) and persisted_summary:
+            merged_details = dict(persisted_summary)
+            for key, value in verification_details.items():
+                if key not in merged_details:
+                    merged_details[key] = value
+            merged_details.setdefault('verification_id', verification_id_hint)
+            verification_details = merged_details
+        if not selected_ids:
+            for run_id in verification_run_ids(verification_details):
+                token = normalize_run_id_token(run_id)
+                if token:
+                    selected_ids.append(token)
+        for run_id in verification_run_ids(verification_details):
+            run_token = normalize_run_id_token(run_id)
+            if not run_token:
+                continue
+            run_obj = verification_run(verification_details, run_id)
+            if not isinstance(run_obj, dict) or (not run_obj):
+                continue
+            run_summary = run_obj.get('summary') if isinstance(run_obj, dict) else None
+            verification_run_rows[run_token] = {
+                'id': run_token,
+                'build_id': str(verification_details.get('build_id') or verification_record.get('build_id') or '').strip(),
+                'mode': str(verification_details.get('mode') or execute_mode).strip() or execute_mode,
+                'status': str(run_obj.get('status') or verification_record.get('status') or verification_details.get('status') or 'running').strip().lower() or 'running',
+                'source_label': str(run_obj.get('source_label') or '').strip(),
+                'summary_obj': dict(run_summary) if isinstance(run_summary, dict) else {},
+                'created_at': str(verification_record.get('created_at') or '').strip(),
+                'finished_at': str(verification_record.get('finished_at') or verification_details.get('finished_at') or '').strip(),
+            }
+    if (not selected_ids) and isinstance(verification_details, dict) and verification_details:
+        for run_id in verification_run_ids(verification_details):
+            token = normalize_run_id_token(run_id)
+            if token and token not in selected_ids:
+                selected_ids.append(token)
+    verification_created_at = ''
+    if (not verification_created_at) and verification_record is not None:
+        verification_created_at = str(verification_record.get('created_at') or '').strip()
     expected_by_run_id: dict[str, str] = {}
     expected_by_source: dict[str, str] = {}
     solutions_raw = verification_details.get('solutions')
@@ -167,20 +195,16 @@ def build_run_detail_context(
             return expected_token
         return ''
 
-    def _collect_build_stage_markers(build_id_token: str) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], str]:
-        safe_build_id = str(build_id_token or '').strip()
-        if (not safe_build_id) or (not is_canonical_artifact_id(safe_build_id)):
+    def _collect_build_stage_markers() -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], str]:
+        if not isinstance(verification_details, dict) or not verification_details:
             return ({}, {}, '')
-        run_rows = config.db.fetch_all(
-            """
-            SELECT id,status,created_at,finished_at,summary_json
-            FROM runs
-            WHERE problem_id=? AND workspace_id=? AND build_id=?
-            ORDER BY created_at DESC
-            LIMIT 512
-            """,
-            [int(problem_id), int(workspace_id), safe_build_id],
-        )
+        stage_summaries: list[dict[str, object]] = []
+        generate_stage = verification_stage_summary(verification_details, 'generate_input')
+        if generate_stage:
+            stage_summaries.append(generate_stage)
+        solve_stage = verification_stage_summary(verification_details, 'solve_main')
+        if solve_stage:
+            stage_summaries.append(solve_stage)
         generate_markers: dict[str, dict[str, str]] = {}
         main_markers: dict[str, dict[str, str]] = {}
         main_source_path = ''
@@ -210,28 +234,25 @@ def build_run_detail_context(
                 'updated_at': safe_stamp,
             }
 
-        for run_row in run_rows:
-            run_id = normalize_run_id_token(run_row['id'])
-            if not run_id:
-                continue
-            summary_obj = parse_summary_json(run_row['summary_json'], f'run/stage/{run_id}')
-            if not isinstance(summary_obj, dict):
-                continue
-            source_token = str(_run_invocation_source_from_summary(summary_obj) or '').strip().lower()
+        for summary_obj in stage_summaries:
+            source_token = str(summary_obj.get('verification_source') or '').strip().lower()
+            if not source_token:
+                source_token = str(_verification_source_from_summary(summary_obj) or '').strip().lower()
             marker_target: dict[str, dict[str, str]] | None = None
+            run_status = str(summary_obj.get('status') or '').strip().lower()
+            tests_raw = summary_obj.get('tests')
             if source_token == 'build.generate-input':
                 marker_target = generate_markers
             elif source_token == 'build.solve':
                 marker_target = main_markers
                 if not main_source_path:
-                    source_rel = normalize_workspace_rel_path(str(_run_source_from_summary(summary_obj) or ''))
+                    source_rel = normalize_workspace_rel_path(str(_run_source_from_summary(summary_obj) or summary_obj.get('source') or ''))
                     if source_rel:
                         main_source_path = source_rel
             else:
                 continue
-            run_status = str(run_row['status'] or '').strip().lower()
-            stamp = str(run_row['finished_at'] or run_row['created_at'] or '').strip()
-            tests_raw = summary_obj.get('tests')
+            run_status = run_status
+            stamp = str(summary_obj.get('updated_at') or '').strip()
             if not isinstance(tests_raw, list):
                 continue
             for test_item in tests_raw:
@@ -263,26 +284,76 @@ def build_run_detail_context(
                 )
         return (generate_markers, main_markers, main_source_path)
 
+    def _inject_buildsolve_stage_run() -> None:
+        nonlocal selected_ids
+        if not isinstance(verification_details, dict) or not verification_details:
+            return
+        has_main_correct_run = False
+        for row_obj in verification_run_rows.values():
+            if not isinstance(row_obj, dict):
+                continue
+            summary_obj = row_obj.get('summary_obj')
+            if not isinstance(summary_obj, dict):
+                continue
+            source_token = str(_verification_source_from_summary(summary_obj) or '').strip().lower()
+            if source_token == 'build.solve':
+                has_main_correct_run = True
+                break
+        if has_main_correct_run:
+            return
+        solve_stage = verification_stage_summary(verification_details, 'solve_main')
+        if not isinstance(solve_stage, dict) or not solve_stage:
+            return
+        source_token = str(_verification_source_from_summary(solve_stage) or '').strip().lower()
+        if source_token != 'build.solve':
+            return
+        build_token = str(
+            verification_details.get('build_id')
+            or (verification_record.get('build_id') if isinstance(verification_record, dict) else '')
+            or ''
+        ).strip()
+        synthetic_run_id = normalize_run_id_token(f"r-buildsolve-stage-{build_token or verification_id_hint or 'main'}")
+        if not synthetic_run_id:
+            return
+        verification_run_rows[synthetic_run_id] = {
+            'id': synthetic_run_id,
+            'build_id': build_token,
+            'mode': str(solve_stage.get('mode') or verification_details.get('mode') or execute_mode).strip() or execute_mode,
+            'status': str(solve_stage.get('status') or verification_details.get('build_status') or verification_details.get('status') or 'running').strip().lower() or 'running',
+            'source_label': str(_run_source_from_summary(solve_stage) or solve_stage.get('source') or '').strip(),
+            'summary_obj': dict(solve_stage),
+            'created_at': verification_created_at,
+            'finished_at': str(solve_stage.get('finished_at') or verification_details.get('finished_at') or '').strip(),
+        }
+        if synthetic_run_id not in selected_ids:
+            selected_ids = [synthetic_run_id, *selected_ids]
+
+    _inject_buildsolve_stage_run()
+
     columns: list[dict] = []
     all_tests: set[str] = set()
     selected_test_name_hint = normalize_run_test_name_token(detail_test_name) if include_row_details else ''
     domjudge_case_cells_by_run = _run_domjudge_case_cells(selected_ids)
     for run_id in selected_ids:
-        row = rows_by_id.get(run_id)
+        row = verification_run_rows.get(run_id)
+        row_dict = row if isinstance(row, dict) else {}
         status = 'running'
         mode = execute_mode
-        created_at = invocation_created_at
+        created_at = verification_created_at
         finished_at = ''
         build_id = ''
         summary_raw = None
-        if row is not None:
-            status = str(row.get('status') or '').strip().lower() or status
-            mode = str(row.get('mode') or '').strip() or mode
-            created_at = row.get('created_at') or created_at
-            finished_at = str(row.get('finished_at') or '').strip()
-            build_id = str(row.get('build_id') or '').strip()
-            summary_raw = row.get('summary_json')
-        summary = parse_summary_json(summary_raw, f'run/{run_id}') if summary_raw else None
+        summary_obj = None
+        if row_dict:
+            status = str(row_dict.get('status') or '').strip().lower() or status
+            mode = str(row_dict.get('mode') or '').strip() or mode
+            created_at = row_dict.get('created_at') or created_at
+            finished_at = str(row_dict.get('finished_at') or '').strip()
+            build_id = str(row_dict.get('build_id') or '').strip()
+            summary_obj = row_dict.get('summary_obj')
+            if not isinstance(summary_obj, dict):
+                summary_raw = row_dict.get('summary_json')
+        summary = dict(summary_obj) if isinstance(summary_obj, dict) else (parse_summary_json(summary_raw, f'run/{run_id}') if summary_raw else None)
         if isinstance(summary, dict):
             _cap_summary_list(summary, 'tests', _C.RUN_DETAIL_TEST_LIST_LIMIT, 'tests_truncated', 'tests_total', 'tests_limit')
             _cap_summary_list(summary, 'compile_diagnostics', _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT, 'compile_diagnostics_truncated', 'compile_diagnostics_total', 'compile_diagnostics_limit')
@@ -293,10 +364,9 @@ def build_run_detail_context(
                 normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
                 summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
         source = _run_source_from_summary(summary)
-        invocation_source = _run_invocation_source_from_summary(summary)
-        is_main_correct_run = _run_is_main_correct_invocation_source(invocation_source)
-        audit_source_label = str(audit_source_labels.get(run_id) or '').strip()
-        source_for_display = source or audit_source_label
+        verification_source = _verification_source_from_summary(summary) or str(verification_details.get('verification_source') or '').strip().lower()
+        is_main_correct_run = _is_main_correct_verification_source(verification_source)
+        source_for_display = source or str(row_dict.get('source_label') or '').strip()
         title = Path(source_for_display).name if source_for_display else ''
         if not title:
             title = run_id or 'unknown run'
@@ -333,7 +403,8 @@ def build_run_detail_context(
         max_time_ms = 0
         max_memory_kb = 0
         has_test_metrics = False
-        tests_raw = (summary.get('tests') if isinstance(summary, dict) else None) if not execution_skipped_from_summary else None
+        tests_raw = summary.get('tests') if isinstance(summary, dict) else None
+        has_materialized_tests = isinstance(tests_raw, list) and any((isinstance(item, dict) for item in tests_raw))
         timeout_limit_ms = _run_timeout_ms_from_summary(summary)
         if timeout_limit_ms <= 0:
             timeout_limit_ms = fallback_timeout_ms
@@ -468,7 +539,7 @@ def build_run_detail_context(
                     'detail': detail_payload,
                     'detail_available': True,
                 }
-        execution_skipped = bool(execution_skipped_from_summary)
+        execution_skipped = bool(execution_skipped_from_summary and (not has_materialized_tests))
         execution_skipped_reason = ''
         if isinstance(summary, dict):
             execution_skipped_reason = preserve_error_text(
@@ -552,9 +623,52 @@ def build_run_detail_context(
                         max_memory_kb = memory_kb
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = _run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
-        columns.append({'id': run_id, 'build_id': build_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'invocation_source': invocation_source, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'status_upper': status.upper(), 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': str(summary.get('compile_log') or '') if isinstance(summary, dict) else '', 'compile_diagnostics': summary.get('compile_diagnostics') if isinstance(summary, dict) else [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')) if isinstance(summary, dict) else False, 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0) if isinstance(summary, dict) else 0, 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0) if isinstance(summary, dict) else 0, 'error': str(summary.get('error') or '') if isinstance(summary, dict) else '', 'error_display': _run_error_display(str(summary.get('error') or '')) if isinstance(summary, dict) else '', 'tests_total': int(summary.get('tests_total') or len(tests_map)) if isinstance(summary, dict) else len(tests_map), 'tests_truncated': bool(summary.get('tests_truncated')) if isinstance(summary, dict) else False, 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': str(match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display})
+        columns.append({'id': run_id, 'build_id': build_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'verification_source': verification_source, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'status_upper': status.upper(), 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': str(summary.get('compile_log') or '') if isinstance(summary, dict) else '', 'compile_diagnostics': summary.get('compile_diagnostics') if isinstance(summary, dict) else [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')) if isinstance(summary, dict) else False, 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0) if isinstance(summary, dict) else 0, 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0) if isinstance(summary, dict) else 0, 'error': str(summary.get('error') or '') if isinstance(summary, dict) else '', 'error_display': _run_error_display(str(summary.get('error') or '')) if isinstance(summary, dict) else '', 'tests_total': int(summary.get('tests_total') or len(tests_map)) if isinstance(summary, dict) else len(tests_map), 'tests_truncated': bool(summary.get('tests_truncated')) if isinstance(summary, dict) else False, 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': str(match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display})
     ordered_tests = sorted(all_tests, key=_run_test_sort_key)
-    status_summary = _run_invocation_status_summary(columns)
+    status_summary = _verification_status_summary(columns)
+    if (not columns) and isinstance(verification_details, dict) and verification_details:
+        fallback_status = str(
+            verification_details.get('status')
+            or (verification_record.get('status') if isinstance(verification_record, dict) else '')
+            or ''
+        ).strip().lower()
+        fallback_total = 0
+        for raw_total in (
+            verification_details.get('solution_count'),
+            len(verification_run_ids(verification_details)),
+            len(verification_source_paths(verification_details)),
+        ):
+            try:
+                fallback_total = max(fallback_total, int(raw_total or 0))
+            except Exception:
+                continue
+        if fallback_status in {'running', 'queued', 'pending'}:
+            status_summary = {
+                'status': 'running',
+                'status_upper': 'RUNNING',
+                'is_failed': False,
+                'has_running': True,
+                'matched_count': 0,
+                'total_count': fallback_total,
+            }
+        elif fallback_status in {'failed', 'cancelled'}:
+            status_summary = {
+                'status': 'failed',
+                'status_upper': 'FAILED',
+                'is_failed': True,
+                'has_running': False,
+                'matched_count': 0,
+                'total_count': fallback_total,
+            }
+        elif fallback_status in {'ok', 'pass'}:
+            status_summary = {
+                'status': 'ok',
+                'status_upper': 'OK',
+                'is_failed': False,
+                'has_running': False,
+                'matched_count': fallback_total,
+                'total_count': fallback_total,
+            }
     verification_build_id = str(verification_details.get('build_id') or '').strip() if isinstance(verification_details, dict) else ''
     if not is_canonical_artifact_id(verification_build_id):
         verification_build_id = ''
@@ -566,7 +680,7 @@ def build_run_detail_context(
                 break
     gen_stage_map: dict[str, dict[str, str]] = {}
     if verification_build_id:
-        gen_stage_map, _main_stage_map, _main_stage_source = _collect_build_stage_markers(verification_build_id)
+        gen_stage_map, _main_stage_map, _main_stage_source = _collect_build_stage_markers()
     all_tests.update(gen_stage_map.keys())
     ordered_tests = sorted(all_tests, key=_run_test_sort_key)
     known_tests_by_index: dict[int, str] = {}
@@ -804,12 +918,12 @@ def build_run_detail_context(
                     'has_detail': any((cell.get('detail') is not None for cell in cells)),
                 }
             )
-    detail_invocation_sources = {
-        str(col.get('invocation_source') or '').strip().lower()
+    detail_verification_sources = {
+        str(col.get('verification_source') or '').strip().lower()
         for col in columns
-        if isinstance(col, dict) and str(col.get('invocation_source') or '').strip()
+        if isinstance(col, dict) and str(col.get('verification_source') or '').strip()
     }
-    detail_is_main_correct_run = bool(detail_invocation_sources) and detail_invocation_sources.issubset({'build.solve'})
+    detail_is_main_correct_run = bool(detail_verification_sources) and detail_verification_sources.issubset({'build.solve'})
     if (not detail_is_main_correct_run) and isinstance(verification_details, dict):
         details_source = str(verification_details.get('source') or '').strip().lower()
         if details_source == 'build.solve':
@@ -822,8 +936,8 @@ def build_run_detail_context(
         )
         if (build_status_token in {'running', 'queued', 'pending'}) and (not has_materialized_summary):
             detail_is_main_correct_run = True
-    safe_invocation_hint = normalize_run_id_token(invocation_id_hint)
-    if (not detail_is_main_correct_run) and safe_invocation_hint.startswith('inv-buildsolve-'):
+    safe_verification_hint = normalize_run_id_token(verification_id_hint)
+    if (not detail_is_main_correct_run) and safe_verification_hint.startswith('inv-buildsolve-'):
         detail_is_main_correct_run = True
     rejudge_context = _run_rejudge_context_for_entries(columns, workspace)
     rerun_paths = rejudge_context.get('paths')
@@ -841,29 +955,33 @@ def build_run_detail_context(
     progress_placeholder_total = min(progress_total, 24) if bool(status_summary['has_running']) and progress_total > 0 else 0
     last_updated_candidates: list[str] = [str(col.get('finished_at') or '').strip() for col in columns]
     last_updated_candidates.extend([str(col.get('created_at') or '').strip() for col in columns])
-    if invocation_created_at:
-        last_updated_candidates.append(invocation_created_at)
+    if isinstance(verification_details, dict):
+        last_updated_candidates.append(str(verification_details.get('updated_at') or '').strip())
+        last_updated_candidates.append(str(verification_details.get('finished_at') or '').strip())
+    if verification_created_at:
+        last_updated_candidates.append(verification_created_at)
     last_updated = _latest_iso_timestamp(last_updated_candidates)
-    invocation_id = invocation_id_hint
-    for col in columns:
-        summary_obj = col.get('summary')
-        token = _run_invocation_id_from_summary(summary_obj if isinstance(summary_obj, dict) else None, '')
-        if token:
-            invocation_id = token
-            break
+    verification_id = verification_id_hint
     lifecycle_cards: list[dict[str, object]] = []
-    if (not verification_details) and invocation_id:
-        verification_audit_row = _run_verification_details_from_audit(problem_id, actor_user_id, invocation_id)
-        details_obj = verification_audit_row.get('details')
-        verification_details = details_obj if isinstance(details_obj, dict) else {}
-    if selected_ids:
+    if (not verification_details) and verification_id:
+        detail_snapshot = load_verification_detail_snapshot(problem_id, verification_id)
+        detail_details = detail_snapshot.get('details')
+        verification_details = dict(detail_details) if isinstance(detail_details, dict) else {}
+        if not verification_created_at:
+            verification_created_at = str(detail_snapshot.get('created_at') or '').strip()
+    has_verification_context = bool(
+        verification_id
+        or (isinstance(verification_details, dict) and verification_details)
+        or verification_record is not None
+    )
+    if selected_ids or has_verification_context:
         lifecycle_cards = [
             _build_verification_lifecycle_card(
                 problem_slug=str(ctx['problem']['slug']),
                 problem_id=int(ctx['problem']['id']),
                 workspace_id=int(ctx['workspace']['id']),
                 actor_user_id=int(ctx['user']['id']),
-                invocation_id=invocation_id,
+                verification_id=verification_id,
                 verification_details=verification_details,
                 columns=columns,
                 detail_status=str(status_summary['status']),
@@ -941,6 +1059,7 @@ def build_run_detail_context(
         pass
 
     return {
+        'verification_id': verification_id,
         'detail_columns': columns,
         'detail_rows': detail_rows,
         'selected_run_ids': selected_ids,
@@ -961,5 +1080,3 @@ def build_run_detail_context(
         'detail_lifecycle_cards': lifecycle_cards,
         'detail_verification_build': verification_build,
     }
-
-

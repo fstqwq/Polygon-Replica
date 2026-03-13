@@ -31,7 +31,6 @@ def run_build(
     ref: str | None = None,
     *,
     sample_only: bool = False,
-    verification_pipeline: bool = False,
 ) -> str:
     ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
@@ -187,6 +186,18 @@ def run_build(
     failing_test: str | None = None
     snapshot: Path | None = None
     final_status = "running"
+    stage_results: dict[str, dict[str, object]] = {
+        "generate_input": {
+            "verification_source": "build.generate-input",
+            "status": "pending",
+            "tests": [],
+        },
+        "solve_main": {
+            "verification_source": "build.solve",
+            "status": "pending",
+            "tests": [],
+        },
+    }
 
     try:
         if commit:
@@ -316,9 +327,7 @@ def run_build(
             shared_testlib_blob = resolved_testlib.read_bytes()
 
         compile_jobs = 0
-        compile_backend = getattr(self, "_judgehost_task_service", None)
-        if compile_backend is None:
-            raise RuntimeError("judge backend unavailable for build compile")
+        compile_backend = self.judgehost_task_service
         try:
             if (not compile_backend.enabled()) or (not compile_backend.auth_token_configured()):
                 raise RuntimeError("judge backend unavailable for build compile")
@@ -480,7 +489,7 @@ def run_build(
             if not normalized_tests:
                 return {}
             run_id = f"r-bg-{uuid.uuid4().hex[:12]}"
-            invocation_id = f"inv-buildgen-{build_id[:12]}-{uuid.uuid4().hex[:8]}"
+            verification_id = f"ver-buildgen-{build_id[:12]}-{uuid.uuid4().hex[:8]}"
             validator_source = compile_source_by_name.get("validator")
             sources_payload: dict[str, str] = {}
             binaries_payload: dict[str, str] = {}
@@ -539,38 +548,26 @@ def run_build(
                 upload_filename=safe_source_name,
                 run_id=run_id,
                 selected_tests=[],
-                invocation_id=invocation_id,
-                invocation_run_ids=[run_id],
+                verification_id=verification_id,
+                verification_run_ids=[run_id],
                 expected_behavior="accepted",
-                invocation_source="build.generate-input",
+                verification_source="build.generate-input",
                 task_kind="generate",
                 compile_only=False,
+                persist_verification_run=False,
                 prepared_payload=prepared_payload,
             )
-            waited_run_id = str(compile_backend.wait_for_task(task_id, timeout_sec=None) or run_id).strip() or run_id
-            run_row = self.db.fetch_one(
-                "SELECT status,summary_json,artifact_path FROM runs WHERE id=?",
-                [waited_run_id],
-            )
-            if run_row is None:
-                return {
-                    row["name"]: (1, "judge backend generate result missing")
-                    for row in normalized_tests
-                }
-            run_status = str(run_row["status"] or "").strip().lower()
-            summary_obj: dict = {}
-            raw_summary = str(run_row["summary_json"] or "").strip()
-            if raw_summary:
-                try:
-                    parsed = json.loads(raw_summary)
-                    if isinstance(parsed, dict):
-                        summary_obj = parsed
-                except Exception:
-                    summary_obj = {}
+            task_result = compile_backend.wait_for_task_result(task_id, timeout_sec=None)
+            if str(task_result.get("task_status") or "").strip().lower() == compile_backend.STATUS_FAILED:
+                detail = str(task_result.get("error") or "").strip() or "judge backend generate task failed"
+                return {row["name"]: (1, detail) for row in normalized_tests}
+            run_status = str(task_result.get("status") or "").strip().lower()
+            summary_obj: dict = dict(task_result.get("summary") or {})
             if run_status and run_status != "ok":
                 detail = str(summary_obj.get("error") or "").strip() or f"judge backend run status is {run_status}"
                 return {row["name"]: (1, detail) for row in normalized_tests}
-            run_root = Path(str(run_row["artifact_path"] or "")).resolve()
+            artifact_path = str(task_result.get("artifact_path") or "").strip()
+            run_root = Path(artifact_path).resolve() if artifact_path else Path()
             work_root_hint = _run_summary_work_root(summary_obj)
             test_result_map = _run_summary_test_result_map(summary_obj)
             results: dict[str, tuple[int, str]] = {}
@@ -637,6 +634,7 @@ def run_build(
         test_files: list[Path] = []
         tests_meta: list[dict] = []
         source_answer_by_test: dict[str, Path] = {}
+        generate_stage_tests: list[dict[str, object]] = []
         counter = 1
         manual_count = 0
         generated_count = 0
@@ -879,6 +877,22 @@ def run_build(
                 if rc != 0:
                     if output_or_err:
                         glog.write(str(output_or_err) + "\n")
+                    generate_stage_tests.append(
+                        {
+                            "test": dst.name,
+                            "verdict": "FL",
+                            "message": str(output_or_err or "").strip(),
+                            "source_kind": kind,
+                        }
+                    )
+                    stage_results["generate_input"] = {
+                        "verification_source": "build.generate-input",
+                        "status": "failed",
+                        "tests": list(generate_stage_tests),
+                        "manual_count": manual_count,
+                        "generated_count": generated_count,
+                        "total": len(generate_stage_tests),
+                    }
                     dst.unlink(missing_ok=True)
                     failing_test = dst.name
                     action = "validator failed on" if kind == "manual" else "generator failed on"
@@ -889,6 +903,14 @@ def run_build(
                 else:
                     dst.write_text(str(output_or_err or ""), encoding="utf-8")
                     generated_count += 1
+                generate_stage_tests.append(
+                    {
+                        "test": dst.name,
+                        "verdict": "OK",
+                        "message": "",
+                        "source_kind": kind,
+                    }
+                )
                 test_files.append(dst)
                 tests_meta.append(dict(planned.get("tests_meta") or {}))
                 custom_sample_row = planned.get("custom_sample_row")
@@ -900,6 +922,14 @@ def run_build(
             glog.write(f"manual_tests={manual_count}\n")
             glog.write(f"generated_tests={generated_count}\n")
             glog.write(f"total_tests={len(test_files)}\n")
+        stage_results["generate_input"] = {
+            "verification_source": "build.generate-input",
+            "status": "ok",
+            "tests": list(generate_stage_tests),
+            "manual_count": manual_count,
+            "generated_count": generated_count,
+            "total": len(generate_stage_tests),
+        }
         if not test_files:
             if tests_spec_entries is not None:
                 if sample_only:
@@ -911,7 +941,7 @@ def run_build(
 
         current_step = "validate"
         with (logs_dir / "validate.log").open("w", encoding="utf-8") as vlog:
-            vlog.write("input validation is recorded in judgehost build.generate-input runs\n")
+            vlog.write("input validation is recorded in build summary stage_results.generate_input\n")
             vlog.write(f"validated_tests={len(test_files)}\n")
         steps.append({"step": "validate", "status": "ok", "log": "logs/validate.log"})
 
@@ -920,8 +950,8 @@ def run_build(
         custom_sample_output_validate_total = 0
         custom_sample_output_validate_checked = 0
         solve_results: dict[str, dict[str, object]] = {}
-        solve_backend = "domjudge-judgehost"
-        use_judge_backend = self._can_use_judge_backend_for_solve()
+        solve_stage_result: dict[str, object] = {}
+        solve_backend = self.judgehost_task_service.backend_name()
         with (logs_dir / "solve.log").open("w", encoding="utf-8") as slog:
             slog.write(f"solve_jobs={solve_jobs}\n")
             slog.write(f"solve_backend={solve_backend}\n")
@@ -969,10 +999,36 @@ def run_build(
                     detail_text = f"{detail_text}: stderr: {stderr_text}"
                 return f"{base_msg}: {detail_text}"
 
-            if not use_judge_backend:
-                msg = "judge backend unavailable for build solve; configure JUDGEHOST_ENABLE and JUDGEHOST_API_TOKEN"
-                slog.write(msg + "\n")
-                raise RuntimeError(msg)
+            def _update_solve_stage(status_token: str) -> None:
+                solve_stage_summary = dict(solve_stage_result.get("summary") or {})
+                if not solve_stage_summary:
+                    tests_payload: list[dict[str, object]] = []
+                    for test_name, result_row in solve_results.items():
+                        if not isinstance(result_row, dict):
+                            continue
+                        verdict = str(result_row.get("verdict") or "").strip().upper()
+                        if verdict in {"AC", "ACCEPTED", "CORRECT"}:
+                            verdict = "OK"
+                        if not verdict:
+                            verdict = "OK" if int(result_row.get("rc") or 0) == 0 else "FL"
+                        tests_payload.append(
+                            {
+                                "test": test_name,
+                                "verdict": verdict,
+                                "message": str(
+                                    result_row.get("worker_error")
+                                    or result_row.get("stderr")
+                                    or ""
+                                ).strip(),
+                            }
+                        )
+                    solve_stage_summary["tests"] = tests_payload
+                solve_stage_summary.setdefault("verification_source", "build.solve")
+                solve_stage_summary["status"] = str(status_token or "ok").strip().lower() or "ok"
+                solve_stage_summary["source"] = accepted_rel
+                solve_stage_summary["artifact_path"] = str(solve_stage_result.get("artifact_path") or "").strip()
+                stage_results["solve_main"] = solve_stage_summary
+
             solve_results = self._solve_with_judge_backend(
                 problem=problem,
                 username=username,
@@ -983,7 +1039,9 @@ def run_build(
                 ans_dir=artifact_paths.ans,
                 solve_jobs=solve_jobs,
                 source_answer_by_test=source_answer_by_test,
+                stage_result_out=solve_stage_result,
             )
+            pending_solve_failure = ""
             for t in test_files:
                 row = solve_results.get(t.name) or self._solve_result_error("missing judge solve result")
                 solve_results[t.name] = row
@@ -996,14 +1054,11 @@ def run_build(
                 if fail_msg:
                     failing_test = t.name
                     slog.write(f"early_stop={t.name}\n")
-                    raise RuntimeError(fail_msg)
-
-            for t in test_files:
-                failing_test = t.name
-                row = solve_results[t.name]
-                fail_msg = _solve_failure_message(t.name, row)
-                if fail_msg:
-                    raise RuntimeError(fail_msg)
+                    pending_solve_failure = fail_msg
+                    break
+            _update_solve_stage("failed" if pending_solve_failure else "ok")
+            if pending_solve_failure:
+                raise RuntimeError(pending_solve_failure)
 
             if custom_sample_rows_by_test:
                 custom_validate_log = logs_dir / "sample_output_validate.log"
@@ -1052,7 +1107,6 @@ def run_build(
             "sandbox_output_kb": self.default_exec_output_kb,
             "generation_params_digest": str(generation_params_digest or "").strip().lower(),
             "toolchain_cmd_digest": str(toolchain_cmd_digest or "").strip().lower(),
-            "verification_pipeline": False,
         }
         # Small runner-focused config sidecar avoids full manifest reads on run setup hot paths.
         (logs_dir / "run_config.json").write_text(json.dumps(generation_params, indent=2), encoding="utf-8")
@@ -1076,6 +1130,7 @@ def run_build(
                         "steps": steps,
                         "diagnostics": diagnostics,
                         "generation_params": generation_params,
+                        "stage_results": stage_results,
                     },
                     normalize_diagnostics_for_db=normalize_diagnostics_for_db,
                     diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
@@ -1126,6 +1181,7 @@ def run_build(
                         "failed_test": failing_test,
                         "steps": steps,
                         "diagnostics": diagnostics,
+                        "stage_results": stage_results,
                     },
                     normalize_diagnostics_for_db=normalize_diagnostics_for_db,
                     diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
@@ -1150,4 +1206,3 @@ def run_build(
                     self._build_inflight.pop(cache_key_hash, None)
 
     return build_id
-

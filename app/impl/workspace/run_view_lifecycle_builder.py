@@ -9,7 +9,6 @@ from app.service.platform.process import is_canonical_artifact_id
 
 from .context import count_label
 from .context_operation import parse_summary_json, _status_rule_expectation_display
-from .context_job import _invocation_marked_cancelled
 from .run_view_lifecycle_card import (
     normalize_run_id_token,
     _normalize_verification_step_id,
@@ -34,7 +33,7 @@ def _build_verification_lifecycle_card(
     problem_id: int,
     workspace_id: int,
     actor_user_id: int,
-    invocation_id: str,
+    verification_id: str,
     verification_details: dict[str, object],
     columns: list[dict[str, object]],
     detail_status: str,
@@ -123,22 +122,19 @@ def _build_verification_lifecycle_card(
     # Backend routing is judgehost-only after migration cleanup; lifecycle
     # progress should always follow case-level judgehost progress semantics.
     prefer_case_progress = True
-    invocation_sources: set[str] = set()
+    verification_sources: set[str] = set()
     for col in materialized_columns:
         summary_obj = col.get('summary')
         if not isinstance(summary_obj, dict):
             continue
-        inv_block = summary_obj.get('invocation')
-        if not isinstance(inv_block, dict):
-            continue
-        source_token = str(inv_block.get('source') or '').strip().lower()
+        source_token = str(summary_obj.get('verification_source') or '').strip().lower()
         if source_token:
-            invocation_sources.add(source_token)
-    if not invocation_sources and isinstance(verification_details, dict):
-        details_source = str(verification_details.get('source') or '').strip().lower()
+            verification_sources.add(source_token)
+    if not verification_sources and isinstance(verification_details, dict):
+        details_source = str(verification_details.get('verification_source') or '').strip().lower()
         if details_source:
-            invocation_sources.add(details_source)
-    buildsolve_only = bool(invocation_sources) and invocation_sources.issubset({'build.solve'})
+            verification_sources.add(details_source)
+    buildsolve_only = bool(verification_sources) and verification_sources.issubset({'build.solve'})
     if buildsolve_only:
         has_started_runs = False
         has_running_runs = False
@@ -170,18 +166,15 @@ def _build_verification_lifecycle_card(
     error_text_lower = error_text.lower()
     cancelled_from_error = ('cancelled by user' in error_text_lower) or ('verification cancelled' in error_text_lower)
     cancelled_from_details = bool(verification_details.get('cancelled'))
-    cancelled_from_audit = False
-    safe_invocation_id = normalize_run_id_token(invocation_id)
-    if safe_invocation_id and int(actor_user_id) > 0:
-        try:
-            cancelled_from_audit = _invocation_marked_cancelled(int(problem_id), int(actor_user_id), safe_invocation_id)
-        except Exception:
-            cancelled_from_audit = False
-    run_interrupted = bool(cancelled_run_count > 0 or cancelled_from_error or cancelled_from_details or cancelled_from_audit)
+    run_interrupted = bool(cancelled_run_count > 0 or cancelled_from_error or cancelled_from_details)
     try:
-        run_count = max(0, int(verification_details.get('run_count') or 0))
+        run_count = max(0, int(verification_details.get('solution_count') or 0))
     except Exception:
         run_count = 0
+    if run_count <= 0:
+        runs_order_obj = verification_details.get('runs_order')
+        if isinstance(runs_order_obj, list):
+            run_count = len([str(item or '').strip() for item in runs_order_obj if str(item or '').strip()])
     if run_count <= 0:
         run_count = len(columns)
     run_count = max(run_count, len(columns))
@@ -301,7 +294,7 @@ def _build_verification_lifecycle_card(
         # ans-file totals from previous runs (for example transient 27/27 while still running).
         outputs_total = 0
         outputs_generated = 0
-    validate_stats = _verification_validate_stats(problem_slug, build_id)
+    validate_stats = _verification_validate_stats(verification_details)
     validated_total = max(0, int(validate_stats.get('total') or 0))
     validated_ok = max(0, int(validate_stats.get('ok') or 0))
     validated_failed = max(0, int(validate_stats.get('failed') or 0))

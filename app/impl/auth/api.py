@@ -10,10 +10,9 @@ from app.impl.auth.shared import (
     enforce_same_origin_state_change,
     login_redirect,
     redirect_response,
-    _startup_cancel_audit_inflight,
 )
 
-_ = (issue_password_form_csrf_token, _startup_cancel_audit_inflight)
+_ = (issue_password_form_csrf_token,)
 
 
 async def auth_middleware(request: Request, call_next):

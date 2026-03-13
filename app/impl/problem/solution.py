@@ -164,7 +164,7 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
                 workspace=workspace,
                 source_path=selected,
                 source_content=content,
-                invocation_source='problem.solution.save_source',
+                verification_source='problem.solution.save_source',
             )
             if compile_check_error:
                 if existed_before:

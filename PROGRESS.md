@@ -6,7 +6,7 @@ Last updated: 2026-03-10
 
 - 主体方向保持不变：verification 走 judgehost 两类任务（`generate` / `solve`），`compile-only` 作为同级独立接口，仅供保存源码等编译检查入口。
 - 本轮已修复一个关键错误：judgehost 拉取 testcase 文件时的 `testcase_id` 解析错位，导致拿错 input/answer，触发 `compare script ... exit 3`。
-- 旧失败 invocation 仍会显示历史失败；修复后需要看新的 rejudge 结果。
+- 旧失败 verification 仍会显示历史失败；修复后需要看新的 rejudge 结果。
 
 ### 已完成（Done）
 
@@ -88,6 +88,6 @@ Last updated: 2026-03-10
 ### 下一步执行顺序
 
 1. 先跑四题 Playwright 全链路验收（重启后清缓存）。
-2. 针对每题保留 invocation 证据（run details + 关键日志）。
+2. 针对每题保留 verification 证据（run details + 关键日志）。
 3. 修正 verification 阶段汇总一致性问题。
 4. 清理 native 非 TeX 路径与过期测试，并回归核心测试集。

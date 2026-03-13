@@ -375,7 +375,6 @@ class JudgehostDomjudgeResultsMixin:
             "compare": self._domjudge_lower_text(job_row["compare_hash"]),
         }
         summary["judgehost"] = judgehost_obj
-        summary.setdefault("invocation_backend", "domjudge-judgehost")
         if force_failed and error_text:
             summary["error"] = str(error_text)
         elif compile_error_summary:
@@ -474,8 +473,8 @@ class JudgehostDomjudgeResultsMixin:
         result_root = (work_root / "results" / f"{case_id}").resolve()
         result_root.mkdir(parents=True, exist_ok=True)
         task_payload_obj = self._task_payload(safe_task_id) if safe_task_id else {}
-        invocation_source = self._domjudge_lower_text(task_payload_obj.get("invocation_source"))
-        task_kind = self._domjudge_task_kind(task_payload_obj, invocation_source=invocation_source)
+        verification_source = self._domjudge_lower_text(task_payload_obj.get("verification_source"))
+        task_kind = self._domjudge_task_kind(task_payload_obj, verification_source=verification_source)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
 
         def _store_payload_file(
@@ -586,7 +585,7 @@ class JudgehostDomjudgeResultsMixin:
         testcase_input_hash = self._domjudge_sha256_bytes(input_bytes)
         testcase_answer_hash = self._domjudge_sha256_bytes(answer_bytes)
         if not re.fullmatch(r"[0-9a-f]{64}", testcase_hash):
-            if invocation_source in {"build.solve", "solve.main"}:
+            if verification_source in {"build.solve", "solve.main"}:
                 testcase_hash = testcase_input_hash
             else:
                 testcase_hash = self._domjudge_set_hash_from_blobs([input_bytes, answer_bytes])
@@ -673,7 +672,7 @@ class JudgehostDomjudgeResultsMixin:
                 tags={
                     "source_hash": source_hash,
                     "testcase_hash": testcase_hash,
-                    "invocation_source": invocation_source,
+                    "verification_source": verification_source,
                     "task_kind": task_kind,
                 },
                 runresult=runresult,
@@ -708,7 +707,7 @@ class JudgehostDomjudgeResultsMixin:
         # Prefer cache refs for summary output_ref so build/run consumers can still
         # resolve artifacts after judgehost temp work directories are cleaned.
 
-        if invocation_source in {"build.solve", "solve.main"} and runresult == "correct":
+        if verification_source in {"build.solve", "solve.main"} and runresult == "correct":
             solve_key_hash, solve_signature = self._domjudge_solve_output_cache_ref(
                 source_hash=source_hash,
                 compile_hash=compile_hash,
