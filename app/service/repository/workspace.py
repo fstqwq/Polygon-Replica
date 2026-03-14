@@ -426,16 +426,17 @@ class WorkspaceService:
         git_dir = ws_path / ".git"
         if not git_dir.exists() or not git_dir.is_dir():
             raise RuntimeError(f"workspace git metadata missing for {problem}/{username}")
-        latest_build = None
+        latest_artifact_verification = None
         latest_preview = None
         if include_recent:
             recent_rows = self.db.fetch_all(
                 """
                 SELECT kind,id,status,created_at
                 FROM (
-                    SELECT 'build' AS kind,id,status,created_at
-                    FROM builds
+                    SELECT 'verification' AS kind,id,status,created_at
+                    FROM verifications
                     WHERE workspace_id=?
+                      AND kind='verification'
                     ORDER BY created_at DESC
                     LIMIT 1
                 )
@@ -453,15 +454,15 @@ class WorkspaceService:
             )
             for row in recent_rows:
                 entry = {"id": row["id"], "status": row["status"], "created_at": row["created_at"]}
-                if row["kind"] == "build":
-                    latest_build = entry
+                if row["kind"] == "verification":
+                    latest_artifact_verification = entry
                 elif row["kind"] == "preview":
                     latest_preview = entry
         return {
             "problem": dict(p),
             "user": dict(u),
             "workspace": dict(ws),
-            "latest_build": latest_build,
+            "latest_artifact_verification": latest_artifact_verification,
             "latest_preview": latest_preview,
         }
 
@@ -505,12 +506,12 @@ class WorkspaceService:
                 raise RuntimeError(f"workspace path mismatch for {safe_problem}/{safe_user}")
             workspace_path = row_path
         if workspace_id > 0:
-            active_build = self.db.fetch_one(
-                "SELECT id,status FROM builds WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+            active_verification = self.db.fetch_one(
+                "SELECT id,status FROM verifications WHERE workspace_id=? AND kind='verification' ORDER BY created_at DESC LIMIT 1",
                 [workspace_id],
             )
-            if active_build is not None and self._is_active_status(active_build["status"]):
-                raise ValueError("workspace has active build jobs")
+            if active_verification is not None and self._is_active_status(active_verification["status"]):
+                raise ValueError("workspace has active verifications")
             active_preview = self.db.fetch_one(
                 "SELECT id,status FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
                 [workspace_id],
@@ -569,7 +570,7 @@ class WorkspaceService:
         active_rows = self.db.fetch_all(
             """
             SELECT kind,id,status FROM (
-                SELECT 'build' AS kind,id,status,created_at FROM builds WHERE problem_id=?
+                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=? AND kind='verification'
                 UNION ALL
                 SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
                 UNION ALL
@@ -646,7 +647,7 @@ class WorkspaceService:
             conn.execute("DELETE FROM exports WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM verifications WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM builds WHERE problem_id=?", [problem_id])
+            conn.execute("DELETE FROM verifications WHERE problem_id=? AND kind='verification'", [problem_id])
             conn.execute("DELETE FROM workspaces WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [problem_id])
             conn.execute("DELETE FROM audit_log WHERE problem_id=?", [problem_id])

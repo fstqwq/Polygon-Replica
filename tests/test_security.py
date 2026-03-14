@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import base64
@@ -11,7 +11,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from tests.common import SmokeBase, testsuite_root
+from .common import SmokeBase, testsuite_root
 from app.impl.runtime.config import config
 from app.impl.problem.api import (
     checker_set_standard,
@@ -36,9 +36,9 @@ from app.impl.problem.api import (
 from app.impl.root.api import auth_password_meta, login_page
 from app.impl.run_export.api import artifact_file, run_artifact_file, run_execute
 from app.service.problem.test_spec import parse_gen_command_tokens
-from tests.ui_support import _register_with_password_proof
+from .ui_support import _register_with_password_proof
 
-build_service = config.build_service
+build_service = config.verification_service
 db = config.db
 workspace_service = config.workspace_service
 
@@ -155,16 +155,16 @@ class TestSecurity(SmokeBase):
         self.assertTrue(messages)
         return str(messages[0] or "")
 
-    def _fixture_build_root(self, *, problem: str, workspace_id: int, build_id: str) -> tuple[str, Path]:
-        build_ref = config.fs_manager.compute_build_ref(
+    def _fixture_verification_root(self, *, problem: str, workspace_id: int, verification_id: str) -> tuple[str, Path]:
+        build_ref = config.fs_manager.compute_artifact_ref(
             {
                 "suite": "security",
                 "problem": str(problem or "").strip(),
                 "workspace_id": int(workspace_id),
-                "build_id": str(build_id or "").strip(),
+                "verification_id": str(verification_id or "").strip(),
             }
         )
-        artifact_root = config.fs_manager.ensure_build_layout(build_ref).root.resolve()
+        artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
         return build_ref, artifact_root
 
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:
@@ -201,26 +201,26 @@ class TestSecurity(SmokeBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
-        build_id = f"b-sec-artifact-{uuid.uuid4().hex[:8]}"
-        build_ref, artifact_root = self._fixture_build_root(
+        verification_id = f"ver-sec-artifact-{uuid.uuid4().hex[:8]}"
+        _build_ref, artifact_root = self._fixture_verification_root(
             problem="alice/sample",
             workspace_id=alice_workspace_id,
-            build_id=build_id,
+            verification_id=verification_id,
         )
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db.execute(
             """
-            INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
-                build_id,
-                build_ref,
+                verification_id,
                 problem_id,
                 alice_workspace_id,
                 "",
                 "main",
+                "materialization",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -230,7 +230,7 @@ class TestSecurity(SmokeBase):
         )
 
         with self.assertRaises(HTTPException) as denied:
-            artifact_file("alice/sample", "bob", build_id, "logs/compile.log")
+            artifact_file("alice/sample", "bob", verification_id, "logs/compile.log")
         self.assertEqual(denied.exception.status_code, 404)
         self.assertIn("workspace", str(denied.exception.detail))
 
@@ -239,26 +239,26 @@ class TestSecurity(SmokeBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
-        build_id = f"b-sec-path-{uuid.uuid4().hex[:8]}"
-        build_ref, artifact_root = self._fixture_build_root(
+        verification_id = f"ver-sec-path-{uuid.uuid4().hex[:8]}"
+        _build_ref, artifact_root = self._fixture_verification_root(
             problem="alice/sample",
             workspace_id=alice_workspace_id,
-            build_id=build_id,
+            verification_id=verification_id,
         )
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db.execute(
             """
-            INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
-                build_id,
-                build_ref,
+                verification_id,
                 problem_id,
                 alice_workspace_id,
                 "",
                 "main",
+                "materialization",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -268,7 +268,7 @@ class TestSecurity(SmokeBase):
         )
 
         with self.assertRaises(HTTPException) as denied:
-            artifact_file("alice/sample", "alice", build_id, "../outside.txt")
+            artifact_file("alice/sample", "alice", verification_id, "../outside.txt")
         self.assertEqual(denied.exception.status_code, 400)
         self.assertIn("invalid artifact path", str(denied.exception.detail))
 
@@ -540,19 +540,20 @@ class TestSecurity(SmokeBase):
         verification_id = f"ver-{run_id}"
         db.execute(
             """
-            INSERT INTO verifications(id,problem_id,workspace_id,build_id,kind,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 verification_id,
                 int(ctx["problem"]["id"]),
                 int(ctx["workspace"]["id"]),
-                "pending",
-                "run",
+                "",
+                "main",
+                "verification",
                 "ok",
                 json.dumps(
                     {
-                        "kind": "run",
+                        "kind": "verification",
                         "mode": "pass-fail",
                         "status": "ok",
                         "runs_order": [run_id],
@@ -606,7 +607,7 @@ class TestSecurity(SmokeBase):
             resp = run_execute(
                 problem="alice/sample",
                 user="alice",
-                build_id="",
+                artifact_verification_id="",
                 solution_paths=["../../escape.cpp"],
                 test_names=[],
                 submission_upload=None,

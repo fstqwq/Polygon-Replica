@@ -188,7 +188,7 @@ def preview_page(request: Request, problem: str, user: str):
         if preview_compile_failed:
             preview_failed_stage = str(selected_preview_summary.get('failed_stage') or '').strip().lower() if isinstance(selected_preview_summary, dict) else ''
             if preview_failed_stage == 'sample_sync':
-                preview_failure_title = 'Sample build failed.'
+                preview_failure_title = 'Sample verification failed.'
                 preview_failure_detail = sanitize_log_text_for_ui(str((selected_preview_summary or {}).get('error') or ''))
                 latex_log_href = ''
                 log = ''
@@ -303,7 +303,7 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
             details['error'] = str(summary_obj.get('error') or 'preview failed') if isinstance(summary_obj, dict) else 'preview failed'
             failed_stage = str(summary_obj.get('failed_stage') or '').strip().lower() if isinstance(summary_obj, dict) else ''
             details['failed_stage'] = failed_stage
-            msg = 'sample build failed' if failed_stage == 'sample_sync' else 'preview compile failed'
+            msg = 'sample verification failed' if failed_stage == 'sample_sync' else 'preview compile failed'
     except Exception as exc:
         details['status'] = 'failed'
         details['error'] = str(exc)

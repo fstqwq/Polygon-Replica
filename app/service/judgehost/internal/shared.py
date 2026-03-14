@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64  
 import json  
@@ -56,7 +56,7 @@ from ..domjudge.client import (
     domjudge_script_ids,
     domjudge_script_provider_job_id,
 )  
-from ..progress import domjudge_buildsolve_progress, domjudge_case_progress_for_runs  
+from ..progress import domjudge_solve_main_progress, domjudge_case_progress_for_runs  
 from ..runtime import (
     domjudge_bool,
     domjudge_feedback_line_from_bytes,

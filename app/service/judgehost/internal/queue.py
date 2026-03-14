@@ -3,7 +3,7 @@ from __future__ import annotations
 from .shared import (
     Path,
     datetime,
-    domjudge_buildsolve_progress,
+    domjudge_solve_main_progress,
     domjudge_case_progress_for_runs,
     json,
     logger,
@@ -128,7 +128,7 @@ class JudgehostQueueMixin:
                             "run_id": str(task.get("run_id") or ""),
                             "problem": str(task.get("problem_slug") or ""),
                             "username": str(task.get("username") or ""),
-                            "build_id": str(task.get("build_id") or ""),
+                            "artifact_verification_id": str(task.get("artifact_verification_id") or ""),
                             "mode": str(task.get("mode") or ""),
                             "lease_expires_at": lease_until,
                             "payload": dict(payload_obj) if isinstance(payload_obj, dict) else {},
@@ -224,6 +224,10 @@ class JudgehostQueueMixin:
         return {}
 
     @staticmethod
+    def _dict_or_empty(value: object) -> dict[str, object]:
+        return dict(value) if isinstance(value, dict) else {}
+
+    @staticmethod
     def _summary_error_text(summary_obj: dict[str, object]) -> str:
         diagnostics_obj = summary_obj.get("compile_diagnostics")
         diagnostics = diagnostics_obj if isinstance(diagnostics_obj, list) else []
@@ -240,7 +244,7 @@ class JudgehostQueueMixin:
         if not safe_task_id:
             raise RuntimeError("task_id is required")
         safe_host = self._normalize_hostname(hostname)
-        payload_obj = dict(payload or {})
+        payload_obj = self._dict_or_empty(payload)
         run_status_raw = str(
             payload_obj.get("run_status")
             or payload_obj.get("status")
@@ -272,8 +276,8 @@ class JudgehostQueueMixin:
             prev_lease_owner = lease_owner
             prev_lease_expires_at = str(row.get("lease_expires_at") or "").strip()
             prev_error_text = str(row.get("error_text") or "").strip()
-            prev_result = dict(row.get("result") or {})
-            prev_summary = dict(row.get("summary") or {})
+            prev_result = self._dict_or_empty(row.get("result"))
+            prev_summary = self._dict_or_empty(row.get("summary"))
             persist_verification_run = bool(row.get("persist_verification_run", True))
             row["status"] = self.STATUS_REPORTING
             row["updated_at"] = now_iso()
@@ -281,12 +285,12 @@ class JudgehostQueueMixin:
         try:
             existing_summary = self._load_run_summary(run_id, verification_id)
             if not existing_summary:
-                existing_summary = dict(prev_summary)
+                existing_summary = self._dict_or_empty(prev_summary)
             summary = payload_obj.get("summary")
             if isinstance(summary, dict):
                 summary_obj: dict[str, object] = dict(summary)
             else:
-                summary_obj = dict(existing_summary)
+                summary_obj = self._dict_or_empty(existing_summary)
             if "tests" not in summary_obj:
                 summary_obj["tests"] = list(existing_summary.get("tests") or [])
             if "source" not in summary_obj:
@@ -294,9 +298,9 @@ class JudgehostQueueMixin:
             if "mode" not in summary_obj:
                 summary_obj["mode"] = str(existing_summary.get("mode") or "pass-fail")
             if "limits" not in summary_obj:
-                summary_obj["limits"] = dict(existing_summary.get("limits") or {})
+                summary_obj["limits"] = self._dict_or_empty(existing_summary.get("limits"))
             if "usage" not in summary_obj:
-                summary_obj["usage"] = dict(existing_summary.get("usage") or {})
+                summary_obj["usage"] = self._dict_or_empty(existing_summary.get("usage"))
             if run_status != "ok":
                 if error_text:
                     summary_obj["error"] = error_text
@@ -304,7 +308,7 @@ class JudgehostQueueMixin:
                     summary_obj["error"] = "judgehost reported failure"
             summary_obj["status"] = run_status
 
-            judgehost_block = dict(summary_obj.get("judgehost") or {})
+            judgehost_block = self._dict_or_empty(summary_obj.get("judgehost"))
             judgehost_block["task_id"] = safe_task_id
             judgehost_block["hostname"] = safe_host
             judgehost_block["status"] = task_status
@@ -331,8 +335,8 @@ class JudgehostQueueMixin:
                     row["lease_owner"] = prev_lease_owner
                     row["lease_expires_at"] = prev_lease_expires_at
                     row["error_text"] = prev_error_text
-                    row["result"] = dict(prev_result)
-                    row["summary"] = dict(prev_summary)
+                    row["result"] = self._dict_or_empty(prev_result)
+                    row["summary"] = self._dict_or_empty(prev_summary)
                     row["updated_at"] = now_iso()
             raise
 
@@ -340,8 +344,8 @@ class JudgehostQueueMixin:
             row = self._tasks_by_id.get(safe_task_id)
             if row is not None:
                 row["status"] = task_status
-                row["result"] = dict(payload_obj)
-                row["summary"] = dict(summary_obj)
+                row["result"] = self._dict_or_empty(payload_obj)
+                row["summary"] = self._dict_or_empty(summary_obj)
                 row["run_status"] = run_status
                 row["error_text"] = error_text
                 row["lease_owner"] = safe_host
@@ -407,7 +411,8 @@ class JudgehostQueueMixin:
             verification_id=safe_verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
-            build_id=str(row.get("build_id") or "").strip(),
+            source_commit="",
+            source_ref="",
             kind="verification",
             mode=str(row.get("mode") or "").strip() or "pass-fail",
             verification_source=verification_source,
@@ -455,7 +460,7 @@ class JudgehostQueueMixin:
                     "status": str(row.get("run_status") or status).strip().lower(),
                     "task_status": status,
                     "error": str(row.get("error_text") or "").strip(),
-                    "summary": dict(row.get("summary") or {}),
+                    "summary": self._dict_or_empty(row.get("summary")),
                 }
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
@@ -668,14 +673,14 @@ class JudgehostQueueMixin:
                 affected += 1
         return affected
 
-    def active_task_count_for_build(self, build_id: str) -> int:
-        safe_build = str(build_id or "").strip()
-        if not safe_build:
+    def active_task_count_for_verification(self, verification_id: str) -> int:
+        safe_verification_id = str(verification_id or "").strip()
+        if not safe_verification_id:
             return 0
         count = 0
         with self._state_lock:
             for row in self._tasks_by_id.values():
-                if str(row.get("build_id") or "").strip() != safe_build:
+                if str(row.get("artifact_verification_id") or "").strip() != safe_verification_id:
                     continue
                 status = str(row.get("status") or "").strip().lower()
                 if status in {self.STATUS_QUEUED, self.STATUS_LEASED}:
@@ -843,12 +848,12 @@ class JudgehostQueueMixin:
         )
         return [dict(row) for row in rows]
 
-    def domjudge_buildsolve_progress(self, build_id: str) -> dict[str, int]:
-        return domjudge_buildsolve_progress(
+    def domjudge_solve_main_progress(self, verification_id: str) -> dict[str, int]:
+        return domjudge_solve_main_progress(
             state_lock=self._state_lock,
             tasks_by_id=self._tasks_by_id,
             db_fetch_one=self._db_fetch_one,
-            build_id=build_id,
+            artifact_verification_id=verification_id,
         )
 
     def forget_domjudge_runs(self, run_ids: list[str]) -> int:

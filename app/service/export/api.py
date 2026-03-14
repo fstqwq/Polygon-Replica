@@ -38,18 +38,17 @@ class ExportService:
         self.artifacts_root = artifacts_root
         self.workspace_root = workspace_root
 
-    def _canonical_build_root(self, build_ref: str) -> Path:
-        token = str(build_ref or "").strip().lower()
-        if re.fullmatch(r"[0-9a-f]{64}", token) is None:
-            raise ValueError("invalid build_ref")
-        base = (self.artifacts_root / "objects" / token[:2]).resolve()
-        root = (base / token).resolve()
+    def _canonical_verification_root(self, artifact_path: str) -> Path:
+        token = str(artifact_path or "").strip()
+        if not token:
+            raise ValueError("invalid artifact_path")
         try:
-            rel = root.relative_to(base)
-        except ValueError as exc:
-            raise ValueError("invalid build_ref") from exc
-        if len(rel.parts) != 1 or rel.parts[0] != token:
-            raise ValueError("invalid build_ref")
+            base = self.artifacts_root.resolve()
+            root = Path(token).resolve()
+        except OSError as exc:
+            raise ValueError("invalid artifact_path") from exc
+        if root != base and base not in root.parents:
+            raise ValueError("invalid artifact_path")
         return root
 
     def _yaml_quote(self, value: str) -> str:
@@ -504,295 +503,176 @@ class ExportService:
             return
         rows = self.db.fetch_all(
             """
-            SELECT id,build_id,build_ref,filename
+            SELECT exports.id,exports.verification_id,exports.filename,verifications.artifact_path
             FROM exports
-            WHERE problem_id=? AND workspace_id=? AND export_type=? AND source_commit=? AND id<>?
-            ORDER BY created_at DESC
+            LEFT JOIN verifications ON verifications.id=exports.verification_id
+            WHERE exports.problem_id=? AND exports.workspace_id=? AND exports.export_type=? AND exports.source_commit=? AND exports.id<>?
+            ORDER BY exports.created_at DESC
             """,
             [problem_id, workspace_id, export_type, source_commit, keep_export_id],
         )
         for row in rows:
             old_id = str(row["id"] or "").strip()
-            old_build_ref = str(row["build_ref"] or "").strip().lower()
             old_filename = str(row["filename"] or "").strip()
-            if old_build_ref and old_filename:
+            old_artifact_path = str(row["artifact_path"] or "").strip()
+            if old_artifact_path and old_filename:
                 try:
-                    old_build_root = self._canonical_build_root(old_build_ref)
-                    old_file = (old_build_root / "export" / old_filename).resolve()
-                    export_root = (old_build_root / "export").resolve()
-                    if export_root in old_file.parents and old_file.exists() and old_file.is_file():
-                        old_file.unlink(missing_ok=True)
+                    old_verification_root = self._canonical_verification_root(old_artifact_path)
+                    export_root = (old_verification_root / "export").resolve()
+                    old_file = (export_root / old_filename).resolve()
+                    if (
+                        export_root.exists()
+                        and export_root.is_dir()
+                        and (not export_root.is_symlink())
+                        and old_file.exists()
+                        and old_file.is_file()
+                        and (not old_file.is_symlink())
+                        and (export_root == old_file.parent or export_root in old_file.parents)
+                    ):
+                        old_file.unlink()
                 except Exception:
                     pass
             if old_id:
-                try:
-                    self.db.execute("DELETE FROM exports WHERE id=?", [old_id])
-                except Exception:
-                    pass
+                self.db.execute("DELETE FROM exports WHERE id=?", [old_id])
 
-    def _try_compile_statement_pdf(self, statement_root: Path, dst_statement: Path) -> bool:
-        tex = statement_root / "main.tex"
-        if not tex.exists() or not tex.is_file() or tex.is_symlink():
-            return False
+    def _load_problem_config(self, snapshot: Path) -> dict:
+        cfg_path = snapshot / "config" / "problem.json"
+        if not cfg_path.exists() or not cfg_path.is_file():
+            return {}
         try:
-            for _ in range(max(1, int(self.STATEMENT_PDF_PASSES))):
-                proc = run_cmd(
-                    [
-                        "pdflatex",
-                        "-interaction=nonstopmode",
-                        "-halt-on-error",
-                        str(tex.name),
-                    ],
-                    cwd=tex.parent,
-                    timeout=self.STATEMENT_PDF_TIMEOUT_SEC,
-                )
-                if proc.returncode != 0:
-                    return False
-            generated_pdf = tex.parent / "main.pdf"
-            if not generated_pdf.exists() or not generated_pdf.is_file() or generated_pdf.is_symlink():
-                return False
-            dst_statement.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(generated_pdf, dst_statement / "problem.en.pdf")
-            return True
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
         except Exception:
-            return False
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
-    def _copy_statement(self, snapshot: Path | None, build_root: Path, dst_statement: Path, problem_name: str) -> None:
-        compiled_pdf = False
-        if snapshot is not None:
-            # Render statement sources on demand in snapshot only.
-            render_statement_main(snapshot / "statement", problem_title=str(problem_name or "").strip())
-            self._copy_dir_contents(snapshot / "statement", dst_statement)
-            compiled_pdf = self._try_compile_statement_pdf(snapshot / "statement", dst_statement)
-
-        has_problem_statement = any(dst_statement.glob("problem.*.tex")) or any(dst_statement.glob("problem.*.pdf"))
-        if not has_problem_statement:
-            main_tex = dst_statement / "main.tex"
-            if main_tex.exists():
-                shutil.copy2(main_tex, dst_statement / "problem.en.tex")
-                has_problem_statement = True
-        if compiled_pdf:
-            has_problem_statement = True
-
-        if snapshot is None and not has_problem_statement:
-            preview_pdf = build_root / "statement_preview" / "statement.pdf"
-            if preview_pdf.exists():
-                dst_statement.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(preview_pdf, dst_statement / "problem.en.pdf")
-                has_problem_statement = True
-
-        if not has_problem_statement:
-            dst_statement.mkdir(parents=True, exist_ok=True)
-            (dst_statement / "problem.en.tex").write_text(
-                "\\documentclass{article}\n"
-                "\\begin{document}\n"
-                "Statement is unavailable in this export snapshot.\n"
-                "\\end{document}\n",
-                encoding="utf-8",
-            )
-
-    def _copy_test_data(self, build_root: Path, data_root: Path) -> None:
-        tests_dir = build_root / "tests"
-        ans_dir = build_root / "ans"
-        try:
-            tests_dir_resolved = tests_dir.resolve()
-        except OSError:
-            tests_dir_resolved = None
-        first_test: Path | None = None
-        test_count = 0
-        try:
-            ans_dir_resolved = ans_dir.resolve()
-        except OSError:
-            ans_dir_resolved = None
-        safe_answers: dict[str, Path] = {}
-        if ans_dir_resolved is not None:
-            for ap in self._iter_safe_top_level_suffix_files(
-                ans_dir,
-                ".ans",
-                folder_resolved=ans_dir_resolved,
-            ):
-                safe_answers[ap.name] = ap
-
-        secret = data_root / "secret"
-        sample = data_root / "sample"
-        secret.mkdir(parents=True, exist_ok=True)
-        sample.mkdir(parents=True, exist_ok=True)
-
-        for t in self._iter_safe_top_level_suffix_files(
-            tests_dir,
-            ".in",
-            folder_resolved=tests_dir_resolved,
-        ):
-            if first_test is None:
-                first_test = t
-            test_count += 1
-            out_in = secret / t.name
-            out_ans = secret / f"{t.stem}.ans"
-            shutil.copy2(t, out_in)
-            src_ans = safe_answers.get(f"{t.stem}.ans")
-            if src_ans is not None:
-                shutil.copy2(src_ans, out_ans)
-            else:
-                out_ans.write_text("", encoding="utf-8")
-
-        if first_test is None or test_count <= 0:
-            raise ValueError("build has no tests to export")
-
-        first = first_test
-        shutil.copy2(first, sample / "1.in")
-        first_ans = safe_answers.get(f"{first.stem}.ans")
-        if first_ans is not None:
-            shutil.copy2(first_ans, sample / "1.ans")
-        else:
-            (sample / "1.ans").write_text("", encoding="utf-8")
-
-    def _populate_submissions(self, snapshot: Path | None, submissions_dir: Path) -> None:
-        for folder in self.KATTIS_SUBMISSION_DIRS:
-            (submissions_dir / folder).mkdir(parents=True, exist_ok=True)
-
-        if snapshot is not None:
-            upstream_root = snapshot / "submissions"
-            for src in self._iter_safe_descendant_files(upstream_root):
-                try:
-                    rel = src.relative_to(upstream_root)
-                except ValueError:
-                    continue
-                if len(rel.parts) < 2:
-                    continue
-                mapped_group = self._submission_dir_for_expected(rel.parts[0])
-                if not mapped_group:
-                    continue
-                dst = submissions_dir / mapped_group
-                for part in rel.parts[1:]:
-                    dst = dst / part
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-
-        if snapshot is not None:
-            solutions_dir = snapshot / "solutions"
-            for src in self._iter_solution_sources(solutions_dir):
-                expected = self._solution_expected_behavior(src)
-                mapped_group = self._submission_dir_for_expected(expected)
-                if not mapped_group:
-                    continue
-                dst_dir = submissions_dir / mapped_group
-                dst_dir.mkdir(parents=True, exist_ok=True)
-                dst = self._ensure_unique_file_path(dst_dir, src.name)
-                shutil.copy2(src, dst)
-
-        accepted = submissions_dir / "accepted"
-        has_accepted = next(self._iter_safe_descendant_files(accepted), None) is not None
-        if not has_accepted and snapshot is not None:
-            src = self._find_first_source(snapshot / "solutions", preferred=["accepted.cpp", "main.cpp"])
-            if src is not None:
-                dst = self._ensure_unique_file_path(accepted, src.name)
-                shutil.copy2(src, dst)
-                has_accepted = True
-
-        if not has_accepted:
-            (accepted / "accepted.cpp").write_text(
-                "#include <bits/stdc++.h>\n"
-                "int main(){return 0;}\n",
-                encoding="utf-8",
-            )
-
-    def _populate_input_validators(self, snapshot: Path | None, validators_dir: Path) -> None:
-        validators_dir.mkdir(parents=True, exist_ok=True)
-        selected_rel: Path | None = None
-        if snapshot is not None:
-            upstream = snapshot / "input_validators"
-            if upstream.exists():
-                self._copy_dir_contents(upstream, validators_dir)
-            else:
-                validators_root = snapshot / "validators"
-                selected_src = self._effective_validator_source(snapshot, strict=False)
-                if validators_root.exists():
-                    self._copy_dir_contents(validators_root, validators_dir)
-                if selected_src is not None:
-                    try:
-                        selected_rel = selected_src.resolve().relative_to(validators_root.resolve())
-                    except Exception:
-                        selected_rel = Path(selected_src.name)
-                        target = validators_dir / selected_rel
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(selected_src, target)
-
-        if selected_rel is not None:
-            for candidate in list(self._iter_safe_descendant_files(validators_dir)):
-                rel = candidate.relative_to(validators_dir)
-                if not self._is_source_filename(rel.name):
-                    continue
-                if rel == selected_rel:
-                    continue
-                candidate.unlink(missing_ok=True)
-
-        has_validator = next(self._iter_safe_descendant_files(validators_dir), None) is not None
-        if not has_validator:
-            fallback = validators_dir / "validator.cpp"
-            if fallback.is_symlink():
-                fallback.unlink(missing_ok=True)
-            elif fallback.exists() and not fallback.is_file():
-                if fallback.is_dir():
-                    shutil.rmtree(fallback, ignore_errors=True)
-                else:
-                    fallback.unlink(missing_ok=True)
-            fallback.write_text(
-                "#include <bits/stdc++.h>\n"
-                "int main(){return 42;}\n",
-                encoding="utf-8",
-            )
-
-    def _populate_output_validator(self, snapshot: Path | None, out_dir: Path, mode: str) -> bool:
-        if snapshot is None:
-            return False
-        src: Path | None = None
-        if mode == "interactive":
-            src = self._find_first_source(snapshot / "interactors")
-        if src is None:
-            src = self._effective_checker_source(snapshot, strict=True)
-        if src is None:
-            return False
-        out_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, out_dir / src.name)
-        return True
-
-    def _kattis_type_yaml(self, mode: str) -> str:
-        if mode == "interactive":
+    def _problem_yaml_type(self, mode: str) -> str:
+        token = str(mode or "pass-fail").strip().lower() or "pass-fail"
+        if token == "interactive":
             return "[pass-fail, interactive]"
-        if mode == "multi-pass":
+        if token == "multi-pass":
             return "[pass-fail, multi-pass]"
         return "pass-fail"
 
-    def _write_kattis_problem_yaml(self, package_root: Path, problem_name: str, source_commit: str | None, mode: str) -> None:
-        pkg_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"polygonlike:{problem_name}:{source_commit or 'head'}")
+    def _build_problem_yaml(self, *, problem_name: str, mode: str, snapshot: Path) -> str:
+        cfg = self._load_problem_config(snapshot)
         lines = [
             "problem_format_version: 2025-09",
-            f"name: {self._yaml_quote(problem_name)}",
-            f"uuid: {self._yaml_quote(str(pkg_uuid))}",
-            f"type: {self._kattis_type_yaml(mode)}",
-            "license: unknown",
+            f"name: {self._yaml_quote(str(problem_name or '').strip() or 'Problem')}",
+            f"type: {self._problem_yaml_type(mode)}",
         ]
-        if source_commit:
-            lines.append(f"version: {self._yaml_quote(source_commit[:12])}")
-        (package_root / "problem.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        time_limit_ms = cfg.get("time_limit_ms")
+        memory_limit_mb = cfg.get("memory_limit_mb")
+        limit_lines: list[str] = []
+        if isinstance(time_limit_ms, int) and time_limit_ms > 0:
+            seconds = max(1, int(round(time_limit_ms / 1000.0)))
+            limit_lines.append(f"  time_limit: {seconds} s")
+        if isinstance(memory_limit_mb, int) and memory_limit_mb > 0:
+            limit_lines.append(f"  memory_limit: {memory_limit_mb} MiB")
+        if limit_lines:
+            lines.append("limits:")
+            lines.extend(limit_lines)
+        return "\n".join(lines) + "\n"
+
+    def _copy_statement_tree(self, snapshot: Path, dst_statement: Path, *, problem_name: str) -> None:
+        dst_statement.mkdir(parents=True, exist_ok=True)
+        src_statement = snapshot / "statement"
+        if src_statement.exists() and src_statement.is_dir() and not src_statement.is_symlink():
+            self._copy_dir_contents(src_statement, dst_statement)
+
+        src_sections = snapshot / "statement-sections"
+        if src_sections.exists() and src_sections.is_dir() and not src_sections.is_symlink():
+            self._copy_dir_contents(src_sections, dst_statement.parent / "statement-sections")
+
+        rendered = render_statement_main(snapshot / "statement", problem_title=problem_name)
+        shutil.copy2(rendered, dst_statement / "problem.en.tex")
+
+    def _try_compile_statement_pdf(self, snapshot: Path, dst_statement: Path) -> bool:
+        try:
+            rendered = render_statement_main(snapshot / "statement")
+        except Exception:
+            return False
+        workdir = rendered.parent
+        proc = run_cmd(
+            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", rendered.name],
+            cwd=workdir,
+            timeout=self.STATEMENT_PDF_TIMEOUT_SEC,
+        )
+        if proc.returncode != 0:
+            return False
+        pdf_path = rendered.with_suffix(".pdf")
+        if not pdf_path.exists() or not pdf_path.is_file():
+            return False
+        dst_statement.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pdf_path, dst_statement / "problem.en.pdf")
+        return True
+
+    def _copy_secret_and_sample_data(self, build_root: Path, package_root: Path) -> None:
+        tests_dir = build_root / "tests"
+        ans_dir = build_root / "ans"
+        secret_dir = package_root / "data" / "secret"
+        sample_dir = package_root / "data" / "sample"
+        secret_dir.mkdir(parents=True, exist_ok=True)
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        input_files = list(self._iter_safe_top_level_suffix_files(tests_dir, ".in"))
+        if not input_files:
+            raise ValueError("verification artifacts do not contain test inputs")
+        first_input = input_files[0]
+        first_answer = ans_dir / f"{first_input.stem}.ans"
+        shutil.copy2(first_input, sample_dir / "1.in")
+        if self._is_safe_regular_file(ans_dir, first_answer):
+            shutil.copy2(first_answer, sample_dir / "1.ans")
+        for input_file in input_files:
+            target_input = secret_dir / input_file.name
+            shutil.copy2(input_file, target_input)
+            answer_file = ans_dir / f"{input_file.stem}.ans"
+            if self._is_safe_regular_file(ans_dir, answer_file):
+                shutil.copy2(answer_file, secret_dir / answer_file.name)
+
+    def _copy_named_component(self, source: Path | None, dst_dir: Path) -> None:
+        if source is None:
+            return
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dst_dir / source.name)
+
+    def _copy_solutions(self, snapshot: Path, package_root: Path) -> None:
+        dst_submissions = package_root / "submissions"
+        dst_submissions.mkdir(parents=True, exist_ok=True)
+        for source_file in self._iter_solution_sources(snapshot / "solutions"):
+            expected = self._solution_expected_behavior(source_file)
+            target_group = self._submission_dir_for_expected(expected)
+            if not target_group:
+                continue
+            target_dir = dst_submissions / target_group
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = self._ensure_unique_file_path(target_dir, source_file.name)
+            shutil.copy2(source_file, target_path)
 
     def _build_kattis(
         self,
+        *,
         package_root: Path,
         build_root: Path,
-        snapshot: Path | None,
+        snapshot: Path,
         problem_name: str,
-        source_commit: str | None,
         mode: str,
     ) -> None:
-        self._write_kattis_problem_yaml(package_root, problem_name, source_commit, mode)
-        self._copy_statement(snapshot, build_root, package_root / "statement", problem_name)
-        self._copy_test_data(build_root, package_root / "data")
-        self._populate_submissions(snapshot, package_root / "submissions")
-        self._populate_input_validators(snapshot, package_root / "input_validators")
-        self._populate_output_validator(snapshot, package_root / "output_validator", mode)
+        package_root.mkdir(parents=True, exist_ok=True)
+        (package_root / "problem.yaml").write_text(
+            self._build_problem_yaml(problem_name=problem_name, mode=mode, snapshot=snapshot),
+            encoding="utf-8",
+        )
+        self._copy_secret_and_sample_data(build_root, package_root)
+        statement_dir = package_root / "statement"
+        self._copy_statement_tree(snapshot, statement_dir, problem_name=problem_name)
+        self._try_compile_statement_pdf(snapshot, statement_dir)
+        validator_source = self._effective_validator_source(snapshot, strict=False)
+        checker_source = None if mode == "interactive" else self._effective_checker_source(snapshot, strict=False)
+        interactor_source = self._find_first_source(snapshot / "interactors") if mode == "interactive" else None
+        self._copy_named_component(validator_source, package_root / "input_validators")
+        self._copy_named_component(interactor_source if mode == "interactive" else checker_source, package_root / "output_validator")
+        self._copy_solutions(snapshot, package_root)
 
-    def create_export(self, problem: str, build_id: str, export_type: str) -> Path:
+    def create_export(self, problem: str, verification_id: str, export_type: str) -> Path:
         export_type_raw = str(export_type or "").strip().lower()
         resolved_export_type = export_type_raw or "icpc"
         if resolved_export_type not in self.TYPES:
@@ -802,35 +682,35 @@ class ExportService:
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
 
-        build_row = self.db.fetch_one(
-            "SELECT problem_id,workspace_id,source_commit,status,build_ref FROM builds WHERE id=?",
-            [build_id],
+        verification_row = self.db.fetch_one(
+            "SELECT problem_id,workspace_id,source_commit,status,artifact_path FROM verifications WHERE id=?",
+            [verification_id],
         )
-        if build_row is None:
-            raise ValueError(f"build metadata not found: {build_id}")
-        if build_row["problem_id"] != problem_row["id"]:
-            raise ValueError(f"build {build_id} does not belong to problem {problem}")
-        if build_row["status"] != "ok":
-            raise ValueError(f"build not exportable: {build_id} (status={build_row['status']})")
-        source_commit = str(build_row["source_commit"] or "").strip()
+        if verification_row is None:
+            raise ValueError(f"verification metadata not found: {verification_id}")
+        if verification_row["problem_id"] != problem_row["id"]:
+            raise ValueError(f"verification {verification_id} does not belong to problem {problem}")
+        if verification_row["status"] != "ok":
+            raise ValueError(f"verification not exportable: {verification_id} (status={verification_row['status']})")
+        source_commit = str(verification_row["source_commit"] or "").strip()
         if resolved_export_type == "icpc" and not source_commit:
-            raise ValueError(f"build source_commit missing: {build_id}")
-        build_ref = str(build_row["build_ref"] or "").strip().lower()
-        if re.fullmatch(r"[0-9a-f]{64}", build_ref) is None:
-            raise ValueError(f"build_ref missing or invalid: {build_id}")
+            raise ValueError(f"verification source_commit missing: {verification_id}")
+        artifact_path = str(verification_row["artifact_path"] or "").strip()
+        if not artifact_path:
+            raise ValueError(f"verification artifact_path missing: {verification_id}")
 
-        build_root = self._canonical_build_root(build_ref)
-        if not build_root.exists():
-            raise ValueError(f"unknown build artifacts: {build_id}")
+        verification_root = self._canonical_verification_root(artifact_path)
+        if not verification_root.exists():
+            raise ValueError(f"unknown verification artifacts: {verification_id}")
         required_paths: list[tuple[str, str]] = [("manifest.json", "file"), ("logs", "dir")]
         if resolved_export_type == "icpc":
             required_paths.extend([("tests", "dir"), ("ans", "dir")])
-        missing_paths = self._validate_required_paths(build_root, required_paths)
+        missing_paths = self._validate_required_paths(verification_root, required_paths)
         if missing_paths:
             raise ValueError(
-                "incomplete build artifacts for export: " + ", ".join(sorted(missing_paths))
+                "incomplete verification artifacts for export: " + ", ".join(sorted(missing_paths))
             )
-        export_dir = build_root / "export"
+        export_dir = verification_root / "export"
         export_dir.mkdir(parents=True, exist_ok=True)
 
         export_id = f"e-{uuid.uuid4().hex[:10]}"
@@ -840,7 +720,7 @@ class ExportService:
         revision_number: int | None = None
         workspace_path: Path | None = None
         try:
-            workspace_path = self._workspace_path_for_export(build_row["workspace_id"], str(problem_row["slug"]))
+            workspace_path = self._workspace_path_for_export(verification_row["workspace_id"], str(problem_row["slug"]))
         except Exception:
             workspace_path = None
         if workspace_path is not None:
@@ -852,7 +732,7 @@ class ExportService:
             mode = "pass-fail"
             if resolved_export_type == "icpc":
                 snapshot = self._snapshot_source(
-                    build_row["workspace_id"],
+                    verification_row["workspace_id"],
                     str(problem_row["slug"]),
                     source_commit,
                     tmp_root,
@@ -860,10 +740,9 @@ class ExportService:
                 mode = self._problem_mode(snapshot)
                 self._build_kattis(
                     package_root=package_root,
-                    build_root=build_root,
+                    build_root=verification_root,
                     snapshot=snapshot,
                     problem_name=problem_row["name"],
-                    source_commit=source_commit,
                     mode=mode,
                 )
 
@@ -880,13 +759,12 @@ class ExportService:
             digest = sha256_file(out)
 
             self.db.execute(
-                "INSERT INTO exports(id,problem_id,build_id,build_ref,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO exports(id,problem_id,verification_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 [
                     export_id,
                     problem_row["id"],
-                    build_id,
-                    build_ref,
-                    build_row["workspace_id"],
+                    verification_id,
+                    verification_row["workspace_id"],
                     resolved_export_type,
                     out.name,
                     digest,
@@ -897,7 +775,7 @@ class ExportService:
             )
             self._cleanup_previous_revision_exports(
                 problem_id=int(problem_row["id"]),
-                workspace_id=build_row["workspace_id"],
+                workspace_id=verification_row["workspace_id"],
                 export_type=resolved_export_type,
                 source_commit=source_commit,
                 keep_export_id=export_id,

@@ -229,7 +229,7 @@ def files_back_target(problem: str, user: str, source: str, source_id: str) -> t
     base = f'/problems/{problem}/{user}'
     if source == 'tests':
         if source_id:
-            return (f'{base}/tests?build_id={quote_plus(source_id)}', 'Tests')
+            return (f'{base}/tests?verification_id={quote_plus(source_id)}', 'Tests')
         return (f'{base}/tests', 'Tests')
     if source == 'preview':
         if source_id:
@@ -713,11 +713,11 @@ def run_solution_options_context(workspace: Path) -> tuple[list[dict], str, bool
         options.append({'path': path, 'label': label, 'is_accepted': str(row.get('expected_behavior') or '') == 'accepted', 'expected_behavior': normalize_expected_behavior(str(row.get('expected_behavior') or 'unknown'))})
     return (options, default_path, bool(truncated))
 
-def _run_test_options_from_build(problem: str, build_id: str, limit: int=_C.RUN_TEST_SELECTOR_LIMIT) -> tuple[list[dict], bool]:
+def _run_test_options_from_verification(problem: str, verification_id: str, limit: int=_C.RUN_TEST_SELECTOR_LIMIT) -> tuple[list[dict], bool]:
     options: list[dict] = []
     truncated = False
     try:
-        root = artifact_root(problem, build_id)
+        root = artifact_root(problem, verification_id)
     except HTTPException:
         return (options, truncated)
     tests_dir = root / 'tests'
@@ -802,12 +802,12 @@ def _run_test_options_from_spec(workspace: Path, limit: int=_C.RUN_TEST_SELECTOR
         options.append({'name': name, 'label': f'{name}{suffix}'})
     return (options, truncated)
 
-def run_test_options_context(problem: str, workspace: Path, active_build: dict | None) -> tuple[list[dict], bool, str]:
-    build_id = str(active_build['id'] or '').strip() if active_build is not None else ''
-    if build_id:
-        build_options, build_truncated = _run_test_options_from_build(problem, build_id, limit=_C.RUN_TEST_SELECTOR_LIMIT)
+def run_test_options_context(problem: str, workspace: Path, active_verification: dict | None) -> tuple[list[dict], bool, str]:
+    verification_id = str(active_verification['id'] or '').strip() if active_verification is not None else ''
+    if verification_id:
+        build_options, build_truncated = _run_test_options_from_verification(problem, verification_id, limit=_C.RUN_TEST_SELECTOR_LIMIT)
         if build_options:
-            return (build_options, build_truncated, f'build {build_id}')
+            return (build_options, build_truncated, f'verification {verification_id}')
     spec_options, spec_truncated = _run_test_options_from_spec(workspace, limit=_C.RUN_TEST_SELECTOR_LIMIT)
     if spec_options:
         return (spec_options, spec_truncated, 'tests/spec.json')
@@ -850,6 +850,5 @@ def generator_sources_from_build_cfg(build_cfg: dict) -> list[str]:
             if normalized:
                 sources.append(normalized)
     return dedupe_preserve_order(sources)
-
 
 

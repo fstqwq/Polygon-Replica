@@ -17,6 +17,117 @@ _diag_logger = logging.getLogger("uvicorn.error")
 
 
 class JudgehostDomjudgeResultsMixin:
+    def _domjudge_update_verification_run_case_progress(
+        self,
+        *,
+        task_id: str,
+        source_path: str,
+        test_name: str,
+        verdict: str,
+        runtime_sec: float,
+        cpu_sec: float,
+        wall_sec: float,
+        memory_kb: int,
+        feedback_text: str,
+        output_ref: str,
+        run_status: str = "running",
+    ) -> None:
+        safe_task_id = str(task_id or "").strip()
+        if not safe_task_id:
+            return
+        task_row = self._task_by_id(safe_task_id)
+        if not isinstance(task_row, dict):
+            return
+        payload = task_row.get("payload")
+        payload_obj = payload if isinstance(payload, dict) else {}
+        verification_id = str(
+            payload_obj.get("artifact_verification_id")
+            or task_row.get("artifact_verification_id")
+            or payload_obj.get("verification_id")
+            or ""
+        ).strip()
+        target_run_id = str(
+            payload_obj.get("verification_target_run_id")
+            or task_row.get("run_id")
+            or payload_obj.get("run_id")
+            or ""
+        ).strip()
+        if (not verification_id) or (not target_run_id):
+            return
+        summary_obj = self._load_run_summary(target_run_id, verification_id)
+        tests_obj = summary_obj.get("tests")
+        existing_tests = tests_obj if isinstance(tests_obj, list) else []
+        updated_tests: list[dict[str, object]] = []
+        safe_test_name = str(test_name or "").strip()
+        safe_feedback = str(feedback_text or "").strip()
+        verdict_token = str(verdict or "").strip().upper() or "FL"
+        time_ms = max(0, int(round(float(runtime_sec or 0.0) * 1000.0)))
+        time_user_ms = max(0, int(round(float(cpu_sec or runtime_sec or 0.0) * 1000.0)))
+        time_wall_ms = max(0, int(round(float(wall_sec or cpu_sec or runtime_sec or 0.0) * 1000.0)))
+        pass_row = {
+            "pass": 1,
+            "verdict": verdict_token,
+            "time_ms": int(time_ms),
+            "time_user_ms": int(time_user_ms),
+            "time_wall_ms": int(time_wall_ms),
+            "memory_kb": int(max(0, int(memory_kb or 0))),
+            "feedback": safe_feedback,
+            "output_ref": str(output_ref or "").strip(),
+        }
+        test_row = {
+            "test": safe_test_name,
+            "verdict": verdict_token,
+            "time_ms": int(time_ms),
+            "time_user_ms": int(time_user_ms),
+            "time_wall_ms": int(time_wall_ms),
+            "memory_kb": int(max(0, int(memory_kb or 0))),
+            "message": safe_feedback,
+            "output_ref": str(output_ref or "").strip(),
+            "passes": [pass_row],
+        }
+        replaced = False
+        for item in existing_tests:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("test") or "").strip() == safe_test_name:
+                updated_tests.append(dict(test_row))
+                replaced = True
+            else:
+                updated_tests.append(dict(item))
+        if not replaced:
+            updated_tests.append(test_row)
+        updated_tests.sort(key=lambda item: str(item.get("test") or ""))
+        summary_obj["tests"] = updated_tests
+        summary_obj["tests_total"] = max(
+            len(updated_tests),
+            int(summary_obj.get("tests_total") or 0),
+            len(payload_obj.get("selected_tests") or []),
+        )
+        usage_obj = summary_obj.get("usage")
+        usage = usage_obj if isinstance(usage_obj, dict) else {}
+        summary_obj["usage"] = {
+            "tests": len(updated_tests),
+            "time_ms_total": max(time_user_ms, int(usage.get("time_ms_total") or 0)),
+            "time_user_ms_total": max(time_user_ms, int(usage.get("time_user_ms_total") or 0)),
+            "time_wall_ms_total": max(time_wall_ms, int(usage.get("time_wall_ms_total") or 0)),
+            "memory_kb_peak": max(int(memory_kb or 0), int(usage.get("memory_kb_peak") or 0)),
+        }
+        summary_obj["source"] = str(summary_obj.get("source") or source_path or "").strip()
+        summary_obj["verification_source"] = str(
+            payload_obj.get("verification_source")
+            or summary_obj.get("verification_source")
+            or "verification.start"
+        ).strip()
+        summary_obj["artifact_verification_id"] = verification_id
+        self._ensure_verification_result(
+            row=task_row,
+            verification_id=verification_id,
+            run_id=target_run_id,
+            run_status=str(run_status or "running").strip().lower() or "running",
+            summary_obj=summary_obj,
+            error_text="",
+        )
+
     def domjudge_get_source_files(self, submit_id: str, contest_id: str | None = None) -> list[dict[str, object]]:
         safe_submit = self._domjudge_text(submit_id)
         if not safe_submit:
@@ -585,7 +696,7 @@ class JudgehostDomjudgeResultsMixin:
         testcase_input_hash = self._domjudge_sha256_bytes(input_bytes)
         testcase_answer_hash = self._domjudge_sha256_bytes(answer_bytes)
         if not re.fullmatch(r"[0-9a-f]{64}", testcase_hash):
-            if verification_source in {"build.solve", "solve.main"}:
+            if verification_source in {"verification.solve-main", "solve.main"}:
                 testcase_hash = testcase_input_hash
             else:
                 testcase_hash = self._domjudge_set_hash_from_blobs([input_bytes, answer_bytes])
@@ -707,7 +818,7 @@ class JudgehostDomjudgeResultsMixin:
         # Prefer cache refs for summary output_ref so build/run consumers can still
         # resolve artifacts after judgehost temp work directories are cleaned.
 
-        if verification_source in {"build.solve", "solve.main"} and runresult == "correct":
+        if verification_source in {"verification.solve-main", "solve.main"} and runresult == "correct":
             solve_key_hash, solve_signature = self._domjudge_solve_output_cache_ref(
                 source_hash=source_hash,
                 compile_hash=compile_hash,
@@ -769,6 +880,27 @@ class JudgehostDomjudgeResultsMixin:
             runresult,
         )
         self._record_host_judging(safe_host, label=f"j{job_id}", updated_at=now_text)
+        if not compile_only:
+            try:
+                self._domjudge_update_verification_run_case_progress(
+                    task_id=safe_task_id,
+                    source_path=self._domjudge_text(row["source_path"]),
+                    test_name=self._domjudge_text(row["test_name"]),
+                    verdict=verdict,
+                    runtime_sec=runtime_sec,
+                    cpu_sec=cpu_sec,
+                    wall_sec=wall_sec,
+                    memory_kb=memory_kb,
+                    feedback_text=feedback_text,
+                    output_ref=output_run_token,
+                    run_status="running",
+                )
+            except Exception:
+                logger.exception(
+                    "failed to persist incremental verification case progress task_id=%s case_id=%s",
+                    safe_task_id,
+                    case_id,
+                )
 
         self._domjudge_finalize_if_ready(job_id)
         return 1

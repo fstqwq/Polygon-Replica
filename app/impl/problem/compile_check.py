@@ -132,7 +132,7 @@ def judgehost_compile_check_error(
         returned = config.judgehost_task_service.compile_only_submission(
             problem=problem,
             username=user,
-            build_id=str(getattr(_C, "RUN_PLACEHOLDER_BUILD_ID", "pending") or "pending"),
+            artifact_verification_id=str(getattr(_C, "RUN_PLACEHOLDER_BUILD_ID", "pending") or "pending"),
             upload_content=source_bytes,
             upload_filename=source_name,
             run_id=run_id,

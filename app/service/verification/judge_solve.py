@@ -8,6 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from app.service.verification import load_verification_summary
+
 RUN_TEST_NAME_RE = re.compile(r"^[0-9]{3}\.in$")
 
 
@@ -33,7 +35,7 @@ def solve_with_judge_backend(
     *,
     problem: str,
     username: str,
-    build_id: str,
+    artifact_verification_id: str,
     accepted_source_rel: str,
     mode: str,
     test_files: list[Path],
@@ -74,7 +76,7 @@ def solve_with_judge_backend(
                 1,
                 min(effective_parallelism, host_count * fetch_batch_size),
             )
-    # Keep one stable judgehost job per accepted source during build.solve.
+    # Keep one stable judgehost job per accepted source during verification.solve-main.
     # This guarantees one compile per source and enables deterministic
     # per-test cache hydration keyed by a stable work root.
     effective_parallelism = 1
@@ -98,13 +100,26 @@ def solve_with_judge_backend(
                 out.append(chunk)
         return out
 
-    verification_id = f"ver-buildsolve-{build_id}-{uuid.uuid4().hex[:8]}"
+    verification_id = f"ver-solve-main-{artifact_verification_id}-{uuid.uuid4().hex[:8]}"
+    target_run_id = ""
+    verification_summary = load_verification_summary(self.db, artifact_verification_id)
+    if isinstance(verification_summary, dict):
+        runs_obj = verification_summary.get("runs")
+        runs = runs_obj if isinstance(runs_obj, dict) else {}
+        for candidate_run_id, item in runs.items():
+            if not isinstance(item, dict):
+                continue
+            source_label = str(item.get("source_label") or "").strip()
+            if source_label == accepted_source_rel:
+                target_run_id = str(candidate_run_id or "").strip()
+                if target_run_id:
+                    break
     plans: list[dict[str, object]] = []
     for idx, chunk in enumerate(_split_chunks(list(selected_tests), effective_parallelism)):
         plans.append(
             {
                 "index": idx,
-                "run_id": f"r-buildsolve-{uuid.uuid4().hex[:12]}",
+                "run_id": f"r-solve-main-{uuid.uuid4().hex[:12]}",
                 "tests": chunk,
             }
         )
@@ -118,11 +133,11 @@ def solve_with_judge_backend(
 
     def _submit_and_wait_chunk(plan: dict[str, object]) -> dict[str, object]:
         chunk = [str(item or "").strip() for item in list(plan.get("tests") or []) if str(item or "").strip()]
-        run_id = str(plan.get("run_id") or "").strip() or f"r-buildsolve-{uuid.uuid4().hex[:12]}"
+        run_id = str(plan.get("run_id") or "").strip() or f"r-solve-main-{uuid.uuid4().hex[:12]}"
         task_id = service.enqueue_task(
             problem=problem,
             username=username,
-            build_id=build_id,
+            artifact_verification_id=artifact_verification_id,
             mode=solve_mode,
             submission_path=accepted_source_rel,
             upload_content=None,
@@ -132,9 +147,12 @@ def solve_with_judge_backend(
             verification_id=verification_id,
             verification_run_ids=list(verification_run_ids),
             expected_behavior="accepted",
-            verification_source="build.solve",
+            verification_source="verification.solve-main",
             task_kind="solve",
             persist_verification_run=False,
+            prepared_payload={
+                "verification_target_run_id": target_run_id,
+            } if target_run_id else None,
         )
         result = service.wait_for_task_result(task_id, timeout_sec=None)
         if str(result.get("task_status") or "").strip().lower() == service.STATUS_FAILED:
@@ -177,7 +195,7 @@ def solve_with_judge_backend(
             stage_result_out.clear()
             stage_result_out.update(
                 {
-                    "verification_source": "build.solve",
+                    "verification_source": "verification.solve-main",
                     "status": run_status or "ok",
                     "artifact_path": artifact_path,
                     "run_id": run_id,
@@ -376,7 +394,7 @@ def solve_with_judge_backend(
             for future in done:
                 idx = inflight.pop(future)
                 plan = plans[idx]
-                fallback_run_id = str(plan.get("run_id") or "").strip() or f"r-buildsolve-{uuid.uuid4().hex[:12]}"
+                fallback_run_id = str(plan.get("run_id") or "").strip() or f"r-solve-main-{uuid.uuid4().hex[:12]}"
                 try:
                     task_result = future.result()
                     chunk = [str(item or "").strip() for item in list(plan.get("tests") or []) if str(item or "").strip()]

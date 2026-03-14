@@ -66,7 +66,7 @@ router.add_api_route(
     methods=["GET"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/artifacts/{build_id}/{rel_path:path}",
+    "/problems/{problem:path}/{user}/artifacts/{verification_id}/{rel_path:path}",
     artifact_file,
     methods=["GET"],
 )

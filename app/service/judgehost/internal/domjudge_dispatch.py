@@ -124,12 +124,12 @@ class JudgehostDomjudgeDispatchMixin:
             if not blob:
                 continue
             extra_source_items.append((safe_name, blob))
-        build_payload = payload.get("build_payload")
-        if not isinstance(build_payload, dict):
-            raise RuntimeError("build payload is required for DOMjudge compatibility")
+        verification_payload = payload.get("verification_payload")
+        if not isinstance(verification_payload, dict):
+            raise RuntimeError("verification payload is required for DOMjudge compatibility")
         manual_validate_only = self._domjudge_bool(payload.get("manual_validate_only"), default=False)
         compile_only, generate_mode, solve_mode = self._domjudge_execution_modes(payload)
-        tests_payload = build_payload.get("tests")
+        tests_payload = verification_payload.get("tests")
         tests_rows = [row for row in (tests_payload if isinstance(tests_payload, list) else []) if isinstance(row, dict)]
         if compile_only:
             # compile_only is a virtual compile task and must not fan out over real tests.
@@ -144,7 +144,7 @@ class JudgehostDomjudgeDispatchMixin:
         if not tests_rows:
             raise RuntimeError("no tests in judgehost payload")
         run_cfg_obj: dict[str, object] = {}
-        run_cfg_raw = self._domjudge_text(build_payload.get("run_config_json"))
+        run_cfg_raw = self._domjudge_text(verification_payload.get("run_config_json"))
         if run_cfg_raw:
             try:
                 parsed = json.loads(run_cfg_raw)
@@ -152,7 +152,7 @@ class JudgehostDomjudgeDispatchMixin:
                     run_cfg_obj = parsed
             except Exception:
                 run_cfg_obj = {}
-        problem_limits_obj = build_payload.get("problem_limits")
+        problem_limits_obj = verification_payload.get("problem_limits")
         if not isinstance(problem_limits_obj, dict):
             problem_limits_obj = {}
         checker_args_raw = run_cfg_obj.get("checker_args")
@@ -212,12 +212,12 @@ class JudgehostDomjudgeDispatchMixin:
         run_overshoot_sec = 0.0
         run_mem_kb = max(16 * 1024, int(run_mem_mb * 1024))
 
-        binaries_b64 = build_payload.get("binaries_b64")
+        binaries_b64 = verification_payload.get("binaries_b64")
         binaries_obj = binaries_b64 if isinstance(binaries_b64, dict) else {}
         checker_bytes = self._domjudge_b64_decode(binaries_obj.get("checker"))
         validator_bytes = self._domjudge_b64_decode(binaries_obj.get("validator"))
         interactor_bytes = self._domjudge_b64_decode(binaries_obj.get("interactor"))
-        sources_b64 = build_payload.get("sources_b64")
+        sources_b64 = verification_payload.get("sources_b64")
         sources_obj = sources_b64 if isinstance(sources_b64, dict) else {}
         checker_source_bytes = self._domjudge_b64_decode(sources_obj.get("checker.cpp"))
         validator_source_bytes = self._domjudge_b64_decode(sources_obj.get("validator.cpp"))
@@ -291,7 +291,7 @@ class JudgehostDomjudgeDispatchMixin:
                 )
             )
             if compile_only or solve_mode:
-                # compile_only/build.solve must accept without checker/answer semantics.
+                # compile_only/verification.solve-main must accept without checker/answer semantics.
                 compare_files.append(("run", self._domjudge_compare_script(solve_mode=True), True))
             elif generate_mode:
                 compare_files.append(("run", self._domjudge_compare_script(generate_mode=True), True))
@@ -473,7 +473,7 @@ class JudgehostDomjudgeDispatchMixin:
                 ans_bytes = self._domjudge_b64_decode(entry.get("answer_b64"))
                 testcase_input_hash = self._domjudge_sha256_bytes(in_bytes)
                 testcase_answer_hash = self._domjudge_sha256_bytes(ans_bytes)
-                # build.solve must not depend on pre-existing answers:
+                # verification.solve-main must not depend on pre-existing answers:
                 # use input hash as testcase key so cache identity is
                 # (main_correct/source signature + input_hash).
                 testcase_hash = (
@@ -541,7 +541,7 @@ class JudgehostDomjudgeDispatchMixin:
         force_recompile = bool(int(job_row["force_recompile"] or 0))
         expected_behavior = self._domjudge_lower_text(job_row["expected_behavior"], default="unknown")
         verification_source = self._domjudge_lower_text(job_row["verification_source"])
-        solve_mode = verification_source in {"build.solve", "solve.main"}
+        solve_mode = verification_source in {"verification.solve-main", "solve.main"}
         compile_only = expected_behavior == "compile"
 
         case_key_hash, case_signature = self._domjudge_case_cache_ref(
@@ -700,10 +700,10 @@ class JudgehostDomjudgeDispatchMixin:
             return
         task_payload = dict(payload or {})
         compile_only = self._domjudge_task_kind(task_payload) == self._TASK_KIND_COMPILE_ONLY
-        build_payload = task_payload.get("build_payload")
-        if not isinstance(build_payload, dict):
+        verification_payload = task_payload.get("verification_payload")
+        if not isinstance(verification_payload, dict):
             return
-        tests_payload = build_payload.get("tests")
+        tests_payload = verification_payload.get("tests")
         if not isinstance(tests_payload, list):
             if not compile_only:
                 return

@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     branch TEXT,
     head_commit TEXT,
     dirty INTEGER NOT NULL DEFAULT 0,
-    recent_build_status TEXT,
+    recent_verification_status TEXT,
     updated_at TEXT NOT NULL,
     UNIQUE(problem_id, user_id),
     FOREIGN KEY(problem_id) REFERENCES problems(id),
@@ -176,26 +176,11 @@ CREATE TABLE IF NOT EXISTS contest_attachments (
     FOREIGN KEY(created_by_user_id) REFERENCES users(id)
 );
 
-CREATE TABLE IF NOT EXISTS builds (
-    id TEXT PRIMARY KEY,
-    build_ref TEXT NOT NULL DEFAULT '',
-    problem_id INTEGER NOT NULL,
-    workspace_id INTEGER,
-    source_commit TEXT,
-    source_ref TEXT,
-    status TEXT NOT NULL,
-    summary_json TEXT,
-    artifact_path TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    finished_at TEXT,
-    FOREIGN KEY(problem_id) REFERENCES problems(id),
-    FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
-);
-
 CREATE TABLE IF NOT EXISTS previews (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
     workspace_id INTEGER,
+    verification_id TEXT,
     source_commit TEXT,
     source_ref TEXT,
     status TEXT NOT NULL,
@@ -211,7 +196,8 @@ CREATE TABLE IF NOT EXISTS verifications (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
     workspace_id INTEGER,
-    build_id TEXT NOT NULL,
+    source_commit TEXT,
+    source_ref TEXT,
     kind TEXT NOT NULL,
     status TEXT NOT NULL,
     summary_json TEXT,
@@ -225,8 +211,7 @@ CREATE TABLE IF NOT EXISTS verifications (
 CREATE TABLE IF NOT EXISTS exports (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
-    build_id TEXT NOT NULL,
-    build_ref TEXT,
+    verification_id TEXT NOT NULL,
     workspace_id INTEGER,
     export_type TEXT NOT NULL,
     filename TEXT NOT NULL,
@@ -255,7 +240,9 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_by_user_id INTEGER,
     FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
 );
+"""
 
+SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_workspaces_problem_user ON workspaces(problem_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_contests_slug ON contests(slug);
 CREATE INDEX IF NOT EXISTS idx_contests_owner ON contests(owner_user_id, created_at DESC);
@@ -269,21 +256,17 @@ CREATE INDEX IF NOT EXISTS idx_contest_artifacts_contest_created ON contest_arti
 CREATE INDEX IF NOT EXISTS idx_contest_artifacts_job_created ON contest_artifacts(job_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_properties_contest_updated ON contest_properties(contest_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_attachments_contest_created ON contest_attachments(contest_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_builds_problem_created ON builds(problem_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_builds_problem_workspace_created ON builds(problem_id, workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_builds_workspace_created ON builds(workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_builds_build_ref ON builds(build_ref);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_workspace_created ON previews(problem_id, workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_workspace_created ON previews(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_source_status_created ON previews(problem_id, source_commit, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_previews_verification_created ON previews(verification_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_verifications_problem_created ON verifications(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_created ON verifications(problem_id, workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_verifications_build_status ON verifications(build_id, status);
 CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status);
+CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_exports_build_created ON exports(build_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_exports_build_ref_created ON exports(build_ref, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
@@ -401,6 +384,7 @@ class DB:
                     conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
                     conn.executescript(SCHEMA)
                     self._migrate(conn)
+                    conn.executescript(SCHEMA_INDEXES)
                     conn.commit()
                     return
             except sqlite3.OperationalError as exc:
@@ -414,13 +398,14 @@ class DB:
         self._migrate_users_system_admin(conn)
         self._migrate_auth_sessions(conn)
         self._migrate_sudo_sessions(conn)
-        self._migrate_exports_workspace_id(conn)
-        self._migrate_build_ref_columns(conn)
         self._migrate_system_config(conn)
         self._migrate_contest_schema(conn)
-        self._migrate_verifications_status_index(conn)
+        self._migrate_workspaces_recent_verification_status(conn)
+        self._migrate_previews_schema(conn)
         self._migrate_verifications_schema(conn)
+        self._migrate_exports_schema(conn)
         self._migrate_drop_runs_table(conn)
+        self._migrate_drop_builds_table(conn)
 
     def _migrate_users_auth_columns(self, conn: sqlite3.Connection) -> None:
         cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -501,49 +486,6 @@ class DB:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sudo_sessions_user_created ON sudo_sessions(user_id, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at)")
 
-    def _migrate_exports_workspace_id(self, conn: sqlite3.Connection) -> None:
-        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
-        if "workspace_id" not in cols:
-            conn.execute("ALTER TABLE exports ADD COLUMN workspace_id INTEGER")
-        conn.execute(
-            """
-            UPDATE exports
-            SET workspace_id = (
-                SELECT b.workspace_id
-                FROM builds b
-                WHERE b.id = exports.build_id
-            )
-            WHERE workspace_id IS NULL
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_exports_problem_workspace_created ON exports(problem_id, workspace_id, created_at DESC)"
-        )
-
-    def _migrate_build_ref_columns(self, conn: sqlite3.Connection) -> None:
-        build_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(builds)").fetchall()}
-        if "build_ref" not in build_cols:
-            conn.execute("ALTER TABLE builds ADD COLUMN build_ref TEXT NOT NULL DEFAULT ''")
-        conn.execute("UPDATE builds SET build_ref=id WHERE COALESCE(TRIM(build_ref), '') = ''")
-
-        export_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
-        if "build_ref" not in export_cols:
-            conn.execute("ALTER TABLE exports ADD COLUMN build_ref TEXT")
-        conn.execute(
-            """
-            UPDATE exports
-            SET build_ref = (
-                SELECT b.build_ref
-                FROM builds b
-                WHERE b.id = exports.build_id
-            )
-            WHERE COALESCE(TRIM(build_ref), '') = ''
-            """
-        )
-
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_builds_build_ref ON builds(build_ref)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_build_ref_created ON exports(build_ref, created_at DESC)")
-
     def _migrate_system_config(self, conn: sqlite3.Connection) -> None:
         conn.execute(
             """
@@ -560,15 +502,35 @@ class DB:
             "CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC)"
         )
 
-    def _migrate_verifications_status_index(self, conn: sqlite3.Connection) -> None:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_build_status ON verifications(build_id, status)")
+    def _migrate_workspaces_recent_verification_status(self, conn: sqlite3.Connection) -> None:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(workspaces)").fetchall()}
+        if "recent_verification_status" not in cols:
+            conn.execute("ALTER TABLE workspaces ADD COLUMN recent_verification_status TEXT")
+        if "recent_build_status" in cols:
+            conn.execute(
+                """
+                UPDATE workspaces
+                SET recent_verification_status = COALESCE(recent_verification_status, recent_build_status)
+                WHERE COALESCE(TRIM(recent_verification_status), '') = ''
+                """
+            )
+
+    def _migrate_previews_schema(self, conn: sqlite3.Connection) -> None:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(previews)").fetchall()}
+        if "verification_id" not in cols:
+            conn.execute("ALTER TABLE previews ADD COLUMN verification_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_previews_verification_created ON previews(verification_id, created_at DESC)")
 
     def _migrate_verifications_schema(self, conn: sqlite3.Connection) -> None:
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='verifications'"
-        ).fetchone()
-        create_sql = str(row[0] or "") if row is not None else ""
-        if create_sql and "FOREIGN KEY(build_id) REFERENCES builds(id)" in create_sql:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(verifications)").fetchall()}
+        if {"source_commit", "source_ref"}.issubset(cols):
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC)"
+            )
+            return
+        if cols:
+            source_commit_expr = "COALESCE(TRIM(v.source_commit), '')" if "source_commit" in cols else "''"
+            source_ref_expr = "COALESCE(TRIM(v.source_ref), '')" if "source_ref" in cols else "''"
             conn.execute("ALTER TABLE verifications RENAME TO verifications_old")
             conn.execute(
                 """
@@ -576,7 +538,8 @@ class DB:
                     id TEXT PRIMARY KEY,
                     problem_id INTEGER NOT NULL,
                     workspace_id INTEGER,
-                    build_id TEXT NOT NULL,
+                    source_commit TEXT,
+                    source_ref TEXT,
                     kind TEXT NOT NULL,
                     status TEXT NOT NULL,
                     summary_json TEXT,
@@ -589,20 +552,83 @@ class DB:
                 """
             )
             conn.execute(
-                """
+                f"""
                 INSERT INTO verifications(
-                    id,problem_id,workspace_id,build_id,kind,status,summary_json,artifact_path,created_at,finished_at
+                    id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
                 )
                 SELECT
-                    id,problem_id,workspace_id,build_id,kind,status,summary_json,artifact_path,created_at,finished_at
-                FROM verifications_old
+                    v.id,
+                    v.problem_id,
+                    v.workspace_id,
+                    {source_commit_expr},
+                    {source_ref_expr},
+                    v.kind,
+                    v.status,
+                    v.summary_json,
+                    v.artifact_path,
+                    v.created_at,
+                    v.finished_at
+                FROM verifications_old v
                 """
             )
             conn.execute("DROP TABLE verifications_old")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_problem_created ON verifications(problem_id, created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_created ON verifications(problem_id, workspace_id, created_at DESC)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_build_status ON verifications(build_id, status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC)")
+
+    def _migrate_exports_schema(self, conn: sqlite3.Connection) -> None:
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
+        if "verification_id" in cols:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_exports_problem_workspace_created ON exports(problem_id, workspace_id, created_at DESC)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC)")
+            return
+        if cols:
+            conn.execute("ALTER TABLE exports RENAME TO exports_old")
+            conn.execute(
+                """
+                CREATE TABLE exports (
+                    id TEXT PRIMARY KEY,
+                    problem_id INTEGER NOT NULL,
+                    verification_id TEXT NOT NULL,
+                    workspace_id INTEGER,
+                    export_type TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    source_commit TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(problem_id) REFERENCES problems(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO exports(
+                    id,problem_id,verification_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at
+                )
+                SELECT
+                    id,
+                    problem_id,
+                    COALESCE(TRIM(verification_id), ''),
+                    workspace_id,
+                    export_type,
+                    filename,
+                    sha256,
+                    size_bytes,
+                    source_commit,
+                    created_at
+                FROM exports_old
+                """
+            )
+            conn.execute("DROP TABLE exports_old")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_exports_problem_workspace_created ON exports(problem_id, workspace_id, created_at DESC)"
+            )
 
     def _migrate_drop_runs_table(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
@@ -611,6 +637,14 @@ class DB:
         if row is None:
             return
         conn.execute("DROP TABLE runs")
+
+    def _migrate_drop_builds_table(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='builds'"
+        ).fetchone()
+        if row is None:
+            return
+        conn.execute("DROP TABLE builds")
 
     @staticmethod
     def _contest_index_label(seq: int) -> str:

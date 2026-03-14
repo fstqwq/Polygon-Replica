@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .artifact import _is_safe_regular_file
 from app.impl.run_export.context import (
@@ -167,43 +167,43 @@ def _sample_manual_rows_missing_answers(workspace: Path) -> tuple[list[tuple[int
 def _materialize_polygon_sample_answers(problem: str, user: str, workspace: Path) -> dict[str, object]:
     sample_rows, missing_rows = _sample_manual_rows_missing_answers(workspace)
     if not sample_rows:
-        return {"sample_manual_total": 0, "sample_answers_missing": 0, "sample_answers_materialized": 0, "build_id": ""}
+        return {"sample_manual_total": 0, "sample_answers_missing": 0, "sample_answers_materialized": 0, "verification_id": ""}
     if not missing_rows:
-        return {"sample_manual_total": len(sample_rows), "sample_answers_missing": 0, "sample_answers_materialized": 0, "build_id": ""}
+        return {"sample_manual_total": len(sample_rows), "sample_answers_missing": 0, "sample_answers_materialized": 0, "verification_id": ""}
     mode = _workspace_problem_mode(workspace)
     if mode != "pass-fail":
         return {
             "sample_manual_total": len(sample_rows),
             "sample_answers_missing": len(missing_rows),
             "sample_answers_materialized": 0,
-            "build_id": "",
+            "verification_id": "",
             "skipped_mode": mode,
         }
 
-    build_id = config.build_service.run_build(problem, user)
-    build_row = config.db.fetch_one(
-        "SELECT status,summary_json,build_ref FROM builds WHERE id=?",
-        [build_id],
+    verification_id = config.verification_service.run_verification(problem, user)
+    verification_row = config.db.fetch_one(
+        "SELECT status,summary_json,artifact_path FROM verifications WHERE id=?",
+        [verification_id],
     )
-    if build_row is None:
-        raise ValueError(f"sample answer materialization build missing: {build_id}")
-    build_status = str(build_row["status"] or "").strip().lower()
-    if build_status != "ok":
-        summary = _summary_object(build_row["summary_json"])
+    if verification_row is None:
+        raise ValueError(f"sample answer verification missing: {verification_id}")
+    verification_status = str(verification_row["status"] or "").strip().lower()
+    if verification_status != "ok":
+        summary = _summary_object(verification_row["summary_json"])
         error_text = str(summary.get("error") or "").strip()
         if error_text:
-            raise ValueError(f"sample answer materialization build failed ({build_id}): {error_text}")
-        raise ValueError(f"sample answer materialization build failed ({build_id})")
-    build_ref = str(build_row["build_ref"] or "").strip().lower()
-    if not build_ref:
-        raise ValueError(f"sample answer materialization build has no build_ref: {build_id}")
+            raise ValueError(f"sample answer verification failed ({verification_id}): {error_text}")
+        raise ValueError(f"sample answer verification failed ({verification_id})")
+    artifact_path = str(verification_row["artifact_path"] or "").strip()
+    if not artifact_path:
+        raise ValueError(f"sample answer verification has no artifact path: {verification_id}")
     try:
-        artifact_root = config.fs_manager.build_paths(build_ref).root.resolve()
+        artifact_root = Path(artifact_path).resolve()
     except Exception as exc:
-        raise ValueError(f"sample answer materialization build has invalid build_ref: {build_id}") from exc
+        raise ValueError(f"sample answer verification has invalid artifact_path: {verification_id}") from exc
     ans_dir = artifact_root / "ans"
     if not ans_dir.exists() or not ans_dir.is_dir() or ans_dir.is_symlink():
-        raise ValueError(f"sample answer materialization build missing ans directory: {build_id}")
+        raise ValueError(f"sample answer verification missing ans directory: {verification_id}")
 
     materialized = 0
     for index, test_id in missing_rows:
@@ -211,7 +211,7 @@ def _materialize_polygon_sample_answers(problem: str, user: str, workspace: Path
         source_answer = ans_dir / source_name
         if not _is_safe_regular_file(source_answer):
             raise ValueError(
-                f"sample answer missing from build output for test id {test_id} (build case {source_name})"
+                f"sample answer missing from verification output for test id {test_id} (case {source_name})"
             )
         target_answer = workspace / "tests" / "answers" / f"{test_id}.ans"
         target_answer.parent.mkdir(parents=True, exist_ok=True)
@@ -221,13 +221,13 @@ def _materialize_polygon_sample_answers(problem: str, user: str, workspace: Path
     _sample_rows_after, still_missing = _sample_manual_rows_missing_answers(workspace)
     if still_missing:
         first_idx, first_id = still_missing[0]
-        raise ValueError(f"sample answer still missing after materialization: test id {first_id} (spec row {first_idx})")
+        raise ValueError(f"sample answer still missing after verification: test id {first_id} (spec row {first_idx})")
 
     return {
         "sample_manual_total": len(sample_rows),
         "sample_answers_missing": len(missing_rows),
         "sample_answers_materialized": materialized,
-        "build_id": build_id,
+        "verification_id": verification_id,
     }
 
 def _is_package_marker(names: list[str], marker: str) -> bool:

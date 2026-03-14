@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import json
@@ -12,10 +12,18 @@ import uuid
 from app.db import now_iso
 from app.service.platform.process import run_cmd
 from app.service.platform.testlib_source import workspace_testlib_header
-from app.service.build.diagnostic import compact_single_line, normalize_diagnostics_for_db
-from app.service.build.source import resolve_source
-from app.service.build.summary import summary_for_db
-from app.service.build.test_spec import tests_spec_answer_source
+from app.service.verification import (
+    VERIFICATION_KIND_VERIFICATION,
+    create_verification_record,
+    load_verification_record,
+    load_verification_summary,
+    save_verification_summary,
+    verification_update_lock,
+)
+from app.service.verification.diagnostic import compact_single_line, normalize_diagnostics_for_db
+from app.service.verification.source import resolve_source
+from app.service.verification.summary import summary_for_db
+from app.service.verification.test_spec import tests_spec_answer_source
 from app.service.run.runtime import RUN_TEST_NAME_RE
 
 CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
@@ -23,7 +31,40 @@ SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
 DEFAULT_TIME_LIMIT_MS = 2000
 
 
-def run_build(
+def _promote_solve_main_stage_into_runs(summary: dict[str, object], *, verification_id: str) -> None:
+    if not isinstance(summary, dict):
+        return
+    stage_results_obj = summary.get("stage_results")
+    stage_results = stage_results_obj if isinstance(stage_results_obj, dict) else {}
+    solve_stage_obj = stage_results.get("solve_main")
+    solve_stage = dict(solve_stage_obj) if isinstance(solve_stage_obj, dict) else {}
+    source_token = str(solve_stage.get("source") or "").strip()
+    if not source_token:
+        return
+    runs_obj = summary.get("runs")
+    runs = runs_obj if isinstance(runs_obj, dict) else {}
+    for run_id, item in list(runs.items()):
+        if not isinstance(item, dict):
+            continue
+        source_label = str(item.get("source_label") or "").strip()
+        if source_label != source_token:
+            continue
+        run_summary_obj = item.get("summary")
+        run_summary = dict(run_summary_obj) if isinstance(run_summary_obj, dict) else {}
+        run_summary.update(solve_stage)
+        item["status"] = str(solve_stage.get("status") or item.get("status") or "running").strip().lower() or "running"
+        item["artifact_path"] = str(solve_stage.get("artifact_path") or item.get("artifact_path") or "").strip()
+        item["summary"] = run_summary
+        runs[run_id] = item
+        summary["runs"] = runs
+        summary["artifact_verification_id"] = str(verification_id or "").strip()
+        current_artifact_status = str(summary.get("artifact_verification_status") or "").strip().lower()
+        if not current_artifact_status:
+            summary["artifact_verification_status"] = "running"
+        break
+
+
+def run_verification_job(
     self,
     problem: str,
     username: str,
@@ -31,6 +72,7 @@ def run_build(
     ref: str | None = None,
     *,
     sample_only: bool = False,
+    verification_id: str = "",
 ) -> str:
     ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
     workspace = Path(ctx["workspace"]["path"])
@@ -41,7 +83,7 @@ def run_build(
     resolved_commit_override = ""
     generation_params_digest = ""
     toolchain_cmd_digest = self._toolchain_cmd_digest() or "unknown"
-    use_build_result_cache = False
+    use_verification_result_cache = False
     cache_key: dict[str, object] | None = None
     cache_key_hash = ""
     inflight_owner = False
@@ -96,9 +138,12 @@ def run_build(
         if inflight_snapshot is not None:
             shutil.rmtree(inflight_snapshot.parent, ignore_errors=True)
 
-    if source_commit and generation_params_digest:
-        use_build_result_cache = True
-        cache_key = self._build_cache_key(
+    target_verification_id = str(verification_id or "").strip()
+    persist_into_existing_verification = bool(target_verification_id)
+
+    if source_commit and generation_params_digest and (not persist_into_existing_verification):
+        use_verification_result_cache = True
+        cache_key = self._verification_cache_key(
             problem_id=problem_id,
             workspace_id=workspace_id,
             source_commit=str(source_commit or "").strip(),
@@ -107,7 +152,7 @@ def run_build(
             toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
             sample_only=bool(sample_only),
         )
-        cached_build_id = self._cached_build_id_for_source(
+        cached_verification_id = self._cached_verification_id_for_source(
             problem_slug=problem,
             problem_id=problem_id,
             workspace_id=workspace_id,
@@ -117,14 +162,14 @@ def run_build(
             toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
             sample_only=bool(sample_only),
         )
-        if cached_build_id:
-            return cached_build_id
-        cache_key_hash = self._build_cache_key_hash(cache_key)
+        if cached_verification_id:
+            return cached_verification_id
+        cache_key_hash = self._verification_cache_key_hash(cache_key)
 
-    build_ref_key = (
+    artifact_ref_key = (
         cache_key
         if isinstance(cache_key, dict)
-        else self._build_cache_key(
+        else self._verification_cache_key(
             problem_id=problem_id,
             workspace_id=workspace_id,
             source_commit=str(source_commit or "").strip(),
@@ -134,26 +179,26 @@ def run_build(
             sample_only=bool(sample_only),
         )
     )
-    build_ref = self._build_ref_from_cache_key_hash(self._build_cache_key_hash(build_ref_key))
-    build_id = f"b-{uuid.uuid4().hex[:12]}"
+    artifact_ref = self._artifact_ref_from_cache_key_hash(self._verification_cache_key_hash(artifact_ref_key))
+    verification_id = target_verification_id or f"ver-{uuid.uuid4().hex[:10]}"
     if cache_key is not None:
-        existing_build_id = ""
+        existing_verification_id = ""
         with self._build_inflight_lock:
-            existing_build_id = str(self._build_inflight.get(cache_key_hash) or "").strip()
-            if not existing_build_id:
-                self._build_inflight[cache_key_hash] = build_id
+            existing_verification_id = str(self._build_inflight.get(cache_key_hash) or "").strip()
+            if not existing_verification_id:
+                self._build_inflight[cache_key_hash] = verification_id
                 inflight_owner = True
-        if existing_build_id:
-            status = self._wait_build_terminal_status(existing_build_id, self.BUILD_JOIN_WAIT_TIMEOUT_SEC)
+        if existing_verification_id:
+            status = self._wait_build_terminal_status(existing_verification_id, self.BUILD_JOIN_WAIT_TIMEOUT_SEC)
             if status == "ok":
-                return existing_build_id
+                return existing_verification_id
             if status in {"failed", "cancelled"}:
-                raise RuntimeError("same-configuration build already failed; check logs and retry")
-            raise RuntimeError("same-configuration build is still running; refresh later")
+                raise RuntimeError("same-configuration verification already failed; check logs and retry")
+            raise RuntimeError("same-configuration verification is still running; refresh later")
 
-    artifact_paths = self._build_paths(problem, build_ref)
-    # Build refs are content-addressed and can be reused across retries. Ensure
-    # each build starts from a clean artifact layout to avoid stale files from a
+    artifact_paths = self._artifact_paths(problem, artifact_ref)
+    # Artifact refs are content-addressed and can be reused across retries. Ensure
+    # each verification starts from a clean artifact layout to avoid stale files from a
     # previous failed/incomplete attempt leaking into current verification.
     for directory in (
         artifact_paths.tests,
@@ -168,10 +213,36 @@ def run_build(
     logs_dir = artifact_paths.logs
     bin_dir = artifact_paths.root / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    self.db.execute(
-        "INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-        [build_id, build_ref, problem_id, workspace_id, source_commit, source_ref, "running", str(artifact_paths.root), now_iso()],
-    )
+    existing_summary: dict[str, object] = {}
+    existing_status = "running"
+    with verification_update_lock(verification_id):
+        if persist_into_existing_verification:
+            existing_record = load_verification_record(self.db, verification_id)
+            if existing_record is not None:
+                existing_summary = load_verification_summary(self.db, verification_id)
+                existing_status = str(existing_record.get("status") or "").strip().lower() or "running"
+        summary_seed = dict(existing_summary)
+        summary_seed["verification_id"] = verification_id
+        create_verification_record(
+            self.db,
+            self.fs_manager,
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            source_commit=source_commit,
+            source_ref=source_ref,
+            kind=VERIFICATION_KIND_VERIFICATION,
+            status=existing_status if persist_into_existing_verification else "running",
+            summary=summary_seed,
+            artifact_path=artifact_paths.root,
+        )
+        save_verification_summary(
+            self.db,
+            verification_id=verification_id,
+            status=existing_status if persist_into_existing_verification else "running",
+            summary=summary_seed,
+            finished=False,
+        )
 
     steps: list[dict] = []
     toolchain_digest = "unknown"
@@ -188,12 +259,12 @@ def run_build(
     final_status = "running"
     stage_results: dict[str, dict[str, object]] = {
         "generate_input": {
-            "verification_source": "build.generate-input",
+            "verification_source": "verification.generate-input",
             "status": "pending",
             "tests": [],
         },
         "solve_main": {
-            "verification_source": "build.solve",
+            "verification_source": "verification.solve-main",
             "status": "pending",
             "tests": [],
         },
@@ -203,7 +274,10 @@ def run_build(
         if commit:
             source_commit = resolved_commit_override or self.workspace_service.resolve_commit(workspace, commit)
             source_ref = ref or commit
-            self.db.execute("UPDATE builds SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
+            self.db.execute(
+                "UPDATE verifications SET source_commit=?, source_ref=? WHERE id=?",
+                [source_commit, source_ref, verification_id],
+            )
             snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
         else:
             with self.workspace_service.workspace_lock(workspace):
@@ -225,7 +299,10 @@ def run_build(
                         source_commit = f"workspace:{synthetic_digest}"
                 if branch:
                     source_ref = ref or branch
-                self.db.execute("UPDATE builds SET source_commit=?, source_ref=? WHERE id=?", [source_commit, source_ref, build_id])
+                self.db.execute(
+                    "UPDATE verifications SET source_commit=?, source_ref=? WHERE id=?",
+                    [source_commit, source_ref, verification_id],
+                )
                 snapshot = self.workspace_service.create_snapshot(
                     workspace,
                     None,
@@ -470,6 +547,7 @@ def run_build(
             extra_sources_b64: dict[str, str] | None = None,
             manual_validate_only: bool = False,
         ) -> dict[str, tuple[int, str]]:
+            owner_verification_id = verification_id
             safe_source_name = Path(str(source_name or "").strip() or "submission.cpp").name
             normalized_tests: list[dict[str, str]] = []
             for row in tests_payload:
@@ -489,7 +567,6 @@ def run_build(
             if not normalized_tests:
                 return {}
             run_id = f"r-bg-{uuid.uuid4().hex[:12]}"
-            verification_id = f"ver-buildgen-{build_id[:12]}-{uuid.uuid4().hex[:8]}"
             validator_source = compile_source_by_name.get("validator")
             sources_payload: dict[str, str] = {}
             binaries_payload: dict[str, str] = {}
@@ -514,7 +591,7 @@ def run_build(
                 checker_args.append("--validate-input")
 
             prepared_payload: dict[str, object] = {
-                "build_payload": {
+                "verification_payload": {
                     "tests": normalized_tests,
                     "run_config_json": json.dumps(
                         {
@@ -541,17 +618,17 @@ def run_build(
             task_id = compile_backend.enqueue_task(
                 problem=problem,
                 username=username,
-                build_id=build_id,
+                artifact_verification_id=owner_verification_id,
                 mode=problem_mode,
                 submission_path=None,
                 upload_content=source_bytes,
                 upload_filename=safe_source_name,
                 run_id=run_id,
                 selected_tests=[],
-                verification_id=verification_id,
+                verification_id=owner_verification_id,
                 verification_run_ids=[run_id],
                 expected_behavior="accepted",
-                verification_source="build.generate-input",
+                verification_source="verification.generate-input",
                 task_kind="generate",
                 compile_only=False,
                 persist_verification_run=False,
@@ -562,7 +639,8 @@ def run_build(
                 detail = str(task_result.get("error") or "").strip() or "judge backend generate task failed"
                 return {row["name"]: (1, detail) for row in normalized_tests}
             run_status = str(task_result.get("status") or "").strip().lower()
-            summary_obj: dict = dict(task_result.get("summary") or {})
+            summary_raw = task_result.get("summary")
+            summary_obj: dict = dict(summary_raw) if isinstance(summary_raw, dict) else {}
             if run_status and run_status != "ok":
                 detail = str(summary_obj.get("error") or "").strip() or f"judge backend run status is {run_status}"
                 return {row["name"]: (1, detail) for row in normalized_tests}
@@ -886,7 +964,7 @@ def run_build(
                         }
                     )
                     stage_results["generate_input"] = {
-                        "verification_source": "build.generate-input",
+                        "verification_source": "verification.generate-input",
                         "status": "failed",
                         "tests": list(generate_stage_tests),
                         "manual_count": manual_count,
@@ -912,7 +990,8 @@ def run_build(
                     }
                 )
                 test_files.append(dst)
-                tests_meta.append(dict(planned.get("tests_meta") or {}))
+                tests_meta_raw = planned.get("tests_meta")
+                tests_meta.append(dict(tests_meta_raw) if isinstance(tests_meta_raw, dict) else {})
                 custom_sample_row = planned.get("custom_sample_row")
                 if isinstance(custom_sample_row, dict):
                     custom_sample_rows_by_test[dst.name] = dict(custom_sample_row)
@@ -923,7 +1002,7 @@ def run_build(
             glog.write(f"generated_tests={generated_count}\n")
             glog.write(f"total_tests={len(test_files)}\n")
         stage_results["generate_input"] = {
-            "verification_source": "build.generate-input",
+            "verification_source": "verification.generate-input",
             "status": "ok",
             "tests": list(generate_stage_tests),
             "manual_count": manual_count,
@@ -1000,7 +1079,12 @@ def run_build(
                 return f"{base_msg}: {detail_text}"
 
             def _update_solve_stage(status_token: str) -> None:
-                solve_stage_summary = dict(solve_stage_result.get("summary") or {})
+                solve_stage_summary_raw = solve_stage_result.get("summary")
+                solve_stage_summary = (
+                    dict(solve_stage_summary_raw)
+                    if isinstance(solve_stage_summary_raw, dict)
+                    else {}
+                )
                 if not solve_stage_summary:
                     tests_payload: list[dict[str, object]] = []
                     for test_name, result_row in solve_results.items():
@@ -1023,7 +1107,7 @@ def run_build(
                             }
                         )
                     solve_stage_summary["tests"] = tests_payload
-                solve_stage_summary.setdefault("verification_source", "build.solve")
+                solve_stage_summary.setdefault("verification_source", "verification.solve-main")
                 solve_stage_summary["status"] = str(status_token or "ok").strip().lower() or "ok"
                 solve_stage_summary["source"] = accepted_rel
                 solve_stage_summary["artifact_path"] = str(solve_stage_result.get("artifact_path") or "").strip()
@@ -1032,7 +1116,7 @@ def run_build(
             solve_results = self._solve_with_judge_backend(
                 problem=problem,
                 username=username,
-                build_id=build_id,
+                verification_id=verification_id,
                 accepted_source_rel=accepted_rel,
                 mode=problem_mode,
                 test_files=test_files,
@@ -1090,7 +1174,7 @@ def run_build(
             "run_jobs": int(build_cfg.get("run_jobs", 0)),
             "mode": problem_mode,
             "sample_only": bool(sample_only),
-            "build_ref": build_ref,
+            "artifact_ref": artifact_ref,
             "solve_backend": solve_backend,
             "time_limit_ms": time_limit_ms,
             "run_timeout_ms": run_timeout_ms,
@@ -1120,31 +1204,54 @@ def run_build(
             steps=steps,
         )
 
-        self.db.execute(
-            "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
-            [
-                "ok",
-                summary_for_db(
-                    {
-                        "build_ref": build_ref,
-                        "steps": steps,
-                        "diagnostics": diagnostics,
-                        "generation_params": generation_params,
-                        "stage_results": stage_results,
-                    },
-                    normalize_diagnostics_for_db=normalize_diagnostics_for_db,
-                    diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
-                ),
-                now_iso(),
-                build_id,
-            ],
+        persisted_summary_obj = {
+            "artifact_ref": artifact_ref,
+            "verification_id": verification_id,
+            "steps": steps,
+            "diagnostics": diagnostics,
+            "generation_params": generation_params,
+            "stage_results": stage_results,
+        }
+        persisted_summary = summary_for_db(
+            persisted_summary_obj,
+            normalize_diagnostics_for_db=normalize_diagnostics_for_db,
+            diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
         )
-        if use_build_result_cache and self._async_task_cache_service is not None and str(source_commit or "").strip():
+        if persist_into_existing_verification:
+            with verification_update_lock(verification_id):
+                merged_summary = load_verification_summary(self.db, verification_id)
+                merged_summary.update(persisted_summary_obj)
+                merged_summary["verification_id"] = verification_id
+                _promote_solve_main_stage_into_runs(merged_summary, verification_id=verification_id)
+                current_record = load_verification_record(self.db, verification_id)
+                current_status = (
+                    str(current_record.get("status") or "").strip().lower()
+                    if current_record is not None
+                    else ""
+                )
+                save_verification_summary(
+                    self.db,
+                    verification_id=verification_id,
+                    status=current_status or "running",
+                    summary=merged_summary,
+                    finished=False,
+                )
+        else:
+            self.db.execute(
+                "UPDATE verifications SET status=?, summary_json=?, finished_at=? WHERE id=?",
+                [
+                    "ok",
+                    persisted_summary,
+                    now_iso(),
+                    verification_id,
+                ],
+            )
+        if use_verification_result_cache and self._async_task_cache_service is not None and str(source_commit or "").strip():
             self._async_task_cache_service.put(
                 self.BUILD_CACHE_NAMESPACE,
                 cache_key
                 if isinstance(cache_key, dict)
-                else self._build_cache_key(
+                else self._verification_cache_key(
                     problem_id=problem_id,
                     workspace_id=workspace_id,
                     source_commit=str(source_commit or "").strip(),
@@ -1153,7 +1260,7 @@ def run_build(
                     toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
                     sample_only=bool(sample_only),
                 ),
-                {"build_id": build_id},
+                {"verification_id": verification_id},
                 tags={
                     "problem_id": str(problem_id),
                     "workspace_id": str(workspace_id),
@@ -1169,32 +1276,49 @@ def run_build(
         except Exception:
             pass
         steps.append({"step": current_step, "status": "error", "log": "logs/failure.log"})
-        self.db.execute(
-            "UPDATE builds SET status=?, summary_json=?, finished_at=? WHERE id=?",
-            [
-                "failed",
-                summary_for_db(
-                    {
-                        "build_ref": build_ref,
-                        "error": str(exc),
-                        "failed_step": current_step,
-                        "failed_test": failing_test,
-                        "steps": steps,
-                        "diagnostics": diagnostics,
-                        "stage_results": stage_results,
-                    },
-                    normalize_diagnostics_for_db=normalize_diagnostics_for_db,
-                    diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
-                ),
-                now_iso(),
-                build_id,
-            ],
+        persisted_summary_obj = {
+            "artifact_ref": artifact_ref,
+            "verification_id": verification_id,
+            "error": str(exc),
+            "failed_step": current_step,
+            "failed_test": failing_test,
+            "steps": steps,
+            "diagnostics": diagnostics,
+            "stage_results": stage_results,
+        }
+        persisted_summary = summary_for_db(
+            persisted_summary_obj,
+            normalize_diagnostics_for_db=normalize_diagnostics_for_db,
+            diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
         )
+        if persist_into_existing_verification:
+            with verification_update_lock(verification_id):
+                merged_summary = load_verification_summary(self.db, verification_id)
+                merged_summary.update(persisted_summary_obj)
+                merged_summary["verification_id"] = verification_id
+                _promote_solve_main_stage_into_runs(merged_summary, verification_id=verification_id)
+                save_verification_summary(
+                    self.db,
+                    verification_id=verification_id,
+                    status="failed",
+                    summary=merged_summary,
+                    finished=False,
+                )
+        else:
+            self.db.execute(
+                "UPDATE verifications SET status=?, summary_json=?, finished_at=? WHERE id=?",
+                [
+                    "failed",
+                    persisted_summary,
+                    now_iso(),
+                    verification_id,
+                ],
+            )
         final_status = "failed"
     finally:
         if final_status != "running":
             self.db.execute(
-                "UPDATE workspaces SET recent_build_status=? WHERE id=?",
+                "UPDATE workspaces SET recent_verification_status=? WHERE id=?",
                 [final_status, workspace_id],
             )
         if snapshot is not None:
@@ -1202,7 +1326,7 @@ def run_build(
         if inflight_owner and cache_key_hash:
             with self._build_inflight_lock:
                 current = str(self._build_inflight.get(cache_key_hash) or "").strip()
-                if current == build_id:
+                if current == verification_id:
                     self._build_inflight.pop(cache_key_hash, None)
 
-    return build_id
+    return verification_id

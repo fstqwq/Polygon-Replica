@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import base64
@@ -18,7 +18,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
-from tests.common import (
+from .common import (
     SmokeBase,
     _wait_for_export_workers,
     _wait_for_run_execute_workers,
@@ -64,7 +64,7 @@ auth_password_meta = _api_attr("auth_password_meta")
 auth_middleware = _api_attr("auth_middleware")
 artifact_file = _api_attr("artifact_file")
 access_page = _api_attr("access_page")
-build_service = config.build_service
+build_service = config.verification_service
 build_page = _api_attr("build_page")
 tests_spec_add_gen = _api_attr("tests_spec_add_gen")
 tests_spec_edit = _api_attr("tests_spec_edit")

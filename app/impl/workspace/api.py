@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from app.impl.workspace.context_job import (  
     _run_export_create_worker,
@@ -19,7 +19,7 @@ from app.impl.workspace.public import (
     allocate_run_id,
     artifact_root,
     assert_workspace_artifact_access,
-    assert_workspace_build_access,
+    assert_workspace_verification_access,
     audit,
     browser_file_response,
     build_line_focus_context,
@@ -42,8 +42,8 @@ from app.impl.workspace.public import (
     interactor_status_context,
     is_system_admin_user_id,
     kind_for_path,
-    latest_workspace_build,
-    latest_workspace_committed_build,
+    latest_workspace_stage_verification,
+    latest_workspace_committed_stage_verification,
     list_solution_entries,
     normalize_contest_role,
     normalize_contest_slug_required,
@@ -116,3 +116,4 @@ from app.impl.workspace.run_view_list import (
     _run_cell_kind,
     run_list_rows,
 )
+

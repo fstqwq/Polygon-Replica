@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -17,22 +17,23 @@ from app.service.problem.test_spec import (
 )
 from app.service.runtime.toolchain import current_cpp_command_digest
 from app.service.repository.workspace import WorkspaceService
+from app.service.verification import VERIFICATION_KIND_VERIFICATION
 
-from app.service.build.cache import (
-    artifact_root_from_build_ref,
-    build_cache_key,
-    build_cache_key_hash,
-    build_ref_from_cache_key_hash,
+from app.service.verification.cache import (
+    artifact_root_from_ref,
+    verification_cache_key,
+    verification_cache_key_hash,
+    artifact_ref_from_cache_key_hash,
     canonical_digest,
-    ensure_build_paths,
+    ensure_artifact_paths,
 )
-from app.service.build.diagnostic import collect_diagnostics, judge_backend_compile_detail
-from app.service.build.judge_solve import solve_with_judge_backend
-from app.service.build.pipeline import effective_compile_jobs, wait_build_terminal_status
-from app.service.build.runner import run_build
-from app.service.build.runtime import coerce_int, effective_run_timeout_ms, effective_run_timeout_sec, load_problem_runtime_config, normalize_problem_mode, normalize_time_limit_ms, wall_time_slack_sec_for_mode
-from app.service.build.source import resolve_standard_checker_source, select_checker_source, select_source
-from app.service.build.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
+from app.service.verification.diagnostic import collect_diagnostics, judge_backend_compile_detail
+from app.service.verification.judge_solve import solve_with_judge_backend
+from app.service.verification.pipeline import effective_compile_jobs, wait_build_terminal_status
+from app.service.verification.runner import run_verification_job
+from app.service.verification.runtime import coerce_int, effective_run_timeout_ms, effective_run_timeout_sec, load_problem_runtime_config, normalize_problem_mode, normalize_time_limit_ms, wall_time_slack_sec_for_mode
+from app.service.verification.source import resolve_standard_checker_source, select_checker_source, select_source
+from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
 
 if TYPE_CHECKING:
     from app.service.platform.async_task_cache import AsyncTaskCacheService
@@ -69,7 +70,7 @@ def solve_result_error(message: str, *, verdict: str = "") -> dict[str, object]:
     }
 
 
-class Build:
+class VerificationService:
     DB_SUMMARY_DIAGNOSTICS_LIMIT = 200
     DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
     BUILD_CACHE_NAMESPACE = "build.run"
@@ -119,7 +120,7 @@ class Build:
         *,
         problem: str,
         username: str,
-        build_id: str,
+        verification_id: str,
         accepted_source_rel: str,
         mode: str,
         test_files: list[Path],
@@ -132,7 +133,7 @@ class Build:
             self,
             problem=problem,
             username=username,
-            build_id=build_id,
+            artifact_verification_id=verification_id,
             accepted_source_rel=accepted_source_rel,
             mode=mode,
             test_files=test_files,
@@ -453,33 +454,33 @@ class Build:
         return token
 
     @staticmethod
-    def _build_cache_key_hash(key_obj: dict[str, object]) -> str:
-        return build_cache_key_hash(key_obj)
+    def _verification_cache_key_hash(key_obj: dict[str, object]) -> str:
+        return verification_cache_key_hash(key_obj)
 
-    def _build_ref_from_cache_key_hash(self, cache_key_hash: str) -> str:
-        return build_ref_from_cache_key_hash(
+    def _artifact_ref_from_cache_key_hash(self, cache_key_hash: str) -> str:
+        return artifact_ref_from_cache_key_hash(
             self.fs_manager,
             schema=self.BUILD_CACHE_SCHEMA,
             cache_key_hash=cache_key_hash,
         )
 
-    def _artifact_root_from_build_ref(self, problem_slug: str, build_ref: str) -> Path:
+    def _artifact_root_from_ref(self, problem_slug: str, artifact_ref: str) -> Path:
         _ = str(problem_slug or "").strip()
-        return artifact_root_from_build_ref(self.fs_manager, build_ref=build_ref)
+        return artifact_root_from_ref(self.fs_manager, artifact_ref=artifact_ref)
 
-    def _build_paths(self, problem_slug: str, build_ref: str):
+    def _artifact_paths(self, problem_slug: str, artifact_ref: str):
         _ = str(problem_slug or "").strip()
-        return ensure_build_paths(self.fs_manager, build_ref=build_ref)
+        return ensure_artifact_paths(self.fs_manager, artifact_ref=artifact_ref)
 
-    def _wait_build_terminal_status(self, build_id: str, timeout_sec: float) -> str:
+    def _wait_verification_terminal_status(self, verification_id: str, timeout_sec: float) -> str:
         return wait_build_terminal_status(
             self.db,
-            build_id=build_id,
+            verification_id=verification_id,
             timeout_sec=timeout_sec,
             poll_sec=self.BUILD_JOIN_POLL_SEC,
         )
 
-    def _build_cache_key(
+    def _verification_cache_key(
         self,
         *,
         problem_id: int,
@@ -490,7 +491,7 @@ class Build:
         toolchain_cmd_digest: str,
         sample_only: bool = False,
     ) -> dict[str, object]:
-        return build_cache_key(
+        return verification_cache_key(
             schema=self.BUILD_CACHE_SCHEMA,
             problem_id=problem_id,
             workspace_id=workspace_id,
@@ -501,7 +502,7 @@ class Build:
             sample_only=sample_only,
         )
 
-    def _cached_build_id_for_source(
+    def _cached_artifact_verification_id_for_source(
         self,
         *,
         problem_slug: str = "",
@@ -521,7 +522,7 @@ class Build:
             return ""
         entry = service.get(
             self.BUILD_CACHE_NAMESPACE,
-            self._build_cache_key(
+            self._verification_cache_key(
                 problem_id=int(problem_id),
                 workspace_id=int(workspace_id),
                 source_commit=safe_commit,
@@ -535,14 +536,18 @@ class Build:
             return ""
         value = entry.get("value")
         value_obj = value if isinstance(value, dict) else {}
-        cached_build_id = str(value_obj.get("build_id") or "").strip()
-        if not cached_build_id:
+        cached_verification_id = str(value_obj.get("verification_id") or "").strip()
+        if not cached_verification_id:
             return ""
         row = self.db.fetch_one(
-            "SELECT status,build_ref,artifact_path,summary_json FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-            [cached_build_id, int(problem_id), int(workspace_id)],
+            """
+            SELECT status,artifact_path,summary_json
+            FROM verifications
+            WHERE id=? AND problem_id=? AND workspace_id=? AND kind=?
+            """,
+            [cached_verification_id, int(problem_id), int(workspace_id), VERIFICATION_KIND_VERIFICATION],
         )
-        cache_key = self._build_cache_key(
+        cache_key = self._verification_cache_key(
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
             source_commit=safe_commit,
@@ -573,14 +578,7 @@ class Build:
         if str(generation_params.get("generation_params_digest") or "").strip().lower() != str(generation_params_digest or "").strip().lower():
             service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
             return ""
-        cached_build_ref = str(row["build_ref"] or "").strip()
-        if not cached_build_ref:
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
-            return ""
-        if str(problem_slug or "").strip():
-            artifact_root = self._artifact_root_from_build_ref(str(problem_slug or "").strip(), cached_build_ref)
-        else:
-            artifact_root = Path(str(row["artifact_path"] or "")).resolve()
+        artifact_root = Path(str(row["artifact_path"] or "")).resolve()
         tests_dir = artifact_root / "tests"
         ans_dir = artifact_root / "ans"
         if not tests_dir.exists() or (not tests_dir.is_dir()) or tests_dir.is_symlink():
@@ -589,9 +587,9 @@ class Build:
         if not ans_dir.exists() or (not ans_dir.is_dir()) or ans_dir.is_symlink():
             service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
             return ""
-        return cached_build_id
+        return cached_verification_id
 
-    def run_build(
+    def run_verification(
         self,
         problem: str,
         username: str,
@@ -599,15 +597,20 @@ class Build:
         ref: str | None = None,
         *,
         sample_only: bool = False,
+        verification_id: str = "",
     ) -> str:
-        return run_build(
+        return run_verification_job(
             self,
             problem,
             username,
             commit=commit,
             ref=ref,
             sample_only=sample_only,
+            verification_id=verification_id,
         )
+
+
+
 
 
 

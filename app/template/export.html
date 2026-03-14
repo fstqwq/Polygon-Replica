@@ -5,7 +5,7 @@
 
 <section>
   <h2>Generate</h2>
-  <p class="muted">{{ build_note }}</p>
+  <p class="muted">{{ verification_note }}</p>
   <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/create">
     <label>Revision</label>
     <strong class="{{ 'danger' if generate_revision_display == 'missing' else '' }}">{{ generate_revision_display }}</strong>
@@ -17,13 +17,13 @@
   <h2>Generation Tasks</h2>
   {% if export_events %}
   <table>
-    <tr><th>Time</th><th>Status</th><th>Revision</th><th>Build</th><th>Detail</th><th>Verification</th></tr>
+    <tr><th>Time</th><th>Status</th><th>Revision</th><th>Verification</th><th>Detail</th><th>Open</th></tr>
     {% for e in export_events %}
     <tr>
       <td>{{ e.created_at|local_time }}</td>
       <td>{{ e.status|status_label }}</td>
       <td><code>{{ e.source_commit_short }}</code></td>
-      <td><code>{{ e.build_id }}</code></td>
+      <td><code>{{ e.verification_id }}</code></td>
       <td>
         {{ e.detail }}
         {% if e.log_href %}
@@ -55,7 +55,7 @@
       <td>{{ e.summary_display }}</td>
       <td>{{ e.size_bytes }}</td>
       <td>{{ e.created_at|local_time }}</td>
-      <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ e.build_id }}/export/{{ e.filename }}">zip</a></td>
+      <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ e.verification_id }}/export/{{ e.filename }}">zip</a></td>
     </tr>
     {% endfor %}
   </table>

@@ -38,23 +38,23 @@ def domjudge_case_progress_for_runs(
     return out
 
 
-def domjudge_buildsolve_progress(
+def domjudge_solve_main_progress(
     *,
     state_lock,
     tasks_by_id: Mapping[str, dict[str, object]],
     db_fetch_one: Callable[[str, list[object]], object | None],
-    build_id: str,
+    artifact_verification_id: str,
 ) -> dict[str, int]:
-    safe_build = str(build_id or "").strip()
-    if not safe_build:
+    safe_verification_id = str(artifact_verification_id or "").strip()
+    if not safe_verification_id:
         return {"total": 0, "reported": 0}
     run_ids: list[str] = []
     with state_lock:
         for row in tasks_by_id.values():
-            if str(row.get("build_id") or "").strip() != safe_build:
+            if str(row.get("artifact_verification_id") or "").strip() != safe_verification_id:
                 continue
             run_id = str(row.get("run_id") or "").strip()
-            if (not run_id) or (not run_id.startswith("r-buildsolve-")):
+            if (not run_id) or (not run_id.startswith("r-solve-main-")):
                 continue
             if run_id not in run_ids:
                 run_ids.append(run_id)

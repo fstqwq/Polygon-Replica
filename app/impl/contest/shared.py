@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import secrets
@@ -18,7 +18,7 @@ from app.impl.workspace.public import (
     audit,
     coerce_int,
     global_user_ctx,
-    latest_workspace_committed_build,
+    latest_workspace_committed_stage_verification,
     normalize_contest_role,
     normalize_contest_slug_required,
     normalize_problem_mode,
@@ -758,7 +758,7 @@ def _run_contest_package_job_worker(
             "problem_slug": problem_slug,
             "status": "failed",
             "head_commit": "",
-            "build_id": "",
+            "verification_id": "",
             "package_file": "",
             "error": "",
         }
@@ -775,11 +775,20 @@ def _run_contest_package_job_worker(
             item["head_commit"] = head_commit
             if not head_commit:
                 raise RuntimeError("no committed revision; commit changes first")
-            committed_build = latest_workspace_committed_build(problem_id, workspace_id, head_commit, ok_only=True)
-            build_id = str(committed_build["id"] or "").strip() if committed_build is not None else ""
-            if not build_id:
-                build_id = str(
-                    config.build_service.run_build(
+            committed_verification = latest_workspace_committed_stage_verification(
+                problem_id,
+                workspace_id,
+                head_commit,
+                ok_only=True,
+            )
+            verification_id = (
+                str(committed_verification["id"] or "").strip()
+                if committed_verification is not None
+                else ""
+            )
+            if not verification_id:
+                verification_id = str(
+                    config.verification_service.run_verification(
                         problem_slug,
                         actor_username,
                         commit=head_commit,
@@ -787,26 +796,28 @@ def _run_contest_package_job_worker(
                     )
                     or ""
                 ).strip()
-            if not build_id:
-                raise RuntimeError("failed to resolve build id")
-            build_row = config.db.fetch_one(
+            if not verification_id:
+                raise RuntimeError("failed to resolve verification")
+            verification_row = config.db.fetch_one(
                 """
                 SELECT status,source_commit,source_ref
-                FROM builds
-                WHERE id=? AND problem_id=? AND workspace_id=?
+                FROM verifications
+                WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'
                 """,
-                [build_id, problem_id, workspace_id],
+                [verification_id, problem_id, workspace_id],
             )
-            if build_row is None:
-                raise RuntimeError(f"build metadata not found: {build_id}")
-            build_status = str(build_row["status"] or "").strip().lower()
-            source_commit = str(build_row["source_commit"] or "").strip()
-            source_ref = str(build_row["source_ref"] or "").strip()
-            if build_status != "ok":
-                raise RuntimeError(f"build status is {build_status}")
+            if verification_row is None:
+                raise RuntimeError(f"verification metadata not found: {verification_id}")
+            verification_status = str(verification_row["status"] or "").strip().lower()
+            source_commit = str(verification_row["source_commit"] or "").strip()
+            source_ref = str(verification_row["source_ref"] or "").strip()
+            if verification_status != "ok":
+                raise RuntimeError(f"verification status is {verification_status}")
             if source_commit != head_commit or source_ref != head_commit:
-                raise RuntimeError("build is not from latest committed revision")
-            export_path = Path(config.export_service.create_export(problem_slug, build_id, "icpc")).resolve()
+                raise RuntimeError("verification is not from latest committed revision")
+            export_path = Path(
+                config.export_service.create_export(problem_slug, verification_id, "icpc")
+            ).resolve()
             problem_artifacts_root = (config.settings.artifacts_root / problem_slug).resolve()
             if problem_artifacts_root not in export_path.parents:
                 raise RuntimeError("invalid package artifact path")
@@ -816,7 +827,7 @@ def _run_contest_package_job_worker(
             output_name = f"{idx}-{file_token}.zip" if idx else f"{file_token}.zip"
             target_package = (packages_dir / output_name).resolve()
             shutil.copy2(export_path, target_package)
-            item["build_id"] = build_id
+            item["verification_id"] = verification_id
             item["package_file"] = f"packages/{output_name}"
             item["status"] = "success"
         except Exception as exc:
@@ -953,5 +964,7 @@ def _queue_contest_job(
             finished=True,
         )
     return (job_id, bool(queued), str(submit_reason or "").strip())
+
+
 
 

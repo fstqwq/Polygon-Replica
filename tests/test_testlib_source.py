@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.impl.problem.compile_check import _testlib_extra_sources
 from app.service.platform.testlib_source import maintained_testlib_header, workspace_testlib_header
-from tests.common import SmokeBase
+from .common import SmokeBase
 
 
 class TestWorkspaceTestlibSource(SmokeBase):

@@ -12,20 +12,23 @@ from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification import (
     VERIFICATION_KIND_VERIFICATION,
     create_verification_record,
+    default_verification_summary,
+    default_verification_run,
     load_verification_run,
     load_verification_summary,
     save_verification_summary,
     save_verification_run_summary,
     verification_stage_results,
+    verification_update_lock,
 )
 
-from .artifact import assert_workspace_build_access
+from .artifact import assert_workspace_verification_access
 from .context_operation import audit, dedupe_preserve_order, parse_summary_json
 from .context_operation import list_solution_entries, resolve_build_accepted_solution_source
-from .context_run_detail import normalize_run_id_token
+from .context_run_detail import normalize_run_id_token, normalize_run_test_name_token
 from .context_ui import page_ctx
 from .context_verification import (
-    latest_workspace_committed_build,
+    latest_workspace_committed_stage_verification,
     _verification_solution_failure_hint,
     _verification_solution_match,
     _verification_sources_signature,
@@ -35,10 +38,10 @@ from .export_dispatch import export_workspace_key
 from .problem_config import normalize_problem_mode, read_problem_config
 from .verification_dispatch import verification_workspace_key
 from .context_job_helper import (
-    BuildFailureError,
+    VerificationFailureError,
     _allocate_run_id,
     annotate_verification_run_result,
-    _ensure_implicit_build,
+    _ensure_implicit_verification,
     record_async_run_failure,
 )
 
@@ -122,27 +125,27 @@ def _verification_submission_parallelism(target_count: int) -> int:
     return max(1, min(safe_total, 32, estimate))
 
 
-def _find_buildsolve_run(
+def _find_solve_main_run(
     problem_id: int,
     workspace_id: int,
-    build_id: str,
+    artifact_verification_id: str,
     accepted_source_path: str,
 ) -> tuple[dict[str, object] | None, dict | None]:
-    safe_build_id = str(build_id or "").strip()
+    safe_verification_id = str(artifact_verification_id or "").strip()
     safe_source = str(accepted_source_path or "").strip()
-    if not safe_build_id:
+    if not safe_verification_id:
         return (None, None)
     row_raw = config.db.fetch_one(
-        "SELECT id,status,summary_json,artifact_path,created_at,finished_at FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_build_id, int(problem_id), int(workspace_id)],
+        "SELECT id,status,summary_json,artifact_path,created_at,finished_at FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_verification_id, int(problem_id), int(workspace_id)],
     )
     row = dict(row_raw) if row_raw is not None else None
     if row is None:
         return (None, None)
-    build_summary = parse_summary_json(row.get("summary_json"), f"buildsolve/{safe_build_id}")
-    if not isinstance(build_summary, dict):
+    verification_summary = parse_summary_json(row.get("summary_json"), f"solve-main/{safe_verification_id}")
+    if not isinstance(verification_summary, dict):
         return (None, None)
-    stage_results_obj = build_summary.get("stage_results")
+    stage_results_obj = verification_summary.get("stage_results")
     stage_results = stage_results_obj if isinstance(stage_results_obj, dict) else {}
     solve_stage = stage_results.get("solve_main")
     if not isinstance(solve_stage, dict):
@@ -152,8 +155,8 @@ def _find_buildsolve_run(
     if safe_source and source_path and source_path != safe_source:
         return (None, None)
     row_dict = {
-        "id": f"buildsolve-{safe_build_id}",
-        "build_id": safe_build_id,
+        "id": f"solve-main-{safe_verification_id}",
+        "artifact_verification_id": safe_verification_id,
         "kind": "verification",
         "status": str(run_summary.get("status") or row.get("status") or "").strip(),
         "summary_json": json.dumps(run_summary),
@@ -164,35 +167,52 @@ def _find_buildsolve_run(
     return (row_dict, run_summary)
 
 
-def _merge_build_stage_context(
+def _merge_verification_stage_context(
     *,
     problem_id: int,
     workspace_id: int,
-    build_id: str,
+    artifact_verification_id: str,
     verification_details: dict[str, object],
 ) -> None:
-    safe_build_id = str(build_id or "").strip()
-    if not safe_build_id:
+    safe_verification_id = str(artifact_verification_id or "").strip()
+    if not safe_verification_id:
         verification_details.pop("stage_results", None)
         return
-    build_row = config.db.fetch_one(
-        "SELECT status,summary_json FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_build_id, int(problem_id), int(workspace_id)],
+    verification_row = config.db.fetch_one(
+        "SELECT status,summary_json FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_verification_id, int(problem_id), int(workspace_id)],
     )
-    build_summary = parse_summary_json(build_row["summary_json"], f"verification/build/{safe_build_id}") if build_row is not None else {}
-    if build_row is not None:
-        build_status = str(build_row["status"] or "").strip().lower()
-        if build_status:
-            verification_details["build_status"] = build_status
-    if isinstance(build_summary, dict):
-        verification_details["build_error"] = str(build_summary.get("error") or "").strip()
-        verification_details["build_failed_step"] = str(build_summary.get("failed_step") or "").strip()
-        verification_details["build_failed_test"] = str(build_summary.get("failed_test") or "").strip()
-        stage_results = verification_stage_results(build_summary)
+    verification_summary = parse_summary_json(verification_row["summary_json"], f"verification/{safe_verification_id}") if verification_row is not None else {}
+    if verification_row is not None:
+        artifact_verification_status = str(verification_row["status"] or "").strip().lower()
+        if artifact_verification_status:
+            verification_details["artifact_verification_status"] = artifact_verification_status
+    if isinstance(verification_summary, dict):
+        verification_details["artifact_verification_error"] = str(verification_summary.get("error") or "").strip()
+        verification_details["artifact_failed_step"] = str(verification_summary.get("failed_step") or "").strip()
+        verification_details["artifact_failed_test"] = str(verification_summary.get("failed_test") or "").strip()
+        stage_results = verification_stage_results(verification_summary)
         if stage_results:
             verification_details["stage_results"] = stage_results
         else:
             verification_details.pop("stage_results", None)
+
+
+def _verification_generated_test_names(verification_details: dict[str, object]) -> list[str]:
+    stage_results_obj = verification_details.get("stage_results")
+    stage_results = stage_results_obj if isinstance(stage_results_obj, dict) else {}
+    generate_stage = stage_results.get("generate_input")
+    names: list[str] = []
+    if isinstance(generate_stage, dict):
+        tests_obj = generate_stage.get("tests")
+        tests_rows = tests_obj if isinstance(tests_obj, list) else []
+        for item in tests_rows:
+            if not isinstance(item, dict):
+                continue
+            token = normalize_run_test_name_token(item.get("test"))
+            if token and token not in names:
+                names.append(token)
+    return names
 
 
 def _load_execution_result(
@@ -216,7 +236,7 @@ def _load_execution_result(
             return (
                 {
                     "id": safe_run_id,
-                    "build_id": str(summary_obj.get("build_id") or "").strip(),
+                    "artifact_verification_id": str(summary_obj.get("artifact_verification_id") or "").strip(),
                     "mode": str(summary_obj.get("mode") or "").strip() or "pass-fail",
                     "status": str(run_row.get("status") or "running").strip().lower() or "running",
                     "summary_json": json.dumps(summary_obj),
@@ -234,7 +254,7 @@ def _seed_verification_runs(
     problem_id: int,
     workspace_id: int,
     verification_id: str,
-    build_id: str,
+    artifact_verification_id: str,
     mode: str,
     verification_source: str,
     targets: list[dict[str, object]],
@@ -243,7 +263,7 @@ def _seed_verification_runs(
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return
-    safe_build_id = str(build_id or "").strip() or _C.RUN_PLACEHOLDER_BUILD_ID
+    safe_artifact_verification_id = str(artifact_verification_id or "").strip() or _C.RUN_PLACEHOLDER_BUILD_ID
     safe_mode = str(mode or "").strip() or "pass-fail"
     safe_source = str(verification_source or "").strip() or "run.execute"
     for target in targets:
@@ -255,7 +275,8 @@ def _seed_verification_runs(
             verification_id=safe_verification_id,
             run_id=run_id,
         )
-        if isinstance(existing, dict) and existing:
+        existing_status = str(existing.get("status") or "").strip().lower() if isinstance(existing, dict) else ""
+        if existing_status and existing_status not in {"queued", "pending", "running"}:
             continue
         source_label = (
             str(target.get("source_label") or "").strip()
@@ -273,17 +294,16 @@ def _seed_verification_runs(
             verification_id=safe_verification_id,
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
-            build_id=safe_build_id,
             kind=VERIFICATION_KIND_VERIFICATION,
             mode=safe_mode,
             verification_source=safe_source,
             source_paths=[source_label] if source_label else [],
             run_id=run_id,
-            run_status="queued",
+            run_status=existing_status or "queued",
             source_label=source_label,
             expected_behavior=expected_behavior,
             run_summary={
-                "build_id": safe_build_id,
+                "artifact_verification_id": safe_artifact_verification_id,
                 "mode": safe_mode,
                 "source": source_label,
                 "tests": [],
@@ -315,17 +335,16 @@ def _materialize_reused_buildsolve_run(
     finished_at = str(buildsolve_row.get("finished_at") or "").strip()
     status = str(buildsolve_row.get("status") or "running").strip() or "running"
     verification_id = normalize_run_id_token(verification_id) or f"ver-{safe_run_id}"
-    safe_build_id = str(buildsolve_row.get("build_id") or "").strip()
+    safe_artifact_verification_id = str(buildsolve_row.get("artifact_verification_id") or "").strip()
     save_verification_run_summary(
         config.db,
         config.fs_manager,
         verification_id=verification_id,
         problem_id=int(problem_id),
         workspace_id=int(workspace_id),
-        build_id=safe_build_id,
         kind=VERIFICATION_KIND_VERIFICATION,
         mode=safe_mode,
-        verification_source="verification.start",
+        verification_source="verification.solve-main",
         source_paths=[str(buildsolve_summary.get("source") or "").strip()] if str(buildsolve_summary.get("source") or "").strip() else [],
         run_id=safe_run_id,
         run_status=status,
@@ -356,7 +375,7 @@ def _run_execute_batch_worker(
     problem: str,
     user: str,
     *,
-    requested_build_id: str,
+    requested_verification_id: str,
     run_mode: str,
     targets: list[dict[str, object]],
     verification_id: str,
@@ -364,23 +383,23 @@ def _run_execute_batch_worker(
     selected_test_names: list[str],
     force_recompile: bool = False,
 ) -> None:
-    resolved_build_id = str(requested_build_id or '').strip()
+    resolved_verification_id = str(requested_verification_id or '').strip()
     try:
         ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
         problem_id = int(ctx['problem']['id'])
         workspace_id = int(ctx['workspace']['id'])
-        if not resolved_build_id:
+        if not resolved_verification_id:
             try:
-                resolved_build_id, _ = _ensure_implicit_build(problem, user, ctx=ctx, force=False)
-            except BuildFailureError as build_exc:
-                resolved_build_id = str(build_exc.build_id or '').strip() or resolved_build_id
+                resolved_verification_id, _ = _ensure_implicit_verification(problem, user, ctx=ctx, force=False)
+            except VerificationFailureError as build_exc:
+                resolved_verification_id = str(build_exc.verification_id or '').strip() or resolved_verification_id
                 raise
-        if not resolved_build_id:
+        if not resolved_verification_id:
             raise RuntimeError('tests generation did not produce a runnable build')
-        assert_workspace_build_access(ctx, resolved_build_id)
+        assert_workspace_verification_access(ctx, resolved_verification_id)
     except Exception as exc:
         err = str(exc)
-        failed_build_id = resolved_build_id or _C.RUN_PLACEHOLDER_BUILD_ID
+        failed_materialization_id = resolved_verification_id or _C.RUN_PLACEHOLDER_BUILD_ID
         for target in targets:
             record_async_run_failure(
                 problem,
@@ -389,7 +408,7 @@ def _run_execute_batch_worker(
                 mode=run_mode,
                 source_label=str(target.get('source_label') or ''),
                 error=err,
-                build_id=failed_build_id,
+                artifact_verification_id=failed_materialization_id,
                 verification_id=verification_id,
                 expected_behavior=str(target.get('expected_behavior') or 'unknown'),
                 synthesize_failed_tests=False,
@@ -397,11 +416,47 @@ def _run_execute_batch_worker(
                 execution_skipped=True,
             )
         return
+    existing_summary = load_verification_summary(config.db, verification_id)
+    if not isinstance(existing_summary, dict) or not existing_summary:
+        existing_summary = default_verification_summary(
+            kind=VERIFICATION_KIND_VERIFICATION,
+            mode=run_mode,
+            source_paths=[
+                str(target.get("source_label") or "").strip()
+                for target in targets
+                if str(target.get("source_label") or "").strip()
+            ],
+            verification_source="run.execute",
+        )
+    else:
+        existing_summary = dict(existing_summary)
+    existing_summary["artifact_verification_id"] = resolved_verification_id
+    existing_summary["artifact_verification_status"] = "ok"
+    existing_summary["verification_source"] = "run.execute"
+    existing_summary["mode"] = str(run_mode or existing_summary.get("mode") or "pass-fail").strip() or "pass-fail"
+    existing_summary["status"] = str(existing_summary.get("status") or "running").strip().lower() or "running"
+    create_verification_record(
+        config.db,
+        config.fs_manager,
+        verification_id=verification_id,
+        problem_id=int(problem_id),
+        workspace_id=int(workspace_id),
+        kind=VERIFICATION_KIND_VERIFICATION,
+        status=str(existing_summary.get("status") or "running"),
+        summary=existing_summary,
+    )
+    save_verification_summary(
+        config.db,
+        verification_id=verification_id,
+        status=str(existing_summary.get("status") or "running"),
+        summary=existing_summary,
+        finished=False,
+    )
     _seed_verification_runs(
         problem_id=problem_id,
         workspace_id=workspace_id,
         verification_id=verification_id,
-        build_id=resolved_build_id,
+        artifact_verification_id=resolved_verification_id,
         mode=run_mode,
         verification_source="run.execute",
         targets=targets,
@@ -434,7 +489,7 @@ def _run_execute_batch_worker(
         submission_kwargs: dict[str, object] = {
             'problem': problem,
             'username': user,
-            'build_id': resolved_build_id,
+            'artifact_verification_id': resolved_verification_id,
             'submission_path': submission_path_arg,
             'mode': run_mode,
             'upload_content': upload_content,
@@ -478,7 +533,7 @@ def _run_execute_batch_worker(
             mode=run_mode,
             source_label=source_label,
             error=str(error),
-            build_id=resolved_build_id,
+            artifact_verification_id=resolved_verification_id,
             verification_id=verification_id,
             expected_behavior=expected_behavior,
         )
@@ -526,7 +581,7 @@ def start_run_execute_batch(
     problem: str,
     user: str,
     *,
-    requested_build_id: str,
+    requested_verification_id: str,
     run_mode: str,
     targets: list[dict[str, object]],
     verification_id: str,
@@ -542,7 +597,7 @@ def start_run_execute_batch(
             _run_execute_batch_worker(
                 problem=problem,
                 user=user,
-                requested_build_id=requested_build_id,
+                requested_verification_id=requested_verification_id,
                 run_mode=run_mode,
                 targets=targets,
                 verification_id=verification_id,
@@ -594,7 +649,7 @@ def _run_verification_start_worker(
         if token and token not in planned_run_ids:
             planned_run_ids.append(token)
     run_ids: list[str] = list(planned_run_ids)
-    build_id = _C.RUN_PLACEHOLDER_BUILD_ID
+    artifact_verification_id = _C.RUN_PLACEHOLDER_BUILD_ID
     verification_mode = str(_C.GENERAL_CONFIG_DEFAULTS['mode'])
     ws_row = config.db.fetch_one('SELECT path FROM workspaces WHERE id=? AND problem_id=?', [int(workspace_id), int(problem_id)])
     if ws_row is not None:
@@ -606,6 +661,43 @@ def _run_verification_start_worker(
             verification_mode = str(_C.GENERAL_CONFIG_DEFAULTS['mode'])
     verification_details: dict[str, object] = {'status': 'failed', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'submission_paths': [str(item.get('path') or '') for item in targets], 'solution_count': len(targets), 'verification_id': verification_id, 'verification_backend': _BACKEND_NAME, 'error': ''}
     verification_details['mode'] = verification_mode
+    verification_details['source_paths'] = [str(item.get('path') or '').strip() for item in targets if str(item.get('path') or '').strip()]
+    initial_runs: dict[str, dict[str, object]] = {}
+    initial_runs_order: list[str] = []
+    for target in targets:
+        run_id = normalize_run_id_token(target.get('run_id'))
+        if not run_id:
+            continue
+        source_path = (
+            str(target.get('path') or '').strip()
+            or str(target.get('source_label') or '').strip()
+            or run_id
+        )
+        expected_behavior = normalize_expected_behavior(str(target.get('expected_behavior') or 'unknown'))
+        run_root = config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()
+        run_root.mkdir(parents=True, exist_ok=True)
+        run_row = default_verification_run(
+            run_id=run_id,
+            source_label=source_path,
+            expected_behavior=expected_behavior,
+            run_status='queued',
+            artifact_path=str(run_root),
+            task_kind='solve',
+        )
+        run_row['summary'] = {
+            'artifact_verification_id': _C.RUN_PLACEHOLDER_BUILD_ID,
+            'mode': verification_mode,
+            'source': source_path,
+            'tests': [],
+            'compile_diagnostics': [],
+            'error': '',
+            'verification_source': 'verification.start',
+        }
+        initial_runs[run_id] = run_row
+        if run_id not in initial_runs_order:
+            initial_runs_order.append(run_id)
+    verification_details['runs'] = initial_runs
+    verification_details['runs_order'] = initial_runs_order
     if verification_signature:
         verification_details['verification_signature'] = verification_signature
     if isinstance(verification_signature_details, dict) and verification_signature_details:
@@ -624,34 +716,38 @@ def _run_verification_start_worker(
         summary_payload['verification_id'] = verification_id
         summary_payload['updated_at'] = now_iso()
         try:
-            existing_summary = load_verification_summary(config.db, verification_id)
-            if not isinstance(existing_summary, dict):
-                existing_summary = {}
-            merged_summary = dict(existing_summary)
-            merged_summary.update(summary_payload)
-            create_verification_record(
-                config.db,
-                config.fs_manager,
-                verification_id=verification_id,
-                problem_id=int(problem_id),
-                workspace_id=int(workspace_id),
-                build_id=str(build_id or _C.RUN_PLACEHOLDER_BUILD_ID).strip() or _C.RUN_PLACEHOLDER_BUILD_ID,
-                kind=VERIFICATION_KIND_VERIFICATION,
-                status=table_status,
-                summary=merged_summary,
-            )
-            save_verification_summary(
-                config.db,
-                verification_id=verification_id,
-                status=table_status,
-                summary=merged_summary,
-                finished=bool(finished),
-            )
+            with verification_update_lock(verification_id):
+                existing_summary = load_verification_summary(config.db, verification_id)
+                if not isinstance(existing_summary, dict):
+                    existing_summary = {}
+                merged_summary = dict(existing_summary)
+                merged_summary.update(summary_payload)
+                create_verification_record(
+                    config.db,
+                    config.fs_manager,
+                    verification_id=verification_id,
+                    problem_id=int(problem_id),
+                    workspace_id=int(workspace_id),
+                    source_commit=str(workspace_head or "").strip(),
+                    source_ref=str(workspace_head or "").strip(),
+                    kind=VERIFICATION_KIND_VERIFICATION,
+                    status=table_status,
+                    summary=merged_summary,
+                )
+                save_verification_summary(
+                    config.db,
+                    verification_id=verification_id,
+                    status=table_status,
+                    summary=merged_summary,
+                    finished=bool(finished),
+                )
         except Exception:
             pass
 
     verification_details['status'] = 'running'
     _persist_verification_details(finished=False)
+    verification_details.pop('runs', None)
+    verification_details.pop('runs_order', None)
 
     def _backfill_missing_verification_runs(
         error_text: str,
@@ -682,7 +778,7 @@ def _run_verification_start_worker(
                 mode=verification_mode,
                 source_label=str(target.get('path') or ''),
                 error=safe_error,
-                build_id=safe_build_for_failure,
+                artifact_verification_id=safe_build_for_failure,
                 verification_id=verification_id,
                 expected_behavior=str(target.get('expected_behavior') or 'unknown'),
                 verification_source='verification.start',
@@ -706,25 +802,26 @@ def _run_verification_start_worker(
             raise RuntimeError('workspace path is unavailable')
         local_ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
         try:
-            build_id, _implicit_created = _ensure_implicit_build(
+            artifact_verification_id, _implicit_created = _ensure_implicit_verification(
                 problem,
                 user,
                 ctx=local_ctx,
                 for_verification=True,
+                verification_id=verification_id,
             )
-        except BuildFailureError as build_exc:
-            build_id = str(build_exc.build_id or '').strip() or _C.RUN_PLACEHOLDER_BUILD_ID
-            verification_details['build_id'] = build_id
-            verification_details['build_status'] = str(build_exc.status or 'failed').strip().lower() or 'failed'
+        except VerificationFailureError as build_exc:
+            artifact_verification_id = str(build_exc.verification_id or '').strip() or _C.RUN_PLACEHOLDER_BUILD_ID
+            verification_details['artifact_verification_id'] = artifact_verification_id
+            verification_details['artifact_verification_status'] = str(build_exc.status or 'failed').strip().lower() or 'failed'
             verification_details['source_commit'] = str(workspace_head or '').strip()
             verification_details['source_ref'] = str(workspace_head or '').strip()
-            verification_details['build_error'] = str(build_exc.reason or str(build_exc)).strip()
-            verification_details['build_failed_step'] = ''
-            verification_details['build_failed_test'] = str(build_exc.failed_test or '').strip()
-            _merge_build_stage_context(
+            verification_details['artifact_verification_error'] = str(build_exc.reason or str(build_exc)).strip()
+            verification_details['artifact_failed_step'] = ''
+            verification_details['artifact_failed_test'] = str(build_exc.failed_test or '').strip()
+            _merge_verification_stage_context(
                 problem_id=problem_id,
                 workspace_id=workspace_id,
-                build_id=build_id,
+                artifact_verification_id=artifact_verification_id,
                 verification_details=verification_details,
             )
             try:
@@ -734,13 +831,14 @@ def _run_verification_start_worker(
                 ).strip()
             except Exception:
                 accepted_source_path = ''
-            if accepted_source_path:
-                buildsolve_row, buildsolve_summary = _find_buildsolve_run(
-                    problem_id,
-                    workspace_id,
-                    build_id,
-                    accepted_source_path,
-                )
+            buildsolve_row, buildsolve_summary = _find_solve_main_run(
+                problem_id,
+                workspace_id,
+                artifact_verification_id,
+                accepted_source_path,
+            )
+            if (not accepted_source_path) and isinstance(buildsolve_summary, dict):
+                accepted_source_path = str(buildsolve_summary.get('source') or '').strip()
             known_failed_tests: list[str] = []
             if isinstance(buildsolve_summary, dict):
                 for item in buildsolve_summary.get('tests') or []:
@@ -787,7 +885,7 @@ def _run_verification_start_worker(
                     )
             _backfill_missing_verification_runs(
                 str(build_exc),
-                build_for_failure=build_id,
+                build_for_failure=artifact_verification_id,
                 execution_skipped_for_missing=True,
                 synthesized_test_names=known_failed_tests,
             )
@@ -796,19 +894,20 @@ def _run_verification_start_worker(
             _persist_verification_details(finished=True)
             audit(actor_user_id, problem_id, 'verification.start', verification_details)
             return
-        verification_details['build_id'] = build_id
-        verification_details['build_status'] = 'ok'
+        verification_details['artifact_verification_id'] = artifact_verification_id
+        verification_details['artifact_verification_status'] = 'ok'
         verification_details['source_commit'] = str(workspace_head or '').strip()
         verification_details['source_ref'] = str(workspace_head or '').strip()
-        verification_details['build_error'] = ''
-        verification_details['build_failed_step'] = ''
-        verification_details['build_failed_test'] = ''
-        _merge_build_stage_context(
+        verification_details['artifact_verification_error'] = ''
+        verification_details['artifact_failed_step'] = ''
+        verification_details['artifact_failed_test'] = ''
+        _merge_verification_stage_context(
             problem_id=problem_id,
             workspace_id=workspace_id,
-            build_id=build_id,
+            artifact_verification_id=artifact_verification_id,
             verification_details=verification_details,
         )
+        selected_test_names = _verification_generated_test_names(verification_details)
         _persist_verification_details(finished=False)
         try:
             solution_entries, _truncated = list_solution_entries(workspace_path)
@@ -817,17 +916,22 @@ def _run_verification_start_worker(
             ).strip()
         except Exception:
             accepted_source_path = ''
-        if accepted_source_path:
-            buildsolve_row, buildsolve_summary = _find_buildsolve_run(
-                problem_id,
-                workspace_id,
-                build_id,
-                accepted_source_path,
-            )
+        buildsolve_row, buildsolve_summary = _find_solve_main_run(
+            problem_id,
+            workspace_id,
+            artifact_verification_id,
+            accepted_source_path,
+        )
+        if (not accepted_source_path) and isinstance(buildsolve_summary, dict):
+            accepted_source_path = str(buildsolve_summary.get('source') or '').strip()
         target_specs: list[dict[str, object]] = []
         for index, target in enumerate(targets):
             source_path = str(target.get('path') or '').strip()
             expected_behavior = normalize_expected_behavior(str(target.get('expected_behavior') or 'unknown'))
+            requested_run_id = normalize_run_id_token(target.get('run_id'))
+            if not requested_run_id:
+                requested_run_id = _allocate_run_id()
+                target['run_id'] = requested_run_id
             reuse_buildsolve = bool(
                 accepted_source_path
                 and buildsolve_row is not None
@@ -841,15 +945,25 @@ def _run_verification_start_worker(
                     'target': target,
                     'source_path': source_path,
                     'expected_behavior': expected_behavior,
-                    'requested_run_id': normalize_run_id_token(target.get('run_id')),
+                    'requested_run_id': requested_run_id,
                     'reuse_buildsolve': reuse_buildsolve,
                 }
             )
+        for spec in target_specs:
+            requested_run_id = normalize_run_id_token(spec.get('requested_run_id'))
+            if not requested_run_id:
+                continue
+            target_ref = spec.get('target')
+            if isinstance(target_ref, dict):
+                target_ref['run_id'] = requested_run_id
+            if requested_run_id not in run_ids:
+                run_ids.append(requested_run_id)
+        run_ids = dedupe_preserve_order(run_ids)
         _seed_verification_runs(
             problem_id=problem_id,
             workspace_id=workspace_id,
             verification_id=verification_id,
-            build_id=build_id,
+            artifact_verification_id=artifact_verification_id,
             mode=verification_mode,
             verification_source='verification.start',
             targets=[
@@ -863,6 +977,26 @@ def _run_verification_start_worker(
             ],
             default_task_kind='solve',
         )
+        for spec in target_specs:
+            if not bool(spec.get('reuse_buildsolve')):
+                continue
+            if buildsolve_row is None or not isinstance(buildsolve_summary, dict):
+                raise RuntimeError('verification.solve-main result missing for accepted solution reuse')
+            requested_run_id = normalize_run_id_token(spec.get('requested_run_id'))
+            expected_behavior = normalize_expected_behavior(str(spec.get('expected_behavior') or 'unknown'))
+            if not requested_run_id:
+                continue
+            _materialize_reused_buildsolve_run(
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                run_id=requested_run_id,
+                mode=verification_mode,
+                buildsolve_row=buildsolve_row,
+                buildsolve_summary=dict(buildsolve_summary),
+                verification_id=verification_id,
+                verification_run_ids=run_ids,
+                expected_behavior=expected_behavior,
+            )
         solution_results_by_index: dict[int, dict[str, object]] = {}
         cancel_reason = 'verification cancelled by user'
         cancel_requested = False
@@ -937,7 +1071,7 @@ def _run_verification_start_worker(
                                 mode=verification_mode,
                                 source_label=source_path,
                                 error=cancel_reason,
-                                build_id=build_id,
+                                artifact_verification_id=artifact_verification_id,
                                 verification_id=verification_id,
                                 expected_behavior=expected_behavior,
                                 verification_source='verification.start',
@@ -969,7 +1103,7 @@ def _run_verification_start_worker(
                         continue
                     if bool(spec.get('reuse_buildsolve')):
                         if buildsolve_row is None or not isinstance(buildsolve_summary, dict):
-                            raise RuntimeError('build.solve result missing for accepted solution reuse')
+                            raise RuntimeError('verification.solve-main result missing for accepted solution reuse')
                         submission_run_id = requested_run_id or _allocate_run_id()
                         if isinstance(target_ref, dict):
                             target_ref['run_id'] = submission_run_id
@@ -1005,7 +1139,7 @@ def _run_verification_start_worker(
                         config.judgehost_task_service.run_submission,
                         problem=problem,
                         username=user,
-                        build_id=build_id,
+                        artifact_verification_id=artifact_verification_id,
                         submission_path=source_path,
                         mode=verification_mode,
                         run_id=submission_run_id,
@@ -1014,6 +1148,7 @@ def _run_verification_start_worker(
                         expected_behavior=expected_behavior,
                         verification_source='verification.start',
                         task_kind='solve',
+                        selected_tests=selected_test_names,
                     )
                     inflight[future] = spec
 
@@ -1064,7 +1199,7 @@ def _run_verification_start_worker(
                                     mode=verification_mode,
                                     source_label=source_path,
                                     error=str(target_exc),
-                                    build_id=build_id,
+                                    artifact_verification_id=artifact_verification_id,
                                     verification_id=verification_id,
                                     expected_behavior=expected_behavior,
                                     verification_source='verification.start',
@@ -1122,7 +1257,7 @@ def _run_verification_start_worker(
                     config.judgehost_task_service.run_submission(
                         problem=problem,
                         username=user,
-                        build_id=build_id,
+                        artifact_verification_id=artifact_verification_id,
                         submission_path=source_path,
                         mode=verification_mode,
                         run_id=retry_run_id,
@@ -1131,6 +1266,7 @@ def _run_verification_start_worker(
                         expected_behavior='accepted',
                         verification_source='verification.start',
                         task_kind='solve',
+                        selected_tests=selected_test_names,
                     )
                     or ''
                 ).strip()
@@ -1170,7 +1306,7 @@ def _run_verification_start_worker(
             item = solution_results_by_index.get(spec_index)
             if not isinstance(item, dict):
                 continue
-            if not bool(item.get('matched')) and (not first_reason):
+            if bool(item.get('completed')) and (not bool(item.get('matched'))) and (not first_reason):
                 first_reason = _verification_solution_failure_hint(
                     str(item.get('source_path') or ''),
                     str(item.get('reason') or ''),
@@ -1178,10 +1314,15 @@ def _run_verification_start_worker(
                 )
             solution_results.append(item)
         verification_details['solutions'] = solution_results
+        all_completed = bool(solution_results) and all((bool(item.get('completed')) for item in solution_results))
         passed = bool(solution_results) and all((bool(item.get('matched')) for item in solution_results))
-        verification_details['status'] = 'pass' if passed else 'failed'
-        if not passed and first_reason:
-            verification_details['error'] = first_reason
+        if all_completed:
+            verification_details['status'] = 'pass' if passed else 'failed'
+            if not passed and first_reason:
+                verification_details['error'] = first_reason
+        else:
+            verification_details['status'] = 'running'
+            verification_details['error'] = ''
         _persist_verification_details(finished=False)
         for item in solution_results:
             current_run_id = str(item.get('run_id') or '').strip()
@@ -1200,26 +1341,35 @@ def _run_verification_start_worker(
             item['completed'] = bool(annotated.get('completed'))
             item['passed_all_tests'] = bool(annotated.get('passed_all_tests'))
             item['reason'] = str(annotated.get('reason') or item.get('reason') or '')
+        all_completed = bool(solution_results) and all((bool(item.get('completed')) for item in solution_results))
         passed = bool(solution_results) and all((bool(item.get('matched')) for item in solution_results))
-        verification_details['status'] = 'pass' if passed else 'failed'
-        if not passed:
-            unmatched = next((item for item in solution_results if (isinstance(item, dict) and (not bool(item.get('matched'))))), None)
-            if isinstance(unmatched, dict):
-                reason_first = _verification_solution_failure_hint(
-                    str(unmatched.get('source_path') or ''),
-                    str(unmatched.get('reason') or ''),
-                    str(unmatched.get('error') or ''),
-                )
-                if reason_first:
-                    verification_details['error'] = reason_first
-        _persist_verification_details(finished=True)
+        if all_completed:
+            verification_details['status'] = 'pass' if passed else 'failed'
+            if not passed:
+                unmatched = next((item for item in solution_results if (isinstance(item, dict) and (not bool(item.get('matched'))))), None)
+                if isinstance(unmatched, dict):
+                    reason_first = _verification_solution_failure_hint(
+                        str(unmatched.get('source_path') or ''),
+                        str(unmatched.get('reason') or ''),
+                        str(unmatched.get('error') or ''),
+                    )
+                    if reason_first:
+                        verification_details['error'] = reason_first
+            _persist_verification_details(finished=True)
+        else:
+            verification_details['status'] = 'running'
+            verification_details['error'] = ''
+            _persist_verification_details(finished=False)
     except Exception as exc:
-        safe_build_status = str(verification_details.get('build_status') or '').strip().lower()
-        build_stage_failed = safe_build_status in {'failed', 'error', 'missing'} or str(exc).strip().lower().startswith('build failed')
+        safe_artifact_verification_status = str(
+            verification_details.get('artifact_verification_status')
+            or ''
+        ).strip().lower()
+        materialization_stage_failed = safe_artifact_verification_status in {'failed', 'error', 'missing'} or str(exc).strip().lower().startswith('verification failed')
         _backfill_missing_verification_runs(
             str(exc),
-            build_for_failure=build_id,
-            execution_skipped_for_missing=build_stage_failed,
+            build_for_failure=artifact_verification_id,
+            execution_skipped_for_missing=materialization_stage_failed,
         )
         verification_details['status'] = 'failed'
         verification_details['error'] = str(exc)
@@ -1324,10 +1474,10 @@ _ = len(_DYNAMIC_EXPORT_KEEP)
 def _export_workspace_key(problem_id: int, workspace_id: int, head_commit: str, export_type: str) -> str:
     return export_workspace_key(problem_id, workspace_id, head_commit, export_type)
 
-def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, head_commit: str, requested_build_id: str, requested_export_type: str) -> None:
-    safe_requested_build_id = str(requested_build_id or '').strip()
+def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, head_commit: str, requested_verification_id: str, requested_export_type: str) -> None:
+    safe_requested_verification_id = str(requested_verification_id or '').strip()
     safe_export_type = str(requested_export_type or '').strip().lower() or 'icpc'
-    details: dict[str, object] = {'status': 'failed', 'build_id': safe_requested_build_id, 'export_type': safe_export_type, 'source_commit': str(head_commit or '').strip(), 'filename': '', 'error': ''}
+    details: dict[str, object] = {'status': 'failed', 'artifact_verification_id': safe_requested_verification_id, 'export_type': safe_export_type, 'source_commit': str(head_commit or '').strip(), 'filename': '', 'error': ''}
     worker_error: Exception | None = None
     try:
         if safe_export_type != 'icpc':
@@ -1335,30 +1485,33 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
         safe_head = str(head_commit or '').strip()
         if not safe_head:
             raise ValueError('no committed revision; commit changes first')
-        resolved_build_id = safe_requested_build_id
-        if not resolved_build_id:
-            active_build = latest_workspace_committed_build(int(problem_id), int(workspace_id), safe_head, ok_only=True)
-            if active_build is None:
-                resolved_build_id = config.build_service.run_build(problem, user, commit=safe_head, ref=safe_head)
+        resolved_verification_id = safe_requested_verification_id
+        if not resolved_verification_id:
+            active_verification = latest_workspace_committed_stage_verification(int(problem_id), int(workspace_id), safe_head, ok_only=True)
+            if active_verification is None:
+                resolved_verification_id = config.verification_service.run_verification(problem, user, commit=safe_head, ref=safe_head)
             else:
-                resolved_build_id = str(active_build['id'] or '').strip()
-        if not resolved_build_id:
-            raise RuntimeError('failed to resolve build id for export')
-        build_row = config.db.fetch_one('SELECT status,source_commit,source_ref FROM builds WHERE id=? AND problem_id=? AND workspace_id=?', [resolved_build_id, int(problem_id), int(workspace_id)])
-        if build_row is None:
-            raise ValueError(f'build metadata not found: {resolved_build_id}')
-        build_status = str(build_row['status'] or 'missing').strip().lower()
-        source_commit = str(build_row['source_commit'] or '').strip()
-        source_ref = str(build_row['source_ref'] or '').strip()
-        details['build_id'] = resolved_build_id
-        details['build_status'] = build_status
+                resolved_verification_id = str(active_verification['id'] or '').strip()
+        if not resolved_verification_id:
+            raise RuntimeError('failed to resolve verification for export')
+        materialization_row = config.db.fetch_one(
+            "SELECT status,source_commit,source_ref FROM verifications WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'",
+            [resolved_verification_id, int(problem_id), int(workspace_id)],
+        )
+        if materialization_row is None:
+            raise ValueError(f'verification not found: {resolved_verification_id}')
+        artifact_verification_status = str(materialization_row['status'] or 'missing').strip().lower()
+        source_commit = str(materialization_row['source_commit'] or '').strip()
+        source_ref = str(materialization_row['source_ref'] or '').strip()
+        details['artifact_verification_id'] = resolved_verification_id
+        details['artifact_verification_status'] = artifact_verification_status
         details['source_commit'] = source_commit
         details['source_ref'] = source_ref
         if source_commit != safe_head or source_ref != safe_head:
             raise ValueError('package must be generated from current committed revision')
-        if build_status != 'ok':
-            raise ValueError(f'build status is {build_status}')
-        out = config.export_service.create_export(problem, resolved_build_id, safe_export_type)
+        if artifact_verification_status != 'ok':
+            raise ValueError(f'verification status is {artifact_verification_status}')
+        out = config.export_service.create_export(problem, resolved_verification_id, safe_export_type)
         details['status'] = 'ok'
         details['filename'] = out.name
     except Exception as exc:
@@ -1369,7 +1522,7 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
     if worker_error is not None:
         raise worker_error
 
-def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, head_commit: str, requested_build_id: str, requested_export_type: str, initial_details: dict[str, object] | None=None) -> bool:
+def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, head_commit: str, requested_verification_id: str, requested_export_type: str, initial_details: dict[str, object] | None=None) -> bool:
     key = _export_workspace_key(problem_id, workspace_id, head_commit, requested_export_type)
     with config.export_lock:
         if key in config.export_inflight:
@@ -1386,7 +1539,7 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
 
     def _runner() -> None:
         try:
-            _run_export_create_worker(problem, user, actor_user_id=actor_user_id, problem_id=problem_id, workspace_id=workspace_id, head_commit=head_commit, requested_build_id=requested_build_id, requested_export_type=requested_export_type)
+            _run_export_create_worker(problem, user, actor_user_id=actor_user_id, problem_id=problem_id, workspace_id=workspace_id, head_commit=head_commit, requested_verification_id=requested_verification_id, requested_export_type=requested_export_type)
         finally:
             worker = worker_ref[0]
             if worker is not None:
@@ -1420,7 +1573,3 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
             config.export_inflight.discard(key)
         raise
     return True
-
-
-
-

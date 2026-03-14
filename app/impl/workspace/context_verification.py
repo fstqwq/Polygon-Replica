@@ -45,24 +45,63 @@ def _source_basename_label(path: str) -> str:
     name = Path(raw).name.strip()
     return name or raw
 
-def latest_workspace_build(problem_id: int, workspace_id: int, *, ok_only: bool=False):
-    sql = 'SELECT id,status,source_commit,source_ref,created_at,finished_at FROM builds WHERE problem_id=? AND workspace_id=?'
+def _verification_has_stage_results(summary_json: object) -> bool:
+    raw = str(summary_json or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    stage_results = parsed.get("stage_results")
+    return isinstance(stage_results, dict) and bool(stage_results)
+
+
+def latest_workspace_stage_verification(problem_id: int, workspace_id: int, *, ok_only: bool=False):
+    sql = """
+        SELECT id,status,source_commit,source_ref,kind,summary_json,created_at,finished_at
+        FROM verifications
+        WHERE problem_id=? AND workspace_id=? AND kind!='sample'
+    """
     params: list[object] = [problem_id, workspace_id]
     if ok_only:
         sql += " AND status='ok'"
-    sql += ' ORDER BY created_at DESC LIMIT 1'
-    return config.db.fetch_one(sql, params)
+    sql += " ORDER BY created_at DESC LIMIT 40"
+    rows = config.db.fetch_all(sql, params)
+    fallback: dict | None = None
+    for row in rows:
+        row_dict = dict(row)
+        if fallback is None:
+            fallback = row_dict
+        if _verification_has_stage_results(row_dict.get("summary_json")):
+            return row_dict
+    return fallback
 
-def latest_workspace_committed_build(problem_id: int, workspace_id: int, head_commit: str, *, ok_only: bool=False):
+
+def latest_workspace_committed_stage_verification(problem_id: int, workspace_id: int, head_commit: str, *, ok_only: bool=False):
     commit = str(head_commit or '').strip()
     if not commit:
         return None
-    sql = 'SELECT id,status,source_commit,source_ref,created_at,finished_at FROM builds WHERE problem_id=? AND workspace_id=? AND source_commit=? AND source_ref=?'
+    sql = """
+        SELECT id,status,source_commit,source_ref,kind,summary_json,created_at,finished_at
+        FROM verifications
+        WHERE problem_id=? AND workspace_id=? AND source_commit=? AND source_ref=? AND kind!='sample'
+    """
     params: list[object] = [problem_id, workspace_id, commit, commit]
     if ok_only:
         sql += " AND status='ok'"
-    sql += ' ORDER BY created_at DESC LIMIT 1'
-    return config.db.fetch_one(sql, params)
+    sql += " ORDER BY created_at DESC LIMIT 40"
+    rows = config.db.fetch_all(sql, params)
+    fallback: dict | None = None
+    for row in rows:
+        row_dict = dict(row)
+        if fallback is None:
+            fallback = row_dict
+        if _verification_has_stage_results(row_dict.get("summary_json")):
+            return row_dict
+    return fallback
 
 def _json_truthy(value: object) -> bool:
     if isinstance(value, bool):
@@ -374,7 +413,7 @@ def _verification_status_context(
     _ = actor_user_id
     row = config.db.fetch_one(
         """
-        SELECT id,build_id,status,summary_json,created_at,finished_at
+        SELECT id,status,summary_json,created_at,finished_at
         FROM verifications
         WHERE problem_id=? AND workspace_id=? AND kind='verification'
         ORDER BY created_at DESC
@@ -383,7 +422,7 @@ def _verification_status_context(
         [int(problem_id), int(workspace_id)],
     )
     if row is None:
-        return {'mode': 'none', 'display': 'none', 'last_status': 'none', 'run_id': '', 'run_ids': '', 'build_id': '', 'error': '', 'created_at': '', 'stale': False, 'stale_reason': ''}
+        return {'mode': 'none', 'display': 'none', 'last_status': 'none', 'run_id': '', 'run_ids': '', 'verification_id': '', 'error': '', 'created_at': '', 'stale': False, 'stale_reason': ''}
     verification_id = normalize_run_id_token(row['id'])
     details = load_verification_summary(config.db, verification_id)
     if not isinstance(details, dict):
@@ -463,10 +502,9 @@ def _verification_status_context(
         'last_status': last_status,
         'run_id': run_id,
         'run_ids': ','.join(run_ids),
-        'build_id': str(details.get('build_id') or row['build_id'] or '').strip(),
+        'verification_id': verification_id,
         'error': error_text,
         'created_at': verification_created_at,
         'stale': stale,
         'stale_reason': stale_reason,
     }
-

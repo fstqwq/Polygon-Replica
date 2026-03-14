@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -15,16 +15,40 @@ from .run_view_lifecycle_card import (
     _run_lifecycle_current_step,
     _run_lifecycle_current_step_fields,
     _run_lifecycle_status_label,
-    _verification_buildsolve_case_progress,
     _verification_failed_build_step_id,
     _verification_output_stats,
     _verification_run_test_progress,
+    _verification_solve_main_case_progress,
     _verification_step_title,
     _verification_tests_meta_stats,
     _verification_validate_stats,
 )
 
 _C = config.constants
+
+
+def _column_has_started_run(col: dict[str, object]) -> bool:
+    status = str(col.get("status") or "").strip().lower()
+    if status and status not in {"queued", "pending"}:
+        return True
+    summary_obj = col.get("summary")
+    summary = summary_obj if isinstance(summary_obj, dict) else {}
+    tests_obj = summary.get("tests")
+    compile_diag_obj = summary.get("compile_diagnostics")
+    if isinstance(tests_obj, list) and any(isinstance(item, dict) for item in tests_obj):
+        return True
+    if isinstance(compile_diag_obj, list) and any(isinstance(item, dict) for item in compile_diag_obj):
+        return True
+    if str(summary.get("error") or "").strip():
+        return True
+    return bool(col.get("tests_map"))
+
+
+def _column_is_buildsolve_run(col: dict[str, object]) -> bool:
+    summary_obj = col.get("summary")
+    summary = summary_obj if isinstance(summary_obj, dict) else {}
+    verification_source = str(summary.get("verification_source") or col.get("verification_source") or "").strip().lower()
+    return verification_source == "verification.solve-main"
 
 
 def _build_verification_lifecycle_card(
@@ -47,7 +71,15 @@ def _build_verification_lifecycle_card(
     step_ids: list[str] = []
     if isinstance(raw_steps, list):
         for item in raw_steps:
-            token = _normalize_verification_step_id(item)
+            if isinstance(item, str):
+                token = _normalize_verification_step_id(item)
+            elif isinstance(item, dict):
+                raw_token = item.get('id')
+                if raw_token is None:
+                    raw_token = item.get('step_id')
+                token = _normalize_verification_step_id(raw_token)
+            else:
+                token = ''
             if token and token not in step_ids:
                 step_ids.append(token)
     if not step_ids:
@@ -59,55 +91,45 @@ def _build_verification_lifecycle_card(
     status_by_step = {token: 'pending' for token in step_ids}
     detail_by_step: dict[str, str] = {}
 
-    build_id = str(verification_details.get('build_id') or '').strip()
-    if (not is_canonical_artifact_id(build_id)):
-        build_id = ''
+    artifact_verification_id = str(
+        verification_details.get('artifact_verification_id')
+        or verification_id
+        or ''
+    ).strip()
+    if (not is_canonical_artifact_id(artifact_verification_id)):
+        artifact_verification_id = normalize_run_id_token(verification_id)
         for col in columns:
-            candidate = str(col.get('build_id') or '').strip()
+            candidate = str(col.get('artifact_verification_id') or '').strip()
             if is_canonical_artifact_id(candidate):
-                build_id = candidate
+                artifact_verification_id = candidate
                 break
-    build_status = str(verification_details.get('build_status') or '').strip().lower()
+    artifact_verification_status = str(
+        verification_details.get('artifact_verification_status')
+        or ''
+    ).strip().lower()
     has_materialized_columns = any(
         bool(col.get('has_run_row')) for col in columns if isinstance(col, dict)
     )
-    if (not build_id) and bool(detail_running) and (not has_materialized_columns):
-        inflight_build = config.db.fetch_one(
-            """
-            SELECT id,status
-            FROM builds
-            WHERE problem_id=? AND workspace_id=? AND status IN ('running','queued','pending')
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            [int(problem_id), int(workspace_id)],
-        )
-        if inflight_build is not None:
-            candidate = str(inflight_build['id'] or '').strip()
-            if is_canonical_artifact_id(candidate):
-                build_id = candidate
-                if not str(build_status or '').strip():
-                    build_status = str(inflight_build['status'] or '').strip().lower()
-    build_failed_step = str(verification_details.get('build_failed_step') or '').strip()
-    build_failed_test = str(verification_details.get('build_failed_test') or '').strip()
-    build_error_text = preserve_error_text(str(verification_details.get('build_error') or ''))
-    if build_id:
+    build_failed_step = str(verification_details.get('artifact_failed_step') or '').strip()
+    build_failed_test = str(verification_details.get('artifact_failed_test') or '').strip()
+    artifact_verification_error_text = preserve_error_text(str(verification_details.get('artifact_verification_error') or ''))
+    if artifact_verification_id:
         build_row = config.db.fetch_one(
-            'SELECT status,summary_json FROM builds WHERE id=? AND problem_id=? AND workspace_id=?',
-            [build_id, int(problem_id), int(workspace_id)],
+            "SELECT status,summary_json FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
+            [artifact_verification_id, int(problem_id), int(workspace_id)],
         )
         if build_row is not None:
             status_token = str(build_row['status'] or '').strip().lower()
             if status_token:
-                build_status = status_token
+                artifact_verification_status = status_token
             if not build_failed_step:
-                build_summary = parse_summary_json(build_row['summary_json'], f'verification/build/{build_id}')
+                build_summary = parse_summary_json(build_row['summary_json'], f'verification/{artifact_verification_id}')
                 build_failed_step = str(build_summary.get('failed_step') or '').strip() if isinstance(build_summary, dict) else ''
                 build_failed_test = str(build_summary.get('failed_test') or '').strip() if isinstance(build_summary, dict) else build_failed_test
-                if (not build_error_text):
-                    build_error_text = preserve_error_text(str(build_summary.get('error') or '')) if isinstance(build_summary, dict) else ''
-    if build_id:
-        detail_by_step['gen'] = 'build prepared'
+                if (not artifact_verification_error_text):
+                    artifact_verification_error_text = preserve_error_text(str(build_summary.get('error') or '')) if isinstance(build_summary, dict) else ''
+    if artifact_verification_id:
+        detail_by_step['gen'] = 'inputs prepared'
 
     running_statuses = {'running', 'queued', 'pending'}
     materialized_columns = [
@@ -116,8 +138,11 @@ def _build_verification_lifecycle_card(
         if isinstance(col, dict) and bool(col.get('has_run_row'))
     ]
     run_statuses = [str(col.get('status') or '').strip().lower() for col in materialized_columns]
-    has_started_runs = bool(materialized_columns)
-    has_running_runs = any((item in running_statuses for item in run_statuses))
+    solution_columns = [col for col in materialized_columns if not _column_is_buildsolve_run(col)]
+    started_solution_columns = [col for col in solution_columns if _column_has_started_run(col)]
+    solution_run_statuses = [str(col.get('status') or '').strip().lower() for col in started_solution_columns]
+    has_started_runs = bool(started_solution_columns)
+    has_running_runs = any((item == 'running' for item in solution_run_statuses))
 
     # Backend routing is judgehost-only after migration cleanup; lifecycle
     # progress should always follow case-level judgehost progress semantics.
@@ -134,17 +159,17 @@ def _build_verification_lifecycle_card(
         details_source = str(verification_details.get('verification_source') or '').strip().lower()
         if details_source:
             verification_sources.add(details_source)
-    buildsolve_only = bool(verification_sources) and verification_sources.issubset({'build.solve'})
+    buildsolve_only = bool(verification_sources) and verification_sources.issubset({'verification.solve-main'})
     if buildsolve_only:
         has_started_runs = False
         has_running_runs = False
     if has_started_runs and bool(detail_running):
         has_running_runs = True
-    completed_runs = sum((1 for item in run_statuses if item and item not in running_statuses))
+    completed_runs = sum((1 for item in solution_run_statuses if item and item not in running_statuses))
     failed_run_count = 0
     cancelled_run_count = 0
-    for idx, col in enumerate(materialized_columns):
-        run_status = run_statuses[idx] if idx < len(run_statuses) else str(col.get('status') or '').strip().lower()
+    for col in started_solution_columns:
+        run_status = str(col.get('status') or '').strip().lower()
         summary_obj = col.get('summary')
         cancelled_this_run = False
         if isinstance(summary_obj, dict):
@@ -159,7 +184,7 @@ def _build_verification_lifecycle_card(
             continue
         if run_status == 'failed':
             failed_run_count += 1
-    run_skip_flags = [bool(col.get('execution_skipped')) for col in columns if isinstance(col, dict)]
+    run_skip_flags = [bool(col.get('execution_skipped')) for col in solution_columns if isinstance(col, dict)]
     all_runs_skipped = bool(run_skip_flags) and all(run_skip_flags)
     safe_detail_status = str(detail_status or '').strip().lower()
     error_text = preserve_error_text(str(verification_details.get('error') or ''))
@@ -172,18 +197,22 @@ def _build_verification_lifecycle_card(
     except Exception:
         run_count = 0
     if run_count <= 0:
-        runs_order_obj = verification_details.get('runs_order')
-        if isinstance(runs_order_obj, list):
-            run_count = len([str(item or '').strip() for item in runs_order_obj if str(item or '').strip()])
+        for key in ('source_paths', 'submission_paths'):
+            source_paths_obj = verification_details.get(key)
+            if not isinstance(source_paths_obj, list):
+                continue
+            run_count = len([str(item or '').strip() for item in source_paths_obj if str(item or '').strip()])
+            if run_count > 0:
+                break
     if run_count <= 0:
-        run_count = len(columns)
-    run_count = max(run_count, len(columns))
-    has_any_runs = bool(run_count > 0 and (has_started_runs or build_status in {'ok', 'failed', 'error'}))
+        run_count = len(solution_columns)
+    run_count = max(run_count, len(solution_columns))
+    has_any_runs = bool(run_count > 0 and (has_started_runs or artifact_verification_status in {'ok', 'failed', 'error'}))
     if has_any_runs:
         completed_runs = min(run_count, max(0, int(completed_runs)))
     test_progress = _verification_run_test_progress(
-        materialized_columns=materialized_columns,
-        run_statuses=run_statuses,
+        materialized_columns=solution_columns,
+        run_statuses=[str(col.get('status') or '').strip().lower() for col in solution_columns],
         run_count=run_count,
         fallback_tests_per_solution=max(0, int(progress_total)),
     )
@@ -198,8 +227,8 @@ def _build_verification_lifecycle_card(
             run_failed = True
     run_failure_detail_text = ""
     if run_failed or run_interrupted:
-        for idx, col in enumerate(materialized_columns):
-            run_status = run_statuses[idx] if idx < len(run_statuses) else str(col.get("status") or "").strip().lower()
+        for col in started_solution_columns:
+            run_status = str(col.get("status") or "").strip().lower()
             if run_status in {"running", "queued", "pending"}:
                 continue
             summary_obj = col.get("summary")
@@ -218,7 +247,7 @@ def _build_verification_lifecycle_card(
         if run_interrupted:
             progress_label = 'not executed (cancelled)'
         else:
-            progress_label = 'not executed (build failed)'
+            progress_label = 'not executed (setup failed)'
     elif total_test_units > 0 and has_started_runs and has_running_runs:
         progress_label = f'{completed_test_units}/{total_test_units} tests finished'
     elif run_interrupted:
@@ -237,20 +266,20 @@ def _build_verification_lifecycle_card(
             progress_label = 'failed'
     elif total_test_units > 0 and has_started_runs:
         progress_label = f'{completed_test_units}/{total_test_units} tests finished'
-    elif build_status == 'ok' and total_test_units > 0:
+    elif artifact_verification_status == 'ok' and total_test_units > 0:
         progress_label = f'0/{total_test_units} tests finished'
     elif has_started_runs:
         progress_label = f'{completed_runs}/{run_count} solutions finished'
-    elif build_status == 'ok' and run_count > 0:
+    elif artifact_verification_status == 'ok' and run_count > 0:
         progress_label = f'0/{run_count} solutions finished'
     if progress_label:
         detail_by_step['run'] = progress_label
     if match_total > 0:
         detail_by_step['check'] = f'matched expectations {int(matched_count)}/{int(match_total)}'
-    if error_text and (build_status not in {'failed', 'error'}) and (not run_interrupted):
+    if error_text and (artifact_verification_status not in {'failed', 'error'}) and (not run_interrupted):
         detail_by_step['check'] = error_text
 
-    tests_meta_stats = _verification_tests_meta_stats(problem_slug, build_id)
+    tests_meta_stats = _verification_tests_meta_stats(problem_slug, artifact_verification_id)
     tests_meta_loaded = bool(tests_meta_stats.get('loaded'))
     generated_total = max(0, int(tests_meta_stats.get('total') or 0))
     generated_manual = max(0, int(tests_meta_stats.get('manual') or 0))
@@ -258,19 +287,19 @@ def _build_verification_lifecycle_card(
     if generated_total <= 0 and progress_total > 0:
         generated_total = max(0, int(progress_total))
 
-    output_stats = _verification_output_stats(problem_slug, build_id)
+    output_stats = _verification_output_stats(problem_slug, artifact_verification_id)
     outputs_total = max(0, int(output_stats.get('total') or 0))
     outputs_generated = max(0, int(output_stats.get('generated') or 0))
     buildsolve_case_total = 0
     buildsolve_case_reported = 0
-    if build_id:
-        buildsolve_progress = _verification_buildsolve_case_progress(build_id)
+    if artifact_verification_id:
+        buildsolve_progress = _verification_solve_main_case_progress(artifact_verification_id)
         case_total = max(0, int(buildsolve_progress.get('total') or 0))
         case_reported = max(0, int(buildsolve_progress.get('reported') or 0))
         buildsolve_case_total = case_total
         buildsolve_case_reported = case_reported
         if case_total > 0:
-            if build_status in {'running', 'queued', 'pending'}:
+            if artifact_verification_status in {'running', 'queued', 'pending'}:
                 # While build is running, case-level progress is authoritative for
                 # output-generation progress. File-based ans counts can include stale
                 # artifacts from previous attempts.
@@ -284,10 +313,10 @@ def _build_verification_lifecycle_card(
     if outputs_generated > outputs_total:
         outputs_total = outputs_generated
     if (
-        build_status in {'running', 'queued', 'pending'}
+        artifact_verification_status in {'running', 'queued', 'pending'}
         and prefer_case_progress
         and (not has_started_runs)
-        and build_id
+        and artifact_verification_id
         and buildsolve_case_total <= 0
     ):
         # Judgehost case progress has not been registered yet; avoid showing stale
@@ -300,17 +329,17 @@ def _build_verification_lifecycle_card(
     validated_failed = max(0, int(validate_stats.get('failed') or 0))
     validated_timed_out = max(0, int(validate_stats.get('timed_out') or 0))
 
-    build_failed = build_status in {'failed', 'error'}
-    build_running = build_status in {'running', 'queued', 'pending'}
-    build_done = build_status == 'ok'
-    if (not build_status) and has_started_runs:
+    build_failed = artifact_verification_status in {'failed', 'error'}
+    build_running = artifact_verification_status in {'running', 'queued', 'pending'}
+    build_done = artifact_verification_status == 'ok'
+    if (not artifact_verification_status) and has_started_runs:
         build_done = True
-    if (not build_status) and (not has_started_runs):
+    if (not artifact_verification_status) and (not has_started_runs):
         # Initial verification audit entry is written before build starts; keep
         # lifecycle focused on "Generate Inputs" instead of jumping to run stage.
         build_running = True
-    outputs_phase_done_while_build_running = bool(has_started_runs)
-    if (not outputs_phase_done_while_build_running) and buildsolve_case_total > 0:
+    outputs_phase_done_while_build_running = False
+    if buildsolve_case_total > 0:
         outputs_phase_done_while_build_running = buildsolve_case_reported >= buildsolve_case_total
 
     failed_step_id = ''
@@ -323,8 +352,8 @@ def _build_verification_lifecycle_card(
             generated_total > 0
             or outputs_total > 0
             or validated_total > 0
-            or build_status in {'ok', 'running', 'queued', 'pending'}
-            or bool(build_id)
+            or artifact_verification_status in {'ok', 'running', 'queued', 'pending'}
+            or bool(artifact_verification_id)
         ):
             failed_step_id = 'val'
         elif 'gen' in step_ids:
@@ -367,7 +396,7 @@ def _build_verification_lifecycle_card(
             else:
                 status_by_step[token] = 'skipped'
                 if token == 'run':
-                    detail_by_step[token] = 'not executed (build failed)'
+                    detail_by_step[token] = 'not executed (setup failed)'
                 if token == 'check':
                     detail_by_step[token] = 'skipped'
     elif build_running:
@@ -513,7 +542,7 @@ def _build_verification_lifecycle_card(
         elif build_running and generated_total > 0:
             detail_by_step['val'] = 'generating outputs'
 
-    running_count = sum((1 for token in run_statuses if token in running_statuses))
+    running_count = sum((1 for token in solution_run_statuses if token == 'running'))
     finished_count = max(0, int(completed_runs))
     if all_runs_skipped:
         if run_count > 0:
@@ -540,13 +569,13 @@ def _build_verification_lifecycle_card(
         if progress_total > 0:
             _step_add_fact('run', 'Tests per solution', count_label(int(progress_total), 'test'))
     if all_runs_skipped:
-        run_skip_note = str(detail_by_step.get('run') or '').strip() or 'not executed (build failed)'
+        run_skip_note = str(detail_by_step.get('run') or '').strip() or 'not executed (setup failed)'
         _step_add_note('run', run_skip_note)
     elif run_interrupted:
         _step_add_note('run', run_failure_detail_text or error_text or 'verification cancelled by user')
     elif run_failed and (run_failure_detail_text or error_text):
         _step_add_note('run', run_failure_detail_text or error_text)
-    elif build_status == 'ok' and run_count > 0 and (not has_started_runs):
+    elif artifact_verification_status == 'ok' and run_count > 0 and (not has_started_runs):
         _step_add_note('run', 'Waiting for solution execution results.')
 
     if generated_total > 0 or (build_running and tests_meta_loaded):
@@ -560,18 +589,18 @@ def _build_verification_lifecycle_card(
     if build_failed and failed_step_id == 'gen':
         if build_failed_test:
             _step_add_note('gen', f'Failed test: {build_failed_test}')
-        if build_error_text:
-            _step_add_note('gen', build_error_text)
+        if artifact_verification_error_text:
+            _step_add_note('gen', artifact_verification_error_text)
         elif error_text:
             _step_add_note('gen', error_text)
 
     if outputs_total > 0:
         hide_generated_outputs_fact = (
             (val_status_token in {'pending', 'running'})
-            and (build_status in {'running', 'queued', 'pending'})
+            and (artifact_verification_status in {'running', 'queued', 'pending'})
             and prefer_case_progress
             and (not has_started_runs)
-            and bool(build_id)
+            and bool(artifact_verification_id)
             and buildsolve_case_total <= 0
         )
         if not hide_generated_outputs_fact:
@@ -585,7 +614,7 @@ def _build_verification_lifecycle_card(
             _step_add_fact('gen', 'Validation timeouts', count_label(validated_timed_out, 'test'), tone='danger')
         if bool(validate_stats.get('truncated')):
             _step_add_note('gen', 'Validation log was truncated while summarizing.')
-    elif (val_status_token in {'pending', 'running'}) and (build_status in {'running', 'queued', 'pending', ''}):
+    elif (val_status_token in {'pending', 'running'}) and (artifact_verification_status in {'running', 'queued', 'pending', ''}):
         if generated_total > 0:
             _step_add_note('val', 'Waiting for output generation results.')
         else:
@@ -601,8 +630,8 @@ def _build_verification_lifecycle_card(
                 _step_add_note('val', f'Output generation failed on {build_failed_test}')
             else:
                 _step_add_note('val', 'Output generation failed.')
-        elif build_error_text:
-            _step_add_note('val', build_error_text)
+        elif artifact_verification_error_text:
+            _step_add_note('val', artifact_verification_error_text)
         elif error_text:
             _step_add_note('val', error_text)
 
@@ -687,6 +716,3 @@ def _build_verification_lifecycle_card(
         'summary': '',
         'steps': steps,
     }
-
-
-

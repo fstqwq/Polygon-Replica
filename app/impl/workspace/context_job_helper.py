@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -15,7 +15,9 @@ from app.service.verification import (
     VERIFICATION_KIND_VERIFICATION,
     allocate_verification_id as _store_allocate_verification_id,
     load_verification_run,
+    load_verification_summary,
     save_verification_run_summary,
+    verification_stage_results,
     verification_run_root,
 )
 
@@ -23,7 +25,7 @@ from .context_operation import dedupe_preserve_order, parse_summary_json
 from .context_run_detail import normalize_run_id_token
 from .context_ui import page_ctx
 from .context_verification import (
-    latest_workspace_build,
+    latest_workspace_stage_verification,
     _verification_solution_match,
 )
 from .problem_config import normalize_problem_mode
@@ -33,11 +35,11 @@ _C = config.constants
 _BACKEND_NAME = config.judgehost_task_service.backend_name()
 
 
-class BuildFailureError(RuntimeError):
-    def __init__(self, *, build_id: str, reason: str, status: str = "", failed_test: str = "") -> None:
-        safe_reason = str(reason or "").strip() or "build failed"
-        super().__init__(f"build failed: {safe_reason}")
-        self.build_id = str(build_id or "").strip()
+class VerificationFailureError(RuntimeError):
+    def __init__(self, *, verification_id: str, reason: str, status: str = "", failed_test: str = "") -> None:
+        safe_reason = str(reason or "").strip() or "verification failed"
+        super().__init__(f"verification failed: {safe_reason}")
+        self.verification_id = str(verification_id or "").strip()
         self.reason = safe_reason
         self.status = str(status or "").strip().lower()
         self.failed_test = str(failed_test or "").strip()
@@ -57,13 +59,14 @@ def _verification_kind_for_source(verification_source: str) -> str:
     return VERIFICATION_KIND_VERIFICATION
 
 
-def _ensure_implicit_build(
+def _ensure_implicit_verification(
     problem: str,
     user: str,
     *,
     ctx: dict | None=None,
     force: bool=False,
     for_verification: bool=False,
+    verification_id: str='',
 ) -> tuple[str, bool]:
     local_ctx = ctx or page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(local_ctx['problem']['id'])
@@ -71,8 +74,9 @@ def _ensure_implicit_build(
     head_commit = str(local_ctx['workspace'].get('head_commit') or '').strip()
     branch = str(local_ctx['workspace'].get('branch') or 'main').strip() or 'main'
     dirty = bool(local_ctx['workspace'].get('dirty'))
-    latest_ok = latest_workspace_build(problem_id, workspace_id, ok_only=True)
-    if not force and latest_ok is not None:
+    safe_target_verification_id = normalize_run_id_token(verification_id)
+    latest_ok = latest_workspace_stage_verification(problem_id, workspace_id, ok_only=True)
+    if (not safe_target_verification_id) and (not force) and latest_ok is not None:
         latest_id = str(latest_ok['id'] or '').strip()
         latest_commit = str(latest_ok['source_commit'] or '').strip()
         latest_ref = str(latest_ok['source_ref'] or '').strip()
@@ -89,44 +93,66 @@ def _ensure_implicit_build(
             if created_at is not None and (utc_now() - created_at).total_seconds() <= _C.IMPLICIT_BUILD_DIRTY_REUSE_SEC:
                 return (latest_id, False)
     if for_verification:
-        build_id = config.build_service.run_build(problem, user)
+        created_verification_id = config.verification_service.run_verification(
+            problem,
+            user,
+            verification_id=safe_target_verification_id,
+        )
     else:
-        build_id = config.build_service.run_build(problem, user)
-    safe_build_id = str(build_id or "").strip()
-    if not safe_build_id:
-        raise RuntimeError("build failed: build id is missing")
+        created_verification_id = config.verification_service.run_verification(problem, user)
+    safe_verification_id = str(created_verification_id or "").strip()
+    if not safe_verification_id:
+        raise RuntimeError("verification failed: verification id is missing")
     row = config.db.fetch_one(
-        "SELECT status FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_build_id, problem_id, workspace_id],
+        "SELECT status FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_verification_id, problem_id, workspace_id],
     )
     status = str(row["status"] or "").strip().lower() if row is not None else ""
     if status and status not in {"ok", "failed", "cancelled"}:
         try:
-            waited = str(config.build_service._wait_build_terminal_status(safe_build_id, 30.0) or "").strip().lower()
+            waited = str(config.verification_service._wait_verification_terminal_status(safe_verification_id, 30.0) or "").strip().lower()
             if waited:
                 status = waited
         except Exception:
             pass
     if status == "ok":
-        return (safe_build_id, True)
-    _failed_test, reason = _parse_build_failure_context(problem_id, workspace_id, safe_build_id)
+        return (safe_verification_id, True)
+    if for_verification:
+        verification_summary = load_verification_summary(config.db, safe_verification_id)
+        if isinstance(verification_summary, dict) and verification_summary:
+            stage_results = verification_stage_results(verification_summary)
+            generate_stage = stage_results.get("generate_input") if isinstance(stage_results, dict) else None
+            solve_stage = stage_results.get("solve_main") if isinstance(stage_results, dict) else None
+            generate_status = (
+                str(generate_stage.get("status") or "").strip().lower()
+                if isinstance(generate_stage, dict)
+                else ""
+            )
+            solve_status = (
+                str(solve_stage.get("status") or "").strip().lower()
+                if isinstance(solve_stage, dict)
+                else ""
+            )
+            if generate_status == "ok" and solve_status == "ok":
+                return (safe_verification_id, True)
+    _failed_test, reason = _parse_verification_failure_context(problem_id, workspace_id, safe_verification_id)
     if reason:
-        raise BuildFailureError(
-            build_id=safe_build_id,
+        raise VerificationFailureError(
+            verification_id=safe_verification_id,
             reason=reason,
             status=status,
             failed_test=_failed_test,
         )
     if status:
-        raise BuildFailureError(
-            build_id=safe_build_id,
-            reason=f"build status is {status}",
+        raise VerificationFailureError(
+            verification_id=safe_verification_id,
+            reason=f"verification status is {status}",
             status=status,
             failed_test=_failed_test,
         )
-    raise BuildFailureError(
-        build_id=safe_build_id,
-        reason="build metadata missing",
+    raise VerificationFailureError(
+        verification_id=safe_verification_id,
+        reason="verification metadata missing",
         status=status,
         failed_test=_failed_test,
     )
@@ -137,11 +163,14 @@ def _allocate_run_id() -> str:
 def allocate_verification_id() -> str:
     return _store_allocate_verification_id(config.db)
 
-def _parse_build_failure_context(problem_id: int, workspace_id: int, build_id: str) -> tuple[str, str]:
-    safe_build_id = str(build_id or '').strip()
-    if not safe_build_id:
+def _parse_verification_failure_context(problem_id: int, workspace_id: int, verification_id: str) -> tuple[str, str]:
+    safe_verification_id = str(verification_id or '').strip()
+    if not safe_verification_id:
         return ('', '')
-    row = config.db.fetch_one('SELECT status,summary_json FROM builds WHERE id=? AND problem_id=? AND workspace_id=?', [safe_build_id, int(problem_id), int(workspace_id)])
+    row = config.db.fetch_one(
+        "SELECT status,summary_json FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
+        [safe_verification_id, int(problem_id), int(workspace_id)],
+    )
     if row is None:
         return ('', '')
     status = str(row['status'] or '').strip().lower()
@@ -161,16 +190,16 @@ def _parse_build_failure_context(problem_id: int, workspace_id: int, build_id: s
         if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.in', candidate):
             failed_test = candidate
     failed_step = str(summary_obj.get('failed_step') or '').strip()
-    build_error = compact_error_text(str(summary_obj.get('error') or ''))
+    artifact_verification_error = compact_error_text(str(summary_obj.get('error') or ''))
     reason = ''
-    if build_error:
-        reason = build_error
+    if artifact_verification_error:
+        reason = artifact_verification_error
     elif failed_step and failed_test_raw:
         reason = compact_error_text(f'{failed_step} failed on {failed_test_raw}')
     elif failed_step:
         reason = compact_error_text(f'{failed_step} failed')
     elif status and status != 'ok':
-        reason = f'build status is {status}'
+        reason = f'verification status is {status}'
     return (failed_test, reason)
 
 def _extract_failed_test_name_from_error(error_text: str) -> str:
@@ -231,8 +260,8 @@ def record_async_run_failure(
     mode: str,
     source_label: str,
     error: str,
-    build_id: str,
-    verification_id: str='',
+    verification_id: str,
+    artifact_verification_id: str='',
     expected_behavior: str='unknown',
     verification_source: str='run.execute',
     synthesize_failed_tests: bool=True,
@@ -260,7 +289,11 @@ def record_async_run_failure(
     compile_log_name = 'compile.log'
     compile_log_text = safe_error + '\n'
     (run_root / compile_log_name).write_text(compile_log_text, encoding='utf-8')
-    failed_test, build_reason = _parse_build_failure_context(int(ctx['problem']['id']), int(ctx['workspace']['id']), build_id)
+    failed_test, build_reason = _parse_verification_failure_context(
+        int(ctx['problem']['id']),
+        int(ctx['workspace']['id']),
+        artifact_verification_id,
+    )
     if not failed_test:
         failed_test = _extract_failed_test_name_from_error(build_reason or safe_error)
     failure_reason = build_reason or safe_error
@@ -297,7 +330,6 @@ def record_async_run_failure(
             summary['execution_skipped_reason'] = failure_reason
         if not safe_failure_stage:
             summary['failure_stage'] = 'build'
-    safe_build_id = str(build_id or '').strip() or _C.RUN_PLACEHOLDER_BUILD_ID
     try:
         save_verification_run_summary(
             config.db,
@@ -305,7 +337,6 @@ def record_async_run_failure(
             verification_id=resolved_verification_id,
             problem_id=int(ctx['problem']['id']),
             workspace_id=int(ctx['workspace']['id']),
-            build_id=safe_build_id,
             kind=_verification_kind_for_source(effective_verification_source),
             mode=safe_mode,
             verification_source=effective_verification_source,
@@ -360,7 +391,6 @@ def _update_verification_run_match(
             verification_id=resolved_verification_id,
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
-            build_id='',
             kind=_verification_kind_for_source(verification_source),
             mode=str(summary_obj.get('mode') or '').strip() or 'pass-fail',
             verification_source=str(verification_source or 'run.execute').strip() or 'run.execute',

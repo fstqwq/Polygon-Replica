@@ -36,28 +36,26 @@ def _browser_blob_response(blob: bytes, filename: str) -> Response:
     if suffix in text_like_suffixes:
         return Response(content=blob, media_type="text/plain; charset=utf-8", headers=headers)
     return Response(content=blob, media_type="application/octet-stream", headers=headers)
-def _build_ref_for_build(problem_id: int, build_id: str) -> str:
-    safe_build_id = str(build_id or "").strip()
-    if (not safe_build_id) or (not is_canonical_artifact_id(safe_build_id)):
-        return ""
+def _verification_artifact_root(problem_id: int, verification_id: str) -> Path | None:
+    safe_verification_id = str(verification_id or "").strip()
+    if (not safe_verification_id) or (not is_canonical_artifact_id(safe_verification_id)):
+        return None
     row = config.db.fetch_one(
-        "SELECT build_ref FROM builds WHERE id=? AND problem_id=?",
-        [safe_build_id, int(problem_id)],
+        "SELECT artifact_path FROM verifications WHERE id=? AND problem_id=?",
+        [safe_verification_id, int(problem_id)],
     )
     if row is None:
-        return ""
-    return str(row["build_ref"] or "").strip().lower()
-
-def _build_artifact_root(problem_id: int, build_id: str) -> Path | None:
-    build_ref = _build_ref_for_build(problem_id, build_id)
-    if not build_ref:
+        return None
+    artifact_path = str(row["artifact_path"] or "").strip()
+    if not artifact_path:
         return None
     try:
-        root = config.fs_manager.build_paths(build_ref).root.resolve()
+        root = Path(artifact_path).resolve()
+        base = config.settings.artifacts_root.resolve()
     except Exception:
         return None
     try:
-        if (not root.exists()) or (not root.is_dir()) or root.is_symlink():
+        if (root != base and base not in root.parents) or (not root.exists()) or (not root.is_dir()) or root.is_symlink():
             return None
     except OSError:
         return None
@@ -69,22 +67,22 @@ def _is_safe_regular_file(path: Path) -> bool:
     except OSError:
         return False
 
-def artifact_file(problem: str, user: str, build_id: str, rel_path: str):
+def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    assert_workspace_artifact_access(ctx, build_id)
+    assert_workspace_artifact_access(ctx, verification_id)
     rel_norm = str(rel_path or '').lstrip('/')
     if rel_norm.startswith("export/"):
         from app.impl.run_export.export import _resolve_export_archive_path
 
         export_name = Path(rel_norm).name
-        file_path = _resolve_export_archive_path(problem, build_id, export_name)
+        file_path = _resolve_export_archive_path(problem, verification_id, export_name)
         if file_path is None:
             raise HTTPException(status_code=404, detail="artifact file not found")
     else:
-        file_path = safe_artifact_path(problem, build_id, rel_path)
+        file_path = safe_artifact_path(problem, verification_id, rel_path)
     if rel_norm.startswith('export/'):
         export_name = Path(rel_norm).name
-        download_name = export_download_filename(ctx, build_id, export_name)
+        download_name = export_download_filename(ctx, verification_id, export_name)
         if download_name:
             return FileResponse(file_path, filename=download_name)
     return browser_file_response(file_path)

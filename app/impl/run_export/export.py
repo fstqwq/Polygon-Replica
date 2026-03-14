@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from app.impl.run_export.context import (
     Path,
@@ -6,7 +6,7 @@ from app.impl.run_export.context import (
     Request,
     audit,
     git_commit_count,
-    latest_workspace_committed_build,
+    latest_workspace_committed_stage_verification,
     redirect_response,
     require_write_access,
     start_export_job,
@@ -17,10 +17,10 @@ from app.impl.run_export.context import (
     zipfile,
 )
 from app.impl.run_export.query import (
-    _build_runtime_progress,
+    _verification_runtime_progress,
     _count_label,
     _summary_object,
-    _verification_href_for_build,
+    _verification_href,
 )
 def _export_recent_events(
     problem_id: int,
@@ -52,39 +52,39 @@ def _export_recent_events(
         commit_key = (export_type, source_commit) if source_commit else ("", "")
         if status == "running" and source_commit and commit_key in resolved_commit_keys:
             continue
-        build_id = str(details.get("build_id") or "").strip()
-        if (not build_id) and status == "running" and source_commit:
-            build_row = config.db.fetch_one(
+        verification_id = str(details.get("verification_id") or "").strip()
+        if (not verification_id) and status == "running" and source_commit:
+            verification_row = config.db.fetch_one(
                 """
                 SELECT id
-                FROM builds
-                WHERE problem_id=? AND source_commit=?
+                FROM verifications
+                WHERE problem_id=? AND source_commit=? AND kind='verification'
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
                 [int(problem_id), source_commit],
             )
-            if build_row is not None:
-                build_id = str(build_row["id"] or "").strip()
+            if verification_row is not None:
+                verification_id = str(verification_row["id"] or "").strip()
         filename = str(details.get("filename") or "").strip()
         error_text = str(details.get("error") or "").strip()
         detail = filename if filename else (error_text if error_text else "-")
-        runtime_progress = _build_runtime_progress(
+        runtime_progress = _verification_runtime_progress(
             problem_id=int(problem_id),
             problem_slug=str(problem_slug or "").strip(),
             username=str(username or "").strip(),
-            build_id=build_id,
+            verification_id=verification_id,
             event_status=status,
         )
         runtime_detail = str(runtime_progress.get("detail") or "").strip()
         log_href = str(runtime_progress.get("log_href") or "").strip()
         if runtime_detail:
             detail = runtime_detail
-        verification_href = _verification_href_for_build(
+        verification_href = _verification_href(
             problem_id=int(problem_id),
             problem_slug=str(problem_slug or "").strip(),
             username=str(username or "").strip(),
-            build_id=build_id,
+            verification_id=verification_id,
         )
         result.append(
             {
@@ -93,7 +93,7 @@ def _export_recent_events(
                 "status_upper": status.upper(),
                 "source_commit": source_commit,
                 "source_commit_short": source_commit[:8] if source_commit else "-",
-                "build_id": build_id or "-",
+                "verification_id": verification_id or "-",
                 "detail": detail,
                 "running": status == "running",
                 "verification_href": verification_href,
@@ -138,7 +138,7 @@ def _build_validation_status(build_row: dict[str, object] | None) -> str:
         return "validation passed"
     return "validation unknown"
 
-def _export_archive_summary(problem: str, build_id: str, filename: str) -> dict[str, object]:
+def _export_archive_summary(problem: str, verification_id: str, filename: str) -> dict[str, object]:
     result: dict[str, object] = {
         "available": False,
         "has_pdf": False,
@@ -146,11 +146,11 @@ def _export_archive_summary(problem: str, build_id: str, filename: str) -> dict[
         "solutions_correct": None,
         "tests_total": None,
     }
-    safe_build = str(build_id or "").strip()
+    safe_verification_id = str(verification_id or "").strip()
     safe_filename = Path(str(filename or "").strip()).name
-    if not safe_build or not safe_filename:
+    if not safe_verification_id or not safe_filename:
         return result
-    archive_path = _resolve_export_archive_path(problem, safe_build, safe_filename)
+    archive_path = _resolve_export_archive_path(problem, safe_verification_id, safe_filename)
     if archive_path is None:
         return result
     if not archive_path.exists() or not archive_path.is_file() or archive_path.is_symlink():
@@ -192,20 +192,23 @@ def _export_archive_summary(problem: str, build_id: str, filename: str) -> dict[
     result["tests_total"] = int(tests_total)
     return result
 
-def _resolve_export_archive_path(problem: str, build_id: str, filename: str) -> Path | None:
-    safe_build = str(build_id or "").strip()
+def _resolve_export_archive_path(problem: str, verification_id: str, filename: str) -> Path | None:
+    safe_verification_id = str(verification_id or "").strip()
     safe_name = Path(str(filename or "").strip()).name
-    if (not safe_build) or (not safe_name):
+    if (not safe_verification_id) or (not safe_name):
         return None
-    row = config.db.fetch_one("SELECT build_ref FROM builds WHERE id=?", [safe_build])
+    row = config.db.fetch_one("SELECT artifact_path FROM verifications WHERE id=?", [safe_verification_id])
     if row is None:
         return None
-    build_ref = str(row["build_ref"] or "").strip().lower()
-    if not build_ref:
+    artifact_path = str(row["artifact_path"] or "").strip()
+    if not artifact_path:
         return None
     try:
-        root = config.fs_manager.build_paths(build_ref).root.resolve()
+        root = Path(artifact_path).resolve()
+        base = config.settings.artifacts_root.resolve()
     except Exception:
+        return None
+    if root != base and base not in root.parents:
         return None
     export_dir = (root / "export").resolve()
     if root != export_dir and root not in export_dir.parents:
@@ -228,17 +231,17 @@ def export_page(request: Request, problem: str, user: str):
     workspace = Path(ctx['workspace']['path'])
     generate_revision: int | None = git_commit_count(workspace, head_commit) if head_commit else None
     generate_revision_display = f'v{generate_revision}' if isinstance(generate_revision, int) and generate_revision >= 0 else 'missing'
-    active_build = latest_workspace_committed_build(problem_id, int(workspace_id), head_commit, ok_only=True)
-    build_status = 'ready' if active_build is not None else 'missing'
+    active_verification = latest_workspace_committed_stage_verification(problem_id, int(workspace_id), head_commit, ok_only=True)
+    artifact_verification_status = 'ready' if active_verification is not None else 'missing'
     if not head_commit:
-        build_note = 'no committed revision yet; commit changes before generating package'
-    elif active_build is None:
-        build_note = 'no committed tests snapshot for this revision; Generate will build from committed revision'
+        verification_note = 'no committed revision yet; commit changes before generating package'
+    elif active_verification is None:
+        verification_note = 'no committed verification for this revision; Generate will materialize from committed revision'
     else:
-        build_note = 'committed revision tests are ready for export'
-    exports_rows = config.db.fetch_all('\n        SELECT id,build_id,export_type,filename,sha256,size_bytes,source_commit,created_at\n        FROM exports\n        WHERE problem_id=? AND workspace_id=?\n        ORDER BY created_at DESC\n        LIMIT 40\n        ', [ctx['problem']['id'], workspace_id])
+        verification_note = 'committed revision artifacts are ready for export'
+    exports_rows = config.db.fetch_all('\n        SELECT id,verification_id,export_type,filename,sha256,size_bytes,source_commit,created_at\n        FROM exports\n        WHERE problem_id=? AND workspace_id=?\n        ORDER BY created_at DESC\n        LIMIT 40\n        ', [ctx['problem']['id'], workspace_id])
     revision_cache: dict[str, int | None] = {}
-    build_meta_cache: dict[str, dict[str, object] | None] = {}
+    verification_meta_cache: dict[str, dict[str, object] | None] = {}
     archive_summary_cache: dict[tuple[str, str], dict[str, object]] = {}
     exports: list[dict[str, object]] = []
     for row in exports_rows:
@@ -256,18 +259,18 @@ def export_page(request: Request, problem: str, user: str):
         stored_filename = Path(str(item.get("filename") or "").strip()).name
         fallback_stem = Path(str(ctx["problem"]["slug"] or "")).name or "problem"
         item['display_filename'] = stored_filename or f"{fallback_stem}-{item['revision_display']}.zip"
-        build_id = str(item.get("build_id") or "").strip()
-        build_meta = build_meta_cache.get(build_id)
-        if build_id and (build_meta is None) and (build_id not in build_meta_cache):
+        verification_id = str(item.get("verification_id") or "").strip()
+        verification_meta = verification_meta_cache.get(verification_id)
+        if verification_id and (verification_meta is None) and (verification_id not in verification_meta_cache):
             row_meta = config.db.fetch_one(
-                "SELECT id,status,summary_json FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-                [build_id, problem_id, workspace_id],
+                "SELECT id,status,summary_json FROM verifications WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'",
+                [verification_id, problem_id, workspace_id],
             )
-            build_meta = dict(row_meta) if row_meta is not None else None
-            build_meta_cache[build_id] = build_meta
-        validation_status = _build_validation_status(build_meta)
+            verification_meta = dict(row_meta) if row_meta is not None else None
+            verification_meta_cache[verification_id] = verification_meta
+        validation_status = _build_validation_status(verification_meta)
         summary_bits: list[str] = [validation_status]
-        summary_key = (build_id, str(item.get("filename") or "").strip())
+        summary_key = (verification_id, str(item.get("filename") or "").strip())
         archive_summary = archive_summary_cache.get(summary_key)
         if archive_summary is None:
             archive_summary = _export_archive_summary(problem, summary_key[0], summary_key[1])
@@ -279,8 +282,8 @@ def export_page(request: Request, problem: str, user: str):
             tests_total = archive_summary.get("tests_total")
             if isinstance(solutions_total, int) and isinstance(solutions_correct, int):
                 summary_bits.append(f"{_count_label(solutions_total, 'solution')} ({solutions_correct} correct)")
-            if isinstance(tests_total, int):
-                summary_bits.append(_count_label(tests_total, "test"))
+        if isinstance(tests_total, int):
+            summary_bits.append(_count_label(tests_total, "test"))
         item["summary_display"] = f"{item['revision_display']} ({', '.join(summary_bits)})" if summary_bits else item["revision_display"]
         exports.append(item)
     export_events = _export_recent_events(
@@ -295,32 +298,49 @@ def export_page(request: Request, problem: str, user: str):
         'export.html',
         {
             'ctx': ctx,
-            'active_build': active_build,
-            'build_status': build_status,
-            'build_note': build_note,
+            'active_verification': active_verification,
+            'artifact_verification_status': artifact_verification_status,
+            'verification_note': verification_note,
             'generate_revision_display': generate_revision_display,
             'exports': exports,
             'export_events': export_events,
         },
     )
 
-def export_create(problem: str, user: str, build_id: str=Form(''), export_type: str=Form('icpc')):
+def export_create(problem: str, user: str, verification_id: str=Form(''), export_type: str=Form('icpc')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     require_write_access(ctx)
-    resolved_build_id = str(build_id or '').strip()
+    resolved_verification_id = str(verification_id or '').strip()
     requested_export_type = str(export_type or '').strip().lower()
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
     head_commit = str(ctx['workspace'].get('head_commit') or '').strip()
     if not requested_export_type:
         requested_export_type = 'icpc'
-    initial_details: dict[str, object] = {'status': 'running', 'build_id': resolved_build_id, 'export_type': requested_export_type, 'source_commit': head_commit, 'filename': '', 'error': ''}
+    initial_details: dict[str, object] = {
+        'status': 'running',
+        'artifact_verification_id': resolved_verification_id,
+        'export_type': requested_export_type,
+        'source_commit': head_commit,
+        'filename': '',
+        'error': '',
+    }
     try:
         if requested_export_type != 'icpc':
             raise ValueError('unsupported package type (ICPC only)')
         if not head_commit:
             raise ValueError('no committed revision; commit changes first')
-        started = start_export_job(problem, user, actor_user_id=int(ctx['user']['id']), problem_id=problem_id, workspace_id=workspace_id, head_commit=head_commit, requested_build_id=resolved_build_id, requested_export_type=requested_export_type, initial_details=initial_details)
+        started = start_export_job(
+            problem,
+            user,
+            actor_user_id=int(ctx['user']['id']),
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            head_commit=head_commit,
+            requested_verification_id=resolved_verification_id,
+            requested_export_type=requested_export_type,
+            initial_details=initial_details,
+        )
         msg = 'package generation queued' if started else 'package generation already running for this revision'
     except ValueError as exc:
         initial_details['status'] = 'failed'
@@ -333,5 +353,6 @@ def export_create(problem: str, user: str, build_id: str=Form(''), export_type: 
         audit(ctx['user']['id'], ctx['problem']['id'], 'export.create', initial_details)
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/export', status_code=303, message=msg)
+
 
 

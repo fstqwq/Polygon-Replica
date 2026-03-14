@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import fcntl
@@ -18,7 +18,7 @@ from app.service.statement.constant import (
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
-from tests.common import SmokeBase
+from .common import SmokeBase
 from app.impl.runtime.config import config
 
 preview_service = config.preview_service
@@ -235,16 +235,16 @@ class TestPreview(SmokeBase):
         rows = preview_service._sample_rows_from_spec(ws)
         self.assertEqual(rows, [(2, "002", "manual")])
 
-    def test_generation_params_digest_changes_when_build_sources_change(self) -> None:
+    def test_generation_params_digest_changes_when_materialization_sources_change(self) -> None:
         ws = self._workspace_path()
-        digest_before = config.build_service._generation_params_digest(ws, sample_only=False)
+        digest_before = config.verification_service._generation_params_digest(ws, sample_only=False)
 
         testlib_path = ws / "third_party" / "testlib" / "testlib.h"
         testlib_path.write_text(
             testlib_path.read_text(encoding="utf-8") + "\n// digest probe\n",
             encoding="utf-8",
         )
-        digest_after_testlib = config.build_service._generation_params_digest(ws, sample_only=False)
+        digest_after_testlib = config.verification_service._generation_params_digest(ws, sample_only=False)
         self.assertNotEqual(digest_before, digest_after_testlib)
 
         validator_path = ws / "validators" / "validator.cpp"
@@ -252,10 +252,10 @@ class TestPreview(SmokeBase):
             '#include "testlib.h"\nint main(int argc, char* argv[]) { registerValidation(argc, argv); inf.readEof(); }\n',
             encoding="utf-8",
         )
-        digest_after_validator = config.build_service._generation_params_digest(ws, sample_only=False)
+        digest_after_validator = config.verification_service._generation_params_digest(ws, sample_only=False)
         self.assertNotEqual(digest_after_testlib, digest_after_validator)
 
-    def test_preview_sample_sync_materializes_manual_and_generator_from_build(self) -> None:
+    def test_preview_sample_sync_materializes_manual_and_generator_from_verification(self) -> None:
         ws = self._workspace_path()
         (ws / "tests" / "spec.json").write_text(
             dumps_tests_spec(
@@ -266,8 +266,8 @@ class TestPreview(SmokeBase):
             ),
             encoding="utf-8",
         )
-        build_id = self.random_id("b-preview-sample-sync")
-        artifact_root = self._artifact_root(build_id)
+        verification_id = self.random_id("ver-preview-sample-sync")
+        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         (artifact_root / "tests").mkdir(parents=True, exist_ok=True)
         (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
         (artifact_root / "tests" / "001.in").write_text("build-manual-input\n", encoding="utf-8")
@@ -278,15 +278,16 @@ class TestPreview(SmokeBase):
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         config.db.execute(
             """
-            INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
-                build_id,
+                verification_id,
                 int(ctx["problem"]["id"]),
                 int(ctx["workspace"]["id"]),
                 "",
                 "main",
+                "materialization",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -297,8 +298,8 @@ class TestPreview(SmokeBase):
 
         calls: list[tuple[str, str]] = []
 
-        class _FakeBuild:
-            def run_build(
+        class _FakeVerificationService:
+            def run_verification(
                 self,
                 problem: str,
                 username: str,
@@ -308,14 +309,14 @@ class TestPreview(SmokeBase):
                 sample_only: bool = False,
             ):
                 calls.append((str(problem), str(username)))
-                return build_id
+                return verification_id
 
-        old_build_service = preview_service.build_service
+        old_verification_service = preview_service.verification_service
         try:
-            preview_service.build_service = _FakeBuild()
-            summary = preview_service._copy_sample_payloads_from_build("alice/sample", "alice", ws)
+            preview_service.verification_service = _FakeVerificationService()
+            summary = preview_service._copy_sample_payloads_from_verification("alice/sample", "alice", ws)
         finally:
-            preview_service.build_service = old_build_service
+            preview_service.verification_service = old_verification_service
 
         self.assertEqual(calls, [("alice/sample", "alice")])
         self.assertEqual(int(summary.get("copied") or 0), 2)
@@ -347,7 +348,7 @@ class TestPreview(SmokeBase):
                     except OSError:
                         pass
             calls["sync"] = int(calls["sync"]) + 1
-            return {"sample_count": 1, "copied": 1, "build_id": "b-sync"}
+            return {"sample_count": 1, "copied": 1, "verification_id": "ver-sync"}
 
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
@@ -370,7 +371,7 @@ class TestPreview(SmokeBase):
             side_effect=_fake_find_cached,
         ), patch.object(
             preview_service,
-            "_copy_sample_payloads_from_build",
+            "_copy_sample_payloads_from_verification",
             side_effect=_fake_sync,
         ), patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")

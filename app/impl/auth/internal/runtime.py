@@ -212,7 +212,7 @@ def _runtime_backend_profile() -> dict[str, str]:
 
 def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str) -> None:
     safe_table = str(table_name or "").strip()
-    if safe_table not in {"builds", "previews", "verifications", "contest_jobs"}:
+    if safe_table not in {"previews", "verifications", "contest_jobs"}:
         return
     try:
         rows = config.db.fetch_all(
@@ -300,7 +300,6 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
         summary_obj["cancel_reason"] = reason
         if not str(summary_obj.get("error") or "").strip():
             summary_obj["error"] = reason
-        build_id = str(summary_obj.get("build_id") or verification_row.get("build_id") or "").strip()
         source_label = str(summary_obj.get("source") or "").strip() or run_id
         source_paths_obj = verification_summary.get("source_paths")
         source_paths = list(source_paths_obj) if isinstance(source_paths_obj, list) else ([source_label] if source_label else [])
@@ -311,7 +310,6 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
                 verification_id=verification_id,
                 problem_id=int(verification_row.get("problem_id") or 0),
                 workspace_id=int(verification_row.get("workspace_id") or 0) if verification_row.get("workspace_id") is not None else None,
-                build_id=build_id,
                 kind=str(verification_row.get("kind") or "verification").strip() or "verification",
                 mode=str(summary_obj.get("mode") or verification_summary.get("mode") or "pass-fail").strip() or "pass-fail",
                 verification_source=str(verification_summary.get("verification_source") or "run.execute").strip() or "run.execute",
@@ -368,7 +366,6 @@ def _startup_clear_all_caches() -> None:
 def _startup_reset_runtime_state() -> None:
     now_text = now_iso()
     cancel_reason = "cancelled on service startup"
-    _startup_cancel_summary_rows("builds", cancel_reason, now_text=now_text)
     _startup_cancel_summary_rows("previews", cancel_reason, now_text=now_text)
     _startup_cancel_summary_rows("contest_jobs", cancel_reason, now_text=now_text)
     _startup_cancel_judgehost_inflight(cancel_reason, now_text=now_text)
@@ -387,4 +384,3 @@ def shutdown() -> None:
         config.worker_queue_service.stop()
     except Exception as exc:
         warnings.warn(f"shutdown worker queue stop failed: {exc}", RuntimeWarning)
-

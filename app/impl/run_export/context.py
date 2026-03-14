@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import json
@@ -19,15 +19,15 @@ from app.impl.workspace.public import (
     allocate_verification_id,
     allocate_run_id,
     assert_workspace_artifact_access,
-    assert_workspace_build_access,
+    assert_workspace_verification_access,
     audit,
     browser_file_response,
     build_run_detail_context,
     dedupe_preserve_order,
     export_download_filename,
     git_commit_count,
-    latest_workspace_build,
-    latest_workspace_committed_build,
+    latest_workspace_stage_verification,
+    latest_workspace_committed_stage_verification,
     normalize_problem_mode,
     normalize_run_id_token,
     normalize_run_test_name_token,
@@ -78,7 +78,6 @@ def _select_importer(package_format: str):
     if token == "icpc":
         return _ICPC_IMPORTER
     raise ValueError(f"unsupported package format: {package_format}")
-
 
 
 

@@ -1,5 +1,6 @@
 from .store import (
     VERIFICATION_KIND_VERIFICATION,
+    VERIFICATION_KIND_SAMPLE,
     allocate_verification_id,
     create_verification_record,
     default_verification_run,
@@ -21,4 +22,5 @@ from .store import (
     verification_run_root,
     verification_runs,
     verification_root,
+    verification_update_lock,
 )

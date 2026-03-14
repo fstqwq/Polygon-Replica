@@ -39,12 +39,7 @@ def artifact_root(problem: str, artifact_id: str) -> Path:
         raise HTTPException(status_code=404, detail="artifact not found")
     problem_id = int(problem_row["id"])
     row = None
-    if aid.startswith("b-"):
-        row = config.db.fetch_one(
-            "SELECT artifact_path FROM builds WHERE id=? AND problem_id=?",
-            [aid, problem_id],
-        )
-    elif aid.startswith("p-"):
+    if aid.startswith("p-"):
         row = config.db.fetch_one(
             "SELECT artifact_path FROM previews WHERE id=? AND problem_id=?",
             [aid, problem_id],
@@ -54,7 +49,7 @@ def artifact_root(problem: str, artifact_id: str) -> Path:
             """
             SELECT artifact_path FROM (
                 SELECT artifact_path
-                FROM builds
+                FROM verifications
                 WHERE id=? AND problem_id=?
                 UNION ALL
                 SELECT artifact_path
@@ -82,8 +77,8 @@ def artifact_root(problem: str, artifact_id: str) -> Path:
     return root
 
 
-def safe_artifact_path(problem: str, build_id: str, rel: str) -> Path:
-    root = artifact_root(problem, build_id)
+def safe_artifact_path(problem: str, verification_id: str, rel: str) -> Path:
+    root = artifact_root(problem, verification_id)
     candidate = root / rel
     path = candidate.resolve()
     if root not in path.parents and root != path:
@@ -112,20 +107,20 @@ def browser_file_response(file_path: Path) -> FileResponse:
     return FileResponse(file_path, filename=file_path.name, headers=headers)
 
 
-def export_download_filename(ctx: dict, build_id: str, stored_filename: str) -> str | None:
-    safe_build_id = str(build_id or "").strip()
+def export_download_filename(ctx: dict, verification_id: str, stored_filename: str) -> str | None:
+    safe_verification_id = str(verification_id or "").strip()
     safe_filename = Path(str(stored_filename or "")).name.strip()
-    if not safe_build_id or not safe_filename:
+    if not safe_verification_id or not safe_filename:
         return None
     row = config.db.fetch_one(
         """
         SELECT source_commit
         FROM exports
-        WHERE problem_id=? AND workspace_id=? AND build_id=? AND filename=?
+        WHERE problem_id=? AND workspace_id=? AND verification_id=? AND filename=?
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        [ctx["problem"]["id"], ctx["workspace"]["id"], safe_build_id, safe_filename],
+        [ctx["problem"]["id"], ctx["workspace"]["id"], safe_verification_id, safe_filename],
     )
     if row is None:
         return None
@@ -195,24 +190,19 @@ def safe_run_artifact_path(ctx: dict, run_id: str, rel: str) -> Path:
     return path
 
 
-def assert_workspace_build_access(ctx: dict, build_id: str) -> None:
+def assert_workspace_verification_access(ctx: dict, verification_id: str) -> None:
     row = config.db.fetch_one(
-        "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-        [build_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
+        "SELECT id FROM verifications WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'",
+        [verification_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="build not found in workspace")
+        raise HTTPException(status_code=404, detail="verification not found in workspace")
 
 
 def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
     aid = str(artifact_id or "").strip()
     row = None
-    if aid.startswith("b-"):
-        row = config.db.fetch_one(
-            "SELECT id FROM builds WHERE id=? AND problem_id=? AND workspace_id=?",
-            [aid, ctx["problem"]["id"], ctx["workspace"]["id"]],
-        )
-    elif aid.startswith("p-"):
+    if aid.startswith("p-"):
         row = config.db.fetch_one(
             "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
             [aid, ctx["problem"]["id"], ctx["workspace"]["id"]],
@@ -222,7 +212,7 @@ def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
             """
             SELECT id FROM (
                 SELECT id
-                FROM builds
+                FROM verifications
                 WHERE id=? AND problem_id=? AND workspace_id=?
                 UNION ALL
                 SELECT id
@@ -236,6 +226,3 @@ def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
     if row is not None:
         return
     raise HTTPException(status_code=404, detail="artifact not found in workspace")
-
-
-

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.ui_support import (
+from .ui_support import (
     Path,
     UIBaseSuite,
     _flash_messages_from_response,
@@ -316,26 +316,27 @@ class TestUIContests(UIBaseSuite):
             )
             return preview_id
 
-        def _fake_run_build(problem: str, username: str, *, commit: str = "", ref: str = "", force_recompile: bool = False) -> str:
+        def _fake_run_verification(problem: str, username: str, *, commit: str = "", ref: str = "", force_recompile: bool = False) -> str:
             _ = bool(force_recompile)
             problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
             self.assertIsNotNone(problem_row)
             ws_ctx = workspace_service.workspace_context(problem, username, include_recent=False)
             workspace_id = int(ws_ctx["workspace"]["id"])
-            build_id = f"b-{uuid.uuid4().hex[:12]}"
-            artifact_root = Path(config.settings.artifacts_root) / problem / build_id
+            verification_id = f"ver-{uuid.uuid4().hex[:12]}"
+            artifact_root = Path(config.settings.artifacts_root) / problem / verification_id
             artifact_root.mkdir(parents=True, exist_ok=True)
             db.execute(
                 """
-                INSERT INTO builds(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
-                    build_id,
+                    verification_id,
                     int(problem_row["id"]),
                     workspace_id,
                     str(commit or "").strip(),
                     str(ref or "").strip(),
+                    "materialization",
                     "ok",
                     json.dumps({"status": "ok"}),
                     str(artifact_root.resolve()),
@@ -343,11 +344,11 @@ class TestUIContests(UIBaseSuite):
                     "2026-02-28T00:00:00+00:00",
                 ],
             )
-            return build_id
+            return verification_id
 
-        def _fake_create_export(problem: str, build_id: str, export_type: str):
+        def _fake_create_export(problem: str, verification_id: str, export_type: str):
             self.assertEqual(str(export_type), "icpc")
-            export_dir = Path(config.settings.artifacts_root) / problem / build_id / "export"
+            export_dir = Path(config.settings.artifacts_root) / problem / verification_id / "export"
             export_dir.mkdir(parents=True, exist_ok=True)
             out = export_dir / f"{problem.replace('/', '-')}-v1.zip"
             out.write_bytes(b"PK\x03\x04mock export")
@@ -355,7 +356,7 @@ class TestUIContests(UIBaseSuite):
 
         with (
             patch.object(config.preview_service, "compile_preview", side_effect=_fake_compile_preview),
-            patch.object(config.build_service, "run_build", side_effect=_fake_run_build),
+            patch.object(config.verification_service, "run_materialization", side_effect=_fake_run_materialization),
             patch.object(config.export_service, "create_export", side_effect=_fake_create_export),
         ):
             preview_start = contest_packages_preview_start(contest=contest_slug, user="alice")
@@ -493,4 +494,5 @@ class TestUIContests(UIBaseSuite):
         problems_html = problems_page.body.decode("utf-8", errors="replace")
         self.assertIn(f"<code>{change_job_id}</code> / SUCCESS", problems_html)
         self.assertIn("<td>FAILED</td>", problems_html)
+
 

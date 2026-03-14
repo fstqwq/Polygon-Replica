@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -10,7 +10,7 @@ from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
 from app.service.platform.async_task_cache import AsyncTaskCacheService
 from app.service.platform.fs.layout import FsManager
-from app.service.build.api import Build
+from app.service.verification.service import VerificationService
 from app.service.export.api import ExportService
 from app.service.repository.git import GitService
 from app.service.platform.judge_fs_index import JudgeFsIndexService
@@ -37,7 +37,7 @@ class RuntimeConfig:
     fs_manager: FsManager = field(init=False)
     artifact_service: ArtifactService = field(init=False)
     preview_sandbox_backend: SandboxBackend = field(init=False)
-    build_service: Build = field(init=False)
+    verification_service: VerificationService = field(init=False)
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
@@ -81,7 +81,7 @@ class RuntimeConfig:
         test_spec.apply_runtime_values(self.constants)
         toolchain.apply_runtime_values(self.constants)
         workspace.apply_runtime_values(self.constants)
-        self.build_service.apply_runtime_values(self.constants)
+        self.verification_service.apply_runtime_values(self.constants)
         self.preview_service.apply_runtime_values(self.constants)
         self.judgehost_task_service.apply_runtime_values(self.constants)
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
@@ -113,7 +113,7 @@ class RuntimeConfig:
             self.constants,
             judge_fs_index_service=self.judge_fs_index_service,
         )
-        self.build_service = Build(
+        self.verification_service = VerificationService(
             self.db,
             self.workspace_service,
             self.artifact_service,
@@ -125,7 +125,7 @@ class RuntimeConfig:
             self.db,
             self.workspace_service,
             self.artifact_service,
-            build_service=self.build_service,
+            verification_service=self.verification_service,
             sandbox_backend=self.preview_sandbox_backend,
             constants=self.constants,
             async_task_cache_service=self.async_task_cache_service,

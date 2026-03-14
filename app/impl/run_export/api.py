@@ -12,7 +12,7 @@ from app.impl.run_export.import_source import (
 )
 from app.impl.run_export.query import _run_detail_use_compact_layout  
 from app.impl.run_export.run import (  
-    _finalize_cancelled_builds,
+    _finalize_cancelled_verifications,
     run_cancel,
     run_details_page,
     run_details_test_fragment,

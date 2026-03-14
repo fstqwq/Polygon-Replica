@@ -37,7 +37,6 @@ class JudgehostEnqueueMixin:
         *,
         problem: str,
         username: str,
-        build_id: str,
         verification_id: str,
         run_id: str,
         mode: str,
@@ -57,11 +56,12 @@ class JudgehostEnqueueMixin:
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            build_id=str(build_id or "").strip(),
             kind=self._verification_kind(verification_source),
             mode=str(mode or "").strip() or "pass-fail",
             verification_source=str(verification_source or "run.execute").strip() or "run.execute",
             source_paths=[source_label] if source_label else [],
+            source_commit="",
+            source_ref="",
             run_id=run_id,
             run_status="running",
             source_label=source_label,
@@ -73,22 +73,25 @@ class JudgehostEnqueueMixin:
         )
         return str(merged.get("status") or "running").strip().lower() or "running"
 
-    def _collect_build_payload(
+    def _collect_verification_payload(
         self,
         *,
         problem: str,
-        build_id: str,
+        artifact_verification_id: str,
         workspace: Path,
         mode: str,
         selected_tests: list[str],
     ) -> dict[str, object]:
         if not self._include_build_payload:
             return {}
-        build_row = self._db_fetch_one("SELECT build_ref FROM builds WHERE id=?", [str(build_id or "").strip()])
-        build_ref = str(build_row["build_ref"] or "").strip().lower() if build_row is not None else ""
-        if not build_ref:
+        verification_row = self._db_fetch_one(
+            "SELECT artifact_path FROM verifications WHERE id=?",
+            [str(artifact_verification_id or "").strip()],
+        )
+        artifact_path = str(verification_row["artifact_path"] or "").strip() if verification_row is not None else ""
+        if not artifact_path:
             return {}
-        artifact_root = self._fs_manager.build_paths(build_ref).root.resolve()
+        artifact_root = Path(artifact_path).resolve()
         if not artifact_root.exists() or (not artifact_root.is_dir()):
             return {}
         tests_dir = (artifact_root / "tests").resolve()
@@ -298,7 +301,7 @@ class JudgehostEnqueueMixin:
         *,
         problem: str,
         username: str,
-        build_id: str,
+        artifact_verification_id: str,
         mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
@@ -333,9 +336,9 @@ class JudgehostEnqueueMixin:
             source_name = source_path.name
             source_label = str(submission_path or source_name)
 
-        build_payload = self._collect_build_payload(
+        verification_payload = self._collect_verification_payload(
             problem=problem,
-            build_id=build_id,
+            artifact_verification_id=artifact_verification_id,
             workspace=workspace,
             mode=mode,
             selected_tests=selected_tests,
@@ -353,7 +356,7 @@ class JudgehostEnqueueMixin:
             "run_id": run_id,
             "problem": problem,
             "username": username,
-            "build_id": build_id,
+            "artifact_verification_id": artifact_verification_id,
             "mode": mode,
             "submission_path": str(submission_path or ""),
             "source_name": source_name,
@@ -367,7 +370,7 @@ class JudgehostEnqueueMixin:
             "task_kind": safe_task_kind,
             "force_recompile": bool(force_recompile),
             "compile_only": bool(legacy_compile_only),
-            "build_payload": build_payload,
+            "verification_payload": verification_payload,
             "enqueued_at": now_iso(),
         }
 
@@ -387,11 +390,11 @@ class JudgehostEnqueueMixin:
             if not blob:
                 continue
             extra_source_items.append((safe_name, blob))
-        build_payload = payload.get("build_payload")
-        if not isinstance(build_payload, dict):
-            raise RuntimeError("build payload is required for DOMjudge compatibility")
+        verification_payload = payload.get("verification_payload")
+        if not isinstance(verification_payload, dict):
+            raise RuntimeError("verification payload is required for DOMjudge compatibility")
         run_cfg_obj: dict[str, object] = {}
-        run_cfg_raw = self._domjudge_text(build_payload.get("run_config_json"))
+        run_cfg_raw = self._domjudge_text(verification_payload.get("run_config_json"))
         if run_cfg_raw:
             try:
                 parsed = json.loads(run_cfg_raw)
@@ -399,7 +402,7 @@ class JudgehostEnqueueMixin:
                     run_cfg_obj = parsed
             except Exception:
                 run_cfg_obj = {}
-        problem_limits_obj = build_payload.get("problem_limits")
+        problem_limits_obj = verification_payload.get("problem_limits")
         if not isinstance(problem_limits_obj, dict):
             problem_limits_obj = {}
         checker_args_raw = run_cfg_obj.get("checker_args")
@@ -445,12 +448,12 @@ class JudgehostEnqueueMixin:
         run_tl_sec = max(0.1, float(run_tl_ms) / 1000.0)
         run_overshoot_sec = 0.0
         run_mem_kb = max(16 * 1024, int(run_mem_mb * 1024))
-        binaries_b64 = build_payload.get("binaries_b64")
+        binaries_b64 = verification_payload.get("binaries_b64")
         binaries_obj = binaries_b64 if isinstance(binaries_b64, dict) else {}
         checker_bytes = self._domjudge_b64_decode(binaries_obj.get("checker"))
         validator_bytes = self._domjudge_b64_decode(binaries_obj.get("validator"))
         interactor_bytes = self._domjudge_b64_decode(binaries_obj.get("interactor"))
-        sources_b64 = build_payload.get("sources_b64")
+        sources_b64 = verification_payload.get("sources_b64")
         sources_obj = sources_b64 if isinstance(sources_b64, dict) else {}
         checker_source_bytes = self._domjudge_b64_decode(sources_obj.get("checker.cpp"))
         validator_source_bytes = self._domjudge_b64_decode(sources_obj.get("validator.cpp"))
@@ -600,7 +603,7 @@ class JudgehostEnqueueMixin:
         *,
         problem: str,
         username: str,
-        build_id: str,
+        artifact_verification_id: str,
         mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
@@ -625,7 +628,7 @@ class JudgehostEnqueueMixin:
         payload = self._build_task_payload(
             problem=problem,
             username=username,
-            build_id=build_id,
+            artifact_verification_id=artifact_verification_id,
             mode=mode,
             submission_path=submission_path,
             upload_content=upload_content,
@@ -693,7 +696,7 @@ class JudgehostEnqueueMixin:
         *,
         problem: str,
         username: str,
-        build_id: str,
+        artifact_verification_id: str,
         mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
@@ -723,7 +726,7 @@ class JudgehostEnqueueMixin:
         payload = self._build_task_payload(
             problem=problem,
             username=username,
-            build_id=build_id,
+            artifact_verification_id=artifact_verification_id,
             mode=mode,
             submission_path=submission_path,
             upload_content=upload_content,
@@ -744,7 +747,7 @@ class JudgehostEnqueueMixin:
         payload["run_id"] = safe_run_id
         payload["problem"] = problem
         payload["username"] = username
-        payload["build_id"] = build_id
+        payload["artifact_verification_id"] = artifact_verification_id
         payload["mode"] = mode
         payload["submission_path"] = str(submission_path or "")
         payload["selected_tests"] = list(selected)
@@ -793,7 +796,7 @@ class JudgehostEnqueueMixin:
                         "run_id": safe_run_id,
                         "problem_slug": str(problem),
                         "username": str(username),
-                        "build_id": str(build_id),
+                        "artifact_verification_id": str(artifact_verification_id),
                         "mode": str(mode),
                         "verification_id": safe_verification_id,
                         "run_id": safe_run_id,
@@ -823,7 +826,6 @@ class JudgehostEnqueueMixin:
                 self._ensure_verification_run(
                     problem=problem,
                     username=username,
-                    build_id=build_id,
                     verification_id=safe_verification_id,
                     run_id=safe_run_id,
                     mode=mode,
@@ -859,7 +861,7 @@ class JudgehostEnqueueMixin:
         *,
         problem: str,
         username: str,
-        build_id: str,
+        artifact_verification_id: str,
         upload_content: bytes,
         upload_filename: str,
         run_id: str,
@@ -872,7 +874,7 @@ class JudgehostEnqueueMixin:
         return self.enqueue_task(
             problem=problem,
             username=username,
-            build_id=build_id,
+            artifact_verification_id=artifact_verification_id,
             mode="pass-fail",
             submission_path=None,
             upload_content=bytes(upload_content),

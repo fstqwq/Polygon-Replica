@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import json
@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from app.service.importing.polygon import PolygonPackageImportService
 from app.service.statement.render import render_statement_main
-from tests.common import SmokeBase, config, db
+from .common import SmokeBase, config, db
 
 
 class TestPolygonPackageImport(SmokeBase):
@@ -255,27 +255,27 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertIn(r"\begin{problem}{Guess the Number (Deluxe ver.)}", rendered_problem)
         self.assertTrue((ws / "statement" / "rendered" / "english" / "problem.pdf").is_file())
 
-        def _fake_run_build(_service, problem: str, username: str, *args, **kwargs) -> str:
+        def _fake_run_verification(_service, problem: str, username: str, *args, **kwargs) -> str:
             self.assertEqual(problem, self.problem)
             self.assertEqual(username, self.user)
             ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-            build_id = f"b-import-ok-{uuid.uuid4().hex[:8]}"
-            build_ref = config.fs_manager.compute_build_ref(
-                {"suite": "polygon-package-import", "problem": self.problem, "build_id": build_id}
+            verification_id = f"ver-import-ok-{uuid.uuid4().hex[:8]}"
+            build_ref = config.fs_manager.compute_artifact_ref(
+                {"suite": "polygon-package-import", "problem": self.problem, "verification_id": verification_id}
             )
-            artifact_root = config.fs_manager.ensure_build_layout(build_ref).root.resolve()
+            artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
             db.execute(
                 """
-                INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
-                    build_id,
-                    build_ref,
+                    verification_id,
                     int(ctx["problem"]["id"]),
                     int(ctx["workspace"]["id"]),
                     "",
                     "main",
+                    "materialization",
                     "ok",
                     "{}",
                     str(artifact_root),
@@ -283,13 +283,13 @@ class TestPolygonPackageImport(SmokeBase):
                     "2026-02-23T00:00:01Z",
                 ],
             )
-            return build_id
+            return verification_id
 
-        with patch("app.service.build.api.run_build", side_effect=_fake_run_build):
-            build_id = config.build_service.run_build(self.problem, self.user)
-        build_row = db.fetch_one("SELECT status,summary_json FROM builds WHERE id=?", [build_id])
-        self.assertIsNotNone(build_row)
-        self.assertEqual(str(build_row["status"] or ""), "ok")
+        with patch("app.service.verification.service.run_verification_job", side_effect=_fake_run_materialization):
+            verification_id = config.verification_service.run_verification(self.problem, self.user)
+        verification_row = db.fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
+        self.assertIsNotNone(verification_row)
+        self.assertEqual(str(verification_row["status"] or ""), "ok")
 
     def test_import_hangzhou_interactive_package_keeps_answer_payloads(self) -> None:
         ws = self._workspace_path()
@@ -304,10 +304,10 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue((ws / "tests" / "answers" / "027.ans").is_file())
         self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8").splitlines()[:1], ["3"])
 
-        build_id = config.build_service.run_build(self.problem, self.user)
-        build_row = db.fetch_one("SELECT status,summary_json FROM builds WHERE id=?", [build_id])
-        self.assertIsNotNone(build_row)
-        self.assertEqual(str(build_row["status"] or ""), "failed")
+        verification_id = config.verification_service.run_verification(self.problem, self.user)
+        verification_row = db.fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
+        self.assertIsNotNone(verification_row)
+        self.assertEqual(str(verification_row["status"] or ""), "failed")
 
     def test_import_taxi_maps_time_limit_exceeded_or_accepted_tag_to_tle_or_correct(self) -> None:
         ws = self._workspace_path()

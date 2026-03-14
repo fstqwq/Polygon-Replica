@@ -153,15 +153,15 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
             'last_status': 'none',
             'run_id': '',
             'run_ids': '',
-            'build_id': '',
+            'artifact_verification_id': '',
             'error': '',
             'created_at': '',
             'stale': False,
             'stale_reason': '',
         }
-    latest_build = ctx.get('latest_build')
+    latest_verification = ctx.get('latest_artifact_verification')
     latest_preview = ctx.get('latest_preview')
-    ctx['latest_build_version'] = artifact_version_number(latest_build['id']) if latest_build else None
+    ctx['latest_verification_version'] = artifact_version_number(latest_verification['id']) if latest_verification else None
     ctx['latest_preview_version'] = artifact_version_number(latest_preview['id']) if latest_preview else None
     ctx['nav_status'] = _build_problem_nav_status(ctx)
     return ctx

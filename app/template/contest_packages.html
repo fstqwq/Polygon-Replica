@@ -78,7 +78,7 @@
       <td><code>{{ row.get("idx", "") }}</code></td>
       <td><code>{{ row.get("problem_slug", "") }}</code></td>
       <td>{{ row.get("status", "") | status_label }}</td>
-      <td><code>{{ row.get("preview_id", row.get("build_id", "")) }}</code></td>
+      <td><code>{{ row.get("preview_id", row.get("verification_id", "")) }}</code></td>
       <td>{{ row.get("error", "") }}</td>
     </tr>
     {% endfor %}

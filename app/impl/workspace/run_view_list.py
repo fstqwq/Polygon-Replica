@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from app.impl.auth.public import parse_iso_utc
 from app.impl.runtime.config import config
-from app.service.build.runtime import effective_run_timeout_ms, wall_time_slack_sec_for_mode
+from app.service.verification.runtime import effective_run_timeout_ms, wall_time_slack_sec_for_mode
 from .problem_config import coerce_int, normalize_problem_mode
 from .run_display import (
     run_actual_display,
@@ -179,7 +179,7 @@ def _verification_source_from_summary(summary: dict | None) -> str:
 
 
 def _is_main_correct_verification_source(source: object) -> bool:
-    return str(source or '').strip().lower() == 'build.solve'
+    return str(source or '').strip().lower() == 'verification.solve-main'
 
 def _verification_runs_for_list(summary: dict[str, object], *, fallback_status: str) -> list[dict[str, object]]:
     source_paths = verification_source_paths(summary)
@@ -276,6 +276,30 @@ def _verification_runs_for_list(summary: dict[str, object], *, fallback_status: 
                 "summary": {},
             }
         )
+    if runs:
+        return runs
+    solution_count = coerce_int(summary.get("solution_count"), 0, 0, 10**6)
+    if solution_count <= 0:
+        solution_count = 1
+    for idx in range(1, solution_count + 1):
+        runs.append(
+            {
+                "id": f"run-{idx}",
+                "source": "",
+                "status": str(fallback_status or "running").strip().lower() or "running",
+                "tests_total": 0,
+                "expected_behavior": "unknown",
+                "expected_behavior_label": expected_behavior_label("unknown"),
+                "matched": False,
+                "completed": False,
+                "passed_all_tests": False,
+                "reason": "pending",
+                "verification_source": str(summary.get("verification_source") or "").strip().lower(),
+                "is_main_correct_run": False,
+                "summary_loaded": False,
+                "summary": {},
+            }
+        )
     return runs
 
 
@@ -290,7 +314,7 @@ def _verification_row_to_list_item(problem_id: int, workspace: Path, row: dict[s
     if summary_status and not row_status:
         status_text = summary_status
     verification_source = str(summary.get("verification_source") or "").strip().lower()
-    if verification_source in {"build.generate-input", "build.solve"}:
+    if verification_source in {"verification.generate-input", "verification.solve-main"}:
         return None
     runs = _verification_runs_for_list(summary, fallback_status=status_text)
     if not runs:
@@ -304,12 +328,21 @@ def _verification_row_to_list_item(problem_id: int, workspace: Path, row: dict[s
             "is_failed": False,
             "has_running": True,
         }
-    elif status_text in {"failed", "cancelled"} and not bool(status_summary.get("has_running")):
+    elif status_text in {"failed", "cancelled"}:
         status_summary = {
             **status_summary,
             "status": "failed",
             "status_upper": "FAILED",
             "is_failed": True,
+            "has_running": False,
+        }
+    elif status_text in {"ok", "pass"}:
+        status_summary = {
+            **status_summary,
+            "status": "ok",
+            "status_upper": "OK",
+            "is_failed": False,
+            "has_running": False,
         }
     has_running = bool(status_summary.get("has_running"))
     matched_count = int(status_summary.get("matched_count") or 0)
@@ -355,7 +388,10 @@ def _verification_row_to_list_item(problem_id: int, workspace: Path, row: dict[s
         "run_ids": [str(item.get("id") or "") for item in runs if str(item.get("id") or "").strip()],
         "run_ids_csv": ",".join([str(item.get("id") or "") for item in runs if str(item.get("id") or "").strip()]),
         "run_count": total_count,
-        "build_id": str(row.get("build_id") or "").strip(),
+        "artifact_verification_id": str(
+            row.get("artifact_verification_id")
+            or ""
+        ).strip(),
         "mode": str(summary.get("mode") or row.get("kind") or "").strip(),
         "status": str(status_summary.get("status") or status_text),
         "status_upper": str(status_summary.get("status_upper") or status_text.upper()),

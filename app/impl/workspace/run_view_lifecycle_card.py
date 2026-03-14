@@ -75,7 +75,7 @@ def _verification_step_title(step_id: str) -> str:
 def _verification_failed_build_step_id(step_hint: str, step_ids: list[str]) -> str:
     return verification_failed_build_step_id(step_hint, step_ids)
 
-def _verification_tests_meta_stats(problem_slug: str, build_id: str) -> dict[str, object]:
+def _verification_tests_meta_stats(problem_slug: str, artifact_verification_id: str) -> dict[str, object]:
     stats: dict[str, object] = {
         'loaded': False,
         'total': 0,
@@ -84,11 +84,11 @@ def _verification_tests_meta_stats(problem_slug: str, build_id: str) -> dict[str
         'sample': 0,
     }
     safe_problem = str(problem_slug or '').strip()
-    safe_build_id = str(build_id or '').strip()
-    if (not safe_problem) or (not is_canonical_artifact_id(safe_build_id)):
+    safe_verification_id = str(artifact_verification_id or '').strip()
+    if (not safe_problem) or (not is_canonical_artifact_id(safe_verification_id)):
         return stats
     try:
-        root = artifact_root(safe_problem, safe_build_id)
+        root = artifact_root(safe_problem, safe_verification_id)
     except HTTPException:
         return stats
     tests_meta_path = root / 'logs' / 'tests_meta.json'
@@ -198,18 +198,18 @@ def _verification_validate_stats(verification_details: dict[str, object]) -> dic
     return stats
 
 
-def _verification_output_stats(problem_slug: str, build_id: str) -> dict[str, object]:
+def _verification_output_stats(problem_slug: str, artifact_verification_id: str) -> dict[str, object]:
     stats: dict[str, object] = {
         'loaded': False,
         'total': 0,
         'generated': 0,
     }
     safe_problem = str(problem_slug or '').strip()
-    safe_build_id = str(build_id or '').strip()
-    if (not safe_problem) or (not is_canonical_artifact_id(safe_build_id)):
+    safe_verification_id = str(artifact_verification_id or '').strip()
+    if (not safe_problem) or (not is_canonical_artifact_id(safe_verification_id)):
         return stats
     try:
-        root = artifact_root(safe_problem, safe_build_id)
+        root = artifact_root(safe_problem, safe_verification_id)
     except HTTPException:
         return stats
     try:
@@ -267,12 +267,12 @@ def _verification_output_stats(problem_slug: str, build_id: str) -> dict[str, ob
     )
     return stats
 
-def _verification_buildsolve_case_progress(build_id: str) -> dict[str, int]:
-    safe_build_id = str(build_id or '').strip()
-    if not is_canonical_artifact_id(safe_build_id):
+def _verification_solve_main_case_progress(artifact_verification_id: str) -> dict[str, int]:
+    safe_verification_id = str(artifact_verification_id or '').strip()
+    if not is_canonical_artifact_id(safe_verification_id):
         return {'total': 0, 'reported': 0}
     try:
-        return dict(config.judgehost_task_service.domjudge_buildsolve_progress(safe_build_id))
+        return dict(config.judgehost_task_service.domjudge_solve_main_progress(safe_verification_id))
     except Exception:
         return {'total': 0, 'reported': 0}
 
@@ -429,7 +429,7 @@ def _verification_run_test_progress(
         run_status = str(run_statuses[idx] if idx < len(run_statuses) else '').strip().lower()
         if case_leased > 0:
             running_tests += case_leased
-        elif run_status in {'running', 'queued', 'pending'} and expected_tests > reported_tests:
+        elif run_status == 'running' and expected_tests > reported_tests:
             running_tests += (expected_tests - reported_tests)
     remaining_runs = max(0, safe_run_count - started_runs)
     if remaining_runs > 0 and safe_fallback_tests > 0:
@@ -455,6 +455,5 @@ def _run_test_count_from_summary(summary: dict | None) -> int:
         except Exception:
             return 0
     return 0
-
 
 

@@ -11,7 +11,7 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 @dataclass(frozen=True)
-class BuildPaths:
+class ArtifactPaths:
     root: Path
     tests: Path
     ans: Path
@@ -26,15 +26,15 @@ class FsManager:
         self.artifacts_root = artifacts_root
         self.run_root = run_root
 
-    def compute_build_ref(self, payload: dict) -> str:
+    def compute_artifact_ref(self, payload: dict) -> str:
         if not isinstance(payload, dict):
             raise TypeError("payload must be a dict")
         return sha256_hex_json(payload, ensure_ascii=True)
 
-    def build_paths(self, build_ref: str) -> BuildPaths:
-        safe_build_ref = self._normalize_build_ref(build_ref)
-        root = self.artifacts_root / "objects" / safe_build_ref[:2] / safe_build_ref
-        return BuildPaths(
+    def artifact_paths(self, artifact_ref: str) -> ArtifactPaths:
+        safe_artifact_ref = self._normalize_artifact_ref(artifact_ref)
+        root = self.artifacts_root / "objects" / safe_artifact_ref[:2] / safe_artifact_ref
+        return ArtifactPaths(
             root=root,
             tests=root / "tests",
             ans=root / "ans",
@@ -44,8 +44,8 @@ class FsManager:
             statement_preview=root / "statement_preview",
         )
 
-    def ensure_build_layout(self, build_ref: str) -> BuildPaths:
-        paths = self.build_paths(build_ref)
+    def ensure_artifact_layout(self, artifact_ref: str) -> ArtifactPaths:
+        paths = self.artifact_paths(artifact_ref)
         paths.root.mkdir(parents=True, exist_ok=True)
         for directory in (paths.tests, paths.ans, paths.logs, paths.bin, paths.export, paths.statement_preview):
             directory.mkdir(parents=True, exist_ok=True)
@@ -77,10 +77,10 @@ class FsManager:
             raise ValueError("run_id escapes verification root")
         return target
 
-    def _normalize_build_ref(self, build_ref: str) -> str:
-        token = str(build_ref or "").strip().lower()
+    def _normalize_artifact_ref(self, artifact_ref: str) -> str:
+        token = str(artifact_ref or "").strip().lower()
         if not _BUILD_REF_RE.fullmatch(token):
-            raise ValueError("build_ref must be a 64-char lowercase hex digest")
+            raise ValueError("artifact_ref must be a 64-char lowercase hex digest")
         return token
 
     def _normalize_token(self, value: str, *, field_name: str) -> str:
@@ -88,6 +88,5 @@ class FsManager:
         if not _TOKEN_RE.fullmatch(token):
             raise ValueError(f"{field_name} has invalid format")
         return token
-
 
 

@@ -93,37 +93,44 @@ def _build_validated_count_from_log(validate_log: Path) -> int:
         return 0
     return max(0, int(len(seen)))
 
-def _build_runtime_progress(
+def _verification_runtime_progress(
     *,
     problem_id: int,
     problem_slug: str,
     username: str,
-    build_id: str,
+    verification_id: str,
     event_status: str,
 ) -> dict[str, str]:
-    from app.impl.run_export.artifact import _build_artifact_root
-
     result = {
         "detail": "",
         "log_href": "",
     }
-    safe_build_id = str(build_id or "").strip()
-    if (not safe_build_id) or (not is_canonical_artifact_id(safe_build_id)):
+    safe_verification_id = str(verification_id or "").strip()
+    if (not safe_verification_id) or (not is_canonical_artifact_id(safe_verification_id)):
         return result
-    build_row = config.db.fetch_one(
-        "SELECT status,summary_json FROM builds WHERE id=? AND problem_id=?",
-        [safe_build_id, int(problem_id)],
+    verification_row = config.db.fetch_one(
+        "SELECT status,summary_json,artifact_path FROM verifications WHERE id=? AND problem_id=?",
+        [safe_verification_id, int(problem_id)],
     )
-    build_status = str(build_row["status"] or "").strip().lower() if build_row is not None else ""
-    build_summary = _summary_object(build_row["summary_json"] if build_row is not None else None)
-    artifact_root = _build_artifact_root(int(problem_id), safe_build_id)
+    verification_status = str(verification_row["status"] or "").strip().lower() if verification_row is not None else ""
+    verification_summary = _summary_object(verification_row["summary_json"] if verification_row is not None else None)
+    artifact_path = str(verification_row["artifact_path"] or "").strip() if verification_row is not None else ""
+    artifact_root = None
+    if artifact_path:
+        try:
+            root = Path(artifact_path).resolve()
+            base = config.settings.artifacts_root.resolve()
+            if (root == base or base in root.parents) and root.exists() and root.is_dir() and (not root.is_symlink()):
+                artifact_root = root
+        except Exception:
+            artifact_root = None
     if artifact_root is None:
         if event_status == "running":
-            if build_status in {"queued", "pending"}:
-                result["detail"] = "build queued"
-            elif build_status == "running":
-                result["detail"] = "build running"
-            elif build_status == "ok":
+            if verification_status in {"queued", "pending"}:
+                result["detail"] = "verification queued"
+            elif verification_status == "running":
+                result["detail"] = "verification running"
+            elif verification_status == "ok":
                 result["detail"] = "packaging export bundle"
         return result
 
@@ -138,13 +145,13 @@ def _build_runtime_progress(
     validated_count = _build_validated_count_from_log(validate_log)
 
     def _log_href(name: str) -> str:
-        return f"/problems/{problem_slug}/{username}/artifacts/{safe_build_id}/logs/{name}"
+        return f"/problems/{problem_slug}/{username}/artifacts/{safe_verification_id}/logs/{name}"
 
     if event_status == "running":
-        if build_status in {"queued", "pending"}:
-            result["detail"] = "build queued"
+        if verification_status in {"queued", "pending"}:
+            result["detail"] = "verification queued"
             return result
-        if build_status == "ok":
+        if verification_status == "ok":
             result["detail"] = "packaging export bundle"
             return result
         if solve_log.exists() and solve_log.is_file() and (not solve_log.is_symlink()):
@@ -176,14 +183,14 @@ def _build_runtime_progress(
             result["detail"] = "compile running"
             result["log_href"] = _log_href("compile.log")
             return result
-        result["detail"] = "build running"
+        result["detail"] = "verification running"
         return result
 
     if event_status == "failed":
-        detail = str(build_summary.get("error") or "").strip()
+        detail = str(verification_summary.get("error") or "").strip()
         if not detail:
-            failed_step = str(build_summary.get("failed_step") or "").strip()
-            failed_test = str(build_summary.get("failed_test") or "").strip()
+            failed_step = str(verification_summary.get("failed_step") or "").strip()
+            failed_test = str(verification_summary.get("failed_test") or "").strip()
             if failed_step and failed_test:
                 detail = f"{failed_step} failed on {failed_test}"
             elif failed_step:
@@ -194,34 +201,27 @@ def _build_runtime_progress(
             result["log_href"] = _log_href("failure.log")
     return result
 
-def _verification_href_for_build(
+def _verification_href(
     *,
     problem_id: int,
     problem_slug: str,
     username: str,
-    build_id: str,
+    verification_id: str,
 ) -> str:
-    safe_build_id = str(build_id or "").strip()
-    if (not safe_build_id) or (not is_canonical_artifact_id(safe_build_id)):
+    safe_verification_id = str(verification_id or "").strip()
+    if (not safe_verification_id) or (not is_canonical_artifact_id(safe_verification_id)):
         return ""
-    verification_rows = config.db.fetch_all(
-        """
-        SELECT id,status
-        FROM verifications
-        WHERE problem_id=? AND build_id=?
-        ORDER BY created_at DESC
-        LIMIT 80
-        """,
-        [int(problem_id), safe_build_id],
+    row = config.db.fetch_one(
+        "SELECT id,status FROM verifications WHERE id=? AND problem_id=?",
+        [safe_verification_id, int(problem_id)],
     )
-    for row in verification_rows:
-        status_token = str(row["status"] or "").strip().lower()
-        if status_token not in {"queued", "pending", "running", "ok", "failed"}:
-            continue
-        verification_id = normalize_run_id_token(row["id"])
-        if verification_id:
-            return f"/problems/{problem_slug}/{username}/run/details?verification_id={quote_plus(verification_id)}"
-    return ""
+    if row is None:
+        return ""
+    status_token = str(row["status"] or "").strip().lower()
+    if status_token not in {"queued", "pending", "running", "ok", "failed"}:
+        return ""
+    return f"/problems/{problem_slug}/{username}/run/details?verification_id={quote_plus(safe_verification_id)}"
+
 
 def _detail_verification_id(detail_ctx: dict[str, object]) -> str:
     return normalize_run_id_token(detail_ctx.get("verification_id"))

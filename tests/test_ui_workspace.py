@@ -3,7 +3,7 @@ import io
 import re
 import zipfile
 
-from tests.ui_support import (
+from .ui_support import (
     AUTH_COOKIE_NAME,
     HTTPException,
     Path,

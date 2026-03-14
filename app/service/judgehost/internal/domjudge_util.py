@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .shared import (
     Path,
@@ -836,7 +836,7 @@ class JudgehostDomjudgeUtilsMixin:
             verification_source=verification_source,
             compile_only=compile_only,
         )
-        solve_main_mode = source in {"build.solve", "solve.main"}
+        solve_main_mode = source in {"verification.solve-main", "solve.main"}
         return (
             kind == self._TASK_KIND_COMPILE_ONLY,
             kind == self._TASK_KIND_GENERATE,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from tests.ui_support import (
+from .ui_support import (
     Path,
     UIBaseSuite,
     _flash_cookie_header,

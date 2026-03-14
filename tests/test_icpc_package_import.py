@@ -5,7 +5,7 @@ import json
 import zipfile
 
 from app.service.importing.icpc import ICPCPackageImportService
-from tests.common import SmokeBase
+from .common import SmokeBase
 
 
 class TestICPCPackageImport(SmokeBase):

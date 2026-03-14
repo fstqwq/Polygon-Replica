@@ -118,7 +118,7 @@ def _wait_for_verification_workers(timeout_sec: float = 300.0) -> None:
 def _wait_for_export_workers(timeout_sec: float = 300.0) -> None:
     _wait_for_worker_group("export_lock", "export_workers", timeout_sec=timeout_sec)
 
-build_service = config.build_service
+build_service = config.verification_service
 db = config.db
 export_service = config.export_service
 preview_service = config.preview_service
@@ -224,3 +224,5 @@ class SmokeBase(unittest.TestCase):
         user = str(getattr(self, "user", "alice"))
         ctx = workspace_service.workspace_context(problem, user, include_recent=False)
         return Path(str(ctx["workspace"]["path"]))
+
+

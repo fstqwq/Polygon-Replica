@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from app.impl.run_export.context import (
     Path,
@@ -10,11 +10,11 @@ from app.impl.run_export.context import (
     _C,
     allocate_verification_id,
     allocate_run_id,
-    assert_workspace_build_access,
+    assert_workspace_verification_access,
     audit,
     build_run_detail_context,
     dedupe_preserve_order,
-    latest_workspace_build,
+    latest_workspace_stage_verification,
     normalize_optional_component_source_path,
     normalize_optional_component_source_path_safe,
     normalize_problem_mode,
@@ -83,7 +83,7 @@ def _mark_run_cancelled(
     summary["cancel_reason"] = str(reason or "").strip()
     if not str(summary.get("error") or "").strip():
         summary["error"] = str(reason or "").strip()
-    build_id = str(summary.get("build_id") or verification_row.get("build_id") or "").strip()
+    artifact_verification_id = str(summary.get("artifact_verification_id") or "").strip()
     mode = str(summary.get("mode") or verification_summary.get("mode") or "pass-fail").strip() or "pass-fail"
     verification_source = str(verification_summary.get("verification_source") or "run.execute").strip() or "run.execute"
     source_label = str(summary.get("source") or "").strip() or safe_run_id
@@ -95,7 +95,6 @@ def _mark_run_cancelled(
         verification_id=safe_verification_id,
         problem_id=int(problem_id),
         workspace_id=int(workspace_id),
-        build_id=build_id,
         kind=str(verification_row.get("kind") or VERIFICATION_KIND_VERIFICATION).strip() or VERIFICATION_KIND_VERIFICATION,
         mode=mode,
         verification_source=verification_source,
@@ -131,48 +130,48 @@ def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
 
     return affected
 
-def _finalize_cancelled_builds(build_ids: list[str], reason: str) -> int:
-    safe_build_ids = dedupe_preserve_order([str(item or "").strip() for item in build_ids if str(item or "").strip()])
-    safe_build_ids = [token for token in safe_build_ids if token != str(_C.RUN_PLACEHOLDER_BUILD_ID)]
-    if not safe_build_ids:
+def _finalize_cancelled_verifications(verification_ids: list[str], reason: str) -> int:
+    safe_verification_ids = dedupe_preserve_order([str(item or "").strip() for item in verification_ids if str(item or "").strip()])
+    safe_verification_ids = [token for token in safe_verification_ids if token != str(_C.RUN_PLACEHOLDER_BUILD_ID)]
+    if not safe_verification_ids:
         return 0
     now_text = now_iso()
     cancelled_count = 0
     service = getattr(config, "judgehost_task_service", None)
     cancel_reason = str(reason or "").strip() or "verification cancelled by user"
-    for build_id in safe_build_ids:
+    for verification_id in safe_verification_ids:
         active_task_count = 0
         if service is not None:
             try:
-                active_task_count = int(service.active_task_count_for_build(build_id))
+                active_task_count = int(service.active_task_count_for_verification(verification_id))
             except Exception:
                 active_task_count = 0
         if active_task_count > 0:
             continue
 
         def _tx(conn):
-            build_row = conn.execute(
+            verification_row = conn.execute(
                 """
                 SELECT summary_json
-                FROM builds
-                WHERE id=? AND status IN ('running','queued','pending')
+                FROM verifications
+                WHERE id=? AND kind='verification' AND status IN ('running','queued','pending')
                 """,
-                [build_id],
+                [verification_id],
             ).fetchone()
-            if build_row is None:
+            if verification_row is None:
                 return 0
-            summary = _summary_object(build_row["summary_json"] if build_row is not None else None)
+            summary = _summary_object(verification_row["summary_json"] if verification_row is not None else None)
             summary["cancelled"] = True
             summary["cancel_reason"] = cancel_reason
             if not str(summary.get("error") or "").strip():
                 summary["error"] = cancel_reason
             cursor = conn.execute(
                 """
-                UPDATE builds
+                UPDATE verifications
                 SET status='failed', summary_json=?, finished_at=COALESCE(finished_at, ?)
-                WHERE id=? AND status IN ('running','queued','pending')
+                WHERE id=? AND kind='verification' AND status IN ('running','queued','pending')
                 """,
-                [json.dumps(summary), now_text, build_id],
+                [json.dumps(summary), now_text, verification_id],
             )
             try:
                 return int(cursor.rowcount or 0)
@@ -212,9 +211,9 @@ def run_new_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
     workspace = Path(ctx['workspace']['path'])
     workspace_id = int(ctx['workspace']['id'])
-    active_build = latest_workspace_build(int(ctx['problem']['id']), workspace_id, ok_only=True)
+    active_verification = latest_workspace_stage_verification(int(ctx['problem']['id']), workspace_id, ok_only=True)
     solution_options, default_submission_path, solution_options_truncated = run_solution_options_context(workspace)
-    test_options, test_options_truncated, test_options_source = run_test_options_context(problem, workspace, active_build)
+    test_options, test_options_truncated, test_options_source = run_test_options_context(problem, workspace, active_verification)
     selected_solution_paths: list[str] = []
     for raw in request.query_params.getlist('solution_paths'):
         normalized = normalize_optional_component_source_path_safe(raw, 'solutions', 'solution path')
@@ -345,10 +344,13 @@ def run_cancel(problem: str, user: str, verification_id: str = Form("")):
     reason = "verification cancelled by user"
     cancelled_runs = 0
     verification_summary = load_verification_summary(config.db, safe_verification_id)
-    build_ids: list[str] = []
-    top_build_id = str(verification_summary.get("build_id") or "").strip() if isinstance(verification_summary, dict) else ""
-    if top_build_id:
-        build_ids.append(top_build_id)
+    artifact_verification_ids: list[str] = []
+    top_artifact_verification_id = str(
+        verification_summary.get("artifact_verification_id")
+        or ""
+    ).strip() if isinstance(verification_summary, dict) else ""
+    if top_artifact_verification_id:
+        artifact_verification_ids.append(top_artifact_verification_id)
     for run_token in verification_run_ids:
         run_row = load_verification_run(
             config.db,
@@ -361,16 +363,23 @@ def run_cancel(problem: str, user: str, verification_id: str = Form("")):
         if status_text in {"ok", "failed"}:
             if not bool(summary_obj.get("cancelled")):
                 continue
-        build_id = str(summary_obj.get("build_id") or "").strip()
-        if not build_id:
-            build_id = str(_C.RUN_PLACEHOLDER_BUILD_ID)
+        artifact_verification_id = str(
+            summary_obj.get("artifact_verification_id")
+            or ""
+        ).strip()
+        if not artifact_verification_id:
+            artifact_verification_id = str(_C.RUN_PLACEHOLDER_BUILD_ID)
         source_label = str(summary_obj.get("source") or "").strip()
         if not source_label:
             source_label = str(run_row.get("source_label") or "").strip() if isinstance(run_row, dict) else ""
         if not source_label:
             source_label = "verification"
-        if build_id and build_id != str(_C.RUN_PLACEHOLDER_BUILD_ID) and build_id not in build_ids:
-            build_ids.append(build_id)
+        if (
+            artifact_verification_id
+            and artifact_verification_id != str(_C.RUN_PLACEHOLDER_BUILD_ID)
+            and artifact_verification_id not in artifact_verification_ids
+        ):
+            artifact_verification_ids.append(artifact_verification_id)
         if not isinstance(run_row, dict) or not run_row:
             record_async_run_failure(
                 problem,
@@ -379,7 +388,7 @@ def run_cancel(problem: str, user: str, verification_id: str = Form("")):
                 mode="pass-fail",
                 source_label=source_label,
                 error=reason,
-                build_id=build_id,
+                artifact_verification_id=artifact_verification_id,
                 verification_id=safe_verification_id,
                 expected_behavior="unknown",
                 verification_source="run.execute",
@@ -391,14 +400,14 @@ def run_cancel(problem: str, user: str, verification_id: str = Form("")):
         cancelled_runs += 1
 
     cancelled_tasks = _cancel_judgehost_tasks(verification_run_ids, reason)
-    cancelled_builds = _finalize_cancelled_builds(build_ids, reason)
+    cancelled_verifications = _finalize_cancelled_verifications(artifact_verification_ids, reason)
     cancel_details: dict[str, object] = {
         "verification_id": safe_verification_id,
         "run_ids": verification_run_ids,
         "run_count": len(verification_run_ids),
         "cancelled_runs": cancelled_runs,
         "cancelled_tasks": cancelled_tasks,
-        "cancelled_builds": cancelled_builds,
+        "cancelled_verifications": cancelled_verifications,
         "reason": reason,
     }
     audit(actor_user_id, problem_id, "run.cancel", cancel_details)
@@ -411,7 +420,7 @@ def run_cancel(problem: str, user: str, verification_id: str = Form("")):
 def run_execute(
     problem: str,
     user: str,
-    build_id: str = Form(""),
+    artifact_verification_id: str = Form(""),
     solution_paths: list[str] = Form(default=[]),
     test_names: list[str] = Form(default=[]),
     submission_upload: UploadFile | None = File(None),
@@ -471,9 +480,9 @@ def run_execute(
             seen_targets.add(key)
             deduped_targets.append((target_submission_path, target_is_upload))
         execution_targets = deduped_targets
-        requested_build_id = str(build_id or '').strip()
-        if requested_build_id:
-            assert_workspace_build_access(ctx, requested_build_id)
+        requested_verification_id = str(artifact_verification_id or '').strip()
+        if requested_verification_id:
+            assert_workspace_verification_access(ctx, requested_verification_id)
         run_ids: list[str] = []
         resolved_submission_paths: list[str] = []
         background_targets: list[dict[str, object]] = []
@@ -497,13 +506,13 @@ def run_execute(
             'run_id': primary_run_id,
             'run_ids': run_ids,
             'run_count': len(run_ids),
-            'build_id': requested_build_id,
+            'artifact_verification_id': requested_verification_id,
             'submission_paths': resolved_submission_paths,
             'solution_paths': selected_solution_paths,
             'selected_test_names': selected_test_names,
             'uploaded': uploaded,
             'mode': run_mode,
-            'implicit_build_generated': not bool(requested_build_id),
+            'implicit_verification_generated': not bool(requested_verification_id),
             'verification_backend': config.judgehost_task_service.backend_name(),
             'async': True,
             'status': 'queued',
@@ -514,7 +523,7 @@ def run_execute(
             started = start_run_execute_batch(
                 problem,
                 user,
-                requested_build_id=requested_build_id,
+                requested_verification_id=requested_verification_id,
                 run_mode=run_mode,
                 targets=background_targets,
                 verification_id=verification_id,
@@ -549,4 +558,3 @@ def run_execute(
     finally:
         if submission_upload is not None:
             submission_upload.file.close()
-

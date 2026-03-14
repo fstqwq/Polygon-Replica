@@ -19,16 +19,16 @@ def effective_compile_jobs(configured: object, target_count: int) -> int:
 def wait_build_terminal_status(
     db: DB,
     *,
-    build_id: str,
+    verification_id: str,
     timeout_sec: float,
     poll_sec: float,
 ) -> str:
-    safe_build_id = str(build_id or "").strip()
-    if not safe_build_id:
+    safe_verification_id = str(verification_id or "").strip()
+    if not safe_verification_id:
         return ""
     deadline = time.monotonic() + max(0.5, float(timeout_sec))
     while time.monotonic() < deadline:
-        row = db.fetch_one("SELECT status FROM builds WHERE id=?", [safe_build_id])
+        row = db.fetch_one("SELECT status FROM verifications WHERE id=?", [safe_verification_id])
         status = str(row["status"] or "").strip().lower() if row is not None else ""
         if status in {"ok", "failed", "cancelled"}:
             return status

@@ -2258,6 +2258,11 @@ section.verification-header-section {
   color: #1d4ed8;
 }
 
+.verification-detail-table td.verification-cell-running {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .verification-detail-table td.verification-cell-neutral {
   background: #f9fafb;
   color: var(--muted);
@@ -2283,6 +2288,28 @@ section.verification-header-section {
   display: inline-block;
   width: auto;
   text-align: left;
+}
+
+.verification-test-cell {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.verification-test-cell .verification-cell-code {
+  font-size: 11px;
+}
+
+.verification-test-cell .verification-cell-meta {
+  margin-left: 4px;
+}
+
+.verification-test-cell .verification-test-toggle {
+  color: inherit;
+  font-weight: 700;
+}
+
+.verification-test-cell .verification-test-toggle:hover {
+  text-decoration: underline;
 }
 
 .verification-cell-code {

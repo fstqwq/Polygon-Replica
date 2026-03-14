@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import json
@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.common import SmokeBase
+from .common import SmokeBase
 from app.impl.run_export import api
 from app.impl.runtime.config import config
 from app.service.platform.process import run_cmd
@@ -20,14 +20,14 @@ workspace_service = config.workspace_service
 
 
 class TestExport(SmokeBase):
-    def _insert_exportable_build(self, build_id: str, source_commit: str) -> None:
+    def _insert_exportable_verification(self, verification_id: str, source_commit: str) -> None:
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        build_ref = config.fs_manager.compute_build_ref(
-            {"suite": "export", "problem": self.problem, "build_id": str(build_id or "").strip()}
+        build_ref = config.fs_manager.compute_artifact_ref(
+            {"suite": "export", "problem": self.problem, "verification_id": str(verification_id or "").strip()}
         )
-        artifact_root = config.fs_manager.ensure_build_layout(build_ref).root.resolve()
+        artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
         logs = artifact_root / "logs"
         tests = artifact_root / "tests"
         ans = artifact_root / "ans"
@@ -42,16 +42,16 @@ class TestExport(SmokeBase):
 
         db.execute(
             """
-            INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             [
-                build_id,
-                build_ref,
+                verification_id,
                 problem_id,
                 workspace_id,
                 source_commit,
                 "main",
+                "materialization",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -91,10 +91,10 @@ class TestExport(SmokeBase):
         (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
         head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export type reject {token}")
-        build_id = f"b-exp-reject-{token}"
-        self._insert_exportable_build(build_id, head)
+        verification_id = f"ver-exp-reject-{token}"
+        self._insert_exportable_verification(verification_id, head)
         with self.assertRaisesRegex(ValueError, "ICPC only"):
-            export_service.create_export(self.problem, build_id, "kattis")
+            export_service.create_export(self.problem, verification_id, "kattis")
 
     def test_icpc_export_can_be_imported_as_new_problem(self) -> None:
         ws = Path(self._workspace_path())
@@ -128,9 +128,9 @@ class TestExport(SmokeBase):
             ],
             f"test export import roundtrip {token}",
         )
-        build_id = f"b-exp-imp-{token}"
-        self._insert_exportable_build(build_id, head)
-        archive = export_service.create_export(self.problem, build_id, "icpc")
+        verification_id = f"ver-exp-imp-{token}"
+        self._insert_exportable_verification(verification_id, head)
+        archive = export_service.create_export(self.problem, verification_id, "icpc")
 
         actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
@@ -206,29 +206,29 @@ class TestExport(SmokeBase):
         target_slug = f"poly-backfill-{uuid.uuid4().hex[:8]}"
         target_problem = f"{self.user}/{target_slug}"
 
-        def _fake_run_build(problem: str, username: str, *args, **kwargs) -> str:
+        def _fake_run_verification(problem: str, username: str, *args, **kwargs) -> str:
             self.assertEqual(problem, target_problem)
             self.assertEqual(username, self.user)
-            build_id = f"b-backfill-{uuid.uuid4().hex[:8]}"
+            verification_id = f"ver-backfill-{uuid.uuid4().hex[:8]}"
             target_ctx = workspace_service.workspace_context(target_problem, self.user, include_recent=False)
-            build_ref = config.fs_manager.compute_build_ref(
-                {"suite": "export-backfill", "problem": target_problem, "build_id": build_id}
+            build_ref = config.fs_manager.compute_artifact_ref(
+                {"suite": "export-backfill", "problem": target_problem, "verification_id": verification_id}
             )
-            artifact_root = config.fs_manager.ensure_build_layout(build_ref).root.resolve()
+            artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
             (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
             (artifact_root / "ans" / "001.ans").write_text("7\n", encoding="utf-8")
             db.execute(
                 """
-                INSERT INTO builds(id,build_ref,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
+                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
-                    build_id,
-                    build_ref,
+                    verification_id,
                     int(target_ctx["problem"]["id"]),
                     int(target_ctx["workspace"]["id"]),
                     "",
                     "main",
+                    "materialization",
                     "ok",
                     "{}",
                     str(artifact_root),
@@ -236,9 +236,9 @@ class TestExport(SmokeBase):
                     "2026-02-23T00:00:01Z",
                 ],
             )
-            return build_id
+            return verification_id
 
-        with patch("app.impl.run_export.import_source.config.build_service.run_build", side_effect=_fake_run_build):
+        with patch("app.impl.run_export.import_source.config.verification_service.run_materialization", side_effect=_fake_run_materialization):
             imported = api.import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
@@ -255,7 +255,7 @@ class TestExport(SmokeBase):
         tests_summary = imported.get("result", {}).get("tests", {})
         self.assertEqual(int(tests_summary.get("sample_answers_materialized") or 0), 1)
 
-    def test_polygon_import_fails_when_sample_answer_materialization_build_fails(self) -> None:
+    def test_polygon_import_fails_when_sample_answer_materialization_verification_fails(self) -> None:
         payload = io.BytesIO()
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <problem short-name="sample-backfill-fail">
@@ -281,7 +281,7 @@ class TestExport(SmokeBase):
         actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"poly-backfail-{uuid.uuid4().hex[:8]}"
-        with self.assertRaisesRegex(ValueError, "sample answer materialization build failed"):
+        with self.assertRaisesRegex(ValueError, "sample answer verification failed"):
             api.import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
@@ -366,9 +366,9 @@ class TestExport(SmokeBase):
         ]
         head = self._commit_workspace_paths(ws, tracked, f"test export cfg sources {token}")
 
-        build_id = f"b-exp-cfg-{token}"
-        self._insert_exportable_build(build_id, head)
-        archive = export_service.create_export(self.problem, build_id, "icpc")
+        verification_id = f"ver-exp-cfg-{token}"
+        self._insert_exportable_verification(verification_id, head)
+        archive = export_service.create_export(self.problem, verification_id, "icpc")
 
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
@@ -396,14 +396,14 @@ class TestExport(SmokeBase):
         (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
         head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export latest-per-revision {token}")
 
-        build_id_1 = f"b-exp-latest-a-{token}"
-        build_id_2 = f"b-exp-latest-b-{token}"
-        self._insert_exportable_build(build_id_1, head)
-        self._insert_exportable_build(build_id_2, head)
+        verification_id_1 = f"ver-exp-latest-a-{token}"
+        verification_id_2 = f"ver-exp-latest-b-{token}"
+        self._insert_exportable_verification(verification_id_1, head)
+        self._insert_exportable_verification(verification_id_2, head)
 
-        first = export_service.create_export(self.problem, build_id_1, "icpc")
+        first = export_service.create_export(self.problem, verification_id_1, "icpc")
         self.assertTrue(first.exists())
-        second = export_service.create_export(self.problem, build_id_2, "icpc")
+        second = export_service.create_export(self.problem, verification_id_2, "icpc")
         self.assertTrue(second.exists())
         self.assertEqual(first.name, second.name)
 
@@ -412,7 +412,7 @@ class TestExport(SmokeBase):
         workspace_id = int(ctx["workspace"]["id"])
         rows = db.fetch_all(
             """
-            SELECT id,build_id,filename
+            SELECT id,verification_id,filename
             FROM exports
             WHERE problem_id=? AND workspace_id=? AND export_type='icpc' AND source_commit=?
             ORDER BY created_at DESC
@@ -420,7 +420,7 @@ class TestExport(SmokeBase):
             [problem_id, workspace_id, head],
         )
         self.assertEqual(len(rows), 1)
-        self.assertEqual(str(rows[0]["build_id"]), build_id_2)
+        self.assertEqual(str(rows[0]["verification_id"]), verification_id_2)
 
     def test_export_includes_statement_pdf_when_export_compile_succeeds(self) -> None:
         ws = Path(self._workspace_path())
@@ -430,8 +430,8 @@ class TestExport(SmokeBase):
         (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
         head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export statement pdf ok {token}")
 
-        build_id = f"b-exp-pdf-ok-{token}"
-        self._insert_exportable_build(build_id, head)
+        verification_id = f"ver-exp-pdf-ok-{token}"
+        self._insert_exportable_verification(verification_id, head)
 
         def _compile_ok(_statement_root: Path, dst_statement: Path) -> bool:
             dst_statement.mkdir(parents=True, exist_ok=True)
@@ -439,7 +439,7 @@ class TestExport(SmokeBase):
             return True
 
         with patch.object(export_service, "_try_compile_statement_pdf", side_effect=_compile_ok) as compile_mock:
-            archive = export_service.create_export(self.problem, build_id, "icpc")
+            archive = export_service.create_export(self.problem, verification_id, "icpc")
 
         compile_mock.assert_called_once()
         with zipfile.ZipFile(archive, "r") as zf:
@@ -460,11 +460,11 @@ class TestExport(SmokeBase):
         (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
         head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export statement pdf fail {token}")
 
-        build_id = f"b-exp-pdf-fail-{token}"
-        self._insert_exportable_build(build_id, head)
+        verification_id = f"ver-exp-pdf-fail-{token}"
+        self._insert_exportable_verification(verification_id, head)
 
         with patch.object(export_service, "_try_compile_statement_pdf", return_value=False) as compile_mock:
-            archive = export_service.create_export(self.problem, build_id, "icpc")
+            archive = export_service.create_export(self.problem, verification_id, "icpc")
 
         compile_mock.assert_called_once()
         with zipfile.ZipFile(archive, "r") as zf:
@@ -477,5 +477,6 @@ class TestExport(SmokeBase):
         self.assertTrue(package_root)
         self.assertNotIn(f"{package_root}/statement/problem.en.pdf", names)
         self.assertIn(f"{package_root}/statement/problem.en.tex", names)
+
 
 

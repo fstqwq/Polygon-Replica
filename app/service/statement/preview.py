@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -22,7 +22,7 @@ from app.service.repository.workspace import WorkspaceService
 
 if TYPE_CHECKING:
     from app.service.platform.async_task_cache import AsyncTaskCacheService
-    from app.service.build.api import Build
+    from app.service.verification.service import VerificationService
 
 
 class PreviewService:
@@ -33,7 +33,7 @@ class PreviewService:
         db: DB,
         workspace_service: WorkspaceService,
         artifacts: ArtifactService,
-        build_service: Build | None = None,
+        verification_service: VerificationService | None = None,
         sandbox_backend: SandboxBackend | None = None,
         constants: RuntimeValues | None = None,
         async_task_cache_service: AsyncTaskCacheService | None = None,
@@ -41,7 +41,7 @@ class PreviewService:
         self.db = db
         self.workspace_service = workspace_service
         self.artifacts = artifacts
-        self.build_service = build_service
+        self.verification_service = verification_service
         self._async_task_cache_service = async_task_cache_service
         self.fs_manager = FsManager(
             self.workspace_service.settings.artifacts_root,
@@ -98,54 +98,54 @@ class PreviewService:
                 rows.append((index, test_id, kind))
         return rows
 
-    def _copy_sample_payloads_from_build(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
+    def _copy_sample_payloads_from_verification(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
         rows = self._sample_rows_from_spec(snapshot)
         if not rows:
-            return {"sample_count": 0, "copied": 0, "build_id": ""}
-        if self.build_service is None:
-            raise RuntimeError("preview sample sync requires build service")
-        build_id = self.build_service.run_build(
+            return {"sample_count": 0, "copied": 0, "verification_id": ""}
+        if self.verification_service is None:
+            raise RuntimeError("preview sample sync requires verification service")
+        verification_id = self.verification_service.run_verification(
             problem,
             username,
             sample_only=True,
         )
-        build_row = self.db.fetch_one(
-            "SELECT status,summary_json,artifact_path FROM builds WHERE id=?",
-            [build_id],
+        verification_row = self.db.fetch_one(
+            "SELECT status,summary_json,artifact_path FROM verifications WHERE id=?",
+            [verification_id],
         )
-        if build_row is None:
-            raise RuntimeError(f"sample build missing: {build_id}")
-        build_status = str(build_row["status"] or "").strip().lower()
-        if build_status != "ok":
+        if verification_row is None:
+            raise RuntimeError(f"sample verification missing: {verification_id}")
+        verification_status = str(verification_row["status"] or "").strip().lower()
+        if verification_status != "ok":
             error_text = ""
             try:
-                payload = json.loads(str(build_row["summary_json"] or "{}"))
+                payload = json.loads(str(verification_row["summary_json"] or "{}"))
                 if isinstance(payload, dict):
                     error_text = str(payload.get("error") or "").strip()
             except Exception:
                 error_text = ""
             if error_text:
-                raise RuntimeError(f"sample build failed ({build_id}): {error_text}")
-            raise RuntimeError(f"sample build failed ({build_id})")
-        artifact_path = str(build_row["artifact_path"] or "").strip()
+                raise RuntimeError(f"sample verification failed ({verification_id}): {error_text}")
+            raise RuntimeError(f"sample verification failed ({verification_id})")
+        artifact_path = str(verification_row["artifact_path"] or "").strip()
         if not artifact_path:
-            raise RuntimeError(f"sample build has no artifact path: {build_id}")
+            raise RuntimeError(f"sample verification has no artifact path: {verification_id}")
         artifact_root = Path(artifact_path)
         tests_dir = artifact_root / "tests"
         ans_dir = artifact_root / "ans"
         if not tests_dir.exists() or not tests_dir.is_dir() or tests_dir.is_symlink():
-            raise RuntimeError(f"sample build missing tests directory: {build_id}")
+            raise RuntimeError(f"sample verification missing tests directory: {verification_id}")
         if not ans_dir.exists() or not ans_dir.is_dir() or ans_dir.is_symlink():
-            raise RuntimeError(f"sample build missing ans directory: {build_id}")
+            raise RuntimeError(f"sample verification missing ans directory: {verification_id}")
         copied = 0
         snapshot_root = snapshot.resolve()
         for index, test_id, kind in rows:
             source_in = tests_dir / f"{int(index):03d}.in"
             source_ans = ans_dir / f"{int(index):03d}.ans"
             if source_in.is_symlink() or (not source_in.exists()) or (not source_in.is_file()):
-                raise RuntimeError(f"sample input missing from build for test id {test_id} (row {index})")
+                raise RuntimeError(f"sample input missing from verification for test id {test_id} (row {index})")
             if source_ans.is_symlink() or (not source_ans.exists()) or (not source_ans.is_file()):
-                raise RuntimeError(f"sample answer missing from build for test id {test_id} (row {index})")
+                raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
             input_rel = Path(payload_rel_path_for_test(test_id, kind))
             answer_rel = Path("tests") / "answers" / f"{test_id}.ans"
             input_target = (snapshot / input_rel).resolve()
@@ -157,7 +157,7 @@ class PreviewService:
             shutil.copy2(source_in, input_target)
             shutil.copy2(source_ans, answer_target)
             copied += 1
-        return {"sample_count": len(rows), "copied": copied, "build_id": build_id}
+        return {"sample_count": len(rows), "copied": copied, "verification_id": verification_id}
 
     def _coerce_int(self, raw: object, default: int, min_value: int, max_value: int) -> int:
         try:
@@ -445,7 +445,8 @@ class PreviewService:
         snapshot: Path | None = None
         dynamic_samples = False
         preview_ref = ""
-        build_id = ""
+        preview_id = ""
+        sample_verification_id = ""
         artifacts = None
         with self.workspace_service.workspace_lock(workspace):
             ws_status = self.workspace_service.read_workspace_status(workspace)
@@ -496,13 +497,13 @@ class PreviewService:
                 statement_signature=str(statement_signature or ""),
                 dynamic_samples=bool(dynamic_samples),
             )
-            build_id = f"p-{uuid.uuid4().hex[:12]}"
-            artifacts = self.fs_manager.ensure_build_layout(preview_ref)
+            preview_id = f"p-{uuid.uuid4().hex[:12]}"
+            artifacts = self.fs_manager.ensure_artifact_layout(preview_ref)
             self.db.execute(
-                "INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                [build_id, problem_id, workspace_id, source_commit, source_ref, "running", str(artifacts.root), now_iso()],
+                "INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                [preview_id, problem_id, workspace_id, "", source_commit, source_ref, "running", str(artifacts.root), now_iso()],
             )
-        if snapshot is None or artifacts is None or (not str(build_id or "").strip()):
+        if snapshot is None or artifacts is None or (not str(preview_id or "").strip()):
             raise RuntimeError("preview compile setup failed")
 
         log = artifacts.logs / "latex.log"
@@ -520,7 +521,8 @@ class PreviewService:
 
         try:
             if dynamic_samples:
-                sample_sync = self._copy_sample_payloads_from_build(problem, username, snapshot)
+                sample_sync = self._copy_sample_payloads_from_verification(problem, username, snapshot)
+                sample_verification_id = str(sample_sync.get("verification_id") or "").strip()
                 summary["sample_sync"] = sample_sync
             tex = render_statement_main(snapshot / "statement", problem_title=problem_title)
 
@@ -614,7 +616,7 @@ class PreviewService:
                 log.write_text(str(exc) + "\n", encoding="utf-8")
         except Exception as exc:
             status = "failed"
-            failed_stage = "sample_sync" if str(exc).startswith("sample build failed") else "latex_compile"
+            failed_stage = "sample_sync" if str(exc).startswith("sample verification failed") else "latex_compile"
             summary = _summary_with_sample(
                 {
                     "error": str(exc),
@@ -642,8 +644,8 @@ class PreviewService:
                     except OSError:
                         pass
             self.db.execute(
-                "UPDATE previews SET source_commit=?, source_ref=?, status=?, summary_json=?, finished_at=? WHERE id=?",
-                [source_commit, source_ref, status, json.dumps(summary), now_iso(), build_id],
+                "UPDATE previews SET verification_id=?, source_commit=?, source_ref=?, status=?, summary_json=?, finished_at=? WHERE id=?",
+                [sample_verification_id, source_commit, source_ref, status, json.dumps(summary), now_iso(), preview_id],
             )
             if status == "ok" and self._async_task_cache_service is not None:
                 self._async_task_cache_service.put(
@@ -655,13 +657,13 @@ class PreviewService:
                         "statement_signature": str(statement_signature or "").strip(),
                         "schema": "v2",
                     },
-                    {"preview_id": build_id},
+                    {"preview_id": preview_id},
                     tags={
                         "problem_id": str(problem_id),
                         "workspace_id": str(workspace_id),
                         "source_commit": source_commit if source_commit else "__dirty__",
                     },
                 )
-            self.prune_workspace_preview_history(problem, problem_id, workspace_id, build_id)
+            self.prune_workspace_preview_history(problem, problem_id, workspace_id, preview_id)
             shutil.rmtree(snapshot.parent, ignore_errors=True)
-        return build_id
+        return preview_id

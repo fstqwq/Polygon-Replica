@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from tests.ui_support import (
+from .ui_support import (
     ADMIN_CONFIG_DEFAULTS,
     AUTH_COOKIE_NAME,
     HTTPException,
@@ -938,7 +938,6 @@ class TestUIAuth(UIBaseSuite):
         )
         self.assertEqual(valid.status_code, 303)
         self.assertIn("/problems/alice/minimal-spanning-tree/alice/statement", valid.headers.get("location", ""))
-
 
 
 

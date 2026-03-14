@@ -7,7 +7,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from app.db import DB, now_iso
-from tests.common import testsuite_root
+from .common import testsuite_root
 
 
 class _TraceValues:
@@ -69,20 +69,30 @@ class TestDBSqlTrace(TestCase):
         self.assertIsNotNone(problem_row)
         db.execute(
             """
-            INSERT INTO builds(id,problem_id,status,summary_json,artifact_path,created_at)
-            VALUES(?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
-            ["b-trace", int(problem_row["id"] or 0), "ok", json.dumps({"seed": True}), str(Path("/tmp/build")), now_iso()],
+            [
+                "ver-trace",
+                int(problem_row["id"] or 0),
+                "",
+                "main",
+                "materialization",
+                "ok",
+                json.dumps({"seed": True}),
+                str(Path("/tmp/verification")),
+                now_iso(),
+            ],
         )
         with patch("app.db.logger.info") as info:
             db.execute(
-                "UPDATE builds SET summary_json=? WHERE id=?",
-                [json.dumps(summary_payload), "b-trace"],
+                "UPDATE verifications SET summary_json=? WHERE id=?",
+                [json.dumps(summary_payload), "ver-trace"],
             )
         sql_texts = self._trace_sql_texts(info)
         trace_text = next((text for text in sql_texts if "json_fields=summary_json" in text), "")
         self.assertTrue(trace_text, sql_texts)
-        self.assertIn("UPDATE builds", trace_text)
+        self.assertIn("UPDATE verifications", trace_text)
         self.assertIn("<redacted-json>", trace_text)
         self.assertNotIn('"blob": "', trace_text)
         self.assertNotIn("line one", trace_text)
