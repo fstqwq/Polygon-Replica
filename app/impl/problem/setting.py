@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import secrets
 from urllib.parse import quote_plus
@@ -7,31 +7,14 @@ from fastapi import Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.db import now_iso
-from app.impl.auth.public import (
-    create_session_for_user,
-    dummy_password_salt_hex,
-    issue_password_form_csrf_token,
-    lookup_user_auth,
-    normalize_password_iters,
-    normalize_password_salt_hex,
-    normalize_password_verifier_hex,
-    password_proof_from_verifier,
-    redirect_response,
-    revoke_sudo_sessions_for_user,
-    set_user_password_verifier,
-    template_response,
-    verify_password_form_csrf_token,
-)
+from app.impl.auth.session import create_session_for_user, revoke_sudo_sessions_for_user
+from app.impl.auth.shared import dummy_password_salt_hex, lookup_user_auth, normalize_password_iters, normalize_password_salt_hex, normalize_password_verifier_hex, redirect_response, set_user_password_verifier, template_response
+from app.impl.auth.csrf import issue_password_form_csrf_token, password_proof_from_verifier, verify_password_form_csrf_token
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _as_bool_form_value, _settings_user_ctx, _system_config_row_by_key
-from app.impl.workspace.public import (
-    audit,
-    coerce_int,
-    form_text,
-    is_system_admin_user_id,
-    require_system_admin,
-    user_participating_problems,
-)
+from app.impl.workspace.context_operation import audit, user_participating_problems
+from app.impl.workspace.problem_config import coerce_int, form_text
+from app.impl.workspace.access import is_system_admin_user_id, require_system_admin
 
 _C = config.constants
 
@@ -57,29 +40,35 @@ def settings_page(request: Request, user: str):
     judgehost_status: dict[str, object] = {}
     admin_runtime_controls: dict[str, dict[str, object]] = {}
     admin_default_category_slug = ""
-    default_problem = str(ctx.get('default_problem') or '')
+    default_problem = default_problem if isinstance(default_problem := ctx.get('default_problem'), str) else ''
     if (not default_problem) and problems:
-        default_problem = str(problems[0].get('slug') or '')
+        first_problem_slug = problems[0].get('slug')
+        default_problem = first_problem_slug if isinstance(first_problem_slug, str) else ''
     if is_system_admin:
         config.system_config_service.refresh()
         admin_sections = config.system_config_service.ui_sections()
         for section in admin_sections:
-            category_slug = str(section.get('slug') or '')
+            category_slug = section['slug'] if isinstance(section.get('slug'), str) else ''
             section['href'] = f"/problems/{user_row['username']}/settings/config/{quote_plus(category_slug)}"
-        admin_changed_total = sum((int(section.get('changed_count') or 0) for section in admin_sections))
+        admin_changed_total = sum((int(section['changed_count']) for section in admin_sections if isinstance(section.get('changed_count'), (int, float))))
         if admin_sections:
-            admin_default_category_slug = str(admin_sections[0].get('slug') or '')
+            admin_default_category_slug = admin_sections[0]['slug'] if isinstance(admin_sections[0].get('slug'), str) else ''
         rows_by_key = _system_config_row_by_key(admin_sections)
         for key in ("JUDGEHOST_ENABLE", "JUDGEHOST_API_TOKEN", "JUDGEHOST_API_USERNAME"):
             row = rows_by_key.get(key, {})
+            description = row['description'] if isinstance(row.get("description"), str) else None
+            choices = list(row["choices"]) if isinstance(row.get("choices"), list) else []
+            current_value = row.get("current_value")
+            current_display = current_display if isinstance(current_display := row.get("current_display"), str) else current_value if isinstance(current_value, str) else None
+            impact = row['impact'] if isinstance(row.get("impact"), str) else None
             admin_runtime_controls[key] = {
                 "key": key,
-                "description": str(row.get("description") or ""),
-                "choices": list(row.get("choices") or []),
+                "description": description,
+                "choices": choices,
                 "current_value": row.get("current_value"),
-                "current_display": str(row.get("current_display") or row.get("current_value") or ""),
+                "current_display": current_display,
                 "changed": bool(row.get("changed")),
-                "impact": str(row.get("impact") or ""),
+                "impact": impact,
             }
         judgehost_status = config.judgehost_task_service.status()
     return template_response(request, 'settings.html', {'user': user_row, 'default_problem': default_problem, 'active_main': 'settings', 'problems': problems, 'password_csrf_token': issue_password_form_csrf_token('settings-password'), 'current_password_salt': current_salt, 'current_password_iters': current_iters, 'new_password_salt': secrets.token_hex(16), 'new_password_iters': int(_C.PASSWORD_HASH_ITERS), 'is_system_admin': is_system_admin, 'admin_config_sections': admin_sections, 'admin_config_changed_total': admin_changed_total, 'admin_default_category_slug': admin_default_category_slug, 'judgehost_status': judgehost_status, 'admin_runtime_controls': admin_runtime_controls})
@@ -102,7 +91,7 @@ def settings_judgehost_runtime_update(
         }
         result = config.system_config_service.apply_patch(payload, actor_user_id=int(ctx["user"]["id"]))
         config.reload_runtime_values()
-        changed = int(result.get("changed") or 0)
+        changed = int(changed) if isinstance(changed := result.get("changed"), (int, float)) else 0
         diff_rows = result.get("diff") if isinstance(result.get("diff"), list) else []
         runtime_changed = sum((1 for row in diff_rows if isinstance(row, dict) and (not bool(row.get("restart_required")))))
         restart_changed = sum((1 for row in diff_rows if isinstance(row, dict) and bool(row.get("restart_required"))))
@@ -167,9 +156,12 @@ def settings_judgehost_host_action(
         if enable_flag:
             msg = f"judgehost {safe_host} enabled"
         else:
+            released_tasks = int(released_tasks) if isinstance(released_tasks := result.get('released_tasks'), (int, float)) else 0
+            released_jobs = int(released_jobs) if isinstance(released_jobs := result.get('released_jobs'), (int, float)) else 0
+            released_cases = int(released_cases) if isinstance(released_cases := result.get('released_cases'), (int, float)) else 0
             msg = (
-                f"judgehost {safe_host} disabled; released tasks={int(result.get('released_tasks') or 0)}, "
-                f"jobs={int(result.get('released_jobs') or 0)}, cases={int(result.get('released_cases') or 0)}"
+                f"judgehost {safe_host} disabled; released tasks={released_tasks}, "
+                f"jobs={released_jobs}, cases={released_cases}"
             )
     except Exception as exc:
         msg = f"judgehost action failed: {exc}"
@@ -182,12 +174,12 @@ def settings_config_category_page(request: Request, user: str, category: str):
     config.system_config_service.refresh()
     sections = config.system_config_service.ui_sections()
     for section in sections:
-        category_slug = str(section.get('slug') or '')
+        category_slug = section['slug'] if isinstance(section.get('slug'), str) else ''
         section['href'] = f"/problems/{user_row['username']}/settings/config/{quote_plus(category_slug)}"
     requested_slug = config.system_config_service.category_slug(category)
     selected_section = None
     for section in sections:
-        if str(section.get('slug') or '') == requested_slug:
+        if isinstance(section.get('slug'), str) and section['slug'] == requested_slug:
             selected_section = section
             break
     if selected_section is None:
@@ -195,8 +187,8 @@ def settings_config_category_page(request: Request, user: str, category: str):
     selected_rows = selected_section.get('rows') if isinstance(selected_section, dict) else []
     if not isinstance(selected_rows, list):
         selected_rows = []
-    selected_changed = int(selected_section.get('changed_count') or 0) if isinstance(selected_section, dict) else 0
-    selected_count = int(selected_section.get('count') or 0) if isinstance(selected_section, dict) else 0
+    selected_changed = int(selected_changed) if isinstance(selected_changed := selected_section.get('changed_count') if isinstance(selected_section, dict) else None, (int, float)) else 0
+    selected_count = int(selected_count) if isinstance(selected_count := selected_section.get('count') if isinstance(selected_section, dict) else None, (int, float)) else 0
     return template_response(
         request,
         'settings_config_category.html',
@@ -210,7 +202,7 @@ def settings_config_category_page(request: Request, user: str, category: str):
             'selected_slug': requested_slug,
             'selected_changed_count': selected_changed,
             'selected_count': selected_count,
-            'admin_config_changed_total': sum((int(section.get('changed_count') or 0) for section in sections)),
+            'admin_config_changed_total': sum((int(section['changed_count']) for section in sections if isinstance(section.get('changed_count'), (int, float)))),
         },
     )
 
@@ -234,10 +226,10 @@ async def settings_config_category_update(request: Request, user: str, category:
         form = await request.form()
         payload: dict[str, object] = {}
         for row in rows:
-            key = str(row.get('key') or '').strip()
-            input_name = str(row.get('input_name') or '').strip() or f'config_{key}'
+            key = key.strip() if isinstance(key := row.get('key'), str) else ''
+            input_name = input_name.strip() if isinstance(input_name := row.get('input_name'), str) and input_name.strip() else f'config_{key}'
             reset_name = f'config_reset_{key}'
-            kind = str(row.get('type') or 'str').strip().lower()
+            kind = kind.strip().lower() if isinstance(kind := row.get('type'), str) and kind.strip() else 'str'
             if not key:
                 continue
             if reset_name in form:
@@ -251,7 +243,7 @@ async def settings_config_category_update(request: Request, user: str, category:
             payload[key] = form.get(input_name)
         result = config.system_config_service.apply_patch(payload, actor_user_id=int(ctx['user']['id']))
         config.reload_runtime_values()
-        changed = int(result.get('changed') or 0)
+        changed = int(changed) if isinstance(changed := result.get('changed'), (int, float)) else 0
         diff_rows = result.get('diff') if isinstance(result.get('diff'), list) else []
         runtime_changed = sum((1 for row in diff_rows if isinstance(row, dict) and (not bool(row.get('restart_required')))))
         restart_changed = sum((1 for row in diff_rows if isinstance(row, dict) and bool(row.get('restart_required'))))

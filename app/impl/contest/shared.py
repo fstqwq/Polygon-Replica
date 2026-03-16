@@ -8,25 +8,18 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.db import now_iso
-from app.impl.auth.public import redirect_response
+from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from .common import (
     _contest_idx_label,
     _contest_problem_slug_file_token,
 )
-from app.impl.workspace.public import (
-    audit,
-    coerce_int,
-    global_user_ctx,
-    latest_workspace_committed_stage_verification,
-    normalize_contest_role,
-    normalize_contest_slug_required,
-    normalize_problem_mode,
-    normalize_problem_name_required,
-    read_problem_config,
-    workspace_access_context,
-    workspace_revision_info,
-)
+from app.impl.workspace.context_operation import audit, normalize_contest_role, normalize_contest_slug_required, normalize_problem_name_required
+from app.impl.workspace.problem_config import coerce_int, normalize_problem_mode, read_problem_config
+from app.impl.workspace.context import global_user_ctx
+from app.impl.workspace.context_job import latest_workspace_committed_stage_verification
+from app.impl.workspace.access import workspace_access_context
+from app.impl.workspace.revision import workspace_revision_info
 from app.service.platform.hashing import sha256_file
 from app.service.platform.process import is_canonical_artifact_id, run_cmd
 
@@ -139,7 +132,7 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
         raise HTTPException(status_code=404, detail="contest not found")
     access = _contest_access_context(int(contest_row["id"]), int(gctx["user"]["id"]))
     if not access.get("can_read"):
-        raise HTTPException(status_code=403, detail=str(access.get("read_block_reason") or "contest access required"))
+        raise HTTPException(status_code=403, detail=str(reason_obj) if (reason_obj := access.get("read_block_reason")) is not None else "contest access required")
     return {
         "user": gctx["user"],
         "contest": {
@@ -182,9 +175,13 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
             try:
                 workspace = Path(config.workspace_service.ensure_workspace(problem_slug, username, refresh_status=True))
                 ws_ctx = config.workspace_service.workspace_context(problem_slug, username, include_recent=False)
-                branch = str(ws_ctx["workspace"].get("branch") or "main").strip() or "main"
+                branch_obj = ws_ctx["workspace"].get("branch")
+                branch = str(branch_obj).strip() if branch_obj is not None else ""
+                if not branch:
+                    branch = "main"
                 revision = workspace_revision_info(workspace, branch)
-                revision_display = str(revision.get("display") or "unknown")
+                revision_display_obj = revision.get("display")
+                revision_display = str(revision_display_obj) if revision_display_obj is not None else "unknown"
                 revision_warn = bool(revision.get("highlight"))
                 dirty = bool(ws_ctx["workspace"].get("dirty"))
                 _payload, general_cfg, _cfg_path = read_problem_config(workspace)
@@ -248,8 +245,7 @@ def _contest_available_problem_rows(contest_id: int, user_id: int, query: str) -
     for row in rows:
         slug = str(row["slug"])
         name = str(row["name"])
-        hay = f"{slug} {name}".lower()
-        if q and q not in hay:
+        if q and q not in f"{slug} {name}".lower():
             continue
         result.append(
             {
@@ -520,7 +516,8 @@ def _run_problem_general_update(
         return result
     try:
         workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
-        safe_name = normalize_problem_name_required(str(requested.get("name") or ""))
+        requested_name_obj = requested.get("name")
+        safe_name = normalize_problem_name_required(str(requested_name_obj) if requested_name_obj is not None else "")
         safe_tl = coerce_int(
             requested.get("time_limit_ms"),
             int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
@@ -536,7 +533,7 @@ def _run_problem_general_update(
         with config.workspace_service.workspace_lock(workspace):
             has_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
             before = config.git_service.status_change_summary(workspace, limit=1)
-            if int(before.get("total") or 0) > 0 and has_head:
+            if int(before.get("total", 0)) > 0 and has_head:
                 raise RuntimeError("workspace has uncommitted changes")
             payload, general_cfg, cfg_path = read_problem_config(workspace)
             safe_mode = normalize_problem_mode(general_cfg.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
@@ -552,7 +549,7 @@ def _run_problem_general_update(
             cfg_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             config.workspace_service.set_problem_name(problem_slug, safe_name)
             after = config.git_service.status_change_summary(workspace, limit=1)
-            if int(after.get("total") or 0) <= 0:
+            if int(after.get("total", 0)) <= 0:
                 result["status"] = "skipped"
                 return result
             commit_msg = f"contest {contest_slug}: bulk update name/TL/ML"
@@ -664,7 +661,9 @@ def _run_contest_preview_job_worker(
                     except Exception:
                         summary = {}
                     if isinstance(summary, dict):
-                        error_text = str(summary.get("error") or error_text)
+                        summary_error_obj = summary.get("error")
+                        if summary_error_obj is not None:
+                            error_text = str(summary_error_obj)
                 raise RuntimeError(error_text)
             source_pdf = (config.settings.artifacts_root / problem_slug / preview_id / "statement_preview" / "statement.pdf").resolve()
             problem_artifacts_root = (config.settings.artifacts_root / problem_slug).resolve()
@@ -682,8 +681,8 @@ def _run_contest_preview_job_worker(
             item["status"] = "failed"
             item["error"] = str(exc)
         results.append(item)
-    success_count = sum((1 for row in results if str(row.get("status") or "") == "success"))
-    failed_count = sum((1 for row in results if str(row.get("status") or "") != "success"))
+    success_count = sum((1 for row in results if str(row.get("status")) == "success"))
+    failed_count = sum((1 for row in results if str(row.get("status")) != "success"))
     bundle_root = job_root / "bundle-preview"
     if bundle_root.exists():
         shutil.rmtree(bundle_root, ignore_errors=True)
@@ -718,8 +717,7 @@ def _run_contest_preview_job_worker(
         )
     summary["artifact_id"] = artifact_id
     summary["filename"] = artifact_filename
-    final_status = "ok" if failed_count == 0 and success_count > 0 else "failed"
-    _update_contest_job(contest_id, job_id, final_status, summary, finished=True)
+    _update_contest_job(contest_id, job_id, "ok" if failed_count == 0 and success_count > 0 else "failed", summary, finished=True)
     audit(
         actor_user_id,
         None,
@@ -771,7 +769,8 @@ def _run_contest_package_job_worker(
             config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True)
             ws_ctx = config.workspace_service.workspace_context(problem_slug, actor_username, include_recent=False)
             workspace_id = int(ws_ctx["workspace"]["id"])
-            head_commit = str(ws_ctx["workspace"].get("head_commit") or "").strip()
+            head_commit_obj = ws_ctx["workspace"].get("head_commit")
+            head_commit = str(head_commit_obj).strip() if head_commit_obj is not None else ""
             item["head_commit"] = head_commit
             if not head_commit:
                 raise RuntimeError("no committed revision; commit changes first")
@@ -834,8 +833,8 @@ def _run_contest_package_job_worker(
             item["status"] = "failed"
             item["error"] = str(exc)
         results.append(item)
-    success_count = sum((1 for row in results if str(row.get("status") or "") == "success"))
-    failed_count = sum((1 for row in results if str(row.get("status") or "") != "success"))
+    success_count = sum((1 for row in results if str(row.get("status")) == "success"))
+    failed_count = sum((1 for row in results if str(row.get("status")) != "success"))
     bundle_root = job_root / "bundle-package"
     if bundle_root.exists():
         shutil.rmtree(bundle_root, ignore_errors=True)
@@ -870,8 +869,7 @@ def _run_contest_package_job_worker(
         )
     summary["artifact_id"] = artifact_id
     summary["filename"] = artifact_filename
-    final_status = "ok" if failed_count == 0 and success_count > 0 else "failed"
-    _update_contest_job(contest_id, job_id, final_status, summary, finished=True)
+    _update_contest_job(contest_id, job_id, "ok" if failed_count == 0 and success_count > 0 else "failed", summary, finished=True)
     audit(
         actor_user_id,
         None,

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import json
@@ -8,6 +8,7 @@ import xml.etree.ElementTree
 ET = xml.etree.ElementTree
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import TypedDict, cast
 
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
@@ -52,8 +53,113 @@ POLYGON_SOLUTION_TAG_EXPECTED: dict[str, str] = {
 }
 
 
-def _normalize_zip_path(raw: str) -> str:
-    text = str(raw or "").replace("\\", "/").strip()
+PolygonTestRow = TypedDict(
+    "PolygonTestRow",
+    {
+        "method": str,
+        "sample": bool,
+        "cmd": str,
+    },
+)
+
+PolygonSolutionRow = TypedDict(
+    "PolygonSolutionRow",
+    {
+        "path": str,
+        "tag": str,
+        "source_type": str,
+    },
+)
+
+PolygonMeta = TypedDict(
+    "PolygonMeta",
+    {
+        "title": str,
+        "time_limit_ms": int,
+        "memory_limit_bytes": int,
+        "run_count": int,
+        "is_multipass": bool,
+        "tests": list[PolygonTestRow],
+        "input_pattern": str,
+        "answer_pattern": str,
+        "statement_template_path": str,
+        "problem_template_path": str,
+        "style_path": str,
+        "checker_name": str,
+        "checker_source": str,
+        "validator_sources": list[str],
+        "interactor_source": str,
+        "solutions": list[PolygonSolutionRow],
+        "executables": list[str],
+        "statement_languages": list[str],
+    },
+)
+
+StatementImportSummary = TypedDict(
+    "StatementImportSummary",
+    {
+        "copied_files": int,
+        "language": str,
+        "language_warning": str,
+        "prebuilt_pdf_count": int,
+        "prebuilt_pdf_languages": list[str],
+    },
+)
+
+TestsImportSummary = TypedDict(
+    "TestsImportSummary",
+    {
+        "manual": int,
+        "gen": int,
+        "total": int,
+        "generated_fallback_to_manual": int,
+        "answers": int,
+    },
+)
+
+ComponentImportSummary = TypedDict(
+    "ComponentImportSummary",
+    {
+        "testlib_source": str,
+        "checker_standard": str | None,
+        "checker_source": str | None,
+        "validator_source": str | None,
+        "interactor_source": str | None,
+        "generator_sources": list[str],
+    },
+)
+
+SolutionImportSummary = TypedDict(
+    "SolutionImportSummary",
+    {
+        "count": int,
+        "accepted_source": str,
+    },
+)
+
+
+def _xml_attr(node: ET.Element | None, name: str) -> str:
+    if node is None:
+        return ""
+    raw = node.get(name)
+    if raw is None:
+        return ""
+    return raw.strip()
+
+
+def _xml_text(node: ET.Element | None, path: str) -> str:
+    if node is None:
+        return ""
+    raw = node.findtext(path)
+    if raw is None:
+        return ""
+    return raw.strip()
+
+
+def _normalize_zip_path(raw: str | None) -> str:
+    if raw is None:
+        return ""
+    text = raw.replace("\\", "/").strip()
     if not text:
         return ""
     pure = PurePosixPath(text)
@@ -61,7 +167,7 @@ def _normalize_zip_path(raw: str) -> str:
         return ""
     parts: list[str] = []
     for part in pure.parts:
-        token = str(part or "").strip()
+        token = part.strip()
         if not token or token == ".":
             continue
         if token == "..":
@@ -71,26 +177,24 @@ def _normalize_zip_path(raw: str) -> str:
 
 
 def _bool_attr(raw: str | None) -> bool:
-    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _coerce_int(raw: str | None, default: int) -> int:
+    if raw is None:
+        return default
     try:
-        return int(str(raw or "").strip())
+        return int(raw.strip())
     except Exception:
-        return int(default)
+        return default
 
 
-def _bool_text(raw: object) -> bool:
-    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _safe_read_json(path: Path) -> dict:
+def _safe_read_json(path: Path) -> dict[str, object]:
     try:
         if path.exists() and path.is_file() and (not path.is_symlink()):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
+            return cast(dict[str, object], json.loads(path.read_text(encoding="utf-8")))
     except Exception:
         return {}
     return {}
@@ -117,7 +221,7 @@ def _read_bytes_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
 
 
 def _normalize_text_newlines_bytes(payload: bytes) -> bytes:
-    return bytes(payload or b"").replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
 def _entry_map_from_zip(zf: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
@@ -148,7 +252,7 @@ def _entry_map_from_zip(zf: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
 
 
 def _expand_pattern(pattern: str, index: int) -> str:
-    token = str(pattern or "").strip()
+    token = pattern.strip()
     if not token:
         return ""
     try:
@@ -160,7 +264,7 @@ def _expand_pattern(pattern: str, index: int) -> str:
 
 
 def _unique_rel_path(workspace: Path, parent_rel: Path, filename: str) -> str:
-    safe_name = Path(str(filename or "")).name
+    safe_name = Path(filename).name if filename else ""
     if not safe_name:
         safe_name = "source.cpp"
     candidate = parent_rel / safe_name
@@ -176,19 +280,8 @@ def _unique_rel_path(workspace: Path, parent_rel: Path, filename: str) -> str:
         idx += 1
 
 
-def _find_file_upwards(start: Path, rel: Path) -> Path | None:
-    base = start.resolve()
-    if base.is_file():
-        base = base.parent
-    for parent in (base, *base.parents):
-        candidate = parent / rel
-        if candidate.exists() and candidate.is_file():
-            return candidate
-    return None
-
-
 class PolygonPackageImportService:
-    def _parse_problem_xml(self, xml_text: str) -> dict[str, object]:
+    def _parse_problem_xml(self, xml_text: str) -> PolygonMeta:
         try:
             root = ET.fromstring(xml_text)
         except ET.ParseError as exc:
@@ -196,108 +289,105 @@ class PolygonPackageImportService:
 
         names: list[dict[str, str]] = []
         for node in root.findall("./names/name"):
-            language = str(node.get("language") or "").strip()
-            value = str(node.get("value") or "").strip()
+            language = _xml_attr(node, "language")
+            value = _xml_attr(node, "value")
             if language and value:
                 names.append({"language": language, "value": value})
-        problem_title = ""
+
+        problem_title = DEFAULT_PROBLEM_TITLE
         for row in names:
             if row["language"].lower() == "english":
                 problem_title = row["value"]
                 break
-        if not problem_title and names:
+        if problem_title == DEFAULT_PROBLEM_TITLE and names:
             problem_title = names[0]["value"]
-        if not problem_title:
-            problem_title = DEFAULT_PROBLEM_TITLE
 
         judging_node = root.find("./judging")
-        run_count = _coerce_int(judging_node.get("run-count") if judging_node is not None else None, 1)
+        run_count = max(1, _coerce_int(_xml_attr(judging_node, "run-count"), 1))
         multipass_property = False
         for node in root.findall("./properties/property"):
-            name = str(node.get("name") or "").strip().lower().replace("_", "-")
+            name = _xml_attr(node, "name").lower().replace("_", "-")
             if name in {"multipass", "multi-pass"}:
-                multipass_property = _bool_text(node.get("value"))
+                multipass_property = _bool_attr(_xml_attr(node, "value"))
                 if multipass_property:
                     break
+
         testset = root.find("./judging/testset")
-        time_limit_ms = _coerce_int(testset.findtext("time-limit") if testset is not None else None, 2000)
-        memory_limit_bytes = _coerce_int(testset.findtext("memory-limit") if testset is not None else None, 1024 * 1024 * 1024)
-        input_pattern = str(testset.findtext("input-path-pattern") if testset is not None else "").strip()
-        answer_pattern = str(testset.findtext("answer-path-pattern") if testset is not None else "").strip()
-        tests: list[dict[str, object]] = []
+        time_limit_ms = max(1, _coerce_int(_xml_text(testset, "time-limit"), 2000))
+        memory_limit_bytes = max(1, _coerce_int(_xml_text(testset, "memory-limit"), 1024 * 1024 * 1024))
+        input_pattern = _xml_text(testset, "input-path-pattern")
+        answer_pattern = _xml_text(testset, "answer-path-pattern")
+
+        tests: list[PolygonTestRow] = []
         for node in root.findall("./judging/testset/tests/test"):
+            method = _xml_attr(node, "method").lower()
             tests.append(
                 {
-                    "method": str(node.get("method") or "").strip().lower(),
-                    "sample": _bool_attr(node.get("sample")),
-                    "cmd": str(node.get("cmd") or "").strip(),
+                    "method": method,
+                    "sample": _bool_attr(_xml_attr(node, "sample")),
+                    "cmd": normalize_gen_command(_xml_attr(node, "cmd")) if method == "generated" else "",
                 }
             )
 
-        statement_template_path = ""
-        problem_template_path = ""
-        style_path = ""
+        statement_template_path = "files/statements.ftl"
+        problem_template_path = "files/problem.tex"
+        style_path = "files/olymp.sty"
         for node in root.findall("./files/resources/file"):
-            path = str(node.get("path") or "").strip()
-            normalized = _normalize_zip_path(path)
-            source_name = PurePosixPath(normalized or path).name.lower()
+            path = _xml_attr(node, "path")
+            normalized_path = _normalize_zip_path(path)
+            source_name = PurePosixPath(normalized_path or path).name.lower()
             if source_name == "statements.ftl":
                 statement_template_path = path
             elif source_name == "problem.tex":
                 problem_template_path = path
             elif source_name == "olymp.sty":
                 style_path = path
-        statement_template_path = statement_template_path or "files/statements.ftl"
-        problem_template_path = problem_template_path or "files/problem.tex"
-        style_path = style_path or "files/olymp.sty"
 
         checker_node = root.find("./assets/checker")
-        checker_name = str(checker_node.get("name") or "").strip() if checker_node is not None else ""
-        checker_source = ""
-        if checker_node is not None:
-            source_node = checker_node.find("./source")
-            if source_node is not None:
-                checker_source = str(source_node.get("path") or "").strip()
+        checker_name = _xml_attr(checker_node, "name")
+        checker_source = _xml_attr(checker_node.find("./source") if checker_node is not None else None, "path")
 
         validator_sources: list[str] = []
         for node in root.findall("./assets/validators/validator/source"):
-            path = str(node.get("path") or "").strip()
+            path = _xml_attr(node, "path")
             if path:
                 validator_sources.append(path)
 
-        interactor_source = ""
-        interactor_node = root.find("./assets/interactor/source")
-        if interactor_node is not None:
-            interactor_source = str(interactor_node.get("path") or "").strip()
+        interactor_source = _xml_attr(root.find("./assets/interactor/source"), "path")
 
-        solutions: list[dict[str, str]] = []
+        solutions: list[PolygonSolutionRow] = []
         for node in root.findall("./assets/solutions/solution"):
-            tag = str(node.get("tag") or "").strip()
-            src = node.find("./source")
-            source_path = str(src.get("path") or "").strip() if src is not None else ""
-            source_type = str(src.get("type") or "").strip() if src is not None else ""
-            if source_path:
-                solutions.append({"path": source_path, "tag": tag, "source_type": source_type})
+            source_node = node.find("./source")
+            source_path = _xml_attr(source_node, "path")
+            if not source_path:
+                continue
+            solutions.append(
+                {
+                    "path": source_path,
+                    "tag": _xml_attr(node, "tag").lower(),
+                    "source_type": _xml_attr(source_node, "type").lower(),
+                }
+            )
 
         executables: list[str] = []
         for node in root.findall("./files/executables/executable/source"):
-            path = str(node.get("path") or "").strip()
+            path = _xml_attr(node, "path")
             if path:
                 executables.append(path)
 
         statement_languages: list[str] = []
         for node in root.findall("./statements/statement"):
-            stype = str(node.get("type") or "").strip().lower()
-            lang = str(node.get("language") or "").strip()
-            if stype == "application/x-tex" and lang:
-                statement_languages.append(lang)
+            statement_type = _xml_attr(node, "type").lower()
+            language = _xml_attr(node, "language")
+            if statement_type == "application/x-tex" and language:
+                statement_languages.append(language)
 
         return {
             "title": problem_title,
-            "time_limit_ms": max(1, time_limit_ms),
-            "memory_limit_bytes": max(1, memory_limit_bytes),
-            "run_count": max(1, run_count),
-            "is_multipass": bool(multipass_property or (run_count > 1)),
+            "time_limit_ms": time_limit_ms,
+            "memory_limit_bytes": memory_limit_bytes,
+            "run_count": run_count,
+            "is_multipass": multipass_property or (run_count > 1),
             "tests": tests,
             "input_pattern": input_pattern,
             "answer_pattern": answer_pattern,
@@ -316,7 +406,7 @@ class PolygonPackageImportService:
     def _write_text(self, workspace: Path, rel: Path, text: str) -> None:
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(str(text or ""), encoding="utf-8")
+        target.write_text(text, encoding="utf-8")
 
     def _write_bytes(self, workspace: Path, rel: Path, payload: bytes) -> None:
         target = workspace / rel
@@ -330,18 +420,23 @@ class PolygonPackageImportService:
         info = entries.get(normalized)
         if info is None:
             return False
-        payload = _read_bytes_from_zip(zf, info)
-        self._write_bytes(workspace, target_rel, payload)
+        self._write_bytes(workspace, target_rel, _read_bytes_from_zip(zf, info))
         return True
 
-    def _import_statement(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path, meta: dict[str, object]) -> dict[str, object]:
+    def _import_statement(
+        self,
+        zf: zipfile.ZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+        workspace: Path,
+        meta: PolygonMeta,
+    ) -> StatementImportSummary:
         shutil.rmtree(workspace / STATEMENT_RENDERED_DIR_REL, ignore_errors=True)
         shutil.rmtree(workspace / STATEMENT_SECTIONS_DIR, ignore_errors=True)
 
         template_ok = self._copy_zip_entry(
             zf,
             entries,
-            str(meta.get("statement_template_path") or ""),
+            meta["statement_template_path"],
             workspace,
             STATEMENT_TEMPLATE_REL,
         )
@@ -350,7 +445,7 @@ class PolygonPackageImportService:
         problem_ok = self._copy_zip_entry(
             zf,
             entries,
-            str(meta.get("problem_template_path") or ""),
+            meta["problem_template_path"],
             workspace,
             STATEMENT_PROBLEM_REL,
         )
@@ -359,7 +454,7 @@ class PolygonPackageImportService:
         style_ok = self._copy_zip_entry(
             zf,
             entries,
-            str(meta.get("style_path") or ""),
+            meta["style_path"],
             workspace,
             STATEMENT_STYLE_REL,
         )
@@ -371,7 +466,7 @@ class PolygonPackageImportService:
             if not path.startswith("statement-sections/"):
                 continue
             rel = Path(path.replace("\\", "/"))
-            if len(rel.parts) >= 3 and STATEMENT_SECTION_SAMPLE_FILE_RE.fullmatch(str(rel.name or "")):
+            if len(rel.parts) >= 3 and STATEMENT_SECTION_SAMPLE_FILE_RE.fullmatch(rel.name):
                 continue
             self._write_bytes(workspace, rel, _read_bytes_from_zip(zf, info))
             copied += 1
@@ -385,18 +480,17 @@ class PolygonPackageImportService:
             parts = Path(rel).parts
             if len(parts) < 4:
                 continue
-            language = str(parts[-2] or "").strip()
+            language = parts[-2]
             if not language:
                 continue
-            target_rel = STATEMENT_SECTIONS_DIR / language / "problem.pdf"
-            self._write_bytes(workspace, target_rel, _read_bytes_from_zip(zf, info))
+            self._write_bytes(workspace, STATEMENT_SECTIONS_DIR / language / "problem.pdf", _read_bytes_from_zip(zf, info))
             copied_prebuilt_pdf += 1
             if language not in prebuilt_pdf_languages:
                 prebuilt_pdf_languages.append(language)
 
         languages = sorted(
             {
-                str(p.relative_to(workspace / STATEMENT_SECTIONS_DIR).parts[0])
+                p.relative_to(workspace / STATEMENT_SECTIONS_DIR).parts[0]
                 for p in (workspace / STATEMENT_SECTIONS_DIR).glob("*")
                 if p.is_dir()
             }
@@ -415,13 +509,10 @@ class PolygonPackageImportService:
             "prebuilt_pdf_languages": prebuilt_pdf_languages,
         }
 
-    def _supported_generator_tokens(self, meta: dict[str, object]) -> set[str]:
+    def _supported_generator_tokens(self, meta: PolygonMeta) -> set[str]:
         tokens: set[str] = set()
-        executable_paths = meta.get("executables")
-        if not isinstance(executable_paths, list):
-            return tokens
-        for raw in executable_paths:
-            source = _normalize_zip_path(str(raw or ""))
+        for source_path in meta["executables"]:
+            source = _normalize_zip_path(source_path)
             if not source:
                 continue
             source_name = Path(source).name
@@ -435,17 +526,16 @@ class PolygonPackageImportService:
                 tokens.add(source_stem)
         return tokens
 
-    def _generator_command_supported(self, command: str, meta: dict[str, object]) -> bool:
-        cmd = normalize_gen_command(str(command or "").strip())
-        if not cmd:
+    def _generator_command_supported(self, command: str, meta: PolygonMeta) -> bool:
+        if not command:
             return False
         try:
-            tokens = parse_gen_command_tokens(cmd)
+            tokens = parse_gen_command_tokens(command)
         except Exception:
             return False
         if not tokens:
             return False
-        command_token = Path(str(tokens[0]).replace("\\", "/")).name
+        command_token = Path(tokens[0].replace("\\", "/")).name
         if not command_token:
             return False
         token_stem = Path(command_token).stem
@@ -457,13 +547,11 @@ class PolygonPackageImportService:
         zf: zipfile.ZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
-        meta: dict[str, object],
+        meta: PolygonMeta,
         *,
         normalize_test_data_newlines: bool = False,
-    ) -> dict[str, object]:
-        tests = meta.get("tests")
-        if not isinstance(tests, list):
-            tests = []
+    ) -> TestsImportSummary:
+        tests = meta["tests"]
 
         manual_dir = workspace / "tests" / "manual"
         gen_dir = workspace / "tests" / "generator"
@@ -476,19 +564,16 @@ class PolygonPackageImportService:
         answers_dir.mkdir(parents=True, exist_ok=True)
 
         spec_entries: list[dict[str, object]] = []
-        input_pattern = str(meta.get("input_pattern") or "").strip()
-        answer_pattern = str(meta.get("answer_pattern") or "").strip()
+        input_pattern = meta["input_pattern"]
+        answer_pattern = meta["answer_pattern"]
         manual_count = 0
         gen_count = 0
         generated_fallback_to_manual = 0
         answer_count = 0
 
         for idx, row in enumerate(tests, start=1):
-            if not isinstance(row, dict):
-                continue
-            method = str(row.get("method") or "").strip().lower()
-            is_generated = method == "generated"
-            sample = bool(row.get("sample"))
+            is_generated = row["method"] == "generated"
+            sample = row["sample"]
             test_id = f"{idx:03d}"
             answer_rel = _normalize_zip_path(_expand_pattern(answer_pattern, idx)) if answer_pattern else ""
             sample_output_text = ""
@@ -505,11 +590,10 @@ class PolygonPackageImportService:
             if sample and sample_output_text:
                 spec_row["sample_output"] = sample_output_text
             if is_generated:
-                cmd = normalize_gen_command(str(row.get("cmd") or "").strip())
+                cmd = row["cmd"]
                 if self._generator_command_supported(cmd, meta):
                     spec_entries.append({**spec_row, "kind": "gen"})
-                    payload_rel = payload_rel_path_for_test(test_id, "gen")
-                    self._write_text(workspace, Path(payload_rel), cmd)
+                    self._write_text(workspace, Path(payload_rel_path_for_test(test_id, "gen")), cmd)
                     gen_count += 1
                     continue
 
@@ -519,18 +603,15 @@ class PolygonPackageImportService:
             info = entries.get(input_rel)
             if info is None:
                 if is_generated:
-                    # Keep generated entry if package does not provide a concrete materialized input.
-                    cmd = normalize_gen_command(str(row.get("cmd") or "").strip())
+                    cmd = row["cmd"]
                     spec_entries.append({**spec_row, "kind": "gen"})
-                    payload_rel = payload_rel_path_for_test(test_id, "gen")
-                    self._write_text(workspace, Path(payload_rel), cmd)
+                    self._write_text(workspace, Path(payload_rel_path_for_test(test_id, "gen")), cmd)
                     gen_count += 1
                     continue
                 raise ValueError(f"missing test input file in package: {input_rel}")
             payload_text = normalize_manual_input(_read_bytes_from_zip(zf, info).decode("utf-8", errors="replace"))
             spec_entries.append({**spec_row, "kind": "manual"})
-            payload_rel = payload_rel_path_for_test(test_id, "manual")
-            self._write_text(workspace, Path(payload_rel), payload_text)
+            self._write_text(workspace, Path(payload_rel_path_for_test(test_id, "manual")), payload_text)
             manual_count += 1
             if is_generated:
                 generated_fallback_to_manual += 1
@@ -561,59 +642,85 @@ class PolygonPackageImportService:
 
     def _write_maintained_testlib(self, workspace: Path) -> str:
         target_rel = Path("third_party") / "testlib" / "testlib.h"
-        upstream = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3])
-        self._write_bytes(workspace, target_rel, upstream.read_bytes())
+        self._write_bytes(workspace, target_rel, maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3]).read_bytes())
         return "third_party/upstream/testlib/testlib.h"
 
-    def _import_components(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path, meta: dict[str, object]) -> dict[str, object]:
+    def _import_components(
+        self,
+        zf: zipfile.ZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+        workspace: Path,
+        meta: PolygonMeta,
+    ) -> ComponentImportSummary:
         build_cfg = _safe_read_json(workspace / "config" / "build.json")
 
         imported_testlib = self._write_maintained_testlib(workspace)
 
-        checker_name = str(meta.get("checker_name") or "").strip()
-        checker_source = str(meta.get("checker_source") or "").strip()
+        checker_name = meta["checker_name"]
+        checker_source_path = meta["checker_source"]
+        checker_standard: str | None = None
+        imported_checker_source: str | None = None
         if checker_name.startswith("std::"):
+            checker_standard = checker_name
             build_cfg["checker_standard"] = checker_name
             build_cfg.pop("checker_source", None)
         else:
-            imported_checker = self._copy_source_from_zip(zf, entries, checker_source, workspace, "checkers", "checker.cpp")
-            if imported_checker:
-                build_cfg["checker_source"] = imported_checker
-                build_cfg.pop("checker_standard", None)
+            imported_checker_source = self._copy_source_from_zip(
+                zf,
+                entries,
+                checker_source_path,
+                workspace,
+                "checkers",
+                "checker.cpp",
+            )
+            if imported_checker_source:
+                build_cfg["checker_source"] = imported_checker_source
             else:
                 build_cfg.pop("checker_source", None)
+            build_cfg.pop("checker_standard", None)
 
-        validator_source = ""
-        validator_sources = meta.get("validator_sources")
-        if isinstance(validator_sources, list) and validator_sources:
-            validator_source = self._copy_source_from_zip(
-                zf, entries, str(validator_sources[0]), workspace, "validators", "validator.cpp"
+        validator_source: str | None = None
+        validator_sources = meta["validator_sources"]
+        if validator_sources:
+            imported_validator_source = self._copy_source_from_zip(
+                zf,
+                entries,
+                validator_sources[0],
+                workspace,
+                "validators",
+                "validator.cpp",
             )
-        if validator_source:
-            build_cfg["validator_source"] = validator_source
+            if imported_validator_source:
+                validator_source = imported_validator_source
+                build_cfg["validator_source"] = imported_validator_source
+            else:
+                build_cfg.pop("validator_source", None)
         else:
             build_cfg.pop("validator_source", None)
 
-        interactor_source = self._copy_source_from_zip(
-            zf, entries, str(meta.get("interactor_source") or ""), workspace, "interactors", "interactor.cpp"
+        imported_interactor_source = self._copy_source_from_zip(
+            zf,
+            entries,
+            meta["interactor_source"],
+            workspace,
+            "interactors",
+            "interactor.cpp",
         )
-        if interactor_source:
-            build_cfg["interactor_source"] = interactor_source
+        interactor_source: str | None = None
+        if imported_interactor_source:
+            interactor_source = imported_interactor_source
+            build_cfg["interactor_source"] = imported_interactor_source
         else:
             build_cfg.pop("interactor_source", None)
 
-        executable_paths = [str(x) for x in (meta.get("executables") or []) if str(x).strip()] if isinstance(meta.get("executables"), list) else []
-        used = {checker_source, str(meta.get("interactor_source") or "")}
-        if isinstance(validator_sources, list):
-            used.update([str(x) for x in validator_sources])
-        generator_sources: list[str] = []
-        test_rows = meta.get("tests") if isinstance(meta.get("tests"), list) else []
+        used = {checker_source_path, meta["interactor_source"], *validator_sources}
         generator_names = {
-            str(str(row.get("cmd") or "").strip().split()[0]).strip()
-            for row in test_rows
-            if isinstance(row, dict) and str(row.get("method") or "").strip().lower() == "generated" and str(row.get("cmd") or "").strip()
+            row["cmd"].split()[0]
+            for row in meta["tests"]
+            if row["method"] == "generated" and row["cmd"]
         }
-        for source in executable_paths:
+        generator_sources: list[str] = []
+        for source in meta["executables"]:
             if source in used:
                 continue
             stem = Path(source).stem
@@ -623,31 +730,34 @@ class PolygonPackageImportService:
             imported = self._copy_source_from_zip(zf, entries, source, workspace, "generators", Path(source).name)
             if imported and suffix in GENERATOR_CPP_SUFFIX_ALLOW:
                 generator_sources.append(imported)
-        build_cfg["generator_sources"] = sorted(dict.fromkeys(generator_sources))
+        generator_sources = sorted(dict.fromkeys(generator_sources))
+        build_cfg["generator_sources"] = generator_sources
 
         (workspace / "config").mkdir(parents=True, exist_ok=True)
-        (workspace / "config" / "build.json").write_text(json.dumps(build_cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (workspace / "config" / "build.json").write_text(
+            json.dumps(build_cfg, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
         return {
             "testlib_source": imported_testlib,
-            "checker_standard": str(build_cfg.get("checker_standard") or ""),
-            "checker_source": str(build_cfg.get("checker_source") or ""),
-            "validator_source": str(build_cfg.get("validator_source") or ""),
-            "interactor_source": str(build_cfg.get("interactor_source") or ""),
-            "generator_sources": [str(x) for x in build_cfg.get("generator_sources", []) if str(x).strip()],
+            "checker_standard": checker_standard,
+            "checker_source": imported_checker_source,
+            "validator_source": validator_source,
+            "interactor_source": interactor_source,
+            "generator_sources": generator_sources,
         }
 
     def _solution_expected_from_tag(self, tag: str) -> str:
-        raw_tag = str(tag or "").strip().lower()
-        if not raw_tag:
+        if not tag:
             return "unknown"
-        direct = POLYGON_SOLUTION_TAG_EXPECTED.get(raw_tag)
+        direct = POLYGON_SOLUTION_TAG_EXPECTED.get(tag)
         if direct is not None:
             return normalize_expected_behavior(direct)
-        expected = normalize_expected_behavior(raw_tag)
+        expected = normalize_expected_behavior(tag)
         if expected != "unknown":
             return expected
-        normalized = raw_tag.replace("-", "_").replace(" ", "_")
+        normalized = tag.replace("-", "_").replace(" ", "_")
         expected = normalize_expected_behavior(normalized)
         if expected != "unknown":
             return expected
@@ -655,9 +765,9 @@ class PolygonPackageImportService:
 
     @staticmethod
     def _solution_suffix_from_source_type(source_type: str) -> str:
-        token = str(source_type or "").strip().lower()
-        if not token:
+        if not source_type:
             return ""
+        token = source_type
         if ("python" in token) or ("pypy" in token):
             return ".py"
         if "java" in token:
@@ -667,7 +777,7 @@ class PolygonPackageImportService:
         return ""
 
     def _solution_filename_for_import(self, source_path: str, source_type: str) -> str:
-        safe_name = Path(str(source_path or "")).name
+        safe_name = Path(source_path).name
         if not safe_name:
             safe_name = "solution"
         expected_suffix = self._solution_suffix_from_source_type(source_type)
@@ -681,10 +791,14 @@ class PolygonPackageImportService:
             return f"{safe_name}{expected_suffix}"
         return safe_name
 
-    def _import_solutions(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path, meta: dict[str, object]) -> dict[str, object]:
-        solution_rows = meta.get("solutions")
-        if not isinstance(solution_rows, list):
-            solution_rows = []
+    def _import_solutions(
+        self,
+        zf: zipfile.ZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+        workspace: Path,
+        meta: PolygonMeta,
+    ) -> SolutionImportSummary:
+        solution_rows = meta["solutions"]
 
         solutions_dir_rel = Path("solutions")
         solutions_dir = workspace / solutions_dir_rel
@@ -692,45 +806,51 @@ class PolygonPackageImportService:
         accepted_source = ""
         imported_count = 0
         for row in solution_rows:
-            if not isinstance(row, dict):
-                continue
-            source_path = _normalize_zip_path(str(row.get("path") or ""))
+            source_path = _normalize_zip_path(row["path"])
             if not source_path:
                 continue
             info = entries.get(source_path)
             if info is None:
                 continue
-            source_type = str(row.get("source_type") or "").strip()
+            source_type = row["source_type"]
             filename = self._solution_filename_for_import(source_path, source_type)
             target_rel = _unique_rel_path(workspace, solutions_dir_rel, filename)
             payload = _read_bytes_from_zip(zf, info)
             self._write_bytes(workspace, Path(target_rel), payload)
-            expected = self._solution_expected_from_tag(str(row.get("tag") or ""))
+            tag = row["tag"]
+            expected = self._solution_expected_from_tag(tag)
             self._write_text(workspace, Path(f"{target_rel}.desc"), render_solution_desc(expected, ""))
             if not accepted_source and (expected == "accepted"):
                 accepted_source = target_rel
-            if str(row.get("tag") or "").strip().lower() == "main":
+            if tag == "main":
                 accepted_source = target_rel
             imported_count += 1
         return {"count": imported_count, "accepted_source": accepted_source}
 
-    def _write_problem_config(self, workspace: Path, meta: dict[str, object], components: dict[str, object]) -> dict[str, object]:
+    def _write_problem_config(
+        self,
+        workspace: Path,
+        meta: PolygonMeta,
+        components: ComponentImportSummary,
+    ) -> dict[str, object]:
         cfg = _safe_read_json(workspace / "config" / "problem.json")
-        run_count = _coerce_int(str(meta.get("run_count") or "1"), 1)
-        is_multipass = bool(meta.get("is_multipass")) or (run_count > 1)
+        run_count = meta["run_count"]
+        is_multipass = meta["is_multipass"] or (run_count > 1)
         mode = "pass-fail"
         if is_multipass:
             mode = "multi-pass"
-        elif str(components.get("interactor_source") or "").strip():
+        elif components["interactor_source"]:
             mode = "interactive"
         cfg["input_file"] = "stdin"
         cfg["output_file"] = "stdout"
-        cfg["time_limit_ms"] = max(1, int(meta.get("time_limit_ms") or 2000))
-        memory_bytes = max(1, int(meta.get("memory_limit_bytes") or 1024 * 1024 * 1024))
-        cfg["memory_limit_mb"] = max(1, memory_bytes // (1024 * 1024))
+        cfg["time_limit_ms"] = meta["time_limit_ms"]
+        cfg["memory_limit_mb"] = max(1, meta["memory_limit_bytes"] // (1024 * 1024))
         cfg["mode"] = mode
         (workspace / "config").mkdir(parents=True, exist_ok=True)
-        (workspace / "config" / "problem.json").write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (workspace / "config" / "problem.json").write_text(
+            json.dumps(cfg, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         return cfg
 
     def import_package(
@@ -741,7 +861,7 @@ class PolygonPackageImportService:
         *,
         normalize_test_data_newlines: bool = False,
     ) -> dict[str, object]:
-        raw = bytes(package_bytes or b"")
+        raw = package_bytes
         if not raw:
             raise ValueError("empty package file")
         if len(raw) > ZIP_MAX_BYTES:
@@ -759,18 +879,18 @@ class PolygonPackageImportService:
                 entry_map,
                 workspace,
                 meta,
-                normalize_test_data_newlines=bool(normalize_test_data_newlines),
+                normalize_test_data_newlines=normalize_test_data_newlines,
             )
             component_summary = self._import_components(zf, entry_map, workspace, meta)
             solutions_summary = self._import_solutions(zf, entry_map, workspace, meta)
             build_cfg = _safe_read_json(workspace / "config" / "build.json")
             build_cfg_changed = False
-            if solutions_summary.get("accepted_source"):
-                build_cfg["accepted_solution_source"] = str(solutions_summary.get("accepted_source"))
+            if solutions_summary["accepted_source"]:
+                build_cfg["accepted_solution_source"] = solutions_summary["accepted_source"]
                 build_cfg_changed = True
-            run_count = _coerce_int(str(meta.get("run_count") or "1"), 1)
-            if bool(meta.get("is_multipass")) or (run_count > 1):
-                build_cfg["max_passes"] = max(1, run_count)
+            run_count = meta["run_count"]
+            if meta["is_multipass"] or (run_count > 1):
+                build_cfg["max_passes"] = run_count
                 build_cfg_changed = True
             if build_cfg_changed:
                 (workspace / "config" / "build.json").write_text(
@@ -779,8 +899,8 @@ class PolygonPackageImportService:
                 )
             problem_cfg = self._write_problem_config(workspace, meta, component_summary)
             return {
-                "package_name": str(package_name or "").strip(),
-                "title": str(meta.get("title") or DEFAULT_PROBLEM_TITLE),
+                "package_name": package_name.strip(),
+                "title": meta["title"],
                 "statement": statement_summary,
                 "tests": tests_summary,
                 "components": component_summary,

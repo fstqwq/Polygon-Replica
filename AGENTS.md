@@ -30,6 +30,15 @@ Rules:
 - judgehost API surface is `/api/v4/*`.
 - async/judge fs caches are startup-cleared by current runtime policy.
 
+## Python code style
+
+- Use clear type hints everywhere.
+- Reduce runtime type checks by strengthening upstream types and boundaries first.
+- Do less `isinstance`, `is not None`, `if x:`, etc. To do so, use strict types in the upstream code.
+- Do not use synonym substitution like `if x is not None` vs `if x` vs `if x != ""` vs `if x != []` vs `if x != {}`. Instead, upstream code should guarantee that the value is always a canonical shape (e.g. never `None`, always a list, etc.) so that downstream code can just consume it without extra checks.
+- Boundary code may validate and normalize external input once. Internal code should consume canonical shapes directly.
+- Once a token is canonical inside the system, do not keep re-normalizing it with `.strip()`, `.lower()`, `str(...)`, or similar compatibility coercion.
+
 ## Active Docs
 
 Active project docs live at repository root:
@@ -44,6 +53,7 @@ Active project docs live at repository root:
 
 Never consider backwards compatibility. Always prefer risky refactor and code removal over maintaining old code. If the code is not needed, remove it. If the code is needed but can be improved, refactor it. If the code is needed and cannot be improved, keep it as is.
 
+- Never use "patch" to fix the problem. Always consider use a simple, unified way to solve the problem.
 - For files larger than 1000 lines, consider refactor to split into smaller files.
 - Use subdirectories or even subsubdirectories as needed to maintain a clean structure.
 - Any refactor must define responsibility boundaries and invariants first.

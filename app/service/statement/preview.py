@@ -67,14 +67,18 @@ class PreviewService:
                 continue
             if not bool(entry.get("sample")):
                 continue
-            test_id = str(entry.get("id") or "").strip()
-            kind = str(entry.get("kind") or "").strip().lower()
+            test_id_obj = entry.get("id")
+            test_id = str(test_id_obj).strip() if test_id_obj is not None else ""
+            kind_obj = entry.get("kind")
+            kind = str(kind_obj).strip().lower() if kind_obj is not None else ""
             if kind not in {"manual", "gen"}:
                 raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind or '(empty)'}")
             if not test_id:
                 continue
-            sample_input = str(entry.get("sample_input") or "")
-            sample_output = str(entry.get("sample_output") or "")
+            sample_input_obj = entry.get("sample_input")
+            sample_input = str(sample_input_obj) if sample_input_obj is not None else ""
+            sample_output_obj = entry.get("sample_output")
+            sample_output = str(sample_output_obj) if sample_output_obj is not None else ""
             needs_sync = False
             if not sample_input:
                 if kind == "gen":
@@ -115,19 +119,21 @@ class PreviewService:
         )
         if verification_row is None:
             raise RuntimeError(f"sample verification missing: {verification_id}")
-        verification_status = str(verification_row["status"] or "").strip().lower()
+        verification_status = str(verification_row["status"]).strip().lower()
         if verification_status != "ok":
             error_text = ""
             try:
-                payload = json.loads(str(verification_row["summary_json"] or "{}"))
+                summary_json_obj = verification_row["summary_json"]
+                payload = json.loads(str(summary_json_obj) if summary_json_obj is not None else "{}")
                 if isinstance(payload, dict):
-                    error_text = str(payload.get("error") or "").strip()
+                    error_obj = payload.get("error")
+                    error_text = str(error_obj).strip() if error_obj is not None else ""
             except Exception:
                 error_text = ""
             if error_text:
                 raise RuntimeError(f"sample verification failed ({verification_id}): {error_text}")
             raise RuntimeError(f"sample verification failed ({verification_id})")
-        artifact_path = str(verification_row["artifact_path"] or "").strip()
+        artifact_path = str(verification_row["artifact_path"]).strip()
         if not artifact_path:
             raise RuntimeError(f"sample verification has no artifact path: {verification_id}")
         artifact_root = Path(artifact_path)
@@ -294,9 +300,9 @@ class PreviewService:
         if cache_service is not None:
             cached_entry = cache_service.get(self.PREVIEW_CACHE_NAMESPACE, cache_key)
             if isinstance(cached_entry, dict):
-                cached_value = cached_entry.get("value")
-                cached_obj = cached_value if isinstance(cached_value, dict) else {}
-                cached_preview_id = str(cached_obj.get("preview_id") or "").strip()
+                cached_obj = cached_value if isinstance(cached_value := cached_entry.get("value"), dict) else {}
+                cached_preview_id_obj = cached_obj.get("preview_id")
+                cached_preview_id = str(cached_preview_id_obj).strip() if cached_preview_id_obj is not None else ""
                 if cached_preview_id and _cached_preview_still_valid(cached_preview_id):
                     return cached_preview_id
                 if cached_preview_id and allow_cache_mutation:
@@ -348,7 +354,7 @@ class PreviewService:
         return None
 
     def _summary_statement_signature(self, raw: object) -> str:
-        text = str(raw or "").strip()
+        text = str(raw).strip() if raw is not None else ""
         if not text:
             return ""
         try:
@@ -357,7 +363,8 @@ class PreviewService:
             return ""
         if not isinstance(payload, dict):
             return ""
-        return str(payload.get("statement_signature") or "").strip()
+        signature_obj = payload.get("statement_signature")
+        return str(signature_obj).strip() if signature_obj is not None else ""
 
     def _preview_artifact_root(
         self,
@@ -436,11 +443,12 @@ class PreviewService:
     def compile_preview(self, problem: str, username: str) -> str:
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
-        problem_title = str(ctx["problem"].get("name") or "").strip()
+        problem_title = str(ctx["problem"]["name"]).strip()
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         source_commit = ""
-        source_ref = (ctx["workspace"].get("branch") or "main")
+        source_ref_obj = ctx["workspace"].get("branch")
+        source_ref = str(source_ref_obj).strip() if source_ref_obj is not None else "main"
         statement_signature = ""
         snapshot: Path | None = None
         dynamic_samples = False
@@ -450,8 +458,12 @@ class PreviewService:
         artifacts = None
         with self.workspace_service.workspace_lock(workspace):
             ws_status = self.workspace_service.read_workspace_status(workspace)
-            head = str(ws_status.get("head_commit") or "").strip()
-            branch = str(ws_status.get("branch") or "").strip() or source_ref
+            head_obj = ws_status.get("head_commit")
+            head = str(head_obj).strip() if head_obj is not None else ""
+            branch_obj = ws_status.get("branch")
+            branch = str(branch_obj).strip() if branch_obj is not None else ""
+            if not branch:
+                branch = source_ref
             dirty = bool(ws_status.get("dirty"))
             statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
             dynamic_samples = bool(self._sample_rows_from_spec(workspace))
@@ -522,7 +534,8 @@ class PreviewService:
         try:
             if dynamic_samples:
                 sample_sync = self._copy_sample_payloads_from_verification(problem, username, snapshot)
-                sample_verification_id = str(sample_sync.get("verification_id") or "").strip()
+                sample_verification_id_obj = sample_sync.get("verification_id")
+                sample_verification_id = str(sample_verification_id_obj).strip() if sample_verification_id_obj is not None else ""
                 summary["sample_sync"] = sample_sync
             tex = render_statement_main(snapshot / "statement", problem_title=problem_title)
 
@@ -635,7 +648,8 @@ class PreviewService:
                 if log_missing_or_empty:
                     fallback_error = ""
                     if isinstance(summary, dict):
-                        fallback_error = str(summary.get("error") or "").strip()
+                        error_obj = summary.get("error")
+                        fallback_error = str(error_obj).strip() if error_obj is not None else ""
                     if not fallback_error:
                         fallback_error = "latex compile failed"
                     try:

@@ -1,6 +1,12 @@
 ﻿from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
+
+
+_DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
+    r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
+)
 
 
 def now_iso_after(seconds: float) -> str:
@@ -40,7 +46,7 @@ def domjudge_parse_int(raw: object, default: int = 0) -> int:
 
 
 def domjudge_run_time_limit_sec(run_cfg_obj: dict[str, object]) -> float:
-    cfg = run_cfg_obj if isinstance(run_cfg_obj, dict) else {}
+    cfg = run_cfg_obj
     tl_sec = domjudge_parse_float(cfg.get("time_limit"), 0.0)
     if tl_sec > 0:
         return float(tl_sec)
@@ -93,15 +99,54 @@ def domjudge_bool(raw: object, default: bool = False) -> bool:
     return bool(default)
 
 
+def _domjudge_compact_feedback_line(text: str) -> str:
+    normalized = _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE.sub("", text.replace("\\", "/"))
+    return " ".join(normalized.split())
+
+
+def _domjudge_feedback_line_score(line: str) -> int:
+    token = line.lower()
+    if (
+        " error:" in token
+        or token.startswith("error:")
+        or " fatal error:" in token
+        or token.startswith("fatal error:")
+    ):
+        return 100
+    if (
+        "undefined reference" in token
+        or token.startswith("collect2:")
+        or " ld returned " in token
+        or "no such file or directory" in token
+    ):
+        return 90
+    if " warning:" in token or token.startswith("warning:"):
+        return 70
+    if "compiling failed with exitcode" in token or "compiler output:" in token:
+        return 40
+    if " in function " in token or token.startswith("in file included from "):
+        return 5
+    return 10
+
+
 def domjudge_feedback_line_from_text(text: str, *, max_chars: int = 240) -> str:
+    first_line = ""
+    best_line = ""
+    best_score = -1
     for raw_line in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = " ".join(str(raw_line or "").split())
+        line = _domjudge_compact_feedback_line(raw_line)
         if not line:
             continue
-        if len(line) <= max_chars:
-            return line
-        return line[:max_chars].rstrip() + "..."
-    return ""
+        if not first_line:
+            first_line = line
+        score = _domjudge_feedback_line_score(line)
+        if score > best_score:
+            best_line = line
+            best_score = score
+    selected = best_line or first_line
+    if len(selected) <= max_chars:
+        return selected
+    return selected[:max_chars].rstrip() + "..."
 
 
 def domjudge_feedback_line_from_bytes(blob: bytes, *, max_chars: int = 240) -> str:

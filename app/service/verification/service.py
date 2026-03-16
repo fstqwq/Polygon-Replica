@@ -17,21 +17,15 @@ from app.service.problem.test_spec import (
 )
 from app.service.runtime.toolchain import current_cpp_command_digest
 from app.service.repository.workspace import WorkspaceService
-from app.service.verification import VERIFICATION_KIND_VERIFICATION
+from app.service.verification.types import Kind, Status
 
 from app.service.verification.cache import (
-    artifact_root_from_ref,
     verification_cache_key,
-    verification_cache_key_hash,
-    artifact_ref_from_cache_key_hash,
     canonical_digest,
-    ensure_artifact_paths,
 )
-from app.service.verification.diagnostic import collect_diagnostics, judge_backend_compile_detail
-from app.service.verification.judge_solve import solve_with_judge_backend
-from app.service.verification.pipeline import effective_compile_jobs, wait_build_terminal_status
+from app.service.verification.pipeline import effective_compile_jobs
 from app.service.verification.runner import run_verification_job
-from app.service.verification.runtime import coerce_int, effective_run_timeout_ms, effective_run_timeout_sec, load_problem_runtime_config, normalize_problem_mode, normalize_time_limit_ms, wall_time_slack_sec_for_mode
+from app.service.verification.runtime import coerce_int, effective_run_timeout_ms, effective_run_timeout_sec, load_problem_runtime_config
 from app.service.verification.source import resolve_standard_checker_source, select_checker_source, select_source
 from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
 
@@ -40,7 +34,6 @@ if TYPE_CHECKING:
     from app.service.judgehost.api import Judgehost
 
 
-DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<level>warning|error|note):\s*(?P<msg>.*)$")
 CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
 GENERATOR_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
@@ -50,33 +43,13 @@ STANDARD_CHECKER_ROOT = (Path(__file__).resolve().parents[3] / "third_party" / "
 DEFAULT_TIME_LIMIT_MS = 2000
 TIME_LIMIT_MIN_MS = 100
 TIME_LIMIT_MAX_MS = 30000
-CHECKER_TESTLIB_EXIT_CXXFLAGS = [
-    "-DOK_EXIT_CODE=42",
-    "-DWA_EXIT_CODE=43",
-    "-DPE_EXIT_CODE=43",
-]
-
-def solve_result_ok() -> dict[str, object]:
-    return {"rc": 0, "worker_error": "", "timed_out": False, "stderr": "", "verdict": "AC"}
-
-
-def solve_result_error(message: str, *, verdict: str = "") -> dict[str, object]:
-    return {
-        "rc": -1,
-        "worker_error": str(message or "").strip(),
-        "timed_out": False,
-        "stderr": "",
-        "verdict": str(verdict or "").strip().upper(),
-    }
-
 
 class VerificationService:
-    DB_SUMMARY_DIAGNOSTICS_LIMIT = 200
     DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
-    BUILD_CACHE_NAMESPACE = "build.run"
-    BUILD_CACHE_SCHEMA = "v3"
-    BUILD_JOIN_WAIT_TIMEOUT_SEC = 180
-    BUILD_JOIN_POLL_SEC = 0.25
+    VERIFICATION_CACHE_NAMESPACE = "verification.run"
+    VERIFICATION_CACHE_SCHEMA = "v3"
+    VERIFICATION_JOIN_WAIT_TIMEOUT_SEC = 180
+    VERIFICATION_JOIN_POLL_SEC = 0.25
 
     def __init__(
         self,
@@ -99,94 +72,48 @@ class VerificationService:
         self.wall_time_slack_interactive_sec = 15
         self.judgehost_task_service = judgehost_task_service
         self._async_task_cache_service = async_task_cache_service
-        self._build_inflight_lock = threading.RLock()
-        self._build_inflight: dict[str, str] = {}
+        self._verification_inflight_lock = threading.RLock()
+        self._verification_inflight: dict[str, str] = {}
         self.fs_manager = FsManager(self.workspace_service.settings.artifacts_root, self.workspace_service.settings.run_root)
         self.apply_runtime_values(constants or build_runtime_values())
 
-    @staticmethod
-    def _solve_result_ok() -> dict[str, object]:
-        return solve_result_ok()
-
-    @staticmethod
-    def _solve_result_error(message: str, *, verdict: str = "") -> dict[str, object]:
-        return solve_result_error(message, verdict=verdict)
-
-    def _judge_backend_compile_detail(self, summary_obj: dict[str, Any], run_root: Path) -> str:
-        return judge_backend_compile_detail(summary_obj, run_root)
-
-    def _solve_with_judge_backend(
-        self,
-        *,
-        problem: str,
-        username: str,
-        verification_id: str,
-        accepted_source_rel: str,
-        mode: str,
-        test_files: list[Path],
-        ans_dir: Path,
-        solve_jobs: int = 1,
-        source_answer_by_test: dict[str, Path] | None = None,
-        stage_result_out: dict[str, object] | None = None,
-    ) -> dict[str, dict[str, object]]:
-        return solve_with_judge_backend(
-            self,
-            problem=problem,
-            username=username,
-            artifact_verification_id=verification_id,
-            accepted_source_rel=accepted_source_rel,
-            mode=mode,
-            test_files=test_files,
-            ans_dir=ans_dir,
-            solve_jobs=solve_jobs,
-            source_answer_by_test=source_answer_by_test,
-            stage_result_out=stage_result_out,
-        )
-
-
-    def _coerce_int(self, raw: object, default: int, min_value: int, max_value: int) -> int:
-        return coerce_int(raw, default, min_value, max_value)
-
     def apply_runtime_values(self, values: RuntimeValues) -> None:
-        self.default_exec_memory_mb = self._coerce_int(
-            values.get("BUILD_EXEC_MEMORY_MB", 1024),
+        self.default_exec_memory_mb = coerce_int(
+            values.get("VERIFICATION_EXEC_MEMORY_MB", 1024),
             default=1024,
             min_value=16,
             max_value=262144,
         )
-        self.default_exec_process_limit = self._coerce_int(
-            values.get("BUILD_EXEC_PROCESS_LIMIT", 64),
+        self.default_exec_process_limit = coerce_int(
+            values.get("VERIFICATION_EXEC_PROCESS_LIMIT", 64),
             default=64,
             min_value=1,
             max_value=4096,
         )
-        self.default_exec_output_kb = self._coerce_int(
-            values.get("BUILD_EXEC_OUTPUT_KB", 65536),
+        self.default_exec_output_kb = coerce_int(
+            values.get("VERIFICATION_EXEC_OUTPUT_KB", 65536),
             default=65536,
             min_value=64,
             max_value=1048576,
         )
-        self.wall_time_slack_pass_fail_sec = self._coerce_int(
+        self.wall_time_slack_pass_fail_sec = coerce_int(
             values.get("RUN_WALL_TIME_SLACK_PASS_FAIL_SEC", 1),
             default=1,
             min_value=0,
             max_value=300,
         )
-        self.wall_time_slack_multi_pass_sec = self._coerce_int(
+        self.wall_time_slack_multi_pass_sec = coerce_int(
             values.get("RUN_WALL_TIME_SLACK_MULTI_PASS_SEC", 15),
             default=15,
             min_value=0,
             max_value=300,
         )
-        self.wall_time_slack_interactive_sec = self._coerce_int(
+        self.wall_time_slack_interactive_sec = coerce_int(
             values.get("RUN_WALL_TIME_SLACK_INTERACTIVE_SEC", 15),
             default=15,
             min_value=0,
             max_value=300,
         )
-
-    def _normalize_problem_mode(self, raw: object, default: str = "pass-fail") -> str:
-        return normalize_problem_mode(raw, default)
 
     def _resolve_standard_checker_source(self, checker_standard: str) -> Path | None:
         return resolve_standard_checker_source(
@@ -250,20 +177,10 @@ class VerificationService:
         path = snapshot / "config" / "build.json"
         if path.exists():
             try:
-                cfg.update(json.loads(path.read_text(encoding="utf-8")))
+                cfg.update(dict(json.loads(path.read_text(encoding="utf-8"))))
             except json.JSONDecodeError:
                 pass
-        if not isinstance(cfg.get("generator_args"), list):
-            cfg["generator_args"] = []
-        if not isinstance(cfg.get("generator_sources"), list):
-            cfg["generator_sources"] = []
-        if not isinstance(cfg.get("validator_args"), list):
-            cfg["validator_args"] = []
-        if not isinstance(cfg.get("checker_args"), list):
-            cfg["checker_args"] = []
-        if not isinstance(cfg.get("checker_standard"), str):
-            cfg["checker_standard"] = ""
-        cfg["checker_standard"] = str(cfg.get("checker_standard") or "").strip()
+        cfg["checker_standard"] = cfg["checker_standard"].strip()
         try:
             cfg["compile_jobs"] = max(0, min(16, int(cfg.get("compile_jobs", 0))))
         except Exception:
@@ -290,22 +207,6 @@ class VerificationService:
             cfg["max_passes"] = 16
         return cfg
 
-    def _normalize_time_limit_ms(self, raw: object) -> int:
-        return normalize_time_limit_ms(
-            raw,
-            default_ms=DEFAULT_TIME_LIMIT_MS,
-            min_ms=TIME_LIMIT_MIN_MS,
-            max_ms=TIME_LIMIT_MAX_MS,
-        )
-
-    def _wall_time_slack_sec_for_mode(self, mode: object) -> int:
-        return wall_time_slack_sec_for_mode(
-            mode,
-            pass_fail_sec=int(self.wall_time_slack_pass_fail_sec),
-            multi_pass_sec=int(self.wall_time_slack_multi_pass_sec),
-            interactive_sec=int(self.wall_time_slack_interactive_sec),
-        )
-
     def _effective_run_timeout_ms(self, time_limit_ms: int, *, mode: object = "pass-fail") -> int:
         return effective_run_timeout_ms(
             time_limit_ms,
@@ -330,35 +231,6 @@ class VerificationService:
             max_time_limit_ms=TIME_LIMIT_MAX_MS,
         )
 
-    def _collect_diagnostics(self, snapshot: Path, text: str) -> list[dict]:
-        return collect_diagnostics(snapshot, text, DIAG_RE)
-
-    def _append_compile_streams(
-        self,
-        log_fh,
-        snapshot: Path,
-        stdout_text: str,
-        stderr_text: str,
-    ) -> list[dict]:
-        diagnostics: list[dict] = []
-        saw_stream_text = False
-        wrote_stream = False
-        for chunk in (stdout_text, stderr_text):
-            text = str(chunk or "")
-            if not text:
-                continue
-            saw_stream_text = True
-            if wrote_stream and not text.startswith("\n"):
-                log_fh.write("\n")
-            log_fh.write(text)
-            if not text.endswith("\n"):
-                log_fh.write("\n")
-            diagnostics.extend(self._collect_diagnostics(snapshot, text))
-            wrote_stream = True
-        if not saw_stream_text:
-            diagnostics.extend(self._collect_diagnostics(snapshot, ""))
-        return diagnostics
-
     def _manual_test_sources(self, snapshot: Path) -> list[Path]:
         return manual_test_sources(snapshot)
 
@@ -381,10 +253,6 @@ class VerificationService:
 
     def _effective_compile_jobs(self, configured: object, target_count: int) -> int:
         return effective_compile_jobs(configured, target_count)
-
-    @staticmethod
-    def _canonical_digest(payload: object) -> str:
-        return canonical_digest(payload)
 
     def _build_source_tree_entries(self, source_root: Path) -> list[dict[str, object]]:
         include_dirs = (
@@ -435,7 +303,7 @@ class VerificationService:
             tests_spec_rows = [dict(row) for row in load_tests_spec(source_root / "tests" / "spec.json")]
         except Exception:
             tests_spec_rows = []
-        return self._canonical_digest(
+        return canonical_digest(
             {
                 "schema": "v2",
                 "sample_only": bool(sample_only),
@@ -448,64 +316,14 @@ class VerificationService:
 
     def _toolchain_cmd_digest(self) -> str:
         try:
-            token = str(current_cpp_command_digest() or "").strip().lower()
+            token = current_cpp_command_digest()
         except Exception:
             token = ""
         return token
 
-    @staticmethod
-    def _verification_cache_key_hash(key_obj: dict[str, object]) -> str:
-        return verification_cache_key_hash(key_obj)
-
-    def _artifact_ref_from_cache_key_hash(self, cache_key_hash: str) -> str:
-        return artifact_ref_from_cache_key_hash(
-            self.fs_manager,
-            schema=self.BUILD_CACHE_SCHEMA,
-            cache_key_hash=cache_key_hash,
-        )
-
-    def _artifact_root_from_ref(self, problem_slug: str, artifact_ref: str) -> Path:
-        _ = str(problem_slug or "").strip()
-        return artifact_root_from_ref(self.fs_manager, artifact_ref=artifact_ref)
-
-    def _artifact_paths(self, problem_slug: str, artifact_ref: str):
-        _ = str(problem_slug or "").strip()
-        return ensure_artifact_paths(self.fs_manager, artifact_ref=artifact_ref)
-
-    def _wait_verification_terminal_status(self, verification_id: str, timeout_sec: float) -> str:
-        return wait_build_terminal_status(
-            self.db,
-            verification_id=verification_id,
-            timeout_sec=timeout_sec,
-            poll_sec=self.BUILD_JOIN_POLL_SEC,
-        )
-
-    def _verification_cache_key(
+    def _cached_verification_id_for_source(
         self,
         *,
-        problem_id: int,
-        workspace_id: int,
-        source_commit: str,
-        source_ref: str,
-        generation_params_digest: str,
-        toolchain_cmd_digest: str,
-        sample_only: bool = False,
-    ) -> dict[str, object]:
-        return verification_cache_key(
-            schema=self.BUILD_CACHE_SCHEMA,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit=source_commit,
-            source_ref=source_ref,
-            generation_params_digest=generation_params_digest,
-            toolchain_cmd_digest=toolchain_cmd_digest,
-            sample_only=sample_only,
-        )
-
-    def _cached_artifact_verification_id_for_source(
-        self,
-        *,
-        problem_slug: str = "",
         problem_id: int,
         workspace_id: int,
         source_commit: str,
@@ -517,26 +335,26 @@ class VerificationService:
         service = self._async_task_cache_service
         if service is None:
             return ""
-        safe_commit = str(source_commit or "").strip()
-        if not safe_commit:
+        if not source_commit:
             return ""
-        entry = service.get(
-            self.BUILD_CACHE_NAMESPACE,
-            self._verification_cache_key(
-                problem_id=int(problem_id),
-                workspace_id=int(workspace_id),
-                source_commit=safe_commit,
-                source_ref=str(source_ref or "").strip(),
-                generation_params_digest=str(generation_params_digest or "").strip().lower(),
-                toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
-                sample_only=bool(sample_only),
-            ),
+        cache_key = verification_cache_key(
+            schema=self.VERIFICATION_CACHE_SCHEMA,
+            problem_id=int(problem_id),
+            workspace_id=int(workspace_id),
+            source_commit=source_commit,
+            source_ref=source_ref,
+            generation_params_digest=generation_params_digest,
+            toolchain_cmd_digest=toolchain_cmd_digest,
+            sample_only=bool(sample_only),
         )
-        if not isinstance(entry, dict):
+        entry = service.get(
+            self.VERIFICATION_CACHE_NAMESPACE,
+            cache_key,
+        )
+        if entry is None:
             return ""
-        value = entry.get("value")
-        value_obj = value if isinstance(value, dict) else {}
-        cached_verification_id = str(value_obj.get("verification_id") or "").strip()
+        value = entry["value"]
+        cached_verification_id = value["verification_id"]
         if not cached_verification_id:
             return ""
         row = self.db.fetch_one(
@@ -545,47 +363,38 @@ class VerificationService:
             FROM verifications
             WHERE id=? AND problem_id=? AND workspace_id=? AND kind=?
             """,
-            [cached_verification_id, int(problem_id), int(workspace_id), VERIFICATION_KIND_VERIFICATION],
-        )
-        cache_key = self._verification_cache_key(
-            problem_id=int(problem_id),
-            workspace_id=int(workspace_id),
-            source_commit=safe_commit,
-            source_ref=str(source_ref or "").strip(),
-            generation_params_digest=str(generation_params_digest or "").strip().lower(),
-            toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
-            sample_only=bool(sample_only),
+            [cached_verification_id, int(problem_id), int(workspace_id), Kind.VERIFICATION.value],
         )
         if row is None:
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
+            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
             return ""
-        if str(row["status"] or "").strip().lower() != "ok":
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
+        if row["status"] != Status.OK.value:
+            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
             return ""
         try:
-            summary_obj = json.loads(str(row["summary_json"] or "{}"))
+            summary_obj = dict(json.loads(row["summary_json"]))
         except Exception:
             summary_obj = {}
-        generation_params = summary_obj.get("generation_params") if isinstance(summary_obj, dict) else {}
-        if not isinstance(generation_params, dict):
-            generation_params = {}
+        generation_params = summary_obj.get("generation_params") or {}
         if bool(generation_params.get("sample_only", False)) != bool(sample_only):
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
+            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
             return ""
-        if str(generation_params.get("toolchain_cmd_digest") or "").strip().lower() != str(toolchain_cmd_digest or "").strip().lower():
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
+        generation_toolchain_digest = generation_params.get("toolchain_cmd_digest")
+        if generation_toolchain_digest != toolchain_cmd_digest:
+            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
             return ""
-        if str(generation_params.get("generation_params_digest") or "").strip().lower() != str(generation_params_digest or "").strip().lower():
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
+        stored_generation_params_digest = generation_params.get("generation_params_digest")
+        if stored_generation_params_digest != generation_params_digest:
+            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
             return ""
-        artifact_root = Path(str(row["artifact_path"] or "")).resolve()
+        artifact_root = Path(row["artifact_path"]).resolve()
         tests_dir = artifact_root / "tests"
         ans_dir = artifact_root / "ans"
         if not tests_dir.exists() or (not tests_dir.is_dir()) or tests_dir.is_symlink():
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
+            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
             return ""
         if not ans_dir.exists() or (not ans_dir.is_dir()) or ans_dir.is_symlink():
-            service.delete(self.BUILD_CACHE_NAMESPACE, cache_key)
+            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
             return ""
         return cached_verification_id
 
@@ -608,10 +417,3 @@ class VerificationService:
             sample_only=sample_only,
             verification_id=verification_id,
         )
-
-
-
-
-
-
-

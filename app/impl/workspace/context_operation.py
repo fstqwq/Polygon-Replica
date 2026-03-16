@@ -22,17 +22,9 @@ from .solution import (
 )
 from .test_spec import (
     read_tests_spec,
-    tests_spec_bool_flag,
     tests_spec_payload_file_path,
     tests_spec_payload_rel_path,
     tests_spec_read_payload,
-)
-from .context_verification import (
-    _expected_status_rule,
-    _json_truthy,
-    _status_rule_expectation_display,
-    _status_rule_expected_display,
-    _verification_solution_match,
 )
 from app.main_util import (
     normalize_optional_component_source_path_safe,
@@ -66,40 +58,41 @@ def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LI
     rows = config.db.fetch_all('\n        SELECT p.slug,p.name,a.role AS role,\n               w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,\n               COALESCE(NULLIF(w.updated_at, \'\'), p.created_at) AS last_updated_at\n        FROM repo_acl a\n        JOIN problems p ON p.id=a.problem_id\n        LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?\n        WHERE a.user_id=?\n        ORDER BY last_updated_at DESC, p.slug ASC\n        LIMIT ?\n        ', [uid, uid, cap])
     items: list[dict] = []
     for row in rows:
-        role = str(row['role'] or 'read').strip().lower()
-        if role not in {'owner', 'write', 'read'}:
-            role = 'read'
-        head = str(row['head_commit'] or '').strip()
-        branch = str(row['branch'] or 'main').strip() or 'main'
-        dirty_raw = row['dirty']
+        role = normalize_contest_role(row['role'])
+        head = row['head_commit']
+        if head is None:
+            head = ''
+        branch = row['branch']
+        if branch is None:
+            branch = 'main'
+        dirty_value = row['dirty']
         dirty = False
-        if dirty_raw is not None:
+        if dirty_value is not None:
             try:
-                dirty = int(dirty_raw) != 0
+                dirty = int(dirty_value) != 0
             except Exception:
-                dirty = bool(dirty_raw)
-        workspace_path_raw = str(row['path'] or '').strip()
-        if workspace_path_raw:
-            revision = workspace_revision_info(Path(workspace_path_raw), branch, fetch_remote=False)
+                dirty = bool(dirty_value)
+        workspace_path = row['path'] or ''
+        if workspace_path:
+            revision = workspace_revision_info(Path(workspace_path), branch, fetch_remote=False)
         else:
             revision = {'local': None, 'upstream': None, 'display': 'none / upstream missing', 'highlight': True, 'upstream_higher': False, 'missing': True}
-        items.append({'slug': str(row['slug']), 'name': str(row['name']), 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path_raw, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision['local'], 'revision_upstream': revision['upstream'], 'revision_display': revision['display'], 'revision_highlight': revision['highlight'], 'revision_upstream_higher': revision['upstream_higher'], 'revision_missing': revision['missing'], 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
+        items.append({'slug': row['slug'], 'name': row['name'], 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision['local'], 'revision_upstream': revision['upstream'], 'revision_display': revision['display'], 'revision_highlight': revision['highlight'], 'revision_upstream_higher': revision['upstream_higher'], 'revision_missing': revision['missing'], 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
     return items
 
-def normalize_contest_role(raw: object) -> str:
-    role = str(raw or '').strip().lower()
-    if role in {'owner', 'write', 'read'}:
-        return role
+def normalize_contest_role(raw: str | None) -> str:
+    if raw in {'owner', 'write', 'read'}:
+        return raw
     return 'read'
 
 def normalize_contest_slug_required(value: str) -> str:
-    slug = str(value or '').strip()
+    slug = value.strip()
     if not _C.CONTEST_IDENT_RE.fullmatch(slug):
         raise ValueError('invalid contest slug')
     return slug
 
 def normalize_contest_title_required(value: str) -> str:
-    title = str(value or '').strip()
+    title = value.strip()
     if not title:
         raise ValueError('contest title is required')
     if len(title) > _C.CONTEST_TITLE_MAX_LEN:
@@ -107,7 +100,7 @@ def normalize_contest_title_required(value: str) -> str:
     return title
 
 def normalize_problem_name_required(value: str) -> str:
-    name = str(value or '').strip()
+    name = value.strip()
     if not name:
         raise ValueError('problem name is required')
     if len(name) > _C.PROBLEM_NAME_MAX_LEN:
@@ -128,15 +121,15 @@ def user_contests_overview(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) 
             dirty_problem_count = max(0, int(row['dirty_problem_count'] or 0))
         except Exception:
             dirty_problem_count = 0
-        preview = str(row['problem_slugs_preview'] or '').strip()
-        entries.append({'id': int(row['id']), 'slug': str(row['slug']), 'title': str(row['title']), 'owner_user_id': int(row['owner_user_id']), 'created_at': row['created_at'], 'last_updated_at': row['last_updated_at'], 'role': normalize_contest_role(row['role']), 'problem_count': problem_count, 'problem_slugs_preview': preview, 'problem_preview_truncated': problem_count > 5, 'dirty_problem_count': dirty_problem_count, 'has_dirty': dirty_problem_count > 0})
+        preview = row['problem_slugs_preview'] or ''
+        entries.append({'id': int(row['id']), 'slug': row['slug'], 'title': row['title'], 'owner_user_id': int(row['owner_user_id']), 'created_at': row['created_at'], 'last_updated_at': row['last_updated_at'], 'role': normalize_contest_role(row['role']), 'problem_count': problem_count, 'problem_slugs_preview': preview, 'problem_preview_truncated': problem_count > 5, 'dirty_problem_count': dirty_problem_count, 'has_dirty': dirty_problem_count > 0})
     return entries
 
 def audit(actor_user_id: int, problem_id: int | None, action: str, details: dict) -> None:
     config.db.execute('INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)', [actor_user_id, problem_id, action, json.dumps(details), now_iso()])
 
 def normalize_page_target(page: str) -> str:
-    raw = str(page or '').strip().lower()
+    raw = page.strip().lower()
     allowed = {
         'problems',
         'statement',
@@ -159,19 +152,15 @@ def normalize_page_target(page: str) -> str:
     }
     return raw if raw in allowed else 'tests'
 
-def parse_summary_json(raw: str | None, label: str) -> dict | None:
+def parse_summary_json(raw: str | None, label: str) -> dict[str, object]:
     if not raw:
-        return None
-    text = str(raw)
-    if len(text) > _C.SUMMARY_JSON_UI_CHAR_LIMIT:
-        return {'error': f'summary_json for {label} exceeds UI parse limit ({_C.SUMMARY_JSON_UI_CHAR_LIMIT} chars)', 'summary_json_too_large': True, 'summary_json_chars': len(text), 'summary_json_char_limit': _C.SUMMARY_JSON_UI_CHAR_LIMIT}
+        return {}
+    if len(raw) > _C.SUMMARY_JSON_UI_CHAR_LIMIT:
+        return {'error': f'summary_json for {label} exceeds UI parse limit ({_C.SUMMARY_JSON_UI_CHAR_LIMIT} chars)', 'summary_json_too_large': True, 'summary_json_chars': len(raw), 'summary_json_char_limit': _C.SUMMARY_JSON_UI_CHAR_LIMIT}
     try:
-        payload = json.loads(text)
+        return json.loads(raw)
     except Exception:
         return {'error': f'invalid summary_json for {label}'}
-    if isinstance(payload, dict):
-        return payload
-    return {'error': f'summary_json for {label} must be a JSON object'}
 
 def read_text_safe_limited(path: Path, max_chars: int) -> tuple[str, bool]:
     cap = max(1, int(max_chars))
@@ -195,14 +184,16 @@ def read_workspace_source_with_default(workspace: Path, rel: Path, default_text:
     return read_text_safe_limited(file_path, _C.STATEMENT_EDITOR_CHAR_LIMIT)
 
 def parse_line_param(raw: str | None, default: int=1) -> int:
+    if raw is None:
+        return default
     try:
-        line = int(str(raw or '').strip())
+        line = int(raw.strip())
     except Exception:
         return default
     return line if line > 0 else default
 
 def build_line_focus_context(text: str, line: int, radius: int=2) -> dict | None:
-    rows = str(text or '').splitlines()
+    rows = text.splitlines()
     if not rows:
         return None
     target = int(line)
@@ -217,12 +208,12 @@ def build_line_focus_context(text: str, line: int, radius: int=2) -> dict | None
     return {'start': start, 'end': end, 'line': target, 'text': '\n'.join(snippet)}
 
 def normalize_files_source(raw: str | None) -> str:
-    value = str(raw or '').strip().lower()
+    value = '' if raw is None else raw.strip().lower()
     allowed = {'tests', 'preview', 'statement', 'run', 'export', 'workspace', 'access', 'checker', 'validator', 'interactor', 'solutions', 'generators'}
     return value if value in allowed else ''
 
 def normalize_source_id(raw: str | None) -> str:
-    value = str(raw or '').strip()
+    value = '' if raw is None else raw.strip()
     return value if is_canonical_artifact_id(value) else ''
 
 def files_back_target(problem: str, user: str, source: str, source_id: str) -> tuple[str, str]:
@@ -270,7 +261,7 @@ def files_source_query_tail(source: str, source_id: str) -> str:
     return '&' + '&'.join(parts)
 
 def _normalize_repo_dir(raw: str | None) -> str:
-    text = str(raw or '').strip().replace('\\', '/')
+    text = '' if raw is None else raw.strip().replace('\\', '/')
     if not text:
         return ''
     if text.startswith('/'):
@@ -295,9 +286,8 @@ def files_browse_query_tail(repo_dir: str) -> str:
     return '&' + '&'.join(parts)
 
 def build_repo_browser_entries(workspace: Path, paths: list[str], browse_dir: str) -> tuple[str, str, list[dict[str, str]], list[dict[str, str]], int]:
-    normalized: list[dict[str, object]] = []
-    for raw in paths:
-        rel = str(raw).strip()
+    entries: list[tuple[str, bool]] = []
+    for rel in paths:
         if not rel:
             continue
         is_dir = False
@@ -305,17 +295,16 @@ def build_repo_browser_entries(workspace: Path, paths: list[str], browse_dir: st
             abs_path = safe_workspace_path(workspace, rel)
             is_dir = abs_path.exists() and abs_path.is_dir()
         except HTTPException:
-            is_dir = False
-        normalized.append({'path': rel, 'is_dir': is_dir})
+            pass
+        entries.append((rel, is_dir))
     dir_norm = _normalize_repo_dir(browse_dir)
     prefix = f'{dir_norm}/' if dir_norm else ''
-    if dir_norm and (not any((str(row['path']) == dir_norm or str(row['path']).startswith(prefix) for row in normalized))):
+    if dir_norm and (not any((full == dir_norm or full.startswith(prefix) for full, _is_dir in entries))):
         dir_norm = ''
         prefix = ''
     child_dirs: dict[str, str] = {}
     child_files: list[dict[str, str]] = []
-    for row in normalized:
-        full = str(row['path'])
+    for full, is_dir in entries:
         if full == dir_norm:
             continue
         if prefix and (not full.startswith(prefix)):
@@ -325,21 +314,22 @@ def build_repo_browser_entries(workspace: Path, paths: list[str], browse_dir: st
             continue
         if '/' in rel:
             name = rel.split('/', 1)[0]
-            child_dirs.setdefault(name, f'{prefix}{name}' if prefix else name)
-        elif bool(row['is_dir']):
-            child_dirs.setdefault(rel, f'{prefix}{rel}' if prefix else rel)
+            if name not in child_dirs:
+                child_dirs[name] = f'{prefix}{name}' if prefix else name
+        elif is_dir:
+            if rel not in child_dirs:
+                child_dirs[rel] = f'{prefix}{rel}' if prefix else rel
         else:
             child_files.append({'name': rel, 'path': f'{prefix}{rel}' if prefix else rel})
     dirs = [{'name': name, 'path': child_dirs[name]} for name in sorted(child_dirs)]
     files = sorted(child_files, key=lambda row: row['name'])
     parent = dir_norm.rsplit('/', 1)[0] if '/' in dir_norm else ''
-    return (dir_norm, parent, dirs, files, len(normalized))
+    return (dir_norm, parent, dirs, files, len(entries))
 
 def kind_for_path(path: str) -> str:
-    target = str(path or '').strip()
     for row in _C.CORE_SOURCE_TARGETS:
-        if str(row['path']) == target:
-            return str(row['kind'])
+        if row['path'] == path:
+            return row['kind']
     return ''
 
 def default_files_selected_path(workspace: Path, listed_paths: list[str]) -> str:
@@ -351,19 +341,19 @@ def default_files_selected_path(workspace: Path, listed_paths: list[str]) -> str
         if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
             return rel
     for rel in listed_paths:
-        safe_rel = normalize_workspace_rel_path(rel)
-        if not safe_rel:
+        normalized_rel = normalize_workspace_rel_path(rel)
+        if not normalized_rel:
             continue
         try:
-            candidate = safe_workspace_path(workspace, safe_rel)
+            candidate = safe_workspace_path(workspace, normalized_rel)
         except HTTPException:
             continue
         if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
-            return safe_rel
+            return normalized_rel
     return 'config/problem.json'
 
 def template_for_kind(kind: str) -> str:
-    key = str(kind or '').strip().lower()
+    key = kind.strip().lower()
     if key not in _C.FILE_TEMPLATES:
         raise ValueError('unknown template kind')
     return str(_C.FILE_TEMPLATES[key])
@@ -384,7 +374,7 @@ def _standard_checker_cache_values() -> tuple[tuple[str, ...], frozenset[str], b
             available = True
             with os.scandir(root) as entries:
                 for entry in entries:
-                    name = str(entry.name or '')
+                    name = entry.name
                     if Path(name).suffix.lower() != '.cpp':
                         continue
                     if not _C.STANDARD_CHECKER_NAME_RE.fullmatch(name):
@@ -413,12 +403,12 @@ def standard_checker_catalog() -> list[dict]:
     catalog: list[dict] = []
     for name in _standard_checker_options():
         canonical = f'std::{name}'
-        description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(name, 'general-purpose standard checker from testlib'))
+        description = _C.STANDARD_CHECKER_DESCRIPTIONS.get(name, 'general-purpose standard checker from testlib')
         catalog.append({'name': name, 'value': canonical, 'description': description, 'label': f'{canonical} - {description}'})
     return catalog
 
 def _normalize_standard_checker_name(raw: str) -> str:
-    value = str(raw or '').strip()
+    value = raw.strip()
     if value.startswith('std::'):
         value = value[5:]
     if not value:
@@ -445,19 +435,17 @@ def resolve_standard_checker_path(raw_name: str) -> tuple[str, Path]:
     return (checker_name, source)
 
 def read_build_config(workspace: Path) -> tuple[dict, Path]:
-    cfg_path = safe_workspace_path(workspace, str(_C.BUILD_CONFIG_REL))
+    cfg_path = safe_workspace_path(workspace, _C.BUILD_CONFIG_REL)
     payload: dict = {}
     if cfg_path.exists() and cfg_path.is_file():
         try:
-            raw = json.loads(cfg_path.read_text(encoding='utf-8'))
-            if isinstance(raw, dict):
-                payload = dict(raw)
+            payload = json.loads(cfg_path.read_text(encoding='utf-8'))
         except Exception:
             payload = {}
     return (payload, cfg_path)
 
 def write_build_config(cfg_path: Path, payload: dict) -> None:
-    data = dict(payload) if isinstance(payload, dict) else {}
+    data = dict(payload)
     has_generator_keys = 'generator_sources' in data
     if has_generator_keys:
         normalized_sources = generator_sources_from_build_cfg(data)
@@ -465,8 +453,6 @@ def write_build_config(cfg_path: Path, payload: dict) -> None:
             data['generator_sources'] = normalized_sources
         else:
             data.pop('generator_sources', None)
-    data.pop('generator_source', None)
-    data.pop('accepted_source', None)
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8')
 
@@ -497,7 +483,7 @@ def workspace_rel_file_exists(workspace: Path, rel: str | None) -> bool:
 
 def _text_head_by_bytes(raw: str, max_bytes: int) -> tuple[str, bool]:
     cap = max(1, int(max_bytes))
-    encoded = str(raw or '').encode('utf-8', errors='replace')
+    encoded = raw.encode('utf-8', errors='replace')
     clipped = len(encoded) > cap
     head = encoded[:cap].decode('utf-8', errors='replace')
     return (head, clipped)
@@ -520,12 +506,12 @@ def tests_spec_editor_context(workspace: Path, limit: int=_C.TESTS_SPEC_ROWS_LIM
     cap = max(1, int(limit))
     truncated = len(entries) > cap
     for idx, entry in enumerate(entries[:cap], start=1):
-        kind = str(entry.get('kind') or '')
-        test_id = str(entry.get('id') or '').strip()
-        sample = bool(entry.get('sample'))
-        sample_input = str(entry.get('sample_input') or '')
-        sample_output = str(entry.get('sample_output') or '')
-        sample_output_validate = tests_spec_bool_flag(entry.get('sample_output_validate', True))
+        kind = entry['kind']
+        test_id = entry['id']
+        sample = entry['sample']
+        sample_input = entry['sample_input']
+        sample_output = entry['sample_output']
+        sample_output_validate = entry['sample_output_validate']
         payload_path = tests_spec_payload_rel_path(test_id, kind) if test_id and kind else ''
         payload_abs: Path | None = None
         if payload_path:
@@ -565,7 +551,7 @@ def tests_spec_editor_context(workspace: Path, limit: int=_C.TESTS_SPEC_ROWS_LIM
             if payload_size_bytes <= 0:
                 payload_size_bytes = len(payload.encode('utf-8', errors='replace'))
         if manual_large_payload:
-            preview_text = str(preview_source or '').replace('\r\n', '\n').replace('\r', '\n')
+            preview_text = preview_source.replace('\r\n', '\n').replace('\r', '\n')
             if not preview_text:
                 preview_text = '(empty)'
         else:
@@ -593,20 +579,16 @@ def tests_spec_editor_context(workspace: Path, limit: int=_C.TESTS_SPEC_ROWS_LIM
         )
     return {'path': TESTS_SPEC_REL.as_posix(), 'exists': bool(path.exists() and path.is_file() and (not path.is_symlink())), 'entries': entries, 'rows': rows, 'summary': summary, 'total': len(entries), 'shown': len(rows), 'truncated': truncated}
 
-# Referenced via dynamic re-export in workspace.api/public.
-_DYNAMIC_EXPORT_KEEP = (read_workspace_source_with_default, tests_spec_editor_context)
-_ = len(_DYNAMIC_EXPORT_KEEP)
-
 def _tests_spec_status_context(workspace: Path) -> dict:
     try:
         entries, _path = read_tests_spec(workspace)
     except ValueError:
         return {'mode': 'invalid', 'display': 'invalid', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
     summary = summarize_tests_spec(entries)
-    total = int(summary.get('total') or 0)
-    manual = int(summary.get('manual') or 0)
-    gen = int(summary.get('gen') or 0)
-    sample = int(summary.get('sample') or 0)
+    total = summary['total']
+    manual = summary['manual']
+    gen = summary['gen']
+    sample = summary['sample']
     if total <= 0:
         return {'mode': 'empty', 'display': 'empty', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
     return {'mode': 'ready', 'display': f'{total} ({count_label(sample, "sample")})', 'total': total, 'manual': manual, 'gen': gen, 'sample': sample}
@@ -622,7 +604,7 @@ def _list_cpp_sources(workspace: Path, folder: str, limit: int=64) -> tuple[list
     try:
         with os.scandir(base) as entries:
             for entry in entries:
-                name = str(entry.name or '')
+                name = entry.name
                 if Path(name).suffix.lower() not in _C.CPP_SOURCE_EXTENSIONS:
                     continue
                 try:
@@ -640,7 +622,7 @@ def _list_cpp_sources(workspace: Path, folder: str, limit: int=64) -> tuple[list
     return (names, truncated)
 
 def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
-    source_path = str(source_rel or '')
+    source_path = source_rel
     desc_path = desc_rel_path_for_source(source_path)
     desc_exists = workspace_rel_file_exists(workspace, desc_path)
     expected = infer_expected_behavior_from_name(source_path)
@@ -652,10 +634,10 @@ def solution_metadata_entry(workspace: Path, source_rel: str) -> dict:
             desc_abs = safe_workspace_path(workspace, desc_path)
             desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
             parsed = parse_solution_desc(desc_text)
-            expected = str(parsed.get('expected_behavior') or 'unknown')
-            note = str(parsed.get('note') or '')
+            expected = parsed['expected_behavior']
+            note = parsed['note']
             origin = 'metadata'
-            errors = [str(item) for item in parsed.get('errors') or []]
+            errors = parsed['errors']
         except Exception as exc:
             errors = [str(exc)]
             origin = 'invalid'
@@ -674,6 +656,20 @@ def resolve_build_accepted_solution_source(workspace: Path, entries: list[dict])
     configured = normalize_optional_component_source_path_safe(build_cfg.get('accepted_solution_source'), 'solutions', 'accepted solution source')
     if configured:
         return configured
+    accepted_candidates: list[str] = []
+    for row in entries:
+        source_path = row['source_path']
+        if not source_path:
+            continue
+        expected_behavior = row['expected_behavior']
+        if row['is_accepted'] or expected_behavior == 'accepted':
+            if source_path not in accepted_candidates:
+                accepted_candidates.append(source_path)
+    if accepted_candidates:
+        return accepted_candidates[0]
+    visible_sources = [row['source_path'] for row in entries if row['source_path']]
+    if len(visible_sources) == 1:
+        return visible_sources[0]
     return ''
 
 def _solutions_status_context(workspace: Path) -> dict:
@@ -701,17 +697,24 @@ def _solutions_status_context(workspace: Path) -> dict:
 def run_solution_options_context(workspace: Path) -> tuple[list[dict], str, bool]:
     entries, truncated = list_solution_entries(workspace)
     default_path = resolve_build_accepted_solution_source(workspace, entries)
-    if default_path and (not any((str(row.get('source_path') or '') == default_path for row in entries))):
+    if default_path and (not any((row['source_path'] == default_path) for row in entries)):
         default_path = ''
     options: list[dict] = []
     for row in entries:
-        path = str(row.get('source_path') or '').strip()
+        path = row['source_path']
         if not path:
             continue
-        behavior = str(row.get('expected_behavior_label') or '').strip()
+        behavior = row['expected_behavior_label']
         label = path if not behavior else f'{path} ({behavior})'
-        options.append({'path': path, 'label': label, 'is_accepted': str(row.get('expected_behavior') or '') == 'accepted', 'expected_behavior': normalize_expected_behavior(str(row.get('expected_behavior') or 'unknown'))})
+        expected_behavior = row['expected_behavior']
+        options.append({'path': path, 'label': label, 'is_accepted': expected_behavior == 'accepted', 'expected_behavior': normalize_expected_behavior(expected_behavior)})
     return (options, default_path, bool(truncated))
+
+def _tests_meta_text_field(item: dict[str, object], key: str) -> str:
+    value = item.get(key, '')
+    if value is None:
+        return ''
+    return str(value)
 
 def _run_test_options_from_verification(problem: str, verification_id: str, limit: int=_C.RUN_TEST_SELECTOR_LIMIT) -> tuple[list[dict], bool]:
     options: list[dict] = []
@@ -730,7 +733,7 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
     try:
         with os.scandir(tests_dir) as entries:
             for entry in entries:
-                name = str(entry.name or '')
+                name = entry.name
                 if not _C.RUN_TEST_NAME_RE.fullmatch(name):
                     continue
                 try:
@@ -745,36 +748,39 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
     cap = max(1, int(limit))
     truncated = len(names) > cap
     names = names[:cap]
-    tests_meta_by_name: dict[str, dict] = {}
+    tests_meta_by_name: dict[str, dict[str, str | bool]] = {}
     tests_meta_path = root / 'logs' / 'tests_meta.json'
     try:
         if tests_meta_path.exists() and tests_meta_path.is_file() and (not tests_meta_path.is_symlink()):
             tests_meta_text, _ = read_text_safe_limited(tests_meta_path, _C.SUMMARY_JSON_UI_CHAR_LIMIT)
             payload = json.loads(tests_meta_text)
-            if isinstance(payload, list):
-                for item in payload:
-                    if not isinstance(item, dict):
-                        continue
-                    index = coerce_int(item.get('index'), 0, 1, 10 ** 7)
-                    if index <= 0:
-                        continue
-                    tests_meta_by_name[f'{index:03d}.in'] = item
+            for item in payload:
+                index = coerce_int(item.get('index'), 0, 1, 10 ** 7)
+                if index <= 0:
+                    continue
+                tests_meta_by_name[f'{index:03d}.in'] = {
+                    'id': _tests_meta_text_field(item, 'id'),
+                    'kind': _tests_meta_text_field(item, 'kind'),
+                    'sample': bool(item.get('sample')),
+                    'desc': _tests_meta_text_field(item, 'desc'),
+                }
     except Exception:
         tests_meta_by_name = {}
     for name in names:
-        item = tests_meta_by_name.get(name) or {}
+        item = tests_meta_by_name.get(name)
         parts: list[str] = []
-        test_id = str(item.get('id') or '').strip()
-        if test_id:
-            parts.append(f'id={test_id}')
-        kind = str(item.get('kind') or '').strip().lower()
-        if kind in {'manual', 'gen'}:
-            parts.append(kind)
-        if bool(item.get('sample')):
-            parts.append('sample')
-        desc = str(item.get('desc') or '').strip()
-        if desc and desc not in {'manual', 'gen'}:
-            parts.append(desc)
+        if item is not None:
+            test_id = item['id']
+            if test_id:
+                parts.append(f'id={test_id}')
+            kind = item['kind']
+            if kind in {'manual', 'gen'}:
+                parts.append(kind)
+            if item['sample']:
+                parts.append('sample')
+            desc = item['desc']
+            if desc and desc not in {'manual', 'gen'}:
+                parts.append(desc)
         suffix = f" ({'; '.join(parts)})" if parts else ''
         options.append({'name': name, 'label': f'{name}{suffix}'})
     return (options, truncated)
@@ -790,20 +796,22 @@ def _run_test_options_from_spec(workspace: Path, limit: int=_C.RUN_TEST_SELECTOR
     for idx, row in enumerate(entries[:cap], start=1):
         name = f'{idx:03d}.in'
         parts: list[str] = []
-        test_id = str(row.get('id') or '').strip()
+        test_id = row['id']
         if test_id:
             parts.append(f'id={test_id}')
-        kind = str(row.get('kind') or '').strip().lower()
+        kind = row['kind']
         if kind in {'manual', 'gen'}:
             parts.append(kind)
-        if _json_truthy(row.get('sample')):
+        if row['sample']:
             parts.append('sample')
         suffix = f" ({'; '.join(parts)})" if parts else ''
         options.append({'name': name, 'label': f'{name}{suffix}'})
     return (options, truncated)
 
 def run_test_options_context(problem: str, workspace: Path, active_verification: dict | None) -> tuple[list[dict], bool, str]:
-    verification_id = str(active_verification['id'] or '').strip() if active_verification is not None else ''
+    verification_id = ''
+    if active_verification is not None:
+        verification_id = active_verification['id']
     if verification_id:
         build_options, build_truncated = _run_test_options_from_verification(problem, verification_id, limit=_C.RUN_TEST_SELECTOR_LIMIT)
         if build_options:
@@ -825,7 +833,7 @@ def _human_size(num_bytes: int) -> str:
     return f'{size} B'
 
 def _inline_text_preview(raw: str, max_chars: int, max_lines: int) -> str:
-    text = str(raw or '').replace('\r\n', '\n').replace('\r', '\n')
+    text = raw.replace('\r\n', '\n').replace('\r', '\n')
     lines = [line.rstrip('\n\r') for line in text.splitlines()]
     clipped_by_lines = False
     if max_lines > 0 and len(lines) > max_lines:
@@ -843,12 +851,11 @@ def _inline_text_preview(raw: str, max_chars: int, max_lines: int) -> str:
 
 def generator_sources_from_build_cfg(build_cfg: dict) -> list[str]:
     sources: list[str] = []
-    raw_sources = build_cfg.get('generator_sources')
-    if isinstance(raw_sources, list):
-        for item in raw_sources:
-            normalized = normalize_optional_component_source_path_safe(item, 'generators', 'generator source')
-            if normalized:
-                sources.append(normalized)
+    raw_sources = build_cfg.get('generator_sources', [])
+    if raw_sources is None:
+        return sources
+    for item in raw_sources:
+        normalized = normalize_optional_component_source_path_safe(item, 'generators', 'generator source')
+        if normalized:
+            sources.append(normalized)
     return dedupe_preserve_order(sources)
-
-

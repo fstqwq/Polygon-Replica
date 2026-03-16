@@ -235,7 +235,7 @@ class TestPreview(SmokeBase):
         rows = preview_service._sample_rows_from_spec(ws)
         self.assertEqual(rows, [(2, "002", "manual")])
 
-    def test_generation_params_digest_changes_when_materialization_sources_change(self) -> None:
+    def test_generation_params_digest_changes_when_build_sources_change(self) -> None:
         ws = self._workspace_path()
         digest_before = config.verification_service._generation_params_digest(ws, sample_only=False)
 
@@ -255,7 +255,7 @@ class TestPreview(SmokeBase):
         digest_after_validator = config.verification_service._generation_params_digest(ws, sample_only=False)
         self.assertNotEqual(digest_after_testlib, digest_after_validator)
 
-    def test_preview_sample_sync_materializes_manual_and_generator_from_verification(self) -> None:
+    def test_preview_sample_sync_builds_manual_and_generator_from_verification(self) -> None:
         ws = self._workspace_path()
         (ws / "tests" / "spec.json").write_text(
             dumps_tests_spec(
@@ -287,7 +287,7 @@ class TestPreview(SmokeBase):
                 int(ctx["workspace"]["id"]),
                 "",
                 "main",
-                "materialization",
+                "build",
                 "ok",
                 "{}",
                 str(artifact_root),

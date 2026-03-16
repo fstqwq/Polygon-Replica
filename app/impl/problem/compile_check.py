@@ -13,34 +13,49 @@ _CPP_EXTENSIONS = {".cpp", ".cc", ".cxx", ".c++", ".c"}
 
 
 def _first_compile_message(summary: dict[str, object]) -> str:
-    diagnostics_obj = summary.get("compile_diagnostics")
-    diagnostics = diagnostics_obj if isinstance(diagnostics_obj, list) else []
+    diagnostics = summary.get("compile_diagnostics")
+    if not isinstance(diagnostics, list):
+        diagnostics = []
     for item in diagnostics:
         if not isinstance(item, dict):
             continue
-        message = str(item.get("message") or "").strip()
+        message = item.get("message")
+        if not isinstance(message, str):
+            continue
+        message = message.strip()
         if message:
             return message
-    return str(summary.get("error") or "").strip()
+    error = summary.get("error")
+    return error.strip() if isinstance(error, str) else ""
 
 
 def _compile_error_text(summary: dict[str, object]) -> str:
-    diagnostics_obj = summary.get("compile_diagnostics")
-    diagnostics = diagnostics_obj if isinstance(diagnostics_obj, list) else []
+    diagnostics = summary.get("compile_diagnostics")
+    if not isinstance(diagnostics, list):
+        diagnostics = []
     lines: list[str] = []
     for item in diagnostics:
         if not isinstance(item, dict):
             continue
-        message = str(item.get("message") or "").strip()
+        message = item.get("message")
+        if not isinstance(message, str):
+            continue
+        message = message.strip()
         if not message:
             continue
-        file_token = str(item.get("file") or "").strip()
+        file_token = item.get("file")
+        if isinstance(file_token, str):
+            file_token = file_token.strip()
+        else:
+            file_token = ""
+        line_value = item.get("line")
         try:
-            line_no = int(item.get("line") or 0)
+            line_no = int(line_value) if line_value is not None else 0
         except Exception:
             line_no = 0
+        column_value = item.get("column")
         try:
-            col_no = int(item.get("column") or 0)
+            col_no = int(column_value) if column_value is not None else 0
         except Exception:
             col_no = 0
         prefix = ""
@@ -55,27 +70,41 @@ def _compile_error_text(summary: dict[str, object]) -> str:
             lines.append(text)
     if lines:
         return preserve_error_text("\n".join(lines), max_chars=1200, max_lines=16)
-    fallback = str(summary.get("error") or "").strip()
+    fallback = summary.get("error")
+    if isinstance(fallback, str):
+        fallback = fallback.strip()
+    else:
+        fallback = ""
     if fallback:
         return preserve_error_text(fallback, max_chars=1200, max_lines=16)
     return ""
 
 
 def _run_summary_verdict(summary: dict[str, object]) -> str:
-    tests_obj = summary.get("tests")
-    tests = tests_obj if isinstance(tests_obj, list) else []
+    tests = summary.get("tests")
+    if not isinstance(tests, list):
+        tests = []
     for row in tests:
         if not isinstance(row, dict):
             continue
-        verdict = str(row.get("verdict") or "").strip().upper()
+        verdict = row.get("verdict")
+        if isinstance(verdict, str):
+            verdict = verdict.strip().upper()
+        else:
+            verdict = ""
         if verdict:
             return verdict
-        passes_obj = row.get("passes")
-        passes = passes_obj if isinstance(passes_obj, list) else []
+        passes = row.get("passes")
+        if not isinstance(passes, list):
+            passes = []
         for pass_row in passes:
             if not isinstance(pass_row, dict):
                 continue
-            verdict = str(pass_row.get("verdict") or "").strip().upper()
+            verdict = pass_row.get("verdict")
+            if isinstance(verdict, str):
+                verdict = verdict.strip().upper()
+            else:
+                verdict = ""
             if verdict:
                 return verdict
     return ""
@@ -100,10 +129,10 @@ def judgehost_compile_check_error(
     source_content: str,
     verification_source: str,
 ) -> str:
-    safe_source_path = str(source_path or "").strip()
+    safe_source_path = source_path.strip()
 
     def _with_path(msg: str) -> str:
-        message = str(msg or "").strip()
+        message = msg.strip()
         if not message:
             return message
         if safe_source_path:
@@ -121,7 +150,7 @@ def judgehost_compile_check_error(
     except Exception:
         return _with_path("judge backend unavailable for compile check")
 
-    source_bytes = str(source_content or "").encode("utf-8")
+    source_bytes = source_content.encode("utf-8")
     source_name = Path(safe_source_path).name or "submission.cpp"
     run_id = f"r-cchk-{uuid.uuid4().hex[:12]}"
     verification_id = f"ver-compilecheck-{uuid.uuid4().hex[:12]}"
@@ -132,32 +161,53 @@ def judgehost_compile_check_error(
         returned = config.judgehost_task_service.compile_only_submission(
             problem=problem,
             username=user,
-            artifact_verification_id=str(getattr(_C, "RUN_PLACEHOLDER_BUILD_ID", "pending") or "pending"),
+            artifact_verification_id=str(getattr(_C, "RUN_PLACEHOLDER_VERIFICATION_ID", "pending")),
             upload_content=source_bytes,
             upload_filename=source_name,
             run_id=run_id,
             verification_id=verification_id,
             verification_run_ids=[run_id],
             expected_behavior="compile",
-            verification_source=str(verification_source or "problem.save_source").strip() or "problem.save_source",
+            verification_source=verification_source.strip() or "problem.save_source",
             prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,
         )
         if isinstance(returned, dict):
             result_obj = dict(returned)
     except Exception as exc:
-        backend_error = str(exc or "").strip()
+        backend_error = str(exc).strip()
 
-    summary_obj = result_obj.get("summary")
-    summary = dict(summary_obj) if isinstance(summary_obj, dict) else {}
-    task_status = str(result_obj.get("task_status") or "").strip().lower()
-    run_status = str(result_obj.get("status") or "").strip().lower()
+    summary = result_obj.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    else:
+        summary = dict(summary)
+    task_status = result_obj.get("task_status")
+    if isinstance(task_status, str):
+        task_status = task_status.strip().lower()
+    else:
+        task_status = ""
+    run_status = result_obj.get("status")
+    if isinstance(run_status, str):
+        run_status = run_status.strip().lower()
+    else:
+        run_status = ""
 
     if task_status == "failed" or (run_status and run_status != "ok"):
+        result_error = result_obj.get("error")
+        if isinstance(result_error, str):
+            result_error = result_error.strip()
+        else:
+            result_error = ""
+        summary_error = summary.get("error")
+        if isinstance(summary_error, str):
+            summary_error = summary_error.strip()
+        else:
+            summary_error = ""
         message = (
             _compile_error_text(summary)
             or _first_compile_message(summary)
-            or str(result_obj.get("error") or "").strip()
-            or str(summary.get("error") or "").strip()
+            or result_error
+            or summary_error
             or backend_error
             or "judge backend compile failed"
         )
@@ -170,3 +220,4 @@ def judgehost_compile_check_error(
     if backend_error:
         return _with_path(compact_error_text(backend_error, max_chars=320) or "compile check failed")
     return ""
+

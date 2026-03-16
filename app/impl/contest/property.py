@@ -1,10 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import Form, HTTPException, Request
 
-from app.impl.auth.public import template_response
+from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.public import audit, normalize_contest_title_required
+from app.impl.workspace.context_operation import audit, normalize_contest_title_required
 
 from .shared import (
     _CONTEST_PROPERTY_DATE,
@@ -20,7 +20,9 @@ def contest_properties_page(request: Request, contest: str, user: str):
     ctx = _contest_ctx(contest, user, "properties")
     contest_id = int(ctx["contest"]["id"])
     props = _contest_properties_map(contest_id)
-    source_mode = str(props.get(_CONTEST_PROPERTY_SOURCE_MODE) or "latest_committed").strip()
+    source_mode = props.get(_CONTEST_PROPERTY_SOURCE_MODE)
+    if source_mode is None:
+        source_mode = "latest_committed"
     if source_mode not in _CONTEST_SOURCE_MODE_VALUES:
         source_mode = "latest_committed"
     return template_response(
@@ -28,8 +30,8 @@ def contest_properties_page(request: Request, contest: str, user: str):
         "contest_properties.html",
         {
             "ctx": ctx,
-            "location": str(props.get(_CONTEST_PROPERTY_LOCATION) or ""),
-            "date_text": str(props.get(_CONTEST_PROPERTY_DATE) or ""),
+            "location": props.get(_CONTEST_PROPERTY_LOCATION),
+            "date_text": props.get(_CONTEST_PROPERTY_DATE),
             "source_mode": source_mode,
         },
     )
@@ -44,14 +46,17 @@ def contest_properties_save(
 ):
     ctx = _contest_ctx(contest, user, "properties")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
+        reason = ctx["access"].get("write_block_reason")
+        if not isinstance(reason, str) or not reason:
+            reason = "write access required"
+        raise HTTPException(status_code=403, detail=reason)
     contest_id = int(ctx["contest"]["id"])
     actor_user_id = int(ctx["user"]["id"])
-    current_title = str(ctx["contest"]["title"] or "").strip()
-    safe_title = normalize_contest_title_required(str(title or "").strip() or current_title)
-    safe_location = str(location or "").strip()
-    safe_date = str(date_text or "").strip()
-    safe_source_mode = str(source_mode or "").strip().lower()
+    current_title = ctx["contest"]["title"]
+    safe_title = normalize_contest_title_required(title.strip() or current_title)
+    safe_location = location.strip()
+    safe_date = date_text.strip()
+    safe_source_mode = source_mode.strip().lower()
     if safe_source_mode not in _CONTEST_SOURCE_MODE_VALUES:
         safe_source_mode = "latest_committed"
     config.db.execute(
@@ -67,13 +72,13 @@ def contest_properties_save(
         "contest.properties.save",
         {
             "contest_id": contest_id,
-            "contest_slug": str(ctx["contest"]["slug"]),
+            "contest_slug": ctx["contest"]["slug"],
             "title": safe_title,
             "location": safe_location,
             "date": safe_date,
             "source_mode": safe_source_mode,
         },
     )
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "properties", message="contest properties saved")
+    return _contest_redirect(ctx["contest"]["slug"], user, "properties", message="contest properties saved")
 
 

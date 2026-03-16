@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 from app.impl.runtime.config import config
 from app.main_util import safe_workspace_path
@@ -17,19 +18,20 @@ def coerce_int(raw: object, default: int, min_value: int, max_value: int) -> int
     return max(min_value, min(max_value, value))
 
 
-def form_text(value: object) -> str:
-    if isinstance(value, str):
-        return value
-    default = getattr(value, "default", "")
+def form_text(value: str | object) -> str:
+    default = getattr(value, "default", value)
     if default is Ellipsis:
         return ""
-    if isinstance(default, str):
-        return default
-    return str(default or "")
+    if default is None:
+        return ""
+    return str(default)
 
 
-def normalize_problem_mode(raw: object, default: str = "pass-fail") -> str:
-    token = str(raw or "").strip().lower().replace("_", "-").replace(" ", "-")
+def normalize_problem_mode(raw: str | None, default: str = "pass-fail") -> str:
+    if raw is None:
+        token = ""
+    else:
+        token = raw.strip().lower().replace("_", "-").replace(" ", "-")
     if token in _C.GENERAL_MODE_VALUES:
         return token
     if default in _C.GENERAL_MODE_VALUES:
@@ -38,7 +40,7 @@ def normalize_problem_mode(raw: object, default: str = "pass-fail") -> str:
 
 
 def sanitize_stdio_name(raw: str, fallback: str, label: str) -> str:
-    value = str(raw or "").strip()
+    value = raw.strip()
     if not value:
         return fallback
     if len(value) > 128:
@@ -52,25 +54,29 @@ def sanitize_stdio_name(raw: str, fallback: str, label: str) -> str:
     return value
 
 
-def read_problem_config(workspace: Path) -> tuple[dict, dict, Path]:
+def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, object], Path]:
     cfg_path = safe_workspace_path(workspace, str(_C.GENERAL_CONFIG_REL))
-    payload: dict = {}
+    payload: dict[str, object] = {}
     if cfg_path.exists() and cfg_path.is_file():
         try:
-            raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                payload = dict(raw)
+            payload = cast(dict[str, object], json.loads(cfg_path.read_text(encoding="utf-8")))
         except Exception:
             payload = {}
     mode = normalize_problem_mode(payload.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
+    input_file = cast(str | None, payload.get("input_file"))
+    if input_file is None:
+        input_file = str(_C.GENERAL_CONFIG_DEFAULTS["input_file"])
+    output_file = cast(str | None, payload.get("output_file"))
+    if output_file is None:
+        output_file = str(_C.GENERAL_CONFIG_DEFAULTS["output_file"])
     ui_cfg = {
         "input_file": sanitize_stdio_name(
-            str(payload.get("input_file") or _C.GENERAL_CONFIG_DEFAULTS["input_file"]),
+            input_file,
             str(_C.GENERAL_CONFIG_DEFAULTS["input_file"]),
             "input file",
         ),
         "output_file": sanitize_stdio_name(
-            str(payload.get("output_file") or _C.GENERAL_CONFIG_DEFAULTS["output_file"]),
+            output_file,
             str(_C.GENERAL_CONFIG_DEFAULTS["output_file"]),
             "output file",
         ),

@@ -61,26 +61,20 @@ def normalize_diagnostics_for_db(entries: list, message_limit: int) -> list[dict
     normalized: list[dict] = []
     cap = max(1, int(message_limit))
     for raw in entries:
-        item = raw if isinstance(raw, dict) else {"message": str(raw or "")}
-        msg, msg_truncated = truncate_inline_text(str(item.get("message") or ""), cap)
+        item = raw if isinstance(raw, dict) else {"message": str(raw)}
+        message = message if isinstance(message := item.get("message"), str) else str(message)
+        msg, msg_truncated = truncate_inline_text(message, cap)
         row = dict(item)
         row["message"] = msg
         row["message_truncated"] = bool(msg_truncated)
         row["message_limit"] = cap
-        row.setdefault("level", "error")
-        row.setdefault("file", "")
-        row.setdefault("line", 0)
-        row.setdefault("column", 0)
-        row.setdefault("can_link", False)
+        row["level"] = row.get("level") if isinstance(row.get("level"), str) and str(row.get("level")).strip() else "error"
+        row["file"] = row.get("file") if isinstance(row.get("file"), str) else ""
+        row["line"] = row["line"] if isinstance(row.get("line"), int) else 0
+        row["column"] = row["column"] if isinstance(row.get("column"), int) else 0
+        row["can_link"] = bool(row.get("can_link")) if "can_link" in row else False
         normalized.append(row)
     return normalized
-
-
-def compact_inline_error(raw: object, *, max_chars: int = 240) -> str:
-    text = " ".join(str(raw or "").split())
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "..."
 
 
 def summary_for_db(

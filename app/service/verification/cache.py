@@ -1,7 +1,5 @@
 ﻿from __future__ import annotations
 
-from pathlib import Path
-
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import canonical_json, sha256_hex_text
 
@@ -17,23 +15,19 @@ def verification_cache_key_hash(key_obj: dict[str, object]) -> str:
 
 
 def artifact_ref_from_cache_key_hash(fs_manager: FsManager, *, schema: str, cache_key_hash: str) -> str:
-    digest = str(cache_key_hash or "").strip().lower()
+    digest = cache_key_hash.lower()
     if not digest:
         digest = sha256_hex_text(f"{schema}:empty")
     return fs_manager.compute_artifact_ref(
         {
-            "schema": str(schema or "v3"),
+            "schema": schema,
             "cache_key_hash": digest,
         }
     )
 
 
-def artifact_root_from_ref(fs_manager: FsManager, *, artifact_ref: str) -> Path:
-    return fs_manager.artifact_paths(str(artifact_ref or "").strip().lower()).root.resolve()
-
-
 def ensure_artifact_paths(fs_manager: FsManager, *, artifact_ref: str):
-    return fs_manager.ensure_artifact_layout(str(artifact_ref or "").strip().lower())
+    return fs_manager.ensure_artifact_layout(artifact_ref.lower())
 
 
 def verification_cache_key(
@@ -50,12 +44,12 @@ def verification_cache_key(
     return {
         "problem_id": int(problem_id),
         "workspace_id": int(workspace_id),
-        "source_commit": str(source_commit or "").strip(),
-        "source_ref": str(source_ref or "").strip(),
-        "generation_params_digest": str(generation_params_digest or "").strip().lower(),
-        "toolchain_cmd_digest": str(toolchain_cmd_digest or "").strip().lower(),
+        "source_commit": source_commit,
+        "source_ref": source_ref,
+        "generation_params_digest": generation_params_digest,
+        "toolchain_cmd_digest": toolchain_cmd_digest,
         "sample_only": bool(sample_only),
-        "schema": str(schema or "v3"),
+        "schema": schema,
     }
 
 

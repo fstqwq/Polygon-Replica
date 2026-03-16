@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from fastapi import HTTPException, Request
 
-from app.impl.auth.public import has_sudo_session, template_response
+from app.impl.auth.session import has_sudo_session
+from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 
 from app.main_util import normalize_workspace_rel_path
@@ -64,20 +66,22 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     ctx['branch_limit'] = 1
     workspace_path = Path(ctx['workspace']['path'])
     if refresh_status:
-        live_status: dict | None = None
+        live_status: dict[str, object] | None = None
         try:
             with config.workspace_service.workspace_lock(workspace_path):
-                status_obj = config.workspace_service.read_workspace_status(workspace_path)
-            if isinstance(status_obj, dict):
-                live_status = status_obj
+                live_status = cast(dict[str, object], config.workspace_service.read_workspace_status(workspace_path))
         except Exception:
             live_status = None
-        if isinstance(live_status, dict):
-            ctx['workspace']['branch'] = str(live_status.get('branch') or 'main').strip() or 'main'
-            ctx['workspace']['head_commit'] = str(live_status.get('head_commit') or '').strip()
+        if live_status is not None:
+            branch_raw = cast(str | None, live_status.get('branch'))
+            ctx['workspace']['branch'] = branch_raw or 'main'
+            head_commit_raw = cast(str | None, live_status.get('head_commit'))
+            ctx['workspace']['head_commit'] = head_commit_raw or ''
             ctx['workspace']['dirty'] = 1 if bool(live_status.get('dirty')) else 0
-    workspace_branch = str(ctx['workspace'].get('branch') or 'main').strip() or 'main'
-    workspace_head = str(ctx['workspace'].get('head_commit') or '').strip()
+    branch_raw = cast(str | None, ctx['workspace'].get('branch'))
+    workspace_branch = branch_raw or 'main'
+    workspace_head_raw = cast(str | None, ctx['workspace'].get('head_commit'))
+    workspace_head = workspace_head_raw or ''
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     try:
         _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
@@ -103,7 +107,8 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
             behind_count = max(0, int(behind_count_raw))
     except Exception:
         behind_count = 0
-    ctx['workspace_needs_update'] = bool(ctx['workspace_revision'].get('upstream_higher')) or behind_count > 0
+    upstream_higher = bool(ctx['workspace_revision'].get('upstream_higher'))
+    ctx['workspace_needs_update'] = True if upstream_higher else behind_count > 0
     ctx['head_short'] = workspace_head[:8]
     try:
         ctx['checker_status'] = checker_status_context(workspace_path)
@@ -153,7 +158,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
             'last_status': 'none',
             'run_id': '',
             'run_ids': '',
-            'artifact_verification_id': '',
+            'verification_id': '',
             'error': '',
             'created_at': '',
             'stale': False,
@@ -174,13 +179,10 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         except Exception:
             return default
 
-    def _row_value(row: object, key: str, default: object='') -> object:
-        if isinstance(row, dict):
-            return row.get(key, default)
-        try:
-            return row[key]
-        except Exception:
+    def _row_value(row: dict[str, object] | None, key: str, default: object='') -> object:
+        if row is None:
             return default
+        return row.get(key, default)
 
     def _short_decimal(value: float) -> str:
         text = f'{float(value):.3f}'.rstrip('0').rstrip('.')
@@ -199,10 +201,10 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         return gb_text if len(gb_text) < len(mb_text) else mb_text
 
     nav: dict[str, dict[str, object]] = {}
-    general_cfg = ctx.get('general_cfg') if isinstance(ctx, dict) else None
-    time_limit_ms = _to_int(general_cfg.get('time_limit_ms') if isinstance(general_cfg, dict) else int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']))
-    memory_limit_mb = _to_int(general_cfg.get('memory_limit_mb') if isinstance(general_cfg, dict) else int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']))
-    mode_text = normalize_problem_mode(general_cfg.get('mode') if isinstance(general_cfg, dict) else str(_C.GENERAL_CONFIG_DEFAULTS['mode']), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
+    general_cfg = cast(dict[str, object], ctx['general_cfg'])
+    time_limit_ms = _to_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']))
+    memory_limit_mb = _to_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']))
+    mode_text = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
     time_text = _compact_time_limit_label(time_limit_ms)
     memory_text = _compact_memory_limit_label(memory_limit_mb)
     nav['general'] = {'text': f'{time_text}, {memory_text}, {mode_text}', 'danger': False}
@@ -212,8 +214,9 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     preview_danger = preview_status in {'none', 'missing', 'failed', 'error'}
     preview_warn = False
     if preview_status == 'ok':
-        preview_id = str(_row_value(latest_preview, 'id', '') or '').strip()
-        problem_slug = str(_row_value(ctx.get('problem'), 'slug', '') or '').strip()
+        preview_id = cast(str | None, _row_value(cast(dict[str, object] | None, latest_preview), 'id', '')) or ''
+        problem_slug_raw = _row_value(cast(dict[str, object], ctx['problem']), 'slug', '')
+        problem_slug = cast(str | None, problem_slug_raw) or ''
         problem_id = _to_int(_row_value(ctx.get('problem'), 'id', 0))
         workspace_id = _to_int(_row_value(ctx.get('workspace'), 'id', 0))
         has_pdf = False
@@ -232,18 +235,21 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
                 preview_text = 'missing'
                 preview_danger = True
             else:
-                preview_source_commit = str(_row_value(preview_row, 'source_commit', '') or '').strip()
-                summary_obj = parse_summary_json(_row_value(preview_row, 'summary_json', None), f'preview/{preview_id}') or {}
-                preview_signature = str(summary_obj.get('statement_signature') or '').strip() if isinstance(summary_obj, dict) else ''
-                workspace_path_text = str(_row_value(ctx.get('workspace'), 'path', '') or '').strip()
-                problem_title = str(_row_value(ctx.get('problem'), 'name', '') or '').strip()
+                preview_source_commit = cast(str | None, _row_value(preview_row, 'source_commit', '')) or ''
+                summary_obj = parse_summary_json(_row_value(preview_row, 'summary_json', None), f'preview/{preview_id}')
+                preview_signature = cast(str | None, summary_obj.get('statement_signature')) or ''
+                workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
+                workspace_path_text = cast(str | None, workspace_path_raw) or ''
+                problem_title_raw = _row_value(cast(dict[str, object], ctx['problem']), 'name', '')
+                problem_title = cast(str | None, problem_title_raw) or ''
                 current_signature = ''
                 if workspace_path_text:
                     try:
                         current_signature = statement_sources_signature(Path(workspace_path_text), problem_title=problem_title)
                     except Exception:
                         current_signature = ''
-                workspace_head = str(_row_value(ctx.get('workspace'), 'head_commit', '') or '').strip()
+                workspace_head_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'head_commit', '')
+                workspace_head = cast(str | None, workspace_head_raw) or ''
                 stale_by_signature = bool(preview_signature and current_signature and (preview_signature != current_signature))
                 stale_by_head = bool((not preview_signature or not current_signature) and preview_source_commit and workspace_head and (preview_source_commit != workspace_head))
                 if stale_by_signature or stale_by_head:
@@ -251,32 +257,30 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
                     preview_danger = False
                     preview_warn = True
     nav['preview'] = {'text': preview_text, 'danger': preview_danger, 'warn': preview_warn}
-    workspace_changes = ctx.get('workspace_changes') if isinstance(ctx, dict) else None
-    changes_total = _to_int(workspace_changes.get('total') if isinstance(workspace_changes, dict) else 0)
+    workspace_changes = cast(dict[str, object], ctx['workspace_changes'])
+    changes_total = _to_int(workspace_changes.get('total'))
     nav['files'] = {'text': 'clean' if changes_total <= 0 else f'{changes_total} changed', 'danger': False}
-    generator_status = ctx.get('generator_status') if isinstance(ctx, dict) else None
-    generator_mode = str(generator_status.get('mode') or '') if isinstance(generator_status, dict) else ''
-    configured_rows = generator_status.get('configured_sources') if isinstance(generator_status, dict) else []
+    generator_status = cast(dict[str, object], ctx['generator_status'])
+    generator_mode = cast(str | None, generator_status.get('mode')) or ''
+    configured_rows = cast(list[dict[str, object]], generator_status.get('configured_sources') or [])
     configured_count = 0
     configured_ready = 0
     configured_paths: list[str] = []
     source_paths: list[str] = []
-    if isinstance(configured_rows, list):
-        for row in configured_rows:
-            if not isinstance(row, dict):
-                continue
-            row_path = str(row.get('path') or '').strip()
+    for row in configured_rows:
+        row_path = cast(str | None, row.get('path')) or ''
+        if row_path:
+            source_paths.append(row_path)
+        if bool(row.get('configured')):
+            configured_count += 1
             if row_path:
-                source_paths.append(row_path)
-            if bool(row.get('configured')):
-                configured_count += 1
-                if row_path:
-                    configured_paths.append(row_path)
-                if bool(row.get('exists')):
-                    configured_ready += 1
+                configured_paths.append(row_path)
+            if bool(row.get('exists')):
+                configured_ready += 1
     if configured_count > 0:
         used_count = 0
-        workspace_path_text = str(_row_value(ctx.get('workspace'), 'path', '') or '').strip()
+        workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
+        workspace_path_text = cast(str | None, workspace_path_raw) or ''
         if workspace_path_text:
             try:
                 used_count = _count_used_configured_generators(Path(workspace_path_text), configured_paths, source_paths)
@@ -285,16 +289,17 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         generator_text = f'{count_label(configured_count, "file")}, {used_count} used'
         generator_danger = configured_ready < configured_count
     else:
-        generator_text = str(generator_status.get('display') or 'missing') if isinstance(generator_status, dict) else 'missing'
+        generator_text = cast(str | None, generator_status.get('display')) or 'missing'
         generator_danger = generator_mode in {'missing', 'invalid'}
     nav['generators'] = {'text': generator_text, 'danger': bool(generator_danger)}
-    checker_status = ctx.get('checker_status') if isinstance(ctx, dict) else None
-    checker_display = str(checker_status.get('display') or 'unknown') if isinstance(checker_status, dict) else 'unknown'
-    checker_mode = str(checker_status.get('mode') or '') if isinstance(checker_status, dict) else ''
-    checker_standard_invalid = bool(isinstance(checker_status, dict) and checker_mode == 'standard' and (not bool(checker_status.get('standard_valid'))))
+    checker_status = cast(dict[str, object], ctx['checker_status'])
+    checker_display = cast(str | None, checker_status.get('display')) or 'unknown'
+    checker_mode = cast(str | None, checker_status.get('mode')) or ''
+    checker_standard_invalid = checker_mode == 'standard' and (not bool(checker_status.get('standard_valid')))
     checker_hint = ''
-    if isinstance(checker_status, dict) and checker_mode == 'standard':
-        raw_standard = str(checker_status.get('standard_checker') or checker_display or '').strip()
+    if checker_mode == 'standard':
+        checker_standard_raw = checker_status.get('standard_checker')
+        raw_standard = cast(str | None, checker_standard_raw) or checker_display
         if raw_standard:
             canonical = raw_standard
             description = 'general-purpose standard checker from testlib'
@@ -307,27 +312,30 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
                     canonical = f'std::{canonical}'
             checker_hint = f'{canonical} - {description}'
     nav['checker'] = {'text': checker_display, 'danger': checker_mode in {'missing', 'none'} or checker_display in {'unknown', 'error', 'missing'} or checker_standard_invalid, 'hint': checker_hint}
-    interactor_status = ctx.get('interactor_status') if isinstance(ctx, dict) else None
-    interactor_mode = str(interactor_status.get('mode') or '') if isinstance(interactor_status, dict) else ''
-    interactor_display = str(interactor_status.get('display') or 'missing') if isinstance(interactor_status, dict) else 'missing'
+    interactor_status = cast(dict[str, object], ctx['interactor_status'])
+    interactor_mode = cast(str | None, interactor_status.get('mode')) or ''
+    interactor_display = cast(str | None, interactor_status.get('display')) or 'missing'
     nav['interactor'] = {'text': interactor_display, 'danger': interactor_mode in {'missing', 'none', 'invalid'}}
-    validator_status = ctx.get('validator_status') if isinstance(ctx, dict) else None
-    validator_mode = str(validator_status.get('mode') or '') if isinstance(validator_status, dict) else ''
-    validator_display = str(validator_status.get('display') or 'missing') if isinstance(validator_status, dict) else 'missing'
+    validator_status = cast(dict[str, object], ctx['validator_status'])
+    validator_mode = cast(str | None, validator_status.get('mode')) or ''
+    validator_display = cast(str | None, validator_status.get('display')) or 'missing'
     nav['validator'] = {'text': validator_display, 'danger': validator_mode in {'missing', 'none', 'invalid'}}
-    tests_status = ctx.get('tests_spec_status') if isinstance(ctx, dict) else None
-    tests_mode = str(tests_status.get('mode') or '') if isinstance(tests_status, dict) else ''
-    tests_total = _to_int(tests_status.get('total') if isinstance(tests_status, dict) else 0)
-    tests_sample = _to_int(tests_status.get('sample') if isinstance(tests_status, dict) else 0)
-    tests_text = f'{tests_total} ({count_label(tests_sample, "sample")})' if tests_total > 0 else str(tests_status.get('display') or 'empty') if isinstance(tests_status, dict) else 'empty'
+    tests_status = cast(dict[str, object], ctx['tests_spec_status'])
+    tests_mode = cast(str | None, tests_status.get('mode')) or ''
+    tests_total = _to_int(tests_status.get('total'))
+    tests_sample = _to_int(tests_status.get('sample'))
+    tests_display = cast(str | None, tests_status.get('display')) or 'empty'
+    tests_text = f'{tests_total} ({count_label(tests_sample, "sample")})' if tests_total > 0 else tests_display
     nav['tests'] = {'text': tests_text, 'danger': tests_mode in {'empty', 'invalid', 'missing', 'none'}, 'has_counts': tests_total > 0, 'total': tests_total, 'sample': tests_sample, 'sample_zero': tests_total > 0 and tests_sample <= 0}
-    solutions_status = ctx.get('solutions_status') if isinstance(ctx, dict) else None
-    solutions_mode = str(solutions_status.get('mode') or '') if isinstance(solutions_status, dict) else ''
-    if isinstance(solutions_status, dict) and solutions_mode == 'missing-main':
-        count_display = str(solutions_status.get('count_display') or '').strip()
+    solutions_status = cast(dict[str, object], ctx['solutions_status'])
+    solutions_mode = cast(str | None, solutions_status.get('mode')) or ''
+    if solutions_mode == 'missing-main':
+        count_display = cast(str | None, solutions_status.get('count_display')) or ''
         solutions_text = f'{count_display} (no main correct)' if count_display else 'no main correct'
     else:
-        solutions_text = str(solutions_status.get('count_display') or solutions_status.get('display') or 'missing') if isinstance(solutions_status, dict) else 'missing'
+        solutions_count_display = cast(str | None, solutions_status.get('count_display'))
+        solutions_display = cast(str | None, solutions_status.get('display'))
+        solutions_text = solutions_count_display or solutions_display or 'missing'
     solutions_danger = solutions_mode != 'ready'
     nav['solutions'] = {'text': solutions_text, 'danger': solutions_danger}
     pipeline_blockers: list[str] = []
@@ -343,33 +351,38 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         nav['pipeline'] = {'text': 'blocked', 'danger': True}
     else:
         nav['pipeline'] = {'text': 'runnable', 'danger': False}
-    verification_status = ctx.get('verification_status') if isinstance(ctx, dict) else None
-    verification_mode = str(verification_status.get('mode') or verification_status.get('display') or 'none') if isinstance(verification_status, dict) else 'none'
-    verification_display = str(verification_status.get('display') or 'none') if isinstance(verification_status, dict) else 'none'
+    verification_status = cast(dict[str, object], ctx['verification_status'])
+    verification_mode_raw = cast(str | None, verification_status.get('mode'))
+    verification_display_raw = cast(str | None, verification_status.get('display'))
+    verification_mode = verification_mode_raw or verification_display_raw or 'none'
+    verification_display = verification_display_raw or 'none'
     nav['run'] = {'text': verification_display, 'danger': verification_mode in {'none', 'failed'}, 'warn': verification_mode == 'stale'}
-    workspace_row = ctx.get('workspace')
-    problem_row = ctx.get('problem')
+    workspace_row = cast(dict[str, object], ctx['workspace'])
+    problem_row = cast(dict[str, object], ctx['problem'])
     workspace_id = _to_int(_row_value(workspace_row, 'id', 0))
     problem_id = _to_int(_row_value(problem_row, 'id', 0))
-    workspace_path_text = str(_row_value(workspace_row, 'path', '') or '').strip()
-    workspace_head = str(_row_value(workspace_row, 'head_commit', '') or '').strip()
-    workspace_revision = ctx.get('workspace_version')
-    head_revision = workspace_revision if isinstance(workspace_revision, int) and workspace_revision > 0 else None
+    workspace_path_raw = _row_value(workspace_row, 'path', '')
+    workspace_head_raw = _row_value(workspace_row, 'head_commit', '')
+    workspace_path_text = cast(str | None, workspace_path_raw) or ''
+    workspace_head = cast(str | None, workspace_head_raw) or ''
+    workspace_revision = cast(int | None, ctx.get('workspace_version'))
+    head_revision = workspace_revision if workspace_revision is not None and workspace_revision > 0 else None
     if head_revision is None and workspace_path_text and workspace_head:
         head_revision = git_commit_count(Path(workspace_path_text), workspace_head)
     export_revision: int | None = None
     if workspace_id > 0 and problem_id > 0 and workspace_path_text:
         latest_export = config.db.fetch_one('\n            SELECT source_commit\n            FROM exports\n            WHERE problem_id=? AND workspace_id=?\n            ORDER BY created_at DESC\n            LIMIT 1\n            ', [problem_id, workspace_id])
         if latest_export is not None:
-            export_source_commit = str(_row_value(latest_export, 'source_commit', '') or '').strip()
+            export_source_commit_raw = _row_value(latest_export, 'source_commit', '')
+            export_source_commit = cast(str | None, export_source_commit_raw) or ''
             if export_source_commit:
                 export_revision = git_commit_count(Path(workspace_path_text), export_source_commit)
-    if isinstance(export_revision, int) and export_revision > 0:
-        export_outdated = isinstance(head_revision, int) and head_revision > 0 and (export_revision != head_revision)
+    if export_revision is not None and export_revision > 0:
+        export_outdated = head_revision is not None and head_revision > 0 and (export_revision != head_revision)
         nav['export'] = {'text': f'built for v{export_revision}', 'danger': bool(export_outdated)}
     else:
         nav['export'] = {'text': 'missing', 'danger': True}
-    access_role = str(ctx.get('access', {}).get('role', 'none')) if isinstance(ctx.get('access'), dict) else 'none'
+    access_role = cast(str | None, cast(dict[str, object], ctx['access']).get('role')) or 'none'
     nav['access'] = {'text': access_role, 'danger': False}
     nav['workspace'] = nav['access']
     return nav
@@ -388,15 +401,14 @@ def render_workspace_page(request: Request, problem: str, user: str, *, show_acc
         acl_entries = problem_acl_entries(int(ctx['problem']['id']))
         return template_response(request, 'access.html', {'ctx': ctx, 'message': message, 'acl_entries': acl_entries, 'repo_role_options': ['owner', 'write', 'read']})
 
-    workspace_changes = ctx.get('workspace_changes') if isinstance(ctx, dict) else {}
-    change_rows_raw = workspace_changes.get('rows') if isinstance(workspace_changes, dict) else []
-    change_rows = [row for row in change_rows_raw if isinstance(row, dict)]
+    workspace_changes = cast(dict[str, object], ctx['workspace_changes'])
+    change_rows = cast(list[dict[str, object]], workspace_changes.get('rows') or [])
     requested_path = normalize_workspace_rel_path(request.query_params.get('path'))
     selected_path = ''
-    if requested_path and any((str(row.get('link_path') or '') == requested_path for row in change_rows)):
+    if requested_path and any((row.get('link_path') == requested_path for row in change_rows)):
         selected_path = requested_path
     elif change_rows:
-        selected_path = str(change_rows[0].get('link_path') or '')
+        selected_path = cast(str | None, change_rows[0].get('link_path')) or ''
 
     selected_diff = ''
     selected_diff_truncated = False
@@ -421,7 +433,3 @@ def render_workspace_page(request: Request, problem: str, user: str, *, show_acc
                 kind = 'del'
             selected_diff_lines.append({'text': line, 'kind': kind})
     return template_response(request, 'workspace.html', {'ctx': ctx, 'status': status, 'branches': ctx.get('branches', []), 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})
-
-
-
-

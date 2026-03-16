@@ -25,8 +25,8 @@ from .context_operation import (
 from .test_spec import read_tests_spec, tests_spec_read_payload
 
 _C = config.constants
-def _checker_standard_from_build_cfg(build_cfg: dict) -> str:
-    raw = str(build_cfg.get('checker_standard') or '').strip()
+def _checker_standard_from_build_cfg(build_cfg: dict[str, object]) -> str:
+    raw = build_cfg.get('checker_standard') or ''
     if not raw:
         return ''
     try:
@@ -56,7 +56,7 @@ def _component_repo_source_from_build_cfg(workspace: Path, build_cfg: dict, conf
         if folder_path.exists() and folder_path.is_dir() and (not folder_path.is_symlink()):
             with os.scandir(folder_path) as entries:
                 for entry in entries:
-                    name = str(entry.name or '')
+                    name = entry.name
                     if not name.endswith('.cpp'):
                         continue
                     try:
@@ -73,21 +73,23 @@ def _component_repo_source_from_build_cfg(workspace: Path, build_cfg: dict, conf
     return (f'{folder}/{names[0]}', True)
 
 def _source_basename_label(path: str) -> str:
-    raw = str(path or '').strip()
+    raw = path.strip()
     if not raw:
         return ''
     name = Path(raw).name.strip()
     return name or raw
 
 def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[str]) -> str:
-    raw = str(token or '').strip().replace('\\', '/')
+    raw = token.strip().replace('\\', '/')
     while raw.startswith('./'):
         raw = raw[2:]
     if not raw:
         return ''
     if any((part == '..' for part in raw.split('/'))):
         return ''
-    normalized_sources = dedupe_preserve_order([str(path or '').strip().replace('\\', '/') for path in source_paths if str(path or '').strip()])
+    normalized_sources = dedupe_preserve_order(
+        [path.strip().replace('\\', '/') for path in source_paths if path.strip()]
+    )
     if not normalized_sources:
         return ''
     source_set = set(normalized_sources)
@@ -108,7 +110,7 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
             candidates.append(f'generators/{raw}{ext}')
     seen: set[str] = set()
     for rel in candidates:
-        rel_key = str(rel or '').strip()
+        rel_key = rel.strip()
         if not rel_key or rel_key in seen:
             continue
         seen.add(rel_key)
@@ -126,21 +128,25 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
     return ''
 
 def _count_used_configured_generators(workspace: Path, configured_sources: list[str], source_paths: list[str]) -> int:
-    configured = dedupe_preserve_order([str(path or '').strip().replace('\\', '/') for path in configured_sources if str(path or '').strip()])
+    configured = dedupe_preserve_order(
+        [path.strip().replace('\\', '/') for path in configured_sources if path.strip()]
+    )
     if not configured:
         return 0
     configured_set = set(configured)
-    source_catalog = dedupe_preserve_order([*[str(path or '').strip().replace('\\', '/') for path in source_paths if str(path or '').strip()], *configured])
+    source_catalog = dedupe_preserve_order(
+        [*(path.strip().replace('\\', '/') for path in source_paths if path.strip()), *configured]
+    )
     try:
         entries, _ = read_tests_spec(workspace)
     except Exception:
         return 0
     used: set[str] = set()
     for row in entries:
-        if str(row.get('kind') or '').strip().lower() != 'gen':
+        if row.get('kind') != 'gen':
             continue
         try:
-            command = str(tests_spec_read_payload(workspace, row) or '').strip()
+            command = tests_spec_read_payload(workspace, row)
         except Exception:
             command = ''
         if not command:

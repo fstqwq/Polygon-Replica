@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
 import re
 
 
-DIAG_RE = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<level>warning|error|note):\s*(?P<msg>.*)$")
 RUN_TEST_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.in$")
 
 
@@ -76,13 +74,3 @@ def effective_run_timeout_sec(run_timeout_ms: object, *, max_timeout_sec: int) -
     timeout_ms = max(1, int(run_timeout_ms))
     timeout_sec = max(1, (timeout_ms + 999) // 1000)
     return max(1, min(int(max_timeout_sec), timeout_sec))
-
-
-def effective_run_jobs(configured: object, *, test_count: int) -> int:
-    auto_jobs = max(1, min(4, os.cpu_count() or 1))
-    try:
-        requested = int(configured)
-    except Exception:
-        requested = 0
-    bounded = auto_jobs if requested <= 0 else max(1, min(16, requested))
-    return max(1, min(bounded, max(1, int(test_count))))

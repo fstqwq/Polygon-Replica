@@ -3,8 +3,8 @@
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-from app.impl.workspace.public import render_workspace_page
-from app.impl.problem.access import access_page, workspace_access_grant, workspace_access_revoke
+from app.impl.workspace.context_ui import render_workspace_page
+from app.impl.problem.access import workspace_access_grant, workspace_access_revoke
 from app.impl.problem.checker import checker_create_template, checker_page, checker_save_source, checker_set_standard, checker_view_standard
 from app.impl.problem.file import files_create_template, files_delete, files_download, files_new, files_page, files_rename, files_save, files_upload
 from app.impl.problem.general import general_save
@@ -254,7 +254,7 @@ router.add_api_route(
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/access",
-    access_page,
+    lambda request, problem, user: render_workspace_page(request, problem, user, show_access_admin=True),
     methods=["GET"],
     response_class=HTMLResponse,
 )

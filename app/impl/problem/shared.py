@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -6,9 +6,10 @@ from urllib.parse import quote_plus
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from app.impl.auth.public import has_sudo_session, redirect_response, safe_next_path
+from app.impl.auth.session import has_sudo_session
+from app.impl.auth.shared import redirect_response, safe_next_path
 from app.impl.runtime.config import config
-from app.impl.workspace.public import global_user_ctx
+from app.impl.workspace.context import global_user_ctx
 from app.main_util import normalize_component_source_path, normalize_workspace_rel_path
 
 _C = config.constants
@@ -46,16 +47,21 @@ def _normalize_component_create_path(raw: str | None, folder: str, default_filen
 
 def _settings_user_ctx(user: str) -> dict:
     gctx = global_user_ctx(user)
-    user_row_raw = gctx.get("user")
-    if not isinstance(user_row_raw, dict):
+    if not isinstance(user_row_raw := gctx.get("user"), dict):
+        raise HTTPException(status_code=400, detail="invalid user")
+    if not isinstance(user_id := user_row_raw.get("id"), int) or not isinstance(username := user_row_raw.get("username"), str):
         raise HTTPException(status_code=400, detail="invalid user")
     user_row = {
-        "id": int(user_row_raw.get("id") or 0),
-        "username": str(user_row_raw.get("username") or ""),
+        "id": user_id,
+        "username": username,
     }
     if user_row["id"] <= 0 or (not user_row["username"]):
         raise HTTPException(status_code=400, detail="invalid user")
-    default_problem = str(gctx.get("default_problem") or "")
+    default_problem = gctx.get("default_problem")
+    if default_problem is None:
+        default_problem = ""
+    elif not isinstance(default_problem, str):
+        raise HTTPException(status_code=400, detail="invalid default problem")
     return {"user": user_row, "default_problem": default_problem}
 
 
@@ -72,7 +78,7 @@ def _has_destructive_sudo_for_ctx(request: Request, ctx: dict) -> bool:
     user_id = 0
     if isinstance(user_row, dict):
         try:
-            user_id = int(user_row.get("id") or 0)
+            user_id = int(user_row["id"])
         except Exception:
             user_id = 0
     if user_id <= 0:
@@ -80,21 +86,21 @@ def _has_destructive_sudo_for_ctx(request: Request, ctx: dict) -> bool:
     return has_sudo_session(request, user_id=user_id, scope=str(_C.SUDO_SCOPE_DESTRUCTIVE))
 
 
-def _as_bool_form_value(raw: object) -> bool:
-    token = str(raw or "").strip().lower()
+def _as_bool_form_value(raw: str) -> bool:
+    token = raw.strip().lower()
     return token in {"1", "true", "yes", "on", "y"}
 
 
 def _system_config_row_by_key(sections: list[dict[str, object]]) -> dict[str, dict[str, object]]:
     rows_by_key: dict[str, dict[str, object]] = {}
     for section in sections:
-        rows_raw = section.get("rows") if isinstance(section, dict) else []
-        if not isinstance(rows_raw, list):
+        rows = section.get("rows") if isinstance(section, dict) else []
+        if not isinstance(rows, list):
             continue
-        for row in rows_raw:
+        for row in rows:
             if not isinstance(row, dict):
                 continue
-            key = str(row.get("key") or "").strip()
+            key = key.strip() if isinstance(key := row.get("key"), str) else ""
             if key:
                 rows_by_key[key] = row
     return rows_by_key

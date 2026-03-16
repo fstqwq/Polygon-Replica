@@ -85,7 +85,8 @@ class TestUIComponents(UIBaseSuite):
     def test_solutions_nav_status_shows_no_main_correct_hint_when_missing_main(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "foo.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "bar.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg = {}
@@ -104,7 +105,7 @@ class TestUIComponents(UIBaseSuite):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'data-page="solutions"[^>]*>\s*<span class="submenu-title">Solution files</span>\s*<span class="submenu-status submenu-status-danger">\s*1 file \(no main correct\)\s*</span>',
+            r'data-page="solutions"[^>]*>\s*<span class="submenu-title">Solution files</span>\s*<span class="submenu-status submenu-status-danger">\s*2 files \(no main correct\)\s*</span>',
         )
 
     def test_checker_page_sets_standard_checker_metadata(self) -> None:
@@ -581,8 +582,8 @@ class TestUIComponents(UIBaseSuite):
     def test_solutions_set_tag_main_correct_updates_main_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         token = uuid.uuid4().hex[:8]
-        main_rel = f"solutions/main_{token}.cpp"
-        other_rel = f"solutions/other_{token}.cpp"
+        main_rel = f"solutions/foo_{token}.cpp"
+        other_rel = f"solutions/bar_{token}.cpp"
         (ws / main_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / other_rel).write_text("int main(){return 1;}\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
@@ -616,10 +617,10 @@ class TestUIComponents(UIBaseSuite):
             rf'<input type="hidden" name="source_path" value="{re.escape(main_rel)}"\s*/?>[\s\S]*?<option value="main_correct" selected>',
         )
 
-    def test_solutions_set_tag_accepted_does_not_mark_main_correct(self) -> None:
+    def test_solutions_set_tag_accepted_keeps_build_config_unset_but_resolves_main_correct_in_ui(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         token = uuid.uuid4().hex[:8]
-        source_rel = f"solutions/ac_{token}.cpp"
+        source_rel = f"solutions/foo_{token}.cpp"
         (ws / source_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -641,7 +642,7 @@ class TestUIComponents(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            rf'<input type="hidden" name="source_path" value="{re.escape(source_rel)}"\s*/?>[\s\S]*?<option value="accepted" selected>',
+            rf'<input type="hidden" name="source_path" value="{re.escape(source_rel)}"\s*/?>[\s\S]*?<option value="main_correct" selected>',
         )
 
     def test_solutions_rename_moves_desc_and_updates_config(self) -> None:

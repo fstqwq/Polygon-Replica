@@ -1,21 +1,16 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
 from fastapi import Form, HTTPException, Request
 
-from app.impl.auth.public import redirect_response, template_response
+from app.impl.auth.shared import redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
-from app.impl.workspace.public import (
-    audit,
-    interactor_status_context,
-    read_build_config,
-    require_write_access,
-    template_for_kind,
-    write_build_config,
-    page_ctx,
-)
+from app.impl.workspace.context_operation import audit, read_build_config, template_for_kind, write_build_config
+from app.impl.workspace.context_component_status import interactor_status_context
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
 _C = config.constants
@@ -25,7 +20,7 @@ def interactor_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     interactor_status = interactor_status_context(workspace)
-    repo_source = str(interactor_status.get('repo_source') or 'interactors/interactor.cpp')
+    repo_source = repo_source if isinstance(repo_source := interactor_status.get('repo_source'), str) and repo_source else 'interactors/interactor.cpp'
     repo_content = ''
     repo_content_truncated = False
     try:
@@ -98,7 +93,7 @@ def interactor_save_source(problem: str, user: str, path: str=Form('interactors/
                 else:
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
-        audit(ctx['user']['id'], ctx['problem']['id'], 'interactor.save_source', {'path': target, 'bytes': len(str(content or '').encode('utf-8'))})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'interactor.save_source', {'path': target, 'bytes': len(content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

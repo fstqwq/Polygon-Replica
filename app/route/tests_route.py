@@ -3,71 +3,71 @@
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-from app.impl.build.test_spec import (
-    build_page,
-    tests_spec_add_gen,
-    tests_spec_add_manual,
-    tests_spec_add_manual_upload,
-    tests_spec_delete,
-    tests_spec_edit,
-    tests_spec_gen_script_save,
-    tests_spec_payload_download,
-    tests_spec_payload_upload,
-    tests_spec_reindex,
+from app.impl.tests_spec.routes import (
+    add_generator_test,
+    add_manual_test,
+    delete_spec_test,
+    download_test_payload,
+    edit_spec_test,
+    reindex_spec_test,
+    render_tests_page,
+    save_gen_script,
+    upload_manual_test,
+    upload_test_payload,
 )
-from app.impl.build.verification import verification_start
+from app.impl.tests_spec.verification import verification_start
 
 router = APIRouter()
 
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests",
-    build_page,
+    render_tests_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/add-manual",
-    tests_spec_add_manual,
+    add_manual_test,
     methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/add-manual-upload",
-    tests_spec_add_manual_upload,
+    upload_manual_test,
     methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/add-gen",
-    tests_spec_add_gen,
+    add_generator_test,
     methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/edit",
-    tests_spec_edit,
+    edit_spec_test,
     methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/delete",
-    tests_spec_delete,
+    delete_spec_test,
     methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/reindex",
-    tests_spec_reindex,
+    reindex_spec_test,
     methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/gen-script",
-    tests_spec_gen_script_save,
+    save_gen_script,
     methods=["POST"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/payload/download",
-    tests_spec_payload_download,
+    download_test_payload,
     methods=["GET"],
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/tests/spec/payload/upload",
-    tests_spec_payload_upload,
+    upload_test_payload,
     methods=["POST"],
 )
 router.add_api_route(

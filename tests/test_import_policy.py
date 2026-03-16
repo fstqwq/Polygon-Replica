@@ -20,11 +20,10 @@ def _export_public(namespace, module):
         namespace.setdefault(name, getattr(module, name))
 _export_public(globals(), module)
 """
-        self.assertTrue(import_policy._dynamic_reexport_detected("app.impl.workspace.public", source))
+        self.assertTrue(import_policy._dynamic_reexport_detected("app.impl.workspace.context_ui", source))
         self.assertFalse(import_policy._dynamic_reexport_detected("scripts.import_policy", source))
 
     def test_plural_segment_naming_detector(self) -> None:
-        self.assertEqual(import_policy._plural_name_violations_for_module("app.impl.contest.api"), [])
         self.assertEqual(
             import_policy._plural_name_violations_for_module(
                 "app.service.process.api",
@@ -32,7 +31,7 @@ _export_public(globals(), module)
             ),
             [],
         )
-        self.assertEqual(import_policy._plural_name_violations_for_module("app.impl.workspace.api"), [])
+        self.assertEqual(import_policy._plural_name_violations_for_module("app.impl.auth.api"), [])
 
     def test_affix_cluster_detector(self) -> None:
         offenders = import_policy._affix_cluster_modules(

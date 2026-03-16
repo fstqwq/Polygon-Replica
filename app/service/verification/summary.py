@@ -12,7 +12,7 @@ def cap_summary_list_field(
     limit_key: str,
 ) -> None:
     values = payload.get(field)
-    if not isinstance(values, list):
+    if values is None:
         return
     cap = max(1, int(limit))
     total = len(values)
@@ -36,6 +36,6 @@ def summary_for_db(summary: dict, *, normalize_diagnostics_for_db, diagnostics_l
         "diagnostics_limit",
     )
     diagnostics = payload.get("diagnostics")
-    if isinstance(diagnostics, list):
+    if diagnostics is not None:
         payload["diagnostics"] = normalize_diagnostics_for_db(diagnostics, diagnostics_limit)
     return json.dumps(payload)

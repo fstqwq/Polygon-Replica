@@ -13,8 +13,8 @@ from starlette.requests import Request
 
 from .common import SmokeBase, testsuite_root
 from app.impl.runtime.config import config
-from app.impl.problem.api import (
-    checker_set_standard,
+from app.impl.problem.checker import checker_set_standard
+from app.impl.problem.file import (
     files_create_template,
     files_delete,
     files_download,
@@ -22,23 +22,23 @@ from app.impl.problem.api import (
     files_rename,
     files_save,
     files_upload,
-    generator_create_template,
-    interactor_create_template,
-    interactor_save_source,
+)
+from app.impl.problem.generator import generator_create_template
+from app.impl.problem.interactor import interactor_create_template, interactor_save_source
+from app.impl.problem.solution import (
     solutions_create_template,
     solutions_delete,
     solutions_rename,
     solutions_save_source,
     solutions_set_tag,
-    validator_create_template,
-    validator_save_source,
 )
+from app.impl.problem.validator import validator_create_template, validator_save_source
+from app.impl.run_export.artifact import artifact_file, run_artifact_file
+from app.impl.run_export.run import run_execute
 from app.impl.root.api import auth_password_meta, login_page
-from app.impl.run_export.api import artifact_file, run_artifact_file, run_execute
 from app.service.problem.test_spec import parse_gen_command_tokens
 from .ui_support import _register_with_password_proof
 
-build_service = config.verification_service
 db = config.db
 workspace_service = config.workspace_service
 
@@ -220,7 +220,7 @@ class TestSecurity(SmokeBase):
                 alice_workspace_id,
                 "",
                 "main",
-                "materialization",
+                "build",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -258,7 +258,7 @@ class TestSecurity(SmokeBase):
                 alice_workspace_id,
                 "",
                 "main",
-                "materialization",
+                "build",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -637,4 +637,3 @@ class TestSecurity(SmokeBase):
         self.assertIn("invalid standard checker name", messages[0].lower())
         payload = json.loads(cfg.read_text(encoding="utf-8"))
         self.assertEqual(str(payload.get("checker_standard") or ""), "std::wcmp.cpp")
-

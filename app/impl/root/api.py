@@ -1,38 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import sqlite3
 import secrets
 from urllib.parse import quote_plus
 from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
-from app.impl.auth.public import (
-    bootstrap_super_admin_with_password_verifier,
-    create_session_for_user,
-    create_sudo_session_for_user,
-    create_user_with_password_verifier,
-    enforce_same_origin_state_change,
-    has_registered_users,
-    has_sudo_session,
-    issue_password_form_csrf_token,
-    login_rate_limit_check,
-    login_rate_limit_fail,
-    login_rate_limit_key,
-    login_rate_limit_success,
-    lookup_user_auth,
-    normalize_password_iters,
-    normalize_password_salt_hex,
-    normalize_password_verifier_hex,
-    normalize_username_required,
-    password_meta_for_username,
-    password_proof_from_verifier,
-    redirect_response,
-    revoke_session_token,
-    revoke_sudo_session_token,
-    safe_next_path,
-    session_identity,
-    session_user,
-    template_response,
-    verify_password_form_csrf_token,
-)
+from app.impl.auth.shared import bootstrap_super_admin_with_password_verifier, create_user_with_password_verifier, enforce_same_origin_state_change, has_registered_users, login_rate_limit_check, login_rate_limit_fail, login_rate_limit_key, login_rate_limit_success, lookup_user_auth, normalize_password_iters, normalize_password_salt_hex, normalize_password_verifier_hex, normalize_username_required, password_meta_for_username, redirect_response, safe_next_path, template_response
+from app.impl.auth.session import create_session_for_user, create_sudo_session_for_user, has_sudo_session, revoke_session_token, revoke_sudo_session_token, session_identity, session_user
+from app.impl.auth.csrf import issue_password_form_csrf_token, password_proof_from_verifier, verify_password_form_csrf_token
 from app.impl.runtime.config import config
 from app.impl.root.contest_import import (
     _build_contest_import_problem_draft_rows,
@@ -44,19 +18,17 @@ from app.impl.root.contest_import import (
     _normalize_import_contest_idx,
     _resolve_import_contest_slug,
 )
-from app.impl.run_export import api
+from app.impl.run_export.import_source import (
+    build_import_slug_hint,
+    import_package_as_new_problem,
+    import_statement_language_warning,
+)
 from app.db import now_iso
 from app.service.importing.contest import PolygonContestImportService
 
-from app.impl.workspace.public import (
-    audit,
-    form_text,
-    global_user_ctx,
-    normalize_contest_slug_required,
-    normalize_contest_title_required,
-    user_contests_overview,
-    user_participating_problems,
-)
+from app.impl.workspace.context_operation import audit, normalize_contest_slug_required, normalize_contest_title_required, user_contests_overview, user_participating_problems
+from app.impl.workspace.problem_config import form_text
+from app.impl.workspace.context import global_user_ctx
 
 _C = config.constants
 _POLYGON_CONTEST_IMPORT_SERVICE = PolygonContestImportService()
@@ -89,24 +61,38 @@ def _render_contest_import_review_page(
     problem_slug_overrides: dict[int, str],
     top_error: str = "",
 ) -> object:
-    package_name = str(draft.get("package_name") or "").strip()
+    package_name_obj = draft.get("package_name")
+    package_name = package_name_obj.strip() if isinstance(package_name_obj, str) else ""
     draft_rows_raw = draft.get("problem_rows")
     draft_rows = [dict(item) for item in draft_rows_raw] if isinstance(draft_rows_raw, list) else []
-    owner = str(gctx.get("user", {}).get("username") or "").strip()
+    user_obj = gctx.get("user")
+    owner = ""
+    if isinstance(user_obj, dict):
+        owner_obj = user_obj.get("username")
+        if isinstance(owner_obj, str):
+            owner = owner_obj.strip()
     rows, rows_have_error = _build_problem_slug_review_rows(owner, draft_rows, problem_slug_overrides)
     slug_state = _contest_slug_review_state(contest_slug_input, package_name)
-    slug_input_value = str(contest_slug_input or "").strip()
+    slug_input_value = contest_slug_input.strip() if isinstance(contest_slug_input, str) else ""
     if not slug_input_value:
-        slug_input_value = str(slug_state.get("suggested") or "").strip()
-    title_input_value = str(contest_title_input or "").strip()
+        suggested_slug = slug_state.get("suggested")
+        if isinstance(suggested_slug, str):
+            slug_input_value = suggested_slug.strip()
+    title_input_value = contest_title_input.strip() if isinstance(contest_title_input, str) else ""
     if not title_input_value:
-        title_input_value = str(draft.get("parsed_title") or "").strip()
+        parsed_title_obj = draft.get("parsed_title")
+        if isinstance(parsed_title_obj, str):
+            title_input_value = parsed_title_obj.strip()
     contest_slug_error = ""
     if not bool(slug_state.get("valid")):
-        contest_slug_error = str(slug_state.get("message") or "")
+        message_obj = slug_state.get("message")
+        contest_slug_error = message_obj if isinstance(message_obj, str) else ""
     elif bool(slug_state.get("exists")):
-        contest_slug_error = str(slug_state.get("message") or "")
+        message_obj = slug_state.get("message")
+        contest_slug_error = message_obj if isinstance(message_obj, str) else ""
     has_error = bool(top_error or rows_have_error or contest_slug_error)
+    parsed_title_obj = draft.get("parsed_title")
+    parsed_title = parsed_title_obj.strip() if isinstance(parsed_title_obj, str) else ""
     return template_response(
         request,
         "contest_import_review.html",
@@ -116,7 +102,7 @@ def _render_contest_import_review_page(
             "active_main": "contests",
             "draft_id": draft_id,
             "package_name": package_name,
-            "parsed_title": str(draft.get("parsed_title") or "").strip(),
+            "parsed_title": parsed_title,
             "contest_slug_value": slug_input_value,
             "contest_slug_state": slug_state,
             "contest_slug_error": contest_slug_error,
@@ -173,8 +159,7 @@ def setup_submit(request: Request, username: str=Form(...), password: str=Form('
         iters = normalize_password_iters(iter_value)
         if iters != int(_C.PASSWORD_HASH_ITERS):
             raise ValueError('setup failed; invalid password iterations')
-        expected_proof = password_proof_from_verifier(proof_token, verifier)
-        if not secrets.compare_digest(expected_proof, proof_value):
+        if not secrets.compare_digest(password_proof_from_verifier(proof_token, verifier), proof_value):
             raise ValueError('setup failed; invalid password proof')
         user_id = bootstrap_super_admin_with_password_verifier(safe_user, verifier, salt_hex, iters)
         token = create_session_for_user(int(user_id))
@@ -293,7 +278,8 @@ def logout(request: Request):
     identity = session_identity(request)
     if identity is not None:
         revoke_session_token(str(identity['token']))
-    revoke_sudo_session_token(str(request.cookies.get(_C.SUDO_COOKIE_NAME, '') or ''))
+    sudo_cookie = request.cookies.get(_C.SUDO_COOKIE_NAME)
+    revoke_sudo_session_token(sudo_cookie if isinstance(sudo_cookie, str) else "")
     response = redirect_response('/login', status_code=303, message='logged out')
     response.delete_cookie(_C.AUTH_COOKIE_NAME, path='/', secure=_C.AUTH_COOKIE_SECURE, httponly=True, samesite='lax')
     response.delete_cookie(_C.SUDO_COOKIE_NAME, path='/', secure=_C.AUTH_COOKIE_SECURE, httponly=True, samesite='lax')
@@ -385,7 +371,7 @@ def problems_root_page(request: Request, user: str = ""):
 def problems_root_import_slug_hint(request: Request, user: str = "", filename: str = "", requested_slug: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
-    payload = api.build_import_slug_hint(str(gctx["user"]["username"]), filename, requested_slug)
+    payload = build_import_slug_hint(str(gctx["user"]["username"]), filename, requested_slug)
     return JSONResponse(payload)
 
 
@@ -402,7 +388,7 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
         if not package_name:
             raise ValueError("package filename is required")
         package_content = package_upload.file.read()
-        imported = api.import_package_as_new_problem(
+        imported = import_package_as_new_problem(
             actor_user_id=int(gctx["user"]["id"]),
             actor_user=str(gctx["user"]["username"]),
             package_name=package_name,
@@ -410,11 +396,14 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
             requested_slug=str(problem_slug or "").strip(),
             source_problem="",
         )
-        target_problem = str(imported.get("target_problem") or "").strip()
-        total_tests = int(imported.get("total_tests") or 0)
-        package_format = str(imported.get("package_format") or "package").strip()
+        target_problem_obj = imported.get("target_problem")
+        target_problem = target_problem_obj.strip() if isinstance(target_problem_obj, str) else ""
+        total_tests_obj = imported.get("total_tests")
+        total_tests = int(total_tests_obj) if isinstance(total_tests_obj, int) else 0
+        package_format_obj = imported.get("package_format")
+        package_format = package_format_obj.strip() if isinstance(package_format_obj, str) else "package"
         msg = f"{package_format} package imported as {target_problem} ({_count_label(total_tests, 'test')})"
-        language_warning = api.import_statement_language_warning(imported)
+        language_warning = import_statement_language_warning(imported)
         if language_warning:
             msg = f"{msg}; warning: {language_warning}"
         return redirect_response(f"/problems/{target_problem}/{gctx['user']['username']}/statement", status_code=303, message=msg)
@@ -500,7 +489,8 @@ def contests_root_import(
         draft_rows = _build_contest_import_problem_draft_rows(actor_username, [dict(item) for item in rows if isinstance(item, dict)])
         if not draft_rows:
             raise ValueError("contest package has no importable problem rows")
-        parsed_title = str(parsed.get("title") or "").strip()
+        parsed_title_obj = parsed.get("title")
+        parsed_title = parsed_title_obj.strip() if isinstance(parsed_title_obj, str) else ""
         draft_id = _create_contest_import_draft(
             actor_user_id=actor_user_id,
             actor_username=actor_username,
@@ -540,8 +530,8 @@ def contests_root_import_review(request: Request, user: str = "", draft_id: str 
         gctx,
         draft,
         draft_id=safe_draft_id,
-        contest_slug_input=str(draft.get("contest_slug_input") or "").strip(),
-        contest_title_input=str(draft.get("contest_title_input") or "").strip(),
+        contest_slug_input=draft["contest_slug_input"].strip() if isinstance(draft.get("contest_slug_input"), str) else "",
+        contest_title_input=draft["contest_title_input"].strip() if isinstance(draft.get("contest_title_input"), str) else "",
         problem_slug_overrides={},
     )
 
@@ -554,9 +544,12 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
     actor_username = str(gctx["user"]["username"])
     created_contest_slug = ""
     form = await request.form()
-    draft_id = str(form.get("draft_id") or "").strip()
-    contest_slug_input = str(form.get("contest_slug") or "").strip()
-    contest_title_input = str(form.get("contest_title") or "").strip()
+    draft_id_obj = form.get("draft_id")
+    draft_id = draft_id_obj.strip() if isinstance(draft_id_obj, str) else ""
+    contest_slug_obj = form.get("contest_slug")
+    contest_slug_input = contest_slug_obj.strip() if isinstance(contest_slug_obj, str) else ""
+    contest_title_obj = form.get("contest_title")
+    contest_title_input = contest_title_obj.strip() if isinstance(contest_title_obj, str) else ""
     try:
         draft, payload_path = _load_contest_import_draft(actor_user_id, actor_username, draft_id)
     except Exception as exc:
@@ -566,19 +559,25 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
     draft_rows = [dict(item) for item in draft_rows_raw] if isinstance(draft_rows_raw, list) else []
     problem_slug_overrides: dict[int, str] = {}
     for row in draft_rows:
-        seq = int(row.get("seq") or 0)
+        seq_obj = row.get("seq")
+        seq = int(seq_obj) if isinstance(seq_obj, int) else 0
         if seq <= 0:
             continue
         key = f"problem_slug_{seq}"
-        problem_slug_overrides[seq] = str(form.get(key) or "").strip()
+        slug_override_obj = form.get(key)
+        problem_slug_overrides[seq] = slug_override_obj.strip() if isinstance(slug_override_obj, str) else ""
 
     review_rows, rows_have_error = _build_problem_slug_review_rows(actor_username, draft_rows, problem_slug_overrides)
-    slug_state = _contest_slug_review_state(contest_slug_input, str(draft.get("package_name") or ""))
+    draft_package_name_obj = draft.get("package_name")
+    draft_package_name = draft_package_name_obj.strip() if isinstance(draft_package_name_obj, str) else ""
+    slug_state = _contest_slug_review_state(contest_slug_input, draft_package_name)
     contest_slug_error = ""
     if not bool(slug_state.get("valid")):
-        contest_slug_error = str(slug_state.get("message") or "")
+        message_obj = slug_state.get("message")
+        contest_slug_error = message_obj if isinstance(message_obj, str) else ""
     elif bool(slug_state.get("exists")):
-        contest_slug_error = str(slug_state.get("message") or "")
+        message_obj = slug_state.get("message")
+        contest_slug_error = message_obj if isinstance(message_obj, str) else ""
     if rows_have_error or contest_slug_error:
         return _render_contest_import_review_page(
             request,
@@ -590,7 +589,7 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             problem_slug_overrides=problem_slug_overrides,
         )
 
-    package_name = str(draft.get("package_name") or "").strip()
+    package_name = draft_package_name
     try:
         payload = payload_path.read_bytes()
         parsed = _POLYGON_CONTEST_IMPORT_SERVICE.parse_package(package_name, payload)
@@ -600,7 +599,8 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             raise ValueError("contest package changed; please re-upload and review again")
 
         target_contest_slug = _resolve_import_contest_slug(contest_slug_input, package_name)
-        parsed_title = str(parsed.get("title") or "").strip()
+        parsed_title_obj = parsed.get("title")
+        parsed_title = parsed_title_obj.strip() if isinstance(parsed_title_obj, str) else ""
         target_contest_title = normalize_contest_title_required(
             form_text(contest_title_input).strip() or parsed_title or target_contest_slug
         )
@@ -625,12 +625,17 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
         used_indices: set[str] = set()
         for idx, row in enumerate(parsed_rows, start=1):
             row_review = review_rows[idx - 1]
-            sub_package_name = str(row.get("package_name") or "").strip() or f"problem-{idx}.zip"
-            sub_package_bytes = bytes(row.get("package_bytes") or b"")
+            sub_package_name_obj = row.get("package_name")
+            sub_package_name = sub_package_name_obj.strip() if isinstance(sub_package_name_obj, str) else ""
+            if not sub_package_name:
+                sub_package_name = f"problem-{idx}.zip"
+            package_bytes_obj = row.get("package_bytes")
+            sub_package_bytes = bytes(package_bytes_obj) if isinstance(package_bytes_obj, (bytes, bytearray)) else b""
             if not sub_package_bytes:
                 raise ValueError(f"empty problem package payload for #{idx}")
-            requested_problem_slug = str(row_review.get("slug_input") or "").strip().lower()
-            imported = api.import_package_as_new_problem(
+            requested_problem_slug_obj = row_review.get("slug_input")
+            requested_problem_slug = requested_problem_slug_obj.strip().lower() if isinstance(requested_problem_slug_obj, str) else ""
+            imported = import_package_as_new_problem(
                 actor_user_id=actor_user_id,
                 actor_user=actor_username,
                 package_name=sub_package_name,
@@ -639,10 +644,11 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
                 source_problem="",
                 normalize_test_data_newlines=True,
             )
-            imported_problem_slug = str(imported.get("target_problem") or "").strip()
+            imported_problem_slug_obj = imported.get("target_problem")
+            imported_problem_slug = imported_problem_slug_obj.strip() if isinstance(imported_problem_slug_obj, str) else ""
             if not imported_problem_slug:
                 raise RuntimeError(f"failed to import problem package #{idx}")
-            language_warning = api.import_statement_language_warning(imported)
+            language_warning = import_statement_language_warning(imported)
             if language_warning:
                 import_warnings.append(f"{imported_problem_slug}: {language_warning}")
             problem_row = config.db.fetch_one("SELECT id FROM problems WHERE slug=?", [imported_problem_slug])

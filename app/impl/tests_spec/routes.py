@@ -1,40 +1,17 @@
 ﻿from __future__ import annotations
 
-from app.impl.preview.shared import (
-    BackgroundTask,
-    File,
-    FileResponse,
-    Form,
-    HTTPException,
-    Path,
-    Request,
-    TESTS_SPEC_MANUAL_MAX_CHARS,
-    TESTS_SPEC_REL,
-    UploadFile,
-    audit,
-    read_tests_spec,
-    redirect_response,
-    require_write_access,
-    template_response,
-    tests_spec_bool_flag,
-    tests_spec_editor_context,
-    tests_spec_form_text,
-    tests_spec_payload_file_path,
-    tests_spec_read_payload,
-    tests_spec_remove_payload,
-    tests_spec_resolve_index,
-    tests_spec_write_payload,
-    write_tests_spec,
-    config,
-    next_test_id,
-    normalize_gen_command,
-    normalize_manual_input,
-    normalize_test_id,
-    normalize_test_kind,
-    normalize_tests_spec_entry,
-    os,
-    page_ctx,
-    tempfile,
+import os
+import tempfile
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
+
+from app.impl.auth.shared import redirect_response, template_response
+from app.impl.runtime.config import config
+from app.impl.tests_spec.shared import (
     parse_gen_script_lines,
     tests_spec_add_single_entry,
     tests_spec_gen_script_context,
@@ -43,7 +20,31 @@ from app.impl.preview.shared import (
     tests_spec_sample_output_validate_value,
     tests_spec_sample_output_value,
 )
-def build_page(request: Request, problem: str, user: str):
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_operation import audit, tests_spec_editor_context
+from app.impl.workspace.test_spec import (
+    read_tests_spec,
+    tests_spec_bool_flag,
+    tests_spec_form_text,
+    tests_spec_payload_file_path,
+    tests_spec_read_payload,
+    tests_spec_remove_payload,
+    tests_spec_resolve_index,
+    tests_spec_write_payload,
+    write_tests_spec,
+)
+from app.service.problem.test_spec import (
+    TESTS_SPEC_MANUAL_MAX_CHARS,
+    TESTS_SPEC_REL,
+    next_test_id,
+    normalize_gen_command,
+    normalize_manual_input,
+    normalize_test_id,
+    normalize_test_kind,
+    normalize_tests_spec_entry,
+)
+def render_tests_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     tests_editor_error = ''
@@ -61,15 +62,15 @@ def build_page(request: Request, problem: str, user: str):
         return template_response(request, 'tests.html', {'ctx': ctx, 'tests_editor': tests_editor, 'tests_gen_script': tests_gen_script, 'message': tests_editor_error})
     return template_response(request, 'tests.html', {'ctx': ctx, 'tests_editor': tests_editor, 'tests_gen_script': tests_gen_script})
 
-def tests_spec_add_manual(
+def add_manual_test(
     problem: str,
     user: str,
-    test_id: str=Form(''),
-    sample: str=Form('0'),
-    manual_input: str=Form(''),
-    sample_input: str | None = Form(None),
-    sample_output: str | None = Form(None),
-    sample_output_validate: str | None = Form(None),
+    test_id: Annotated[str, Form()] = '',
+    sample: Annotated[str, Form()] = '0',
+    manual_input: Annotated[str, Form()] = '',
+    sample_input: Annotated[str | None, Form()] = None,
+    sample_output: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[str | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -115,15 +116,15 @@ def tests_spec_add_manual(
         redirect_url = f'{redirect_url}?{redirect_query}'
     return redirect_response(redirect_url, status_code=303, message=msg)
 
-async def tests_spec_add_manual_upload(
+async def upload_manual_test(
     problem: str,
     user: str,
-    test_id: str=Form(''),
-    sample: str=Form('0'),
-    sample_input: str | None = Form(None),
-    sample_output: str | None = Form(None),
-    sample_output_validate: str | None = Form(None),
-    manual_upload: UploadFile=File(...),
+    manual_upload: Annotated[UploadFile, File(...)],
+    test_id: Annotated[str, Form()] = '',
+    sample: Annotated[str, Form()] = '0',
+    sample_input: Annotated[str | None, Form()] = None,
+    sample_output: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[str | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -191,15 +192,15 @@ async def tests_spec_add_manual_upload(
         redirect_url = f'{redirect_url}?{redirect_query}'
     return redirect_response(redirect_url, status_code=303, message=msg)
 
-def tests_spec_add_gen(
+def add_generator_test(
     problem: str,
     user: str,
-    test_id: str=Form(''),
-    sample: str=Form('0'),
-    command: str=Form(''),
-    sample_input: str | None = Form(None),
-    sample_output: str | None = Form(None),
-    sample_output_validate: str | None = Form(None),
+    test_id: Annotated[str, Form()] = '',
+    sample: Annotated[str, Form()] = '0',
+    command: Annotated[str, Form()] = '',
+    sample_input: Annotated[str | None, Form()] = None,
+    sample_output: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[str | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -246,17 +247,17 @@ def tests_spec_add_gen(
         redirect_url = f'{redirect_url}?{redirect_query}'
     return redirect_response(redirect_url, status_code=303, message=msg)
 
-def tests_spec_edit(
+def edit_spec_test(
     problem: str,
     user: str,
-    index: str=Form(...),
-    test_id: str=Form(''),
-    kind: str=Form(''),
-    sample: str=Form('0'),
-    payload: str=Form(''),
-    sample_input: str | None = Form(None),
-    sample_output: str | None = Form(None),
-    sample_output_validate: str | None = Form(None),
+    index: Annotated[str, Form(...)],
+    test_id: Annotated[str, Form()] = '',
+    kind: Annotated[str, Form()] = '',
+    sample: Annotated[str, Form()] = '0',
+    payload: Annotated[str, Form()] = '',
+    sample_input: Annotated[str | None, Form()] = None,
+    sample_output: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[str | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -271,7 +272,7 @@ def tests_spec_edit(
             idx = tests_spec_resolve_index(index, len(entries))
             current = normalize_tests_spec_entry(dict(entries[idx - 1]), index=idx)
             old_id = normalize_test_id(current.get('id'))
-            if safe_test_id != old_id and any((str(row.get('id') or '').strip() == safe_test_id for i, row in enumerate(entries) if i != idx - 1)):
+            if safe_test_id != old_id and any((normalize_test_id(row.get('id')) == safe_test_id for i, row in enumerate(entries) if i != idx - 1)):
                 raise ValueError(f'test id already exists: {safe_test_id}')
             safe_sample_input = tests_spec_sample_input_value(sample_input, current.get('sample_input', ''))
             safe_sample_output = tests_spec_sample_output_value(sample_output, current.get('sample_output', ''))
@@ -319,7 +320,7 @@ def tests_spec_edit(
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/tests', status_code=303, message=msg)
 
-def tests_spec_delete(problem: str, user: str, index: str=Form(...)):
+def delete_spec_test(problem: str, user: str, index: Annotated[str, Form(...)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -329,16 +330,22 @@ def tests_spec_delete(problem: str, user: str, index: str=Form(...)):
             entries, spec_path = read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
             deleted = entries.pop(idx - 1)
-            deleted_id = str(deleted.get('id') or '').strip()
+            deleted_id = normalize_test_id(deleted.get('id'))
             write_tests_spec(spec_path, entries)
             if deleted_id:
                 tests_spec_remove_payload(workspace, deleted_id)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.delete', {'index': idx, 'kind': str(deleted.get('kind') or ''), 'id': deleted_id})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.delete', {'index': idx, 'kind': normalize_test_kind(deleted.get('kind')), 'id': deleted_id})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/tests', status_code=303, message=msg)
 
-def tests_spec_reindex(problem: str, user: str, test_id: str=Form(''), source_index: str=Form(''), target_index: str=Form('')):
+def reindex_spec_test(
+    problem: str,
+    user: str,
+    test_id: Annotated[str, Form()] = '',
+    source_index: Annotated[str, Form()] = '',
+    target_index: Annotated[str, Form()] = '',
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -367,7 +374,7 @@ def tests_spec_reindex(problem: str, user: str, test_id: str=Form(''), source_in
             else:
                 safe_test_id = normalize_test_id(safe_test_id_raw)
                 for i, row in enumerate(entries):
-                    if str(row.get('id') or '').strip() == safe_test_id:
+                    if normalize_test_id(row.get('id')) == safe_test_id:
                         source_pos = i
                         break
                 if source_pos < 0:
@@ -387,7 +394,7 @@ def tests_spec_reindex(problem: str, user: str, test_id: str=Form(''), source_in
         url = f'{url}?{redirect_query}'
     return redirect_response(url, status_code=303, message=msg)
 
-def tests_spec_gen_script_save(problem: str, user: str, gen_script_text: str=Form('')):
+def save_gen_script(problem: str, user: str, gen_script_text: Annotated[str, Form()] = ''):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -402,23 +409,23 @@ def tests_spec_gen_script_save(problem: str, user: str, gen_script_text: str=For
                 normalized_row = normalize_tests_spec_entry(row, index=idx)
                 row_id = normalize_test_id(normalized_row.get('id'))
                 seed_entries.append({'id': row_id})
-                if str(normalized_row.get('kind') or '').strip().lower() == 'gen':
+                if normalized_row['kind'].strip().lower() == 'gen':
                     existing_gen_rows.append(
                         {
                             'id': row_id,
                             'sample': bool(normalized_row.get('sample')),
-                            'sample_input': str(normalized_row.get('sample_input') or ''),
-                            'sample_output': str(normalized_row.get('sample_output') or ''),
+                            'sample_input': normalized_row['sample_input'] if isinstance(normalized_row.get('sample_input'), str) else '',
+                            'sample_output': normalized_row['sample_output'] if isinstance(normalized_row.get('sample_output'), str) else '',
                             'sample_output_validate': bool(normalized_row.get('sample_output_validate', True)),
                         }
                     )
             replacement_gen_rows: list[dict[str, object]] = []
             for idx, command in enumerate(desired_commands):
                 if idx < len(existing_gen_rows):
-                    safe_test_id = str(existing_gen_rows[idx].get('id') or '').strip()
+                    safe_test_id = normalize_test_id(existing_gen_rows[idx].get('id'))
                     safe_sample = bool(existing_gen_rows[idx].get('sample'))
-                    safe_sample_input = str(existing_gen_rows[idx].get('sample_input') or '')
-                    safe_sample_output = str(existing_gen_rows[idx].get('sample_output') or '')
+                    safe_sample_input = existing_gen_rows[idx]['sample_input'] if isinstance(existing_gen_rows[idx].get('sample_input'), str) else ''
+                    safe_sample_output = existing_gen_rows[idx]['sample_output'] if isinstance(existing_gen_rows[idx].get('sample_output'), str) else ''
                     safe_sample_output_validate = bool(existing_gen_rows[idx].get('sample_output_validate', True))
                 else:
                     safe_test_id = next_test_id(seed_entries)
@@ -442,7 +449,7 @@ def tests_spec_gen_script_save(problem: str, user: str, gen_script_text: str=For
             replacement_idx = 0
             for idx, row in enumerate(entries, start=1):
                 normalized_row = normalize_tests_spec_entry(row, index=idx)
-                kind = str(normalized_row.get('kind') or '').strip().lower()
+                kind = normalized_row['kind'].strip().lower()
                 if kind == 'gen':
                     if replacement_idx >= len(replacement_gen_rows):
                         continue
@@ -453,8 +460,8 @@ def tests_spec_gen_script_save(problem: str, user: str, gen_script_text: str=For
                             test_id=str(replacement['id']),
                             kind='gen',
                             sample=bool(replacement['sample']),
-                            sample_input=str(replacement.get('sample_input') or ''),
-                            sample_output=str(replacement.get('sample_output') or ''),
+                            sample_input=replacement['sample_input'] if isinstance(replacement.get('sample_input'), str) else '',
+                            sample_output=replacement['sample_output'] if isinstance(replacement.get('sample_output'), str) else '',
                             sample_output_validate=bool(replacement.get('sample_output_validate', True)),
                             index=len(rebuilt_entries) + 1,
                         )
@@ -465,8 +472,8 @@ def tests_spec_gen_script_save(problem: str, user: str, gen_script_text: str=For
                         test_id=normalize_test_id(normalized_row.get('id')),
                         kind=normalize_test_kind(normalized_row.get('kind')),
                         sample=bool(normalized_row.get('sample')),
-                        sample_input=str(normalized_row.get('sample_input') or ''),
-                        sample_output=str(normalized_row.get('sample_output') or ''),
+                        sample_input=normalized_row['sample_input'] if isinstance(normalized_row.get('sample_input'), str) else '',
+                        sample_output=normalized_row['sample_output'] if isinstance(normalized_row.get('sample_output'), str) else '',
                         sample_output_validate=bool(normalized_row.get('sample_output_validate', True)),
                         index=len(rebuilt_entries) + 1,
                     )
@@ -477,18 +484,18 @@ def tests_spec_gen_script_save(problem: str, user: str, gen_script_text: str=For
                         test_id=str(replacement['id']),
                         kind='gen',
                         sample=bool(replacement['sample']),
-                        sample_input=str(replacement.get('sample_input') or ''),
-                        sample_output=str(replacement.get('sample_output') or ''),
+                        sample_input=replacement['sample_input'] if isinstance(replacement.get('sample_input'), str) else '',
+                        sample_output=replacement['sample_output'] if isinstance(replacement.get('sample_output'), str) else '',
                         sample_output_validate=bool(replacement.get('sample_output_validate', True)),
                         index=len(rebuilt_entries) + 1,
                     )
                 )
             write_tests_spec(spec_path, rebuilt_entries)
-            old_gen_ids = {str(row.get('id') or '').strip() for row in existing_gen_rows if str(row.get('id') or '').strip()}
-            new_gen_ids = {str(row.get('id') or '').strip() for row in replacement_gen_rows if str(row.get('id') or '').strip()}
+            old_gen_ids = {normalize_test_id(row.get('id')) for row in existing_gen_rows if normalize_test_id(row.get('id'))}
+            new_gen_ids = {normalize_test_id(row.get('id')) for row in replacement_gen_rows if normalize_test_id(row.get('id'))}
             for replacement in replacement_gen_rows:
-                safe_test_id = str(replacement.get('id') or '').strip()
-                safe_command = str(replacement.get('command') or '')
+                safe_test_id = normalize_test_id(replacement.get('id'))
+                safe_command = replacement['command'] if isinstance(replacement.get('command'), str) else ''
                 tests_spec_write_payload(workspace, safe_test_id, 'gen', safe_command)
             for removed_id in sorted(old_gen_ids - new_gen_ids):
                 tests_spec_remove_payload(workspace, removed_id)
@@ -497,7 +504,7 @@ def tests_spec_gen_script_save(problem: str, user: str, gen_script_text: str=For
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/tests', status_code=303, message=msg)
 
-def tests_spec_payload_download(problem: str, user: str, index: str):
+def download_test_payload(problem: str, user: str, index: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     with config.workspace_service.workspace_lock(workspace):
@@ -524,7 +531,12 @@ def tests_spec_payload_download(problem: str, user: str, index: str):
     tmp_path.write_text(payload_text, encoding='utf-8')
     return FileResponse(tmp_path, filename=f'{test_id}.in', media_type='text/plain; charset=utf-8', background=BackgroundTask(lambda: tmp_path.unlink(missing_ok=True)))
 
-async def tests_spec_payload_upload(problem: str, user: str, index: str=Form(...), payload_upload: UploadFile=File(...)):
+async def upload_test_payload(
+    problem: str,
+    user: str,
+    index: Annotated[str, Form(...)],
+    payload_upload: Annotated[UploadFile, File(...)],
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])

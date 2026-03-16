@@ -1,8 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import Request
 
-from app.impl.auth.public import template_response
+from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 
 from .shared import _contest_ctx, _contest_owner_count, _contest_problem_rows, _contest_properties_map

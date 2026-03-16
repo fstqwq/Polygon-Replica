@@ -1,6 +1,4 @@
-﻿from __future__ import annotations
-
-import json
+from __future__ import annotations
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -9,13 +7,13 @@ from fastapi.responses import FileResponse
 from app.impl.runtime.config import config
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
-from app.service.verification import list_verification_rows, verification_run_ids
+from app.service.verification.store import list_verification_rows, verification_run_ids
 
 from .revision import git_commit_count
 
 
 def artifact_version_number(artifact_id: str | None) -> int | None:
-    raw = str(artifact_id or "").strip()
+    raw = "" if artifact_id is None else artifact_id
     if not raw:
         return None
     tail = raw.rsplit("-", 1)[-1]
@@ -28,10 +26,9 @@ def artifact_version_number(artifact_id: str | None) -> int | None:
 
 
 def artifact_root(problem: str, artifact_id: str) -> Path:
-    aid = str(artifact_id or "")
-    if not is_canonical_artifact_id(aid):
+    if not is_canonical_artifact_id(artifact_id):
         raise HTTPException(status_code=404, detail="artifact not found")
-    problem_slug = str(problem or "").strip()
+    problem_slug = problem
     if not problem_slug:
         raise HTTPException(status_code=404, detail="artifact not found")
     problem_row = config.db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
@@ -39,10 +36,10 @@ def artifact_root(problem: str, artifact_id: str) -> Path:
         raise HTTPException(status_code=404, detail="artifact not found")
     problem_id = int(problem_row["id"])
     row = None
-    if aid.startswith("p-"):
+    if artifact_id.startswith("p-"):
         row = config.db.fetch_one(
             "SELECT artifact_path FROM previews WHERE id=? AND problem_id=?",
-            [aid, problem_id],
+            [artifact_id, problem_id],
         )
     else:
         row = config.db.fetch_one(
@@ -58,11 +55,11 @@ def artifact_root(problem: str, artifact_id: str) -> Path:
             )
             LIMIT 1
             """,
-            [aid, problem_id, aid, problem_id],
+            [artifact_id, problem_id, artifact_id, problem_id],
         )
     if row is None:
         raise HTTPException(status_code=404, detail="artifact not found")
-    artifact_path = str(row["artifact_path"] or "").strip()
+    artifact_path = row["artifact_path"]
     if not artifact_path:
         raise HTTPException(status_code=404, detail="artifact not found")
     try:
@@ -108,9 +105,8 @@ def browser_file_response(file_path: Path) -> FileResponse:
 
 
 def export_download_filename(ctx: dict, verification_id: str, stored_filename: str) -> str | None:
-    safe_verification_id = str(verification_id or "").strip()
-    safe_filename = Path(str(stored_filename or "")).name.strip()
-    if not safe_verification_id or not safe_filename:
+    archive_name = Path(stored_filename).name.strip()
+    if not verification_id or not archive_name:
         return None
     row = config.db.fetch_one(
         """
@@ -120,22 +116,23 @@ def export_download_filename(ctx: dict, verification_id: str, stored_filename: s
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        [ctx["problem"]["id"], ctx["workspace"]["id"], safe_verification_id, safe_filename],
+        [ctx["problem"]["id"], ctx["workspace"]["id"], verification_id, archive_name],
     )
     if row is None:
         return None
-    source_commit = str(row["source_commit"] or "").strip()
+    source_commit = row["source_commit"]
     revision = git_commit_count(Path(ctx["workspace"]["path"]), source_commit) if source_commit else None
-    revision_display = f"v{revision}" if isinstance(revision, int) and revision >= 0 else "v?"
-    problem_slug = str(ctx["problem"].get("slug") or "").strip()
+    revision_display = f"v{revision}" if revision is not None and revision >= 0 else "v?"
+    problem_slug = ctx["problem"]["slug"]
     if not problem_slug:
         return None
     return f"{problem_slug}-{revision_display}.zip"
 
 
 def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
-    safe_run_id = str(run_id or "").strip()
-    if not safe_run_id:
+    from .context_operation import parse_summary_json
+
+    if not run_id:
         return ""
     verification_rows = list_verification_rows(
         config.db,
@@ -145,29 +142,20 @@ def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
     )
     verification_id = ""
     for row in verification_rows:
-        summary_raw = str(row.get("summary_json") or "").strip()
-        if not summary_raw:
+        summary = parse_summary_json(row.get("summary_json"), f"artifact/{run_id}")
+        if run_id not in verification_run_ids(summary):
             continue
-        try:
-            summary = json.loads(summary_raw)
-        except Exception:
-            summary = {}
-        if not isinstance(summary, dict):
-            continue
-        if safe_run_id not in verification_run_ids(summary):
-            continue
-        verification_id = str(row.get("id") or "").strip()
+        verification_id = row.get("id") or ""
         if verification_id:
             break
     return verification_id
 
 
 def workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
-    safe_run_id = str(run_id or "").strip()
-    verification_id = workspace_verification_id_for_run(ctx, safe_run_id)
+    verification_id = workspace_verification_id_for_run(ctx, run_id)
     if verification_id:
         try:
-            root = config.fs_manager.resolve_verification_run_root(verification_id, safe_run_id).resolve()
+            root = config.fs_manager.resolve_verification_run_root(verification_id, run_id).resolve()
         except Exception:
             raise HTTPException(status_code=404, detail="run artifact directory not found")
         if (not root.exists()) or (not root.is_dir()) or root.is_symlink():
@@ -200,12 +188,11 @@ def assert_workspace_verification_access(ctx: dict, verification_id: str) -> Non
 
 
 def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
-    aid = str(artifact_id or "").strip()
     row = None
-    if aid.startswith("p-"):
+    if artifact_id.startswith("p-"):
         row = config.db.fetch_one(
             "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
-            [aid, ctx["problem"]["id"], ctx["workspace"]["id"]],
+            [artifact_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
         )
     else:
         row = config.db.fetch_one(
@@ -221,7 +208,7 @@ def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
             )
             LIMIT 1
             """,
-            [aid, ctx["problem"]["id"], ctx["workspace"]["id"], aid, ctx["problem"]["id"], ctx["workspace"]["id"]],
+            [artifact_id, ctx["problem"]["id"], ctx["workspace"]["id"], artifact_id, ctx["problem"]["id"], ctx["workspace"]["id"]],
         )
     if row is not None:
         return

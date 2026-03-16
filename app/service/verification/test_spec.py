@@ -98,10 +98,10 @@ def manual_test_sources(snapshot: Path) -> list[Path]:
 
 
 def tests_spec_payload_text(snapshot: Path, row: dict, index: int) -> tuple[str, str]:
-    test_id = str(row.get("id") or "").strip()
+    test_id = row["id"].strip()
     if not test_id:
         raise RuntimeError(f"tests/spec.json entry {index} missing id")
-    kind = str(row.get("kind") or "").strip().lower()
+    kind = row["kind"].strip().lower()
     if kind not in {"manual", "gen"}:
         raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}")
     rel = payload_rel_path_for_test(test_id, kind)
@@ -115,7 +115,7 @@ def tests_spec_payload_text(snapshot: Path, row: dict, index: int) -> tuple[str,
 
 
 def tests_spec_answer_source(snapshot: Path, test_id: str) -> Path | None:
-    safe_test_id = str(test_id or "").strip()
+    safe_test_id = test_id.strip()
     if not safe_test_id:
         return None
     candidate = snapshot / "tests" / "answers" / f"{safe_test_id}.ans"
@@ -249,11 +249,11 @@ def prepare_tests_spec_runtime(
     by_source_rel: dict[str, tuple[str, Path]] = {}
     generator_catalog = generator_source_catalog(snapshot, generator_source_extensions)
     for index, row in enumerate(tests_spec_entries, start=1):
-        kind = str(row.get("kind") or "").strip()
-        test_id = str(row.get("id") or "").strip()
-        sample = bool(row.get("sample"))
-        sample_input = str(row.get("sample_input") or "")
-        sample_output = str(row.get("sample_output") or "")
+        kind = row["kind"].strip()
+        test_id = row["id"].strip()
+        sample = bool(row["sample"])
+        sample_input = row["sample_input"]
+        sample_output = row["sample_output"]
         sample_output_validate = bool(row.get("sample_output_validate", True))
         payload_rel, payload = tests_spec_payload_text(snapshot, row, index)
         if kind == "manual":

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from .common import SmokeBase
-from app.impl.run_export import api
+from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.runtime.config import config
 from app.service.platform.process import run_cmd
 
@@ -51,7 +51,7 @@ class TestExport(SmokeBase):
                 workspace_id,
                 source_commit,
                 "main",
-                "materialization",
+                "verification",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -135,7 +135,7 @@ class TestExport(SmokeBase):
         actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"imp-icpc-{token}"
-        imported = api.import_package_as_new_problem(
+        imported = import_package_as_new_problem(
             actor_user_id=int(actor_row["id"]),
             actor_user=str(actor_row["username"]),
             package_name=archive.name,
@@ -155,7 +155,7 @@ class TestExport(SmokeBase):
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertIn(str(imported_problem_cfg.get("mode") or ""), {"pass-fail", "interactive", "multi-pass"})
 
-    def test_polygon_import_materializes_missing_sample_answers_via_build(self) -> None:
+    def test_polygon_import_builds_missing_sample_answers_via_verification(self) -> None:
         payload = io.BytesIO()
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <problem short-name="sample-backfill">
@@ -206,7 +206,7 @@ class TestExport(SmokeBase):
         target_slug = f"poly-backfill-{uuid.uuid4().hex[:8]}"
         target_problem = f"{self.user}/{target_slug}"
 
-        def _fake_run_verification(problem: str, username: str, *args, **kwargs) -> str:
+        def _fake_run_build(problem: str, username: str, *args, **kwargs) -> str:
             self.assertEqual(problem, target_problem)
             self.assertEqual(username, self.user)
             verification_id = f"ver-backfill-{uuid.uuid4().hex[:8]}"
@@ -228,7 +228,7 @@ class TestExport(SmokeBase):
                     int(target_ctx["workspace"]["id"]),
                     "",
                     "main",
-                    "materialization",
+                    "verification",
                     "ok",
                     "{}",
                     str(artifact_root),
@@ -238,8 +238,8 @@ class TestExport(SmokeBase):
             )
             return verification_id
 
-        with patch("app.impl.run_export.import_source.config.verification_service.run_materialization", side_effect=_fake_run_materialization):
-            imported = api.import_package_as_new_problem(
+        with patch("app.impl.run_export.import_source.config.verification_service.run_verification", side_effect=_fake_run_build):
+            imported = import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
                 package_name="sample-backfill.zip",
@@ -253,9 +253,9 @@ class TestExport(SmokeBase):
         self.assertTrue(answer_path.is_file())
         self.assertEqual(answer_path.read_text(encoding="utf-8"), "7\n")
         tests_summary = imported.get("result", {}).get("tests", {})
-        self.assertEqual(int(tests_summary.get("sample_answers_materialized") or 0), 1)
+        self.assertEqual(int(tests_summary.get("sample_answers_built") or 0), 1)
 
-    def test_polygon_import_fails_when_sample_answer_materialization_verification_fails(self) -> None:
+    def test_polygon_import_fails_when_sample_answer_build_verification_fails(self) -> None:
         payload = io.BytesIO()
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <problem short-name="sample-backfill-fail">
@@ -282,7 +282,7 @@ class TestExport(SmokeBase):
         self.assertIsNotNone(actor_row)
         target_slug = f"poly-backfail-{uuid.uuid4().hex[:8]}"
         with self.assertRaisesRegex(ValueError, "sample answer verification failed"):
-            api.import_package_as_new_problem(
+            import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
                 package_name="sample-backfill-fail.zip",
@@ -320,7 +320,7 @@ class TestExport(SmokeBase):
             zf.writestr("icpc/data/sample/1.ans", "1\n")
 
         with self.assertRaisesRegex(ValueError, rf"import target already has revision history: {re.escape(target_problem)}"):
-            api.import_package_as_new_problem(
+            import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
                 package_name="reject-stale-target.zip",
@@ -477,6 +477,3 @@ class TestExport(SmokeBase):
         self.assertTrue(package_root)
         self.assertNotIn(f"{package_root}/statement/problem.en.pdf", names)
         self.assertIn(f"{package_root}/statement/problem.en.tex", names)
-
-
-

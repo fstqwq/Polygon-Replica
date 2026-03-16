@@ -5,6 +5,7 @@ import re
 import shutil
 import threading
 from pathlib import Path
+from typing import TypedDict
 
 from app.db import now_iso
 from app.service.platform.hashing import canonical_json, sha256_hex_bytes, sha256_hex_of_hashes, sha256_hex_text
@@ -12,6 +13,24 @@ from app.service.platform.hashing import canonical_json, sha256_hex_bytes, sha25
 
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 _FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+class _JudgeFsIndexFileMeta(TypedDict):
+    size: int
+    sha256: str
+
+
+class _JudgeFsIndexEntry(TypedDict):
+    schema: str
+    kind: str
+    key_hash: str
+    signature: str
+    value: dict[str, object]
+    tags: dict[str, object]
+    files: dict[str, _JudgeFsIndexFileMeta]
+    integrity_hash: str
+    created_at: str
+    updated_at: str
 
 
 class JudgeFsIndexService:
@@ -29,39 +48,36 @@ class JudgeFsIndexService:
         self._root = (Path(cache_root).resolve() / "judge-fs-index" / "v2").resolve()
         self._root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._entries: dict[tuple[str, str, str], dict[str, object]] = {}
+        self._entries: dict[tuple[str, str, str], _JudgeFsIndexEntry] = {}
 
     @staticmethod
     def signature(payload: object) -> str:
-        canonical = str(payload)
-        if isinstance(payload, (dict, list, tuple)):
-            canonical = canonical_json(payload, ensure_ascii=False)
-        return sha256_hex_text(canonical)
+        return sha256_hex_text(canonical_json(payload, ensure_ascii=False))
 
     @staticmethod
     def _normalize_kind(kind: str) -> str:
-        token = str(kind or "").strip().lower()
+        token = kind.strip().lower()
         if token not in {JudgeFsIndexService.KIND_CASE, JudgeFsIndexService.KIND_SOLVE_OUTPUT}:
             raise RuntimeError("invalid judge fs index kind")
         return token
 
     @staticmethod
     def _normalize_key_hash(value: str, *, label: str) -> str:
-        token = str(value or "").strip().lower()
+        token = value.strip().lower()
         if not _HEX_64_RE.fullmatch(token):
             raise RuntimeError(f"invalid {label}")
         return token
 
     @staticmethod
     def _normalize_signature(value: str) -> str:
-        token = str(value or "").strip().lower()
+        token = value.strip().lower()
         if not _HEX_64_RE.fullmatch(token):
             raise RuntimeError("invalid judge fs index signature")
         return token
 
     @staticmethod
     def _normalize_name(name: str) -> str:
-        token = Path(str(name or "").strip()).name
+        token = Path(name.strip()).name
         if not _FILE_NAME_RE.fullmatch(token):
             raise RuntimeError("invalid judge fs index file name")
         return token
@@ -84,7 +100,7 @@ class JudgeFsIndexService:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = (path.parent / f".{path.name}.{os.getpid()}.tmp").resolve()
         try:
-            tmp.write_bytes(bytes(payload))
+            tmp.write_bytes(payload)
             os.replace(tmp, path)
         finally:
             try:
@@ -103,25 +119,20 @@ class JudgeFsIndexService:
             except OSError:
                 pass
 
-    @staticmethod
-    def _set_hash_from_file_hashes(hashes: list[str]) -> str:
-        return sha256_hex_of_hashes(hashes)
-
-    def _compute_payload_file_index(self, files: dict[str, bytes]) -> tuple[dict[str, dict[str, object]], str]:
-        file_index: dict[str, dict[str, object]] = {}
-        ordered_names = sorted([self._normalize_name(name) for name in files.keys()])
+    def _compute_payload_file_index(self, files: dict[str, bytes]) -> tuple[dict[str, _JudgeFsIndexFileMeta], str]:
+        file_index: dict[str, _JudgeFsIndexFileMeta] = {}
         file_hashes: list[str] = []
-        for name in ordered_names:
-            payload = bytes(files.get(name, b""))
+        for name in sorted(files):
+            payload = files[name]
             sha = sha256_hex_bytes(payload)
             file_hashes.append(sha)
-            file_index[name] = {"size": int(len(payload)), "sha256": sha}
-        return (file_index, self._set_hash_from_file_hashes(file_hashes))
+            file_index[name] = {"size": len(payload), "sha256": sha}
+        return (file_index, sha256_hex_of_hashes(file_hashes))
 
-    def _compute_disk_file_index(self, files_dir: Path) -> tuple[dict[str, dict[str, object]], str] | None:
+    def _compute_disk_file_index(self, files_dir: Path) -> tuple[dict[str, _JudgeFsIndexFileMeta], str] | None:
         if (not files_dir.exists()) or (not files_dir.is_dir()) or files_dir.is_symlink():
             return None
-        file_index: dict[str, dict[str, object]] = {}
+        file_index: dict[str, _JudgeFsIndexFileMeta] = {}
         file_hashes: list[str] = []
         for child in sorted(files_dir.iterdir(), key=lambda item: item.name):
             if (not child.is_file()) or child.is_symlink():
@@ -130,8 +141,8 @@ class JudgeFsIndexService:
             blob = child.read_bytes()
             sha = sha256_hex_bytes(blob)
             file_hashes.append(sha)
-            file_index[name] = {"size": int(len(blob)), "sha256": sha}
-        return (file_index, self._set_hash_from_file_hashes(file_hashes))
+            file_index[name] = {"size": len(blob), "sha256": sha}
+        return (file_index, sha256_hex_of_hashes(file_hashes))
 
     @staticmethod
     def _clear_integrity_marker_files(entry_dir: Path) -> None:
@@ -140,7 +151,8 @@ class JudgeFsIndexService:
         for child in list(entry_dir.iterdir()):
             if (not child.is_file()) or child.is_symlink():
                 continue
-            if _HEX_64_RE.fullmatch(str(child.name or "").strip().lower()) is None:
+            token = child.name.lower()
+            if _HEX_64_RE.fullmatch(token) is None:
                 continue
             try:
                 child.unlink(missing_ok=True)
@@ -148,11 +160,11 @@ class JudgeFsIndexService:
                 pass
 
     def _write_integrity_marker(self, entry_dir: Path, integrity_hash: str) -> None:
-        if _HEX_64_RE.fullmatch(str(integrity_hash or "").strip().lower()) is None:
+        if _HEX_64_RE.fullmatch(integrity_hash) is None:
             raise RuntimeError("invalid integrity hash")
         entry_dir.mkdir(parents=True, exist_ok=True)
         self._clear_integrity_marker_files(entry_dir)
-        marker = (entry_dir / str(integrity_hash).strip().lower()).resolve()
+        marker = (entry_dir / integrity_hash).resolve()
         if marker.parent != entry_dir:
             raise RuntimeError("invalid integrity marker path")
         self._atomic_write_bytes(marker, b"")
@@ -164,7 +176,7 @@ class JudgeFsIndexService:
         for child in sorted(entry_dir.iterdir(), key=lambda item: item.name):
             if (not child.is_file()) or child.is_symlink():
                 continue
-            token = str(child.name or "").strip().lower()
+            token = child.name.lower()
             if _HEX_64_RE.fullmatch(token) is None:
                 continue
             tokens.append(token)
@@ -183,12 +195,12 @@ class JudgeFsIndexService:
         tags: dict[str, object] | None = None,
     ) -> None:
         safe_kind, safe_key, safe_sig = self._entry_key(kind=kind, key_hash=key_hash, signature=signature)
-        value_obj = dict(value or {})
-        tags_obj = dict(tags or {})
-        files_obj = dict(files or {})
+        value_obj = {} if value is None else dict(value)
+        tags_obj = {} if tags is None else dict(tags)
+        files_obj = {} if files is None else files
         normalized_files: dict[str, bytes] = {}
         for raw_name, raw_payload in files_obj.items():
-            normalized_files[self._normalize_name(raw_name)] = bytes(raw_payload or b"")
+            normalized_files[self._normalize_name(raw_name)] = bytes(raw_payload)
 
         now_text = now_iso()
         with self._lock:
@@ -196,7 +208,6 @@ class JudgeFsIndexService:
             files_dir = self._files_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
             entry_dir.mkdir(parents=True, exist_ok=True)
             files_dir.mkdir(parents=True, exist_ok=True)
-            # Rewrite files as full snapshot.
             self._empty_dir_files(files_dir)
             for name, payload in sorted(normalized_files.items(), key=lambda item: item[0]):
                 target = (files_dir / name).resolve()
@@ -208,8 +219,8 @@ class JudgeFsIndexService:
             self._write_integrity_marker(entry_dir, integrity_hash)
 
             key = (safe_kind, safe_key, safe_sig)
-            old = self._entries.get(key) or {}
-            created_at = str(old.get("created_at") or "").strip() or now_text
+            old = self._entries.get(key)
+            created_at = now_text if old is None else old["created_at"]
             self._entries[key] = {
                 "schema": "v3",
                 "kind": safe_kind,
@@ -228,7 +239,7 @@ class JudgeFsIndexService:
         key = (safe_kind, safe_key, safe_sig)
         with self._lock:
             row = self._entries.get(key)
-            if not isinstance(row, dict):
+            if row is None:
                 return None
             entry_dir = self._entry_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
             files_dir = self._files_dir(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
@@ -238,40 +249,28 @@ class JudgeFsIndexService:
                 self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
                 return None
             disk_files, disk_hash = disk_tuple
-            expected_files = row.get("files")
-            expected_map = dict(expected_files) if isinstance(expected_files, dict) else {}
-            if set(disk_files.keys()) != set(expected_map.keys()):
+            expected_files = row["files"]
+            if set(disk_files.keys()) != set(expected_files.keys()):
                 self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
                 return None
-            for name, meta in expected_map.items():
-                item = meta if isinstance(meta, dict) else {}
-                disk_meta = disk_files.get(str(name))
-                if not isinstance(disk_meta, dict):
-                    self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
-                    return None
-                try:
-                    exp_size = int(item.get("size") or 0)
-                except Exception:
-                    exp_size = -1
-                exp_sha = str(item.get("sha256") or "").strip().lower()
-                got_size = int(disk_meta.get("size") or 0)
-                got_sha = str(disk_meta.get("sha256") or "").strip().lower()
-                if exp_size != got_size or exp_sha != got_sha:
+            for name, meta in expected_files.items():
+                disk_meta = disk_files[name]
+                if meta["size"] != disk_meta["size"] or meta["sha256"] != disk_meta["sha256"]:
                     self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
                     return None
             if marker_hash != disk_hash:
                 self.delete(kind=safe_kind, key_hash=safe_key, signature=safe_sig)
                 return None
             return {
-                "schema": str(row.get("schema") or "v3"),
+                "schema": row["schema"],
                 "kind": safe_kind,
                 "key_hash": safe_key,
                 "signature": safe_sig,
-                "value": dict(row.get("value") or {}),
-                "tags": dict(row.get("tags") or {}),
-                "files": dict(expected_map),
-                "created_at": str(row.get("created_at") or ""),
-                "updated_at": str(row.get("updated_at") or ""),
+                "value": dict(row["value"]),
+                "tags": dict(row["tags"]),
+                "files": dict(expected_files),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
             }
 
     def read_blob(self, *, kind: str, key_hash: str, signature: str, name: str) -> bytes | None:

@@ -18,19 +18,19 @@ FTL_COMMENT_RE = re.compile(r"<#--.*?-->", re.DOTALL)
 def _render_nodes(nodes: list[dict[str, object]], scope: dict[str, object]) -> str:
     out: list[str] = []
     for node in nodes:
-        kind = str(node.get("type") or "")
+        kind = node["type"]
         if kind == "text":
-            out.append(str(node.get("value") or ""))
+            out.append(node["value"])
             continue
         if kind == "expr":
             try:
-                out.append(_eval_interpolation(str(node.get("expr") or ""), scope))
+                out.append(_eval_interpolation(node["expr"], scope))
             except Exception:
                 out.append("")
             continue
         if kind == "assign":
-            name = str(node.get("name") or "").strip()
-            expr = str(node.get("expr") or "").strip()
+            name = node["name"].strip()
+            expr = node["expr"].strip()
             if not name or not expr:
                 continue
             try:
@@ -58,9 +58,9 @@ def _render_nodes(nodes: list[dict[str, object]], scope: dict[str, object]) -> s
                     break
             continue
         if kind == "list":
-            expr = str(node.get("expr") or "")
-            item_name = str(node.get("item") or "").strip()
-            children = node.get("children")
+            expr = node["expr"]
+            item_name = node["item"].strip()
+            children = node["children"]
             if not expr or not item_name or not isinstance(children, list):
                 continue
             try:
@@ -76,7 +76,7 @@ def _render_nodes(nodes: list[dict[str, object]], scope: dict[str, object]) -> s
 
 
 def render_ftl_template(template_text: str, context: dict[str, object]) -> str:
-    stripped = FTL_COMMENT_RE.sub("", str(template_text or ""))
+    stripped = FTL_COMMENT_RE.sub("", template_text)
     stripped = _strip_standalone_directive_lines(stripped)
     nodes, _pos, _stop_tag, _stop_arg = _parse_nodes(stripped, 0, set(), set())
     return _render_nodes(nodes, dict(context))

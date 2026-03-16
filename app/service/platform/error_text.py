@@ -5,6 +5,9 @@ import re
 _LOG_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _LOG_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 _LOG_BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
+    r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
+)
 
 
 def compact_error_text(raw: str | None, *, max_chars: int = 240) -> str:
@@ -14,23 +17,20 @@ def compact_error_text(raw: str | None, *, max_chars: int = 240) -> str:
     return text[:max_chars].rstrip() + "..."
 
 
-def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[str | tuple[str, str]] | None = None) -> str:
+def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
     text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
     text = _LOG_ANSI_ESCAPE_RE.sub("", text)
     text = _LOG_CONTROL_CHAR_RE.sub("", text)
     text = _LOG_BIDI_CONTROL_RE.sub("", text)
     normalized = text.replace("\\", "/")
+    normalized = _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE.sub("", normalized)
     pairs: list[tuple[str, str]] = []
     fallback_marker_index = 0
-    for raw_item in path_prefixes or []:
-        marker = ""
-        prefix_raw = raw_item
-        if isinstance(raw_item, tuple) and len(raw_item) >= 2:
-            prefix_raw = raw_item[0]
-            marker = str(raw_item[1] or "").strip().replace("\\", "/")
+    for prefix_raw, marker_raw in path_prefixes or []:
         prefix = str(prefix_raw or "").strip().replace("\\", "/")
         if not prefix:
             continue
+        marker = str(marker_raw or "").strip().replace("\\", "/")
         if not marker:
             fallback_marker_index += 1
             marker = f"__redacted_path_{fallback_marker_index}__"

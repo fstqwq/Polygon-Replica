@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import secrets
 from urllib.parse import quote_plus
@@ -6,9 +6,11 @@ from urllib.parse import quote_plus
 from fastapi import Form, HTTPException, Request
 
 from app.db import now_iso
-from app.impl.auth.public import template_response
+from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.public import audit, form_text, workspace_access_context
+from app.impl.workspace.context_operation import audit
+from app.impl.workspace.problem_config import form_text
+from app.impl.workspace.access import workspace_access_context
 
 from .common import (
     _contest_idx_label,
@@ -33,7 +35,7 @@ def contest_problems_page(request: Request, contest: str, user: str, q: str = ""
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
     rows = _contest_problem_rows(contest_id, str(ctx["user"]["username"]), user_id)
-    query = str(q or "").strip()
+    query = q.strip()
     available_rows = _contest_available_problem_rows(contest_id, user_id, query)
     latest_job = _load_contest_job(contest_id, job_id)
     return template_response(
@@ -51,10 +53,14 @@ def contest_problems_page(request: Request, contest: str, user: str, q: str = ""
 def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = Form([]), q: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
-    safe_slugs = _dedupe_preserve([form_text(item) for item in list(problem_slugs or [])])
+        write_block_reason = ctx["access"].get("write_block_reason")
+        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
+            raise RuntimeError("missing write_block_reason")
+        raise HTTPException(status_code=403, detail=write_block_reason)
+    safe_slugs = _dedupe_preserve([form_text(item) for item in problem_slugs])
     if not safe_slugs:
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query=f"q={quote_plus(str(q or ''))}" if str(q or "").strip() else "", message="select at least one problem to add")
+        safe_query = q.strip()
+        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query=f"q={quote_plus(safe_query)}" if safe_query else "", message="select at least one problem to add")
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
     added = 0
@@ -104,18 +110,22 @@ def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = For
     if failed:
         msg += f"; failed {len(failed)}"
     query_parts: list[str] = []
-    if str(q or "").strip():
-        query_parts.append(f"q={quote_plus(str(q or '').strip())}")
+    safe_query = q.strip()
+    if safe_query:
+        query_parts.append(f"q={quote_plus(safe_query)}")
     return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query="&".join(query_parts), message=msg)
 
 def contest_problems_remove(contest: str, user: str, problem_id: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
+        write_block_reason = ctx["access"].get("write_block_reason")
+        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
+            raise RuntimeError("missing write_block_reason")
+        raise HTTPException(status_code=403, detail=write_block_reason)
     contest_id = int(ctx["contest"]["id"])
     msg = "problem removed"
     try:
-        pid = int(str(problem_id or "").strip())
+        pid = int(problem_id)
     except Exception:
         pid = 0
     if pid <= 0:
@@ -130,11 +140,14 @@ def contest_problems_remove(contest: str, user: str, problem_id: str = Form(""))
 def contest_problems_remove_selected(contest: str, user: str, selected_problem_ids: list[str] = Form([])):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
+        write_block_reason = ctx["access"].get("write_block_reason")
+        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
+            raise RuntimeError("missing write_block_reason")
+        raise HTTPException(status_code=403, detail=write_block_reason)
     ids: list[int] = []
-    for raw in list(selected_problem_ids or []):
+    for raw in selected_problem_ids:
         try:
-            value = int(str(raw or "").strip())
+            value = int(raw)
         except Exception:
             continue
         if value > 0 and value not in ids:
@@ -154,8 +167,7 @@ def contest_problems_remove_selected(contest: str, user: str, selected_problem_i
         )
         if before is not None:
             removed += 1
-    msg = f"removed {removed} problem(s)"
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message=msg)
+    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message=f"removed {removed} problem(s)")
 
 def contest_problems_reorder(
     contest: str,
@@ -165,9 +177,12 @@ def contest_problems_reorder(
 ):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
-    ids_raw = list(contest_problem_ids or [])
-    idx_raw = list(contest_problem_indices or [])
+        write_block_reason = ctx["access"].get("write_block_reason")
+        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
+            raise RuntimeError("missing write_block_reason")
+        raise HTTPException(status_code=403, detail=write_block_reason)
+    ids_raw = list(contest_problem_ids)
+    idx_raw = list(contest_problem_indices)
     if not ids_raw or len(ids_raw) != len(idx_raw):
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="invalid reorder payload")
     pairs: list[tuple[int, str]] = []
@@ -175,7 +190,7 @@ def contest_problems_reorder(
     seen_idx: set[str] = set()
     for i, raw_id in enumerate(ids_raw):
         try:
-            cp_id = int(str(raw_id or "").strip())
+            cp_id = int(raw_id)
         except Exception:
             return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="invalid contest problem id")
         if cp_id <= 0 or cp_id in seen_ids:
@@ -209,15 +224,17 @@ def contest_problems_reorder(
             )
         return True
 
-    updated = bool(config.db.write_transaction(_tx))
-    if not updated:
+    if not bool(config.db.write_transaction(_tx)):
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="contest problem not found")
     return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="problem order saved")
 
 def contest_problems_renumber(contest: str, user: str):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
+        write_block_reason = ctx["access"].get("write_block_reason")
+        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
+            raise RuntimeError("missing write_block_reason")
+        raise HTTPException(status_code=403, detail=write_block_reason)
     contest_id = int(ctx["contest"]["id"])
     rows = config.db.fetch_all(
         "SELECT id FROM contest_problems WHERE contest_id=? ORDER BY idx COLLATE NOCASE ASC, id ASC",
@@ -248,13 +265,16 @@ def contest_problems_change_general(
 ):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
+        write_block_reason = ctx["access"].get("write_block_reason")
+        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
+            raise RuntimeError("missing write_block_reason")
+        raise HTTPException(status_code=403, detail=write_block_reason)
     contest_id = int(ctx["contest"]["id"])
     actor_user_id = int(ctx["user"]["id"])
     selected_ids: list[int] = []
-    for raw in list(selected_problem_ids or []):
+    for raw in selected_problem_ids:
         try:
-            value = int(str(raw or "").strip())
+            value = int(raw)
         except Exception:
             continue
         if value > 0 and value not in selected_ids:
@@ -265,12 +285,15 @@ def contest_problems_change_general(
         list(time_limit_ms_values or []),
         list(memory_limit_mb_values or []),
     )
-    safe_retry_job_id = str(retry_job_id or "").strip()
+    safe_retry_job_id = retry_job_id.strip()
     if safe_retry_job_id and not selected_ids:
         retry_job = _load_contest_job(contest_id, safe_retry_job_id)
         if retry_job is None:
             return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="retry job not found")
-        if str(retry_job.get("job_type") or "") != "change-general":
+        retry_job_type = retry_job.get("job_type")
+        if not isinstance(retry_job_type, str):
+            raise RuntimeError("invalid retry job payload: missing job_type")
+        if retry_job_type != "change-general":
             return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="retry job type is invalid")
         summary = retry_job.get("summary")
         if isinstance(summary, dict):
@@ -279,20 +302,25 @@ def contest_problems_change_general(
                 for item in results:
                     if not isinstance(item, dict):
                         continue
-                    if str(item.get("status") or "").strip() != "failed":
+                    item_status = item.get("status")
+                    if not isinstance(item_status, str):
+                        raise RuntimeError("invalid retry job payload: missing result status")
+                    if item_status.strip() != "failed":
                         continue
-                    try:
-                        pid = int(item.get("problem_id") or 0)
-                    except Exception:
-                        continue
+                    pid = item.get("problem_id") if isinstance(item.get("problem_id"), int) else 0
                     if pid <= 0:
                         continue
                     req = item.get("requested")
                     if isinstance(req, dict):
+                        requested_name = req.get("name")
+                        requested_time_limit_ms = req.get("time_limit_ms")
+                        requested_memory_limit_mb = req.get("memory_limit_mb")
+                        if not isinstance(requested_name, str) or not isinstance(requested_time_limit_ms, str) or not isinstance(requested_memory_limit_mb, str):
+                            raise RuntimeError("invalid retry job payload: malformed requested fields")
                         requested_map[pid] = {
-                            "name": str(req.get("name") or "").strip(),
-                            "time_limit_ms": str(req.get("time_limit_ms") or "").strip(),
-                            "memory_limit_mb": str(req.get("memory_limit_mb") or "").strip(),
+                            "name": requested_name.strip(),
+                            "time_limit_ms": requested_time_limit_ms.strip(),
+                            "memory_limit_mb": requested_memory_limit_mb.strip(),
                         }
                     if pid not in selected_ids:
                         selected_ids.append(pid)
@@ -316,7 +344,7 @@ def contest_problems_change_general(
     for row in rows:
         pid = int(row["problem_id"])
         defaults = {
-            "name": str(row["name"] or "").strip(),
+            "name": row["name"],
             "time_limit_ms": str(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
             "memory_limit_mb": str(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
         }
@@ -327,14 +355,14 @@ def contest_problems_change_general(
             actor_user_id=actor_user_id,
             problem_id=pid,
             problem_slug=str(row["slug"]),
-            requested_name=str(requested.get("name") or ""),
-            requested_time_limit_ms=str(requested.get("time_limit_ms") or ""),
-            requested_memory_limit_mb=str(requested.get("memory_limit_mb") or ""),
+            requested_name=requested["name"] if isinstance(requested.get("name"), str) else "",
+            requested_time_limit_ms=requested["time_limit_ms"] if isinstance(requested.get("time_limit_ms"), str) else "",
+            requested_memory_limit_mb=requested["memory_limit_mb"] if isinstance(requested.get("memory_limit_mb"), str) else "",
         )
         results.append(result)
-    success_count = sum((1 for row in results if str(row.get("status") or "") == "success"))
-    failed_count = sum((1 for row in results if str(row.get("status") or "") == "failed"))
-    skipped_count = sum((1 for row in results if str(row.get("status") or "") == "skipped"))
+    success_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "success"))
+    failed_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "failed"))
+    skipped_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "skipped"))
     summary = {
         "contest_slug": str(ctx["contest"]["slug"]),
         "job_type": "change-general",
@@ -362,7 +390,6 @@ def contest_problems_change_general(
             "skipped": skipped_count,
         },
     )
-    msg = f"change names/TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped"
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query=f"job_id={quote_plus(job_id)}", message=msg)
+    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query=f"job_id={quote_plus(job_id)}", message=f"change names/TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped")
 
 

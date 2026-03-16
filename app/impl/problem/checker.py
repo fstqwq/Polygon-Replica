@@ -1,23 +1,16 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
 from fastapi import Form, HTTPException, Request
 
-from app.impl.auth.public import redirect_response, template_response
+from app.impl.auth.shared import redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
-from app.impl.workspace.public import (
-    audit,
-    checker_status_context,
-    read_build_config,
-    require_write_access,
-    resolve_standard_checker_path,
-    standard_checker_catalog,
-    template_for_kind,
-    write_build_config,
-    page_ctx,
-)
+from app.impl.workspace.context_operation import audit, read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
+from app.impl.workspace.context_component_status import checker_status_context
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
 _C = config.constants
@@ -28,10 +21,10 @@ def checker_page(request: Request, problem: str, user: str):
     workspace = Path(ctx['workspace']['path'])
     checker_status = checker_status_context(workspace)
     standard_checker_options = standard_checker_catalog()
-    selected_standard = str(checker_status.get('standard_checker') or '')
+    selected_standard = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''
     if not selected_standard and standard_checker_options:
-        selected_standard = str(standard_checker_options[0]['value'])
-    repo_source = str(checker_status.get('repo_source') or 'checkers/checker.cpp')
+        selected_standard = standard_checker_options[0]['value']
+    repo_source = repo_source if isinstance(repo_source := checker_status.get('repo_source'), str) and repo_source else 'checkers/checker.cpp'
     repo_content = ''
     repo_content_truncated = False
     try:
@@ -49,13 +42,13 @@ def checker_view_standard(request: Request, problem: str, user: str, checker_nam
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     checker_status = checker_status_context(workspace)
-    selected = str(checker_name or '').strip()
+    selected = checker_name.strip()
     if not selected:
-        selected = str(checker_status.get('standard_checker') or '')
+        selected = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''
     if not selected:
         catalog = standard_checker_catalog()
         if catalog:
-            selected = str(catalog[0].get('value') or '')
+            selected = catalog[0]['value']
     if not selected:
         return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message='no standard checker available')
     try:
@@ -159,7 +152,7 @@ def checker_save_source(problem: str, user: str, path: str=Form('checkers/checke
                 else:
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
-        audit(ctx['user']['id'], ctx['problem']['id'], 'checker.save_source', {'path': target, 'bytes': len(str(content or '').encode('utf-8'))})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'checker.save_source', {'path': target, 'bytes': len(content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

@@ -1,52 +1,110 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
-import io
 import json
-import os
 import re
-import threading
 import time
 import uuid
 from pathlib import Path
-from unittest.mock import patch
-from urllib.parse import parse_qs, quote_plus, urlencode, urlparse
+from types import SimpleNamespace
+from urllib.parse import quote_plus, urlencode
 
-from fastapi import HTTPException
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
 
 from .common import (
     SmokeBase,
-    _wait_for_export_workers,
     _wait_for_run_execute_workers,
-    _wait_for_verification_workers,
 )
-import app.impl.auth.api
-import app.impl.build.api
-import app.impl.preview.api
-import app.impl.contest.api
-import app.impl.problem.api
-import app.impl.root.api
-import app.impl.run_export.api
-import app.impl.workspace.api
+import app.impl.auth.api as auth_api_module
+import app.impl.contest.access as contest_access_module
+import app.impl.contest.overview as contest_overview_module
+import app.impl.contest.package as contest_package_module
+import app.impl.contest.problem as contest_problem_module
+import app.impl.contest.property as contest_property_module
+import app.impl.preview.preview as preview_module
+import app.impl.problem.access as problem_access_module
+import app.impl.problem.checker as problem_checker_module
+import app.impl.problem.file as problem_file_module
+import app.impl.problem.general as problem_general_module
+import app.impl.problem.generator as problem_generator_module
+import app.impl.problem.git_op as problem_git_module
+import app.impl.problem.history as problem_history_module
+import app.impl.problem.interactor as problem_interactor_module
+import app.impl.problem.setting as problem_setting_module
+import app.impl.problem.solution as problem_solution_module
+import app.impl.problem.validator as problem_validator_module
+import app.impl.problem.workspace_op as problem_workspace_op_module
+import app.impl.root.api as root_api_module
+import app.impl.run_export.artifact as run_export_artifact_module
+import app.impl.run_export.export as run_export_export_module
+import app.impl.run_export.import_source as run_export_import_module
+import app.impl.run_export.query as run_export_query_module
+import app.impl.run_export.run as run_export_run_module
+import app.impl.tests_spec.routes as tests_spec_module
+import app.impl.tests_spec.verification as tests_spec_verification_module
+import app.impl.workspace.context_job as workspace_job_module
+import app.impl.workspace.context_ui as workspace_ui_module
+import app.impl.workspace.context_verification as workspace_verification_module
+import app.impl.workspace.run_view_detail as workspace_run_view_detail_module
+import app.impl.workspace.run_view_list as workspace_run_view_list_module
 from app.impl.runtime.config import config
-from app.service.statement.signature import statement_sources_signature
-from app.service.platform.process import run_cmd
+from app.service.verification.store import load_verification_summary, verification_run_ids as verification_summary_run_ids
 _API_MODULES = (
-    app.impl.auth.api,
-    app.impl.build.api,
-    app.impl.preview.api,
-    app.impl.contest.api,
-    app.impl.problem.api,
-    app.impl.root.api,
-    app.impl.run_export.api,
-    app.impl.workspace.api,
+    auth_api_module,
+    tests_spec_module,
+    tests_spec_verification_module,
+    preview_module,
+    contest_access_module,
+    contest_overview_module,
+    contest_package_module,
+    contest_problem_module,
+    contest_property_module,
+    problem_access_module,
+    problem_checker_module,
+    problem_file_module,
+    problem_general_module,
+    problem_generator_module,
+    problem_git_module,
+    problem_history_module,
+    problem_interactor_module,
+    problem_setting_module,
+    problem_solution_module,
+    problem_validator_module,
+    problem_workspace_op_module,
+    run_export_artifact_module,
+    run_export_export_module,
+    run_export_import_module,
+    run_export_run_module,
+    workspace_job_module,
+    workspace_ui_module,
+    root_api_module,
 )
-run_export_impl = app.impl.run_export.api
-workspace_impl = app.impl.workspace.api
+
+def _verification_record_run_ids(problem_id: int, workspace_id: int, verification_id: str) -> list[str]:
+    summary = load_verification_summary(config.db, verification_id)
+    if not isinstance(summary, dict):
+        return []
+    return verification_summary_run_ids(summary)
+
+
+run_export_impl = SimpleNamespace(
+    _finalize_cancelled_verifications=run_export_run_module._finalize_cancelled_verifications,
+    _run_detail_use_compact_layout=run_export_query_module._run_detail_use_compact_layout,
+    run_artifact_file=run_export_artifact_module.run_artifact_file,
+    run_cancel=run_export_run_module.run_cancel,
+)
+workspace_impl = SimpleNamespace(
+    _run_cell_kind=workspace_run_view_list_module._run_cell_kind,
+    _verification_solution_match=workspace_verification_module._verification_solution_match,
+    _verification_sources_signature=workspace_verification_module._verification_sources_signature,
+    _verification_sources_signature_details=workspace_verification_module._verification_sources_signature_details,
+    build_run_detail_context=workspace_run_view_detail_module.build_run_detail_context,
+    record_async_run_failure=workspace_job_module.record_async_run_failure,
+    run_list_rows=workspace_run_view_list_module.run_list_rows,
+    verification_detail_context=workspace_run_view_detail_module.build_run_detail_context,
+    verification_run_ids=_verification_record_run_ids,
+)
 
 def _api_attr(name: str):
     for module in _API_MODULES:
@@ -63,18 +121,16 @@ workspace_revision_info = _api_attr("workspace_revision_info")
 auth_password_meta = _api_attr("auth_password_meta")
 auth_middleware = _api_attr("auth_middleware")
 artifact_file = _api_attr("artifact_file")
-access_page = _api_attr("access_page")
-build_service = config.verification_service
-build_page = _api_attr("build_page")
-tests_spec_add_gen = _api_attr("tests_spec_add_gen")
-tests_spec_edit = _api_attr("tests_spec_edit")
-tests_spec_add_manual = _api_attr("tests_spec_add_manual")
-tests_spec_add_manual_upload = _api_attr("tests_spec_add_manual_upload")
-tests_spec_delete = _api_attr("tests_spec_delete")
-tests_spec_gen_script_save = _api_attr("tests_spec_gen_script_save")
-tests_spec_payload_download = _api_attr("tests_spec_payload_download")
-tests_spec_payload_upload = _api_attr("tests_spec_payload_upload")
-tests_spec_reindex = _api_attr("tests_spec_reindex")
+tests_page = tests_spec_module.render_tests_page
+tests_spec_add_gen = tests_spec_module.add_generator_test
+tests_spec_edit = tests_spec_module.edit_spec_test
+tests_spec_add_manual = tests_spec_module.add_manual_test
+tests_spec_add_manual_upload = tests_spec_module.upload_manual_test
+tests_spec_delete = tests_spec_module.delete_spec_test
+tests_spec_gen_script_save = tests_spec_module.save_gen_script
+tests_spec_payload_download = tests_spec_module.download_test_payload
+tests_spec_payload_upload = tests_spec_module.upload_test_payload
+tests_spec_reindex = tests_spec_module.reindex_spec_test
 checker_page = _api_attr("checker_page")
 checker_save_source = _api_attr("checker_save_source")
 checker_set_standard = _api_attr("checker_set_standard")
@@ -165,6 +221,7 @@ validator_create_template = _api_attr("validator_create_template")
 validator_page = _api_attr("validator_page")
 validator_save_source = _api_attr("validator_save_source")
 workspace_page = _api_attr("render_workspace_page")
+access_page = lambda request, problem, user: workspace_page(request, problem, user, show_access_admin=True)
 workspace_access_grant = _api_attr("workspace_access_grant")
 workspace_access_revoke = _api_attr("workspace_access_revoke")
 workspace_service = config.workspace_service
@@ -567,9 +624,5 @@ int main() {
             encoding="utf-8",
         )
         return ws
-
-
-
-
 
 

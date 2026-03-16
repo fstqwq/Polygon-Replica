@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from typing import TypedDict, cast
 from urllib.parse import quote_plus
 
 from fastapi import Request
@@ -17,8 +18,61 @@ from .context_operation import dedupe_preserve_order, _file_head_text, workspace
 _C = config.constants
 
 _RUNPIPE_PROTOCOL_TOKEN_RE = re.compile(r"\[\s*[0-9]+(?:\.[0-9]+)?s/[0-9]+\]")
+
+
+RunDetailPreview = TypedDict(
+    "RunDetailPreview",
+    {
+        "available": bool,
+        "text": str,
+        "truncated": bool,
+        "limit": int,
+        "download_href": str,
+        "message": str,
+    },
+)
+
+InteractiveTranscriptRow = TypedDict(
+    "InteractiveTranscriptRow",
+    {
+        "side": str,
+        "text": str,
+    },
+)
+
+InteractiveTranscriptPreview = TypedDict(
+    "InteractiveTranscriptPreview",
+    {
+        "available": bool,
+        "rows": list[InteractiveTranscriptRow],
+        "shown": int,
+        "total": int,
+        "truncated": bool,
+    },
+)
+
+DiagnosticEntry = TypedDict(
+    "DiagnosticEntry",
+    {
+        "message": str,
+        "message_truncated": bool,
+        "message_limit": int,
+        "level": str,
+        "file": str,
+        "line": int,
+        "column": int,
+        "can_link": bool,
+        "file_display": str,
+        "location_display": str,
+        "location_title": str,
+        "level_upper": str,
+    },
+    total=False,
+)
+
+
 def _strip_runpipe_protocol_lines(raw: str) -> str:
-    text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
     kept: list[str] = []
     for line in text.split("\n"):
         if _RUNPIPE_PROTOCOL_TOKEN_RE.search(line):
@@ -30,21 +84,21 @@ def _strip_runpipe_protocol_lines(raw: str) -> str:
         kept.pop()
     return "\n".join(kept)
 
-def _run_detail_preview_unavailable(message: str='missing') -> dict[str, object]:
-    return {'available': False, 'text': '', 'truncated': False, 'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES), 'download_href': '', 'message': str(message or 'missing')}
+def _run_detail_preview_unavailable(message: str = 'missing') -> RunDetailPreview:
+    return {'available': False, 'text': '', 'truncated': False, 'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES), 'download_href': '', 'message': message}
 
-def _run_detail_preview_from_path(path: Path, download_href: str) -> dict[str, object]:
+def _run_detail_preview_from_path(path: Path, download_href: str) -> RunDetailPreview:
     text, clipped = _file_head_text(path, _C.RUN_DETAIL_PREVIEW_MAX_BYTES)
     normalized = sanitize_log_text_for_ui(text)
     normalized = _strip_runpipe_protocol_lines(normalized)
     if not normalized:
         normalized = '(empty)'
-    return {'available': True, 'text': normalized, 'truncated': bool(clipped), 'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES), 'download_href': str(download_href or ''), 'message': ''}
+    return {'available': True, 'text': normalized, 'truncated': bool(clipped), 'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES), 'download_href': download_href, 'message': ''}
 
 
-def _run_detail_preview_from_bytes(blob: bytes, download_href: str = "") -> dict[str, object]:
+def _run_detail_preview_from_bytes(blob: bytes, download_href: str = "") -> RunDetailPreview:
     limit = int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES)
-    data = bytes(blob or b"")
+    data = blob
     clipped = len(data) > limit
     head = data[:limit]
     normalized = sanitize_log_text_for_ui(head.decode("utf-8", errors="replace"))
@@ -56,31 +110,29 @@ def _run_detail_preview_from_bytes(blob: bytes, download_href: str = "") -> dict
         "text": normalized,
         "truncated": bool(clipped),
         "limit": limit,
-        "download_href": str(download_href or ""),
+        "download_href": download_href,
         "message": "",
     }
 
-def _run_detail_preview_is_noise(preview: dict[str, object]) -> bool:
-    if not isinstance(preview, dict):
+def _run_detail_preview_is_noise(preview: RunDetailPreview) -> bool:
+    if not preview["available"]:
         return True
-    if not bool(preview.get("available")):
-        return True
-    text = str(preview.get("text") or "").strip()
+    text = preview["text"]
     if not text or text == "(empty)":
         return True
     return bool(_RUNPIPE_PROTOCOL_TOKEN_RE.search(text))
 
-def _interactive_transcript_preview(preview: dict[str, object], *, line_limit: int = 24) -> dict[str, object]:
-    if not isinstance(preview, dict) or (not bool(preview.get("available"))):
+def _interactive_transcript_preview(preview: RunDetailPreview, *, line_limit: int = 24) -> InteractiveTranscriptPreview:
+    if not preview["available"]:
         return {"available": False, "rows": [], "shown": 0, "total": 0, "truncated": False}
-    raw_text = str(preview.get("text") or "")
+    raw_text = preview["text"]
     if (not raw_text.strip()) or raw_text.strip() == "(empty)":
         return {"available": False, "rows": [], "shown": 0, "total": 0, "truncated": False}
     lines = raw_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    rows: list[dict[str, str]] = []
+    rows: list[InteractiveTranscriptRow] = []
     last_side = "right"
     for raw_line in lines:
-        line = str(raw_line or "").strip()
+        line = raw_line.strip()
         if not line:
             continue
         side = ""
@@ -102,12 +154,14 @@ def _interactive_transcript_preview(preview: dict[str, object], *, line_limit: i
         if not side:
             side = "left" if last_side == "right" else "right"
         last_side = side
-        rows.append({"side": side, "text": text or line})
+        if not text:
+            text = line
+        rows.append({"side": side, "text": text})
     if not rows:
         return {"available": False, "rows": [], "shown": 0, "total": 0, "truncated": False}
     cap = max(1, int(line_limit))
     shown_rows = rows[:cap]
-    truncated = bool(len(rows) > cap or preview.get("truncated"))
+    truncated = len(rows) > cap or preview["truncated"]
     return {
         "available": True,
         "rows": shown_rows,
@@ -116,106 +170,114 @@ def _interactive_transcript_preview(preview: dict[str, object], *, line_limit: i
         "truncated": truncated,
     }
 
-def _cap_summary_list(summary: dict, field: str, limit: int, truncated_key: str, total_key: str, limit_key: str) -> None:
-    values = summary.get(field)
-    if not isinstance(values, list):
-        return
+def _nonnegative_int_or_none(raw: object) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        return None
+    return value if value >= 0 else None
 
-    def _int_or_none(raw) -> int | None:
-        try:
-            value = int(raw)
-        except Exception:
-            return None
-        return value if value >= 0 else None
+
+def _positive_int_or_none(raw: object) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def _cap_summary_list(summary: dict[str, object], field: str, limit: int, truncated_key: str, total_key: str, limit_key: str) -> None:
+    values = summary.get(field)
+    if values is None:
+        return
+    rows = cast(list[object], values)
     cap = max(1, int(limit))
-    existing_total = _int_or_none(summary.get(total_key))
-    existing_truncated = summary.get(truncated_key) if isinstance(summary.get(truncated_key), bool) else None
-    total = len(values)
+    existing_total = _nonnegative_int_or_none(summary.get(total_key))
+    existing_truncated = cast(bool | None, summary.get(truncated_key))
+    total = len(rows)
     if existing_total is not None:
         total = max(total, existing_total)
-    shown = values
-    if len(values) > cap:
-        shown = values[:cap]
+    if len(rows) > cap:
+        shown = rows[:cap]
         summary[field] = shown
     summary[limit_key] = cap
     summary[total_key] = total
     if existing_truncated is not None:
-        summary[truncated_key] = bool(existing_truncated) or total > cap or len(values) > cap
+        summary[truncated_key] = existing_truncated or total > cap or len(rows) > cap
         return
     summary[truncated_key] = total > cap
 
-def _cap_run_test_feedback_files(summary: dict, limit: int) -> None:
+def _cap_run_test_feedback_files(summary: dict[str, object], limit: int) -> None:
     tests = summary.get('tests')
-    if not isinstance(tests, list):
+    if tests is None:
         return
-
-    def _int_or_none(raw) -> int | None:
-        try:
-            value = int(raw)
-        except Exception:
-            return None
-        return value if value >= 0 else None
+    test_rows = cast(list[dict[str, object]], tests)
     cap = max(1, int(limit))
-    for row in tests:
-        if not isinstance(row, dict):
-            continue
+    for row in test_rows:
         files = row.get('feedback_files')
-        if not isinstance(files, list):
+        if files is None:
             continue
-        existing_total = _int_or_none(row.get('feedback_files_total'))
-        existing_truncated = row.get('feedback_files_truncated') if isinstance(row.get('feedback_files_truncated'), bool) else None
-        total = len(files)
+        feedback_files = cast(list[object], files)
+        existing_total = _nonnegative_int_or_none(row.get('feedback_files_total'))
+        existing_truncated = cast(bool | None, row.get('feedback_files_truncated'))
+        total = len(feedback_files)
         if existing_total is not None:
             total = max(total, existing_total)
-        if len(files) > cap:
-            row['feedback_files'] = files[:cap]
+        if len(feedback_files) > cap:
+            row['feedback_files'] = feedback_files[:cap]
         row['feedback_files_limit'] = cap
         row['feedback_files_total'] = total
         if existing_truncated is not None:
-            row['feedback_files_truncated'] = bool(existing_truncated) or total > cap or len(files) > cap
+            row['feedback_files_truncated'] = existing_truncated or total > cap or len(feedback_files) > cap
             continue
         row['feedback_files_truncated'] = total > cap
 
 def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
     cap = max(1, int(max_chars))
-    text = str(value or '')
+    text = value
     if len(text) <= cap:
         return (text, False)
     return (text[:cap] + f'... [truncated; showing first {cap} characters]', True)
 
-def _normalize_diagnostics(entries: list, message_limit: int) -> list[dict]:
-
-    def _int_or_none(raw) -> int | None:
-        try:
-            value = int(raw)
-        except Exception:
-            return None
-        return value if value > 0 else None
-    normalized: list[dict] = []
-    for raw in entries:
-        item = raw if isinstance(raw, dict) else {'message': str(raw or '')}
-        msg, msg_truncated = _truncate_inline_text(str(item.get('message') or ''), message_limit)
-        persisted_truncated = bool(item.get('message_truncated')) if isinstance(item, dict) else False
-        persisted_limit = _int_or_none(item.get('message_limit')) if isinstance(item, dict) else None
-        row = dict(item)
+def _normalize_diagnostics(entries: list[DiagnosticEntry], message_limit: int) -> list[DiagnosticEntry]:
+    normalized: list[DiagnosticEntry] = []
+    for item in entries:
+        message = item.get("message")
+        if message is None:
+            message = ""
+        msg, msg_truncated = _truncate_inline_text(message, message_limit)
+        persisted_truncated = item.get('message_truncated')
+        if persisted_truncated is None:
+            persisted_truncated = False
+        persisted_limit = _positive_int_or_none(item.get('message_limit'))
+        row: DiagnosticEntry = dict(item)
         row['message'] = msg
-        row['message_truncated'] = bool(msg_truncated) or persisted_truncated
+        row['message_truncated'] = msg_truncated or persisted_truncated
         if msg_truncated:
             row['message_limit'] = message_limit
         elif persisted_truncated and persisted_limit is not None:
             row['message_limit'] = persisted_limit
         else:
             row['message_limit'] = message_limit
-        row.setdefault('level', 'error')
-        row.setdefault('file', '')
-        row.setdefault('line', 0)
-        row.setdefault('column', 0)
-        row.setdefault('can_link', False)
+        level = row.get('level')
+        row['level'] = level if level is not None and level.strip() else 'error'
+        file_path = row.get('file')
+        row['file'] = '' if file_path is None else file_path
+        line_value = _nonnegative_int_or_none(row.get('line'))
+        row['line'] = 0 if line_value is None else line_value
+        column_value = _nonnegative_int_or_none(row.get('column'))
+        row['column'] = 0 if column_value is None else column_value
+        can_link = row.get('can_link')
+        row['can_link'] = False if can_link is None else bool(can_link)
         normalized.append(row)
     return normalized
 
 def _diagnostic_file_display(file_path: str) -> str:
-    text = str(file_path or '').strip()
+    text = file_path.strip()
     if not text:
         return ''
     normalized = text.replace('\\', '/')
@@ -230,32 +292,36 @@ def _diagnostic_file_display(file_path: str) -> str:
         return '/'.join(pieces[-2:])
     return pieces[-1]
 
-def _decorate_compile_diagnostics(entries: list[dict]) -> list[dict]:
-    decorated: list[dict] = []
+def _decorate_compile_diagnostics(entries: list[DiagnosticEntry]) -> list[DiagnosticEntry]:
+    decorated: list[DiagnosticEntry] = []
     for item in entries:
-        if not isinstance(item, dict):
-            continue
-        row = dict(item)
-        file_text = str(row.get('file') or '').strip()
+        row: DiagnosticEntry = dict(item)
+        file_text = row.get("file")
+        if file_text is None:
+            file_text = ""
         file_display = _diagnostic_file_display(file_text)
-        try:
-            line_value = max(0, int(row.get('line') or 0))
-        except Exception:
+        line_value = _nonnegative_int_or_none(row.get("line"))
+        if line_value is None:
             line_value = 0
-        try:
-            column_value = max(0, int(row.get('column') or 0))
-        except Exception:
+        column_value = _nonnegative_int_or_none(row.get("column"))
+        if column_value is None:
             column_value = 0
-        location_display = file_display or '(unknown)'
+        location_display = file_display
+        if not location_display:
+            location_display = '(unknown)'
         if line_value > 0:
             location_display += f':{line_value}'
             if column_value > 0:
                 location_display += f':{column_value}'
         location_title = location_display
-        row['file_display'] = file_display or '(unknown)'
+        row['file_display'] = file_display if file_display else '(unknown)'
         row['location_display'] = location_display
-        row['location_title'] = location_title or location_display
-        level = str(row.get('level') or 'error').strip().lower()
+        row['location_title'] = location_title if location_title else location_display
+        level = row.get("level")
+        if level is None:
+            level = "error"
+        else:
+            level = level.strip()
         if not level:
             level = 'error'
         row['level'] = level
@@ -264,7 +330,9 @@ def _decorate_compile_diagnostics(entries: list[dict]) -> list[dict]:
     return decorated
 
 def normalize_run_id_token(raw: str | None) -> str:
-    token = str(raw or '').strip()
+    if raw is None:
+        return ''
+    token = raw.strip()
     if not token:
         return ''
     if not re.fullmatch('[A-Za-z0-9._-]{1,80}', token):
@@ -272,30 +340,20 @@ def normalize_run_id_token(raw: str | None) -> str:
     return token
 
 def normalize_run_test_name_token(raw: str | None) -> str:
-    token = str(raw or '').strip()
+    if raw is None:
+        return ''
+    token = raw.strip()
     if not token:
         return ''
     if not _C.RUN_TEST_NAME_RE.fullmatch(token):
         return ''
     return token
 
-def parse_run_test_names(raw_values: object) -> list[str]:
-    values: list[str] = []
+def parse_run_test_names(raw_values: list[str] | None) -> list[str]:
     if raw_values is None:
-        return values
-    if isinstance(raw_values, str):
-        values.append(raw_values)
-    elif isinstance(raw_values, list):
-        values.extend((str(item or '') for item in raw_values))
-    elif isinstance(raw_values, tuple):
-        values.extend((str(item or '') for item in raw_values))
-    else:
-        try:
-            values.extend((str(item or '') for item in list(raw_values)))
-        except Exception:
-            values.append(str(raw_values or ''))
+        return []
     result: list[str] = []
-    for raw in values:
+    for raw in raw_values:
         token = normalize_run_test_name_token(raw)
         if token:
             result.append(token)
@@ -309,13 +367,16 @@ def parse_verification_detail_id(request: Request) -> str:
     return ''
 
 
-def _run_source_from_summary(summary: dict | None) -> str:
-    if not isinstance(summary, dict):
+def _run_source_from_summary(summary: dict[str, object] | None) -> str:
+    if summary is None:
         return ''
-    return str(summary.get('source') or '').strip()
+    source = cast(str | None, summary.get("source"))
+    if source is None:
+        return ""
+    return source
 
 def _run_rejudge_source_context(source: str, workspace: Path) -> tuple[str, str]:
-    source_text = str(source or '').strip()
+    source_text = source.strip()
     if not source_text:
         return ('', 'run source missing')
     safe_solution = normalize_optional_component_source_path_safe(source_text, 'solutions', 'solution path')
@@ -326,7 +387,7 @@ def _run_rejudge_source_context(source: str, workspace: Path) -> tuple[str, str]
     return (safe_solution, '')
 
 def _summarize_rejudge_unavailable_reason(reasons: list[str]) -> str:
-    unique_reasons = dedupe_preserve_order([str(item or '').strip() for item in reasons if str(item or '').strip()])
+    unique_reasons = dedupe_preserve_order([item.strip() for item in reasons if item.strip()])
     if not unique_reasons:
         return 'no reusable solutions source'
     if len(unique_reasons) <= 2:
@@ -337,16 +398,17 @@ def _summarize_rejudge_unavailable_reason(reasons: list[str]) -> str:
 def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace: Path) -> dict[str, str | list[str]]:
     if not entries:
         return {'paths': [], 'query': '', 'unavailable_reason': 'no reusable solutions source'}
-    statuses = [str(item.get('status') or '').strip().lower() for item in entries if isinstance(item, dict)]
-    if any((status in {'running', 'queued', 'pending'} for status in statuses)):
+    statuses = [
+        cast(str | None, item.get("status")) if item.get("status") is not None else ""
+        for item in entries
+    ]
+    if any((status == 'running' for status in statuses)):
         return {'paths': [], 'query': '', 'unavailable_reason': 'verification still running'}
     reusable_paths: list[str] = []
     unavailable_reasons: list[str] = []
     all_reusable = True
     for item in entries:
-        if not isinstance(item, dict):
-            continue
-        source = str(item.get('source') or '').strip()
+        source = cast(str | None, item.get("source")) if item.get("source") is not None else ""
         safe_solution, unavailable_reason = _run_rejudge_source_context(source, workspace)
         if safe_solution:
             reusable_paths.append(safe_solution)
@@ -368,9 +430,12 @@ def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace
     }
 
 def _verification_status_summary(entries: list[dict[str, object]]) -> dict[str, object]:
-    statuses = [str(item.get('status') or '').strip().lower() for item in entries if isinstance(item, dict)]
+    statuses = [
+        cast(str | None, item.get("status")) if item.get("status") is not None else ""
+        for item in entries
+    ]
     has_running = any((status in {'running', 'queued', 'pending'} for status in statuses))
-    matched_count = sum((1 for item in entries if isinstance(item, dict) and bool(item.get('matched'))))
+    matched_count = sum((1 for item in entries if bool(item.get('matched'))))
     total_count = len(entries)
     if has_running:
         status_text = 'running'

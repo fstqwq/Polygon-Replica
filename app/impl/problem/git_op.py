@@ -1,12 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
 from fastapi import Form
 
-from app.impl.auth.public import redirect_response
+from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
-from app.impl.workspace.public import audit, require_write_access, page_ctx
+from app.impl.workspace.context_operation import audit
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx
 
 
 def git_commit(problem: str, user: str, message: str=Form(...)):
@@ -77,7 +79,7 @@ def git_restore_revision(problem: str, user: str, revision: str=Form(...), page:
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    target_page = 'workspace' if str(page or '').strip().lower() == 'workspace' else 'history'
+    target_page = 'workspace' if page.strip().lower() == 'workspace' else 'history'
     try:
         with config.workspace_service.workspace_lock(workspace):
             resolved = config.git_service.restore_revision_to_working_copy(workspace, revision)

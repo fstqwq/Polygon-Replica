@@ -91,10 +91,8 @@ class Judgehost(
 
     def backend_status(self) -> dict[str, object]:
         status = self.status()
-        queue = status.get("queue") if isinstance(status, dict) else {}
-        queue_text = ""
-        if isinstance(queue, dict):
-            queue_text = f"queue queued={int(queue.get('queued', 0))}, leased={int(queue.get('leased', 0))}"
+        queue = status["queue"]
+        queue_text = f"queue queued={int(queue.get('queued', 0))}, leased={int(queue.get('leased', 0))}"
         ready = bool(self.enabled() and self.auth_token_configured())
         if not self.enabled():
             detail = "judgehost service disabled"
@@ -157,7 +155,7 @@ class Judgehost(
             verification_source=str(verification_source or "run.execute"),
             task_kind=str(task_kind or ""),
             force_recompile=bool(force_recompile),
-            prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,
+            prepared_payload=None if prepared_payload is None else dict(prepared_payload),
         )
         return self.wait_for_task(task_id, timeout_sec=None)
 
@@ -191,7 +189,7 @@ class Judgehost(
             verification_run_ids=list(verification_run_ids or []),
             expected_behavior=str(expected_behavior or "compile"),
             verification_source=str(verification_source or "compile.only"),
-            prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,
+            prepared_payload=None if prepared_payload is None else dict(prepared_payload),
         )
         return self.wait_for_task_result(task_id, timeout_sec=None)
 

@@ -1,27 +1,23 @@
 ﻿from __future__ import annotations
 
-from app.impl.preview.shared import (
-    Form,
-    Path,
-    allocate_verification_id,
-    allocate_run_id,
-    audit,
-    redirect_response,
-    require_write_access,
-    run_solution_options_context,
-    start_verification_job,
-    workspace_rel_file_exists,
-    normalize_verification_target_page,
-    config,
-    normalize_expected_behavior,
-    page_ctx,
-)
+from pathlib import Path
+
+from fastapi import Form
+
+from app.impl.auth.shared import redirect_response
+from app.impl.runtime.config import config
+from app.impl.tests_spec.shared import normalize_verification_target_page
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx, start_verification_job
+from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
+from app.impl.workspace.context_operation import audit, run_solution_options_context, workspace_rel_file_exists
+from app.service.problem.solution_metadata import normalize_expected_behavior
 def verification_start(problem: str, user: str, page: str=Form('statement')):
     target_page = normalize_verification_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    workspace_head = str(ctx['workspace'].get('head_commit') or '').strip()
+    workspace_head = ctx['workspace']['head_commit']
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     verification_id = allocate_verification_id()
     backend_name = config.judgehost_task_service.backend_name()
@@ -29,17 +25,22 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
     msg = 'verification running'
     try:
         solution_options, accepted_source, _ = run_solution_options_context(workspace)
-        accepted_source = str(accepted_source or '').strip()
+        if not isinstance(accepted_source, str):
+            accepted_source = ''
+        else:
+            accepted_source = accepted_source.strip()
         if not accepted_source:
             raise ValueError('main correct solution is required')
         if not workspace_rel_file_exists(workspace, accepted_source):
             raise ValueError('main correct solution source does not exist')
         targets: list[dict[str, str]] = []
         for row in solution_options:
-            source_path = str(row.get('path') or '').strip()
+            if not isinstance(source_path := row.get('path'), str):
+                continue
+            source_path = source_path.strip()
             if not source_path:
                 continue
-            expected_behavior = normalize_expected_behavior(str(row.get('expected_behavior') or 'unknown'))
+            expected_behavior = normalize_expected_behavior(expected_behavior if isinstance(expected_behavior := row.get('expected_behavior'), str) else 'unknown')
             if source_path == accepted_source:
                 expected_behavior = 'accepted'
             if expected_behavior == 'unknown' and bool(row.get('is_accepted')):
@@ -47,15 +48,15 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
             targets.append({'path': source_path, 'expected_behavior': expected_behavior})
         if not targets:
             raise ValueError('at least one solution source is required')
-        if not any((str(item.get('expected_behavior') or '') == 'accepted' for item in targets)):
+        if not any(item['expected_behavior'] == 'accepted' for item in targets):
             raise ValueError('accepted solution source is required')
-        targets.sort(key=lambda item: (0 if item.get('expected_behavior') == 'accepted' else 1, str(item.get('path') or '')))
+        targets.sort(key=lambda item: (0 if item['expected_behavior'] == 'accepted' else 1, item['path']))
         planned_run_ids: list[str] = []
         for target in targets:
             run_token = allocate_run_id()
             target['run_id'] = run_token
             planned_run_ids.append(run_token)
-        verification_details['submission_paths'] = [str(item.get('path') or '') for item in targets]
+        verification_details['submission_paths'] = [item['path'] for item in targets]
         verification_details['solution_count'] = len(targets)
         started = start_verification_job(
             problem,
@@ -76,7 +77,7 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
         verification_details['error'] = str(exc)
         msg = f'verification failed: {exc}'
     base = f'/problems/{problem}/{user}/{target_page}'
-    if str(verification_details.get('status') or '') == 'failed':
+    if verification_details['status'] == 'failed':
         audit(ctx['user']['id'], ctx['problem']['id'], 'verification.start', verification_details)
     return redirect_response(base, status_code=303, message=msg)
 

@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import Form, HTTPException, Request
 
 from app.db import now_iso
-from app.impl.auth.public import template_response
+from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.public import audit, normalize_contest_role
+from app.impl.workspace.context_operation import audit, normalize_contest_role
 
 from .common import _normalize_contest_member_role_required
 from .shared import _contest_ctx, _contest_owner_count, _contest_redirect
@@ -46,10 +46,10 @@ def contest_access_page(request: Request, contest: str, user: str):
 def contest_access_grant(contest: str, user: str, target_user: str = Form(...), role: str = Form("read")):
     ctx = _contest_ctx(contest, user, "access")
     if not bool(ctx["access"].get("can_manage")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("manage_block_reason") or "owner access required"))
+        raise HTTPException(status_code=403, detail=ctx["access"]["manage_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     actor_user_id = int(ctx["user"]["id"])
-    safe_target = str(target_user or "").strip()
+    safe_target = target_user.strip()
     safe_role = _normalize_contest_member_role_required(role)
     user_row = config.db.fetch_one("SELECT id FROM users WHERE username=?", [safe_target])
     if user_row is None:
@@ -79,10 +79,10 @@ def contest_access_grant(contest: str, user: str, target_user: str = Form(...), 
 def contest_access_revoke(contest: str, user: str, target_user: str = Form(...)):
     ctx = _contest_ctx(contest, user, "access")
     if not bool(ctx["access"].get("can_manage")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("manage_block_reason") or "owner access required"))
+        raise HTTPException(status_code=403, detail=ctx["access"]["manage_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     actor_user_id = int(ctx["user"]["id"])
-    safe_target = str(target_user or "").strip()
+    safe_target = target_user.strip()
     target_row = config.db.fetch_one(
         """
         SELECT m.role,u.id AS user_id

@@ -1,22 +1,23 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.db import DB
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
-import app.impl.preview.api
-import app.impl.workspace.api
+from app.impl.preview.preview import preview_page, preview_run
 from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
+from app.impl.workspace.context_job import _run_export_create_worker
 from app.impl.workspace.context_job_helper import _ensure_implicit_verification
-from app.service.verification import load_verification_record
-import app.service.verification.service as verification_service_module
+from app.service.verification.store import load_verification_record
+from app.service.verification.judge_solve import solve_with_judge_backend
 
 
 class TestBackendMinimal(SmokeBase):
@@ -228,7 +229,7 @@ class TestBackendMinimal(SmokeBase):
         verification_id = self.random_id("ver-artifact-path")
         original_artifact_path = self._artifact_root(f"{verification_id}-artifact")
         original_artifact_path.mkdir(parents=True, exist_ok=True)
-        from app.service.verification import create_verification_record
+        from app.service.verification.store import create_verification_record
 
         create_verification_record(
             config.db,
@@ -261,29 +262,86 @@ class TestBackendMinimal(SmokeBase):
         assert row is not None
         self.assertEqual(Path(str(row.get("artifact_path") or "")).resolve(), original_artifact_path.resolve())
 
-    def test_verification_service_solve_wrapper_maps_verification_id_to_artifact_verification_id(self) -> None:
-        captured: dict[str, object] = {}
+    def test_solve_with_judge_backend_recovers_output_from_judgehost_case_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            artifact_root = (root / "artifact").resolve()
+            artifact_root.mkdir(parents=True, exist_ok=True)
+            ans_dir = (root / "ans").resolve()
+            ans_dir.mkdir(parents=True, exist_ok=True)
+            expected_work_root = (root / "judgehost-domjudge" / "job-abc").resolve()
+            result_root = (expected_work_root / "results" / "7").resolve()
+            result_root.mkdir(parents=True, exist_ok=True)
+            expected_output = b"42\n"
+            (result_root / "program.out").write_bytes(expected_output)
 
-        def _fake_solve_with_judge_backend(_self, **kwargs):
-            captured.update(kwargs)
-            return {}
+            class _FakeJudgehost:
+                STATUS_FAILED = "failed"
 
-        with patch.object(verification_service_module, "solve_with_judge_backend", side_effect=_fake_solve_with_judge_backend):
-            result = config.verification_service._solve_with_judge_backend(
-                problem=self.problem,
-                username=self.user,
-                verification_id="ver-wrapper-probe",
-                accepted_source_rel="solutions/ac.cpp",
-                mode="pass-fail",
-                test_files=[],
-                ans_dir=Path("."),
-            )
+                def __init__(self) -> None:
+                    self.resolve_calls: list[tuple[str, Path | None]] = []
 
-        self.assertEqual(result, {})
-        self.assertEqual(str(captured.get("artifact_verification_id") or ""), "ver-wrapper-probe")
-        self.assertNotIn("verification_id", captured)
+                def status(self) -> dict[str, int]:
+                    return {"hosts_online": 1, "hosts_total": 1, "fetch_batch_size": 1}
 
-    def test_ensure_implicit_verification_accepts_in_place_materialization_stages_while_status_running(self) -> None:
+                def enqueue_task(self, **_kwargs) -> str:
+                    return "jt-recover-output"
+
+                def wait_for_task_result(self, task_id: str, timeout_sec: int | None = None) -> dict[str, object]:
+                    return {
+                        "task_status": "completed",
+                        "run_id": "r-solve-main-case-row",
+                        "status": "ok",
+                        "artifact_path": str(artifact_root),
+                        "summary": {
+                            "judgehost": {"task_id": task_id},
+                            "tests": [
+                                {
+                                    "test": "001.in",
+                                    "verdict": "OK",
+                                    "passes": [{"verdict": "OK"}],
+                                }
+                            ],
+                        },
+                    }
+
+                def resolve_artifact_blob(self, token: str, *, work_root: Path | None = None) -> bytes | None:
+                    self.resolve_calls.append((token, work_root))
+                    if token == "results/7/program.out" and work_root == expected_work_root:
+                        return expected_output
+                    return None
+
+                def _db_fetch_one(self, sql: str, values: list[object]) -> dict[str, object] | None:
+                    if "FROM judgehost_domjudge_cases" in sql:
+                        return {
+                            "id": 7,
+                            "output_run_rel": "results/7/program.out",
+                            "work_root": str(expected_work_root),
+                        }
+                    if "FROM judgehost_domjudge_jobs" in sql:
+                        return {"work_root": str(expected_work_root)}
+                    return None
+
+            fake_service = _FakeJudgehost()
+            fake_self = SimpleNamespace(judgehost_task_service=fake_service, db=SimpleNamespace())
+
+            with patch("app.service.verification.judge_solve.load_verification_summary", return_value={}):
+                result = solve_with_judge_backend(
+                    fake_self,
+                    problem=self.problem,
+                    username=self.user,
+                    artifact_verification_id="ver-recover-output",
+                    accepted_source_rel="solutions/ac.cpp",
+                    mode="pass-fail",
+                    test_files=[Path("001.in")],
+                    ans_dir=ans_dir,
+                )
+
+            self.assertEqual(result["001.in"]["rc"], 0)
+            self.assertEqual((ans_dir / "001.ans").read_bytes(), expected_output)
+            self.assertEqual(fake_service.resolve_calls, [("results/7/program.out", expected_work_root)])
+
+    def test_ensure_implicit_verification_accepts_in_place_build_stages_while_status_running(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = self.random_id("ver-implicit-ready")
         artifact_path = self._artifact_root(verification_id)
@@ -376,7 +434,7 @@ class TestBackendMinimal(SmokeBase):
             ],
         )
         with patch.object(config.preview_service, "compile_preview", return_value=preview_id):
-            resp = app.impl.preview.api.preview_run(self.problem, self.user, page="statement")
+            resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
             f"/problems/{self.problem}/{self.user}/statement?preview_id={preview_id}",
@@ -416,7 +474,7 @@ class TestBackendMinimal(SmokeBase):
                 str(artifact_path),
             ],
         )
-        resp = app.impl.preview.api.preview_page(
+        resp = preview_page(
             _request(
                 f"/problems/{self.problem}/{self.user}/statement",
                 f"preview_id={preview_id}",
@@ -433,14 +491,14 @@ class TestBackendMinimal(SmokeBase):
 
     def test_preview_worker_propagates_exception(self) -> None:
         with patch.object(config.preview_service, "compile_preview", side_effect=RuntimeError("preview failed")):
-            resp = app.impl.preview.api.preview_run(self.problem, self.user, page="statement")
+            resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/{self.problem}/{self.user}/statement", resp.headers.get("location", ""))
 
     def test_export_worker_propagates_exception(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         with self.assertRaises(ValueError):
-            app.impl.workspace.api._run_export_create_worker(
+            _run_export_create_worker(
                 self.problem,
                 self.user,
                 actor_user_id=int(ctx["user"]["id"]),

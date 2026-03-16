@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -7,9 +7,9 @@ from urllib.parse import quote_plus
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.impl.auth.public import template_response
+from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.public import audit
+from app.impl.workspace.context_operation import audit
 from app.service.platform.process import is_canonical_artifact_id
 
 from .shared import (
@@ -24,11 +24,10 @@ from .shared import (
 def contest_packages_preview_start(contest: str, user: str):
     ctx = _contest_ctx(contest, user, "packages")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     problem_count_row = config.db.fetch_one("SELECT COUNT(*) AS c FROM contest_problems WHERE contest_id=?", [contest_id])
-    problem_count = int(problem_count_row["c"] or 0) if problem_count_row is not None else 0
-    if problem_count <= 0:
+    if (int(problem_count_row["c"]) if problem_count_row is not None else 0) <= 0:
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", message="add at least one problem first")
     job_id, queued, reason = _queue_contest_job(
         contest_id=contest_id,
@@ -55,17 +54,15 @@ def contest_packages_preview_start(contest: str, user: str):
             "reason": reason,
         },
     )
-    query = f"job_id={quote_plus(job_id)}" if job_id else ""
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", query=query, message=message)
+    return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", query=f"job_id={quote_plus(job_id)}" if job_id else "", message=message)
 
 def contest_packages_build_start(contest: str, user: str):
     ctx = _contest_ctx(contest, user, "packages")
     if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=str(ctx["access"].get("write_block_reason") or "write access required"))
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     problem_count_row = config.db.fetch_one("SELECT COUNT(*) AS c FROM contest_problems WHERE contest_id=?", [contest_id])
-    problem_count = int(problem_count_row["c"] or 0) if problem_count_row is not None else 0
-    if problem_count <= 0:
+    if (int(problem_count_row["c"]) if problem_count_row is not None else 0) <= 0:
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", message="add at least one problem first")
     job_id, queued, reason = _queue_contest_job(
         contest_id=contest_id,
@@ -92,22 +89,21 @@ def contest_packages_build_start(contest: str, user: str):
             "reason": reason,
         },
     )
-    query = f"job_id={quote_plus(job_id)}" if job_id else ""
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", query=query, message=message)
+    return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", query=f"job_id={quote_plus(job_id)}" if job_id else "", message=message)
 
 def contest_packages_job_status(contest: str, user: str, job_id: str = ""):
     ctx = _contest_ctx(contest, user, "packages")
     contest_id = int(ctx["contest"]["id"])
-    job = _load_contest_job(contest_id, str(job_id or "").strip())
+    job = _load_contest_job(contest_id, job_id.strip())
     if job is None:
-        return JSONResponse({"ok": False, "running": False, "job_id": str(job_id or "").strip(), "status": "missing"}, status_code=404)
-    status = str(job.get("status") or "").strip().lower()
+        return JSONResponse({"ok": False, "running": False, "job_id": job_id.strip(), "status": "missing"}, status_code=404)
+    status = job["status"]
     return JSONResponse(
         {
             "ok": True,
             "running": status == "running",
-            "job_id": str(job.get("id") or ""),
-            "job_type": str(job.get("job_type") or ""),
+            "job_id": job.get("id"),
+            "job_type": job.get("job_type"),
             "status": status,
             "created_at": job.get("created_at"),
             "finished_at": job.get("finished_at"),
@@ -117,7 +113,7 @@ def contest_packages_job_status(contest: str, user: str, job_id: str = ""):
 def contest_packages_artifact_download(contest: str, user: str, artifact_id: str):
     ctx = _contest_ctx(contest, user, "packages")
     contest_id = int(ctx["contest"]["id"])
-    safe_artifact_id = str(artifact_id or "").strip()
+    safe_artifact_id = artifact_id.strip()
     if not is_canonical_artifact_id(safe_artifact_id):
         raise HTTPException(status_code=404, detail="contest artifact not found")
     row = config.db.fetch_one(
@@ -130,19 +126,18 @@ def contest_packages_artifact_download(contest: str, user: str, artifact_id: str
     )
     if row is None:
         raise HTTPException(status_code=404, detail="contest artifact not found")
-    file_path = Path(str(row["artifact_path"] or "")).resolve()
+    file_path = Path(row["artifact_path"]).resolve()
     base = _contest_artifacts_base()
     if base not in file_path.parents:
         raise HTTPException(status_code=404, detail="contest artifact not found")
     if not file_path.exists() or not file_path.is_file() or file_path.is_symlink():
         raise HTTPException(status_code=404, detail="contest artifact file not found")
-    download_name = Path(str(row["filename"] or "")).name.strip() or file_path.name
-    return FileResponse(file_path, filename=download_name)
+    return FileResponse(file_path, filename=Path(row["filename"]).name or file_path.name)
 
 def contest_packages_page(request: Request, contest: str, user: str, job_id: str = ""):
     ctx = _contest_ctx(contest, user, "packages")
     contest_id = int(ctx["contest"]["id"])
-    requested_job_id = str(job_id or "").strip()
+    requested_job_id = str(job_id).strip()
     artifact_rows = config.db.fetch_all(
         """
         SELECT id,job_id,artifact_type,filename,artifact_path,size_bytes,created_at
@@ -167,7 +162,7 @@ def contest_packages_page(request: Request, contest: str, user: str, job_id: str
     for row in job_rows:
         item = dict(row)
         summary: dict[str, object] = {}
-        raw = str(item.get("summary_json") or "").strip()
+        raw = item.get("summary_json")
         if raw:
             try:
                 parsed = json.loads(raw)
@@ -179,13 +174,13 @@ def contest_packages_page(request: Request, contest: str, user: str, job_id: str
         display_job_rows.append(item)
     selected_job = _load_contest_job(contest_id, requested_job_id)
     if selected_job is None and display_job_rows:
-        selected_job = _load_contest_job(contest_id, str(display_job_rows[0].get("id") or ""))
+        selected_job = _load_contest_job(contest_id, display_job_rows[0]["id"])
     base = _contest_artifacts_base()
     display_artifacts: list[dict[str, object]] = []
     for row in artifact_rows:
         item = dict(row)
-        safe_id = str(item.get("id") or "").strip()
-        safe_path = Path(str(item.get("artifact_path") or "")).resolve()
+        safe_id = item["id"]
+        safe_path = Path(item["artifact_path"]).resolve()
         downloadable = bool(
             safe_id
             and is_canonical_artifact_id(safe_id)
@@ -202,7 +197,7 @@ def contest_packages_page(request: Request, contest: str, user: str, job_id: str
         )
         display_artifacts.append(item)
     problem_count_row = config.db.fetch_one("SELECT COUNT(*) AS c FROM contest_problems WHERE contest_id=?", [contest_id])
-    problem_count = int(problem_count_row["c"] or 0) if problem_count_row is not None else 0
+    problem_count = int(problem_count_row["c"]) if problem_count_row is not None else 0
     return template_response(
         request,
         "contest_packages.html",

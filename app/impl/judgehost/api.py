@@ -15,21 +15,19 @@ from starlette.formparsers import MultiPartParser
 from app.impl.runtime.config import config
 
 
-def _json_payload_or_empty(payload: object) -> dict[str, object]:
-    if isinstance(payload, dict):
-        return dict(payload)
-    return {}
+JudgehostPayload = dict[str, str | bytes]
 
 
 def _extract_bearer_token(request: Request) -> str:
-    auth_header = str(request.headers.get("authorization") or "").strip()
+    auth_header = request.headers.get("authorization") or ""
     if auth_header.lower().startswith("bearer "):
         return auth_header[7:].strip()
-    return str(request.headers.get("x-judgehost-token") or "").strip()
+    token = request.headers.get("x-judgehost-token") or ""
+    return token.strip()
 
 
 def _extract_basic_credentials(request: Request) -> tuple[str, str]:
-    auth_header = str(request.headers.get("authorization") or "").strip()
+    auth_header = request.headers.get("authorization") or ""
     if not auth_header.lower().startswith("basic "):
         return ("", "")
     raw = auth_header[6:].strip()
@@ -42,20 +40,20 @@ def _extract_basic_credentials(request: Request) -> tuple[str, str]:
     if ":" not in decoded:
         return ("", "")
     user, password = decoded.split(":", 1)
-    return (str(user or "").strip(), str(password or "").strip())
+    return (user, password)
 
 
-def _extract_hostname(payload: dict[str, object], request: Request) -> str:
-    raw = str(payload.get("hostname") or "").strip()
-    if raw:
-        return raw
+def _extract_hostname(payload: JudgehostPayload, request: Request) -> str:
+    hostname = (payload.get("hostname") or "").strip()
+    if hostname:
+        return hostname
     peer = request.client.host if request.client is not None else ""
-    return str(peer or "judgehost")
+    return peer or "judgehost"
 
 
-def _hostname_from_payload(payload: dict[str, object], request: Request, *, required: bool = False) -> str:
+def _hostname_from_payload(payload: JudgehostPayload, request: Request, *, required: bool = False) -> str:
     hostname = _extract_hostname(payload, request)
-    if required and not str(hostname or "").strip():
+    if required and not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
     return hostname
 
@@ -100,7 +98,7 @@ def _judgehost_form_part_limit_bytes() -> int:
 
     output_kb = max(
         _read_kb("RUN_EXEC_OUTPUT_KB"),
-        _read_kb("BUILD_EXEC_OUTPUT_KB"),
+        _read_kb("VERIFICATION_EXEC_OUTPUT_KB"),
         _read_kb("TOOLCHAIN_COMPILE_OUTPUT_KB"),
     )
     if output_kb <= 0:
@@ -111,46 +109,46 @@ def _judgehost_form_part_limit_bytes() -> int:
     )
 
 
-async def _coerce_form_value(key: str, value: object) -> object:
-    token = str(key or "").strip()
+async def _coerce_form_value(key: str, value: str | UploadFile) -> str | bytes:
     if isinstance(value, UploadFile):
         try:
-            raw = await value.read()
+            raw = await value.read()  # type: ignore[union-attr]
         finally:
             try:
-                await value.close()
+                await value.close()  # type: ignore[union-attr]
             except Exception:
                 pass
-        if token in _FORM_BINARY_KEYS:
+        if key in _FORM_BINARY_KEYS:
             if not raw:
-                return b"" if token in _FORM_RAW_BINARY_KEYS else ""
-            if token in _FORM_RAW_BINARY_KEYS:
+                return b"" if key in _FORM_RAW_BINARY_KEYS else ""
+            if key in _FORM_RAW_BINARY_KEYS:
                 return raw
             return base64.b64encode(raw).decode("ascii")
         return raw.decode("utf-8", errors="replace")
-    return str(value)
+    return value
 
 
-async def _request_payload(request: Request) -> dict[str, object]:
-    def _merge_text_field(out: dict[str, object], key: str, text: str) -> None:
+async def _request_payload(request: Request) -> JudgehostPayload:
+    def _merge_text_field(out: JudgehostPayload, key: str, text: str) -> None:
         if key not in out:
             out[key] = text
             return
-        prev = str(out.get(key) or "")
+        prev = out[key]
         if not prev.strip():
             out[key] = text
             return
-        if (not str(text or "").strip()) or (text == prev):
+        if (not text.strip()) or (text == prev):
             return
         out[key] = f"{prev}\n{text}"
 
-    content_type = str(request.headers.get("content-type") or "").strip().lower()
+    content_type = (request.headers.get("content-type") or "").strip().lower()
+
     if "application/json" in content_type:
         try:
             payload = await request.json()
         except Exception:
             payload = {}
-        return _json_payload_or_empty(payload)
+        return dict(payload)
     if ("application/x-www-form-urlencoded" in content_type) or ("multipart/form-data" in content_type):
         if "multipart/form-data" in content_type:
             # Judgehost payloads may include >1MB parts (program output/logs).
@@ -163,30 +161,20 @@ async def _request_payload(request: Request) -> dict[str, object]:
             form = await request.form(max_files=4096, max_fields=4096)
         except Exception as exc:
             _logger.warning("judgehost multipart parse failed content_type=%s: %s", content_type, exc)
-            form = {}
-        out: dict[str, object] = {}
-        if hasattr(form, "multi_items"):
-            items = form.multi_items()
-        elif isinstance(form, dict):
-            items = form.items()
-        else:
-            items = []
+            return {}
+        out: JudgehostPayload = {}
+        items = form.multi_items()
         for key, value in items:
-            safe_key = str(key)
-            text = await _coerce_form_value(safe_key, value)
-            if safe_key in _FORM_BINARY_KEYS:
-                prev = out.get(safe_key)
-                if safe_key not in out:
-                    out[safe_key] = text
+            text = await _coerce_form_value(key, value)
+            if key in _FORM_BINARY_KEYS:
+                prev = out.get(key)
+                if key not in out:
+                    out[key] = text
                     continue
-                if isinstance(prev, (bytes, bytearray, memoryview)):
-                    if not bytes(prev):
-                        out[safe_key] = text
-                    continue
-                if not str(prev or "").strip():
-                    out[safe_key] = text
+                if not prev:
+                    out[key] = text
                 continue
-            _merge_text_field(out, safe_key, text)
+            _merge_text_field(out, key, text)
         return out
     try:
         body = await request.body()
@@ -198,15 +186,17 @@ async def _request_payload(request: Request) -> dict[str, object]:
         parsed_json = json.loads(body.decode("utf-8", errors="replace"))
     except Exception:
         parsed_json = None
-    if isinstance(parsed_json, dict):
+    try:
         return dict(parsed_json)
+    except Exception:
+        pass
     text = body.decode("utf-8", errors="replace")
     pairs = parse_qsl(text, keep_blank_values=True)
     if not pairs:
         return {}
-    out: dict[str, object] = {}
+    out: JudgehostPayload = {}
     for key, value in pairs:
-        _merge_text_field(out, str(key), str(value))
+        _merge_text_field(out, key, value)
     return out
 
 
@@ -228,7 +218,9 @@ def _require_judgehost_auth(request: Request):
 
 
 def _int_or_none(raw: object) -> int | None:
-    text = str(raw or "").strip()
+    if raw is None:
+        return None
+    text = str(raw).strip()
     if not text:
         return None
     try:
@@ -261,7 +253,7 @@ async def domjudge_judgehosts_get(request: Request):
 async def domjudge_judgehosts_post(request: Request):
     service = _require_judgehost_auth(request)
     payload = await _request_payload(request)
-    hostname = str(payload.get("hostname") or "").strip()
+    hostname = (payload.get("hostname") or "").strip()
     if not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
     rows = await _run_service_call(service.domjudge_register_host, hostname)
@@ -283,14 +275,13 @@ async def domjudge_fetch_work(request: Request):
             hostname,
             [
                 {
-                    "type": str(task.get("type") or ""),
-                    "jobid": str(task.get("jobid") or ""),
-                    "submitid": str(task.get("submitid") or ""),
-                    "judgetaskid": str(task.get("judgetaskid") or ""),
-                    "testcase_id": str(task.get("testcase_id") or ""),
+                    "type": task["type"],
+                    "jobid": task["jobid"],
+                    "submitid": task["submitid"],
+                    "judgetaskid": task["judgetaskid"],
+                    "testcase_id": task["testcase_id"],
                 }
                 for task in tasks
-                if isinstance(task, dict)
             ],
         )
     return JSONResponse(tasks)
@@ -316,7 +307,7 @@ async def domjudge_get_files_source_submit(request: Request, item_id: str):
 
 async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: str):
     service = _require_judgehost_auth(request)
-    token = str(file_type or "").strip().lower()
+    token = file_type.strip().lower()
     try:
         if token == "testcase":
             test_id = _int_or_none(item_id)
@@ -345,8 +336,8 @@ async def domjudge_check_versions(request: Request, judgetask_id: int):
         service.domjudge_check_versions,
         judgetask_id,
         hostname=hostname,
-        compiler=str(payload.get("compiler") or ""),
-        runner=str(payload.get("runner") or ""),
+        compiler=(payload.get("compiler") or "").strip(),
+        runner=(payload.get("runner") or "").strip(),
     )
     return JSONResponse(result)
 
@@ -374,9 +365,9 @@ async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id
 async def domjudge_internal_error(request: Request):
     service = _require_judgehost_auth(request)
     payload = await _request_payload(request)
-    description = str(payload.get("description") or "").strip()
+    description = (payload.get("description") or "").strip()
     judgetask_id = None
-    for key in ("judgetaskid", "judgetask_id", "judgingid", "judging_id", "runid", "run_id"):
+    for key in ("judgetaskid", "run_id"):
         judgetask_id = _int_or_none(payload.get(key))
         if judgetask_id is not None:
             break
@@ -392,8 +383,6 @@ async def domjudge_internal_error(request: Request):
 async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
     payload = await _request_payload(request)
-    if not isinstance(payload, dict):
-        payload = {}
     await _run_service_call(
         service.domjudge_add_debug_info,
         hostname=hostname,

@@ -1,20 +1,21 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from app.impl.auth.internal.dependency import (
-    Request,
-    _C,
-    config,
-    now_iso,
-    secrets,
-    sha256_hex_text,
-    sqlite3,
-    timedelta,
-)
-from app.impl.auth.shared import parse_iso_utc, utc_now
+import secrets
+import sqlite3
+from datetime import datetime, timedelta, timezone
+
+from fastapi import Request
+
+from app.db import now_iso
+from app.impl.runtime.config import config
+from app.impl.auth.shared import parse_iso_utc
+from app.service.platform.hashing import sha256_hex_text
+
+_C = config.constants
 
 def create_session_for_user(user_id: int) -> str:
     uid = int(user_id)
-    expires = (utc_now() + timedelta(seconds=_C.AUTH_COOKIE_MAX_AGE)).isoformat()
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=_C.AUTH_COOKIE_MAX_AGE)).isoformat()
     for _ in range(4):
         token = secrets.token_urlsafe(32)
         token_hash = sha256_hex_text(token)
@@ -31,7 +32,7 @@ def create_sudo_session_for_user(user_id: int, scope: str) -> str:
     safe_scope = str(scope or '').strip().lower()
     if not safe_scope:
         raise ValueError('invalid sudo scope')
-    expires = (utc_now() + timedelta(seconds=int(_C.SUDO_COOKIE_MAX_AGE))).isoformat()
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=int(_C.SUDO_COOKIE_MAX_AGE))).isoformat()
     for _ in range(4):
         token = secrets.token_urlsafe(32)
         token_hash = sha256_hex_text(token)
@@ -72,7 +73,7 @@ def session_identity(request: Request) -> dict | None:
     if row is None:
         return None
     expires_at = parse_iso_utc(str(row['expires_at'] or ''))
-    if expires_at is None or expires_at <= utc_now():
+    if expires_at is None or expires_at <= datetime.now(timezone.utc):
         revoke_session_token(raw)
         return None
     return {'session_id': row['session_id'], 'user_id': int(row['user_id']), 'username': str(row['username']), 'token': raw}
@@ -96,7 +97,7 @@ def _sudo_identity(request: Request, scope: str) -> dict | None:
         revoke_sudo_session_token(raw)
         return None
     expires_at = parse_iso_utc(str(row['expires_at'] or ''))
-    if expires_at is None or expires_at <= utc_now():
+    if expires_at is None or expires_at <= datetime.now(timezone.utc):
         revoke_sudo_session_token(raw)
         return None
     return {'sudo_session_id': str(row['sudo_session_id']), 'user_id': int(row['user_id']), 'scope': row_scope, 'token': raw}

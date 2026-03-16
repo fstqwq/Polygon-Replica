@@ -1,34 +1,22 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import mimetypes
 import os
 import tempfile
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote_plus
 
 from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from app.impl.auth.public import redirect_response, template_response
+from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _looks_like_binary_file
-from app.impl.workspace.public import (
-    audit,
-    build_line_focus_context,
-    build_repo_browser_entries,
-    default_files_selected_path,
-    ensure_solution_metadata_for_source,
-    files_back_target,
-    files_browse_query_tail,
-    files_source_query_tail,
-    kind_for_path,
-    normalize_files_source,
-    normalize_source_id,
-    parse_line_param,
-    require_write_access,
-    template_for_kind,
-    page_ctx,
-)
+from app.impl.workspace.context_operation import audit, build_line_focus_context, build_repo_browser_entries, default_files_selected_path, files_back_target, files_browse_query_tail, files_source_query_tail, kind_for_path, normalize_files_source, normalize_source_id, parse_line_param, template_for_kind
+from app.impl.workspace.solution import ensure_solution_metadata_for_source
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx
 from app.main_util import normalize_workspace_rel_path, safe_workspace_path
 
 _C = config.constants
@@ -62,7 +50,7 @@ def files_page(request: Request, problem: str, user: str):
         selected_abs = safe_workspace_path(workspace, selected)
         auto_message = f'invalid path; opened {selected}'
     if selected_abs.exists() and selected_abs.is_file():
-        selected_media_type = str(mimetypes.guess_type(selected)[0] or '')
+        selected_media_type = mimetypes.guess_type(selected)[0] or ''
         selected_is_pdf = selected.lower().endswith('.pdf') or selected_media_type == 'application/pdf'
         selected_is_binary = selected_is_pdf or _looks_like_binary_file(selected_abs)
         if not selected_is_binary:
@@ -77,8 +65,7 @@ def files_page(request: Request, problem: str, user: str):
         selected_parent = ''
     requested_dir = request.query_params.get('dir')
     browse_dir_default = ''
-    browse_dir_raw = requested_dir if requested_dir is not None else browse_dir_default
-    browse_dir, browse_parent, browse_dirs, browse_files, browse_total = build_repo_browser_entries(workspace, files, str(browse_dir_raw or ''))
+    browse_dir, browse_parent, browse_dirs, browse_files, browse_total = build_repo_browser_entries(workspace, files, requested_dir if requested_dir is not None else browse_dir_default)
     browse_query_tail = files_browse_query_tail(browse_dir)
     line_focus = build_line_focus_context(content, selected_line) if line_raw else None
     line_jump_requested = bool(line_raw)
@@ -88,7 +75,15 @@ def files_page(request: Request, problem: str, user: str):
         message = auto_message
     return template_response(request, 'files.html', {'ctx': ctx, 'files': files, 'files_truncated': files_truncated, 'file_limit': _C.WORKSPACE_FILE_LIST_LIMIT, 'selected': selected, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'selected_line': selected_line, 'selected_parent': selected_parent, 'browse_dir': browse_dir, 'browse_parent': browse_parent, 'browse_dirs': browse_dirs, 'browse_files': browse_files, 'browse_total': browse_total, 'browse_query_tail': browse_query_tail, 'line_focus': line_focus, 'line_jump_requested': line_jump_requested, 'line_jump_missing': line_jump_missing, 'selected_missing': selected_missing, 'selected_is_dir': selected_is_dir, 'selected_is_binary': selected_is_binary, 'selected_is_pdf': selected_is_pdf, 'selected_media_type': selected_media_type, 'selected_template_kind': selected_template_kind, 'source_page': source_page, 'source_id': source_id, 'source_query_tail': source_query_tail, 'source_back_href': source_back_href, 'source_back_label': source_back_label, 'message': message})
 
-def files_save(problem: str, user: str, path: str=Form(...), content: str=Form(...), dir: str=Form(''), src: str=Form(''), sid: str=Form('')):
+def files_save(
+    problem: str,
+    user: str,
+    path: Annotated[str, Form()],
+    content: Annotated[str, Form()],
+    dir: Annotated[str, Form()] = '',
+    src: Annotated[str, Form()] = '',
+    sid: Annotated[str, Form()] = '',
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -104,7 +99,14 @@ def files_save(problem: str, user: str, path: str=Form(...), content: str=Form(.
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message=msg)
 
-def files_new(problem: str, user: str, path: str=Form(...), dir: str=Form(''), src: str=Form(''), sid: str=Form('')):
+def files_new(
+    problem: str,
+    user: str,
+    path: Annotated[str, Form()],
+    dir: Annotated[str, Form()] = '',
+    src: Annotated[str, Form()] = '',
+    sid: Annotated[str, Form()] = '',
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -120,7 +122,15 @@ def files_new(problem: str, user: str, path: str=Form(...), dir: str=Form(''), s
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message=msg)
 
-def files_create_template(problem: str, user: str, path: str=Form(...), kind: str=Form(...), dir: str=Form(''), src: str=Form(''), sid: str=Form('')):
+def files_create_template(
+    problem: str,
+    user: str,
+    path: Annotated[str, Form()],
+    kind: Annotated[str, Form()],
+    dir: Annotated[str, Form()] = '',
+    src: Annotated[str, Form()] = '',
+    sid: Annotated[str, Form()] = '',
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -132,7 +142,7 @@ def files_create_template(problem: str, user: str, path: str=Form(...), kind: st
         expected_kind = kind_for_path(path)
         if not expected_kind:
             raise ValueError('template is only available for checker/interactor/validator/accepted solution')
-        if expected_kind != str(kind).strip().lower():
+        if expected_kind != kind:
             raise ValueError('template kind/path mismatch')
         content = template_for_kind(kind)
         with config.workspace_service.workspace_lock(workspace):
@@ -150,7 +160,15 @@ def files_create_template(problem: str, user: str, path: str=Form(...), kind: st
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message=msg)
 
-async def files_upload(problem: str, user: str, path: str=Form(...), upload: UploadFile=File(...), dir: str=Form(''), src: str=Form(''), sid: str=Form('')):
+async def files_upload(
+    problem: str,
+    user: str,
+    path: Annotated[str, Form()],
+    upload: Annotated[UploadFile, File(...)],
+    dir: Annotated[str, Form()] = '',
+    src: Annotated[str, Form()] = '',
+    sid: Annotated[str, Form()] = '',
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -192,7 +210,15 @@ async def files_upload(problem: str, user: str, path: str=Form(...), upload: Upl
     audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': path, 'bytes': total_bytes})
     return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message='uploaded')
 
-def files_rename(problem: str, user: str, old_path: str=Form(...), new_path: str=Form(...), dir: str=Form(''), src: str=Form(''), sid: str=Form('')):
+def files_rename(
+    problem: str,
+    user: str,
+    old_path: Annotated[str, Form()],
+    new_path: Annotated[str, Form()],
+    dir: Annotated[str, Form()] = '',
+    src: Annotated[str, Form()] = '',
+    sid: Annotated[str, Form()] = '',
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -210,7 +236,14 @@ def files_rename(problem: str, user: str, old_path: str=Form(...), new_path: str
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(selected)}{tail}', status_code=303, message=msg)
 
-def files_delete(problem: str, user: str, path: str=Form(...), dir: str=Form(''), src: str=Form(''), sid: str=Form('')):
+def files_delete(
+    problem: str,
+    user: str,
+    path: Annotated[str, Form()],
+    dir: Annotated[str, Form()] = '',
+    src: Annotated[str, Form()] = '',
+    sid: Annotated[str, Form()] = '',
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])

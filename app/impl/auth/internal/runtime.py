@@ -1,23 +1,20 @@
 from __future__ import annotations
 
-from app.impl.auth.internal.dependency import (
-    Path,
-    _C,
-    _RUNTIME_BACKEND_CACHE_TTL_SEC,
-    _RUNTIME_PROFILE_MAX_LEN,
-    config,
-    json,
-    now_iso,
-    platform,
-    re,
-    shutil,
-    time,
-    warnings,
-)
+import json
+import shutil
+import time
+import warnings
+from pathlib import Path
 
-_RUNTIME_PROFILE_CACHE: dict[str, str] | None = None
+from app.db import now_iso
+from app.impl.runtime.config import config
+
+_C = config.constants
+
 _RUNTIME_BACKEND_CACHE: dict[str, str] | None = None
 _RUNTIME_BACKEND_CACHE_TS = 0.0
+_RUNTIME_PROFILE_MAX_LEN = 160
+_RUNTIME_BACKEND_CACHE_TTL_SEC = 2.0
 
 
 def _sanitize_runtime_profile_value(raw: object, default: str = "n/a") -> str:
@@ -27,122 +24,6 @@ def _sanitize_runtime_profile_value(raw: object, default: str = "n/a") -> str:
     if len(text) > _RUNTIME_PROFILE_MAX_LEN:
         return text[: _RUNTIME_PROFILE_MAX_LEN - 3].rstrip() + "..."
     return text
-
-
-def _read_linux_distro_label() -> str:
-    try:
-        with open("/etc/os-release", "r", encoding="utf-8", errors="replace") as fh:
-            values: dict[str, str] = {}
-            for line in fh:
-                raw = str(line or "").strip()
-                if not raw or "=" not in raw or raw.startswith("#"):
-                    continue
-                key, value = raw.split("=", 1)
-                values[str(key or "").strip()] = str(value or "").strip().strip('"').strip("'")
-    except Exception:
-        values = {}
-    return str(values.get("PRETTY_NAME") or values.get("NAME") or "").strip()
-
-
-def _parse_cpu_frequency_ghz(raw: object) -> float | None:
-    text = str(raw or "").strip().lower()
-    if not text:
-        return None
-    match_ghz = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*ghz", text)
-    if match_ghz is not None:
-        try:
-            value = float(match_ghz.group(1))
-            if value > 0:
-                return value
-        except Exception:
-            return None
-    match_mhz = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*mhz", text)
-    if match_mhz is not None:
-        try:
-            value = float(match_mhz.group(1)) / 1000.0
-            if value > 0:
-                return value
-        except Exception:
-            return None
-    try:
-        numeric = float(text)
-    except Exception:
-        return None
-    if numeric > 100:
-        return numeric / 1000.0
-    if numeric > 0:
-        return numeric
-    return None
-
-
-def _format_cpu_label(label: str, freq_ghz: float | None) -> str:
-    text = " ".join(str(label or "").split()).strip()
-    if not text:
-        return ""
-    if freq_ghz is None:
-        freq_ghz = _parse_cpu_frequency_ghz(text)
-    if freq_ghz is None or freq_ghz <= 0:
-        return text
-    suffix = f" @{freq_ghz:.2f}GHz"
-    if re.search(r"@\s*[0-9]+(?:\.[0-9]+)?\s*ghz", text, flags=re.IGNORECASE):
-        return re.sub(r"@\s*[0-9]+(?:\.[0-9]+)?\s*ghz", suffix, text, count=1, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*[0-9]+(?:\.[0-9]+)?\s*ghz\b", "", text, flags=re.IGNORECASE).strip()
-    if not cleaned:
-        cleaned = text
-    return f"{cleaned}{suffix}"
-
-
-def _read_cpu_info_details() -> tuple[str, float | None]:
-    try:
-        primary = ""
-        secondary = ""
-        freq_ghz: float | None = None
-        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                text = str(line or "")
-                if ":" not in text:
-                    continue
-                key, value = text.split(":", 1)
-                k = str(key or "").strip().lower()
-                cleaned = str(value or "").strip()
-                if not cleaned:
-                    continue
-                if k in {"model name", "cpu model", "hardware"}:
-                    if (not primary) and (not re.fullmatch(r"\d+", cleaned)):
-                        primary = cleaned
-                    continue
-                if k == "processor" and (not secondary) and (not re.fullmatch(r"\d+", cleaned)):
-                    secondary = cleaned
-                    continue
-                if (k in {"cpu mhz", "clock"}) and (freq_ghz is None):
-                    freq_ghz = _parse_cpu_frequency_ghz(cleaned)
-        if primary:
-            return (primary, freq_ghz)
-        if secondary:
-            return (secondary, freq_ghz)
-    except Exception:
-        pass
-    return ("", None)
-
-
-def _runtime_footer_profile() -> dict[str, str]:
-    global _RUNTIME_PROFILE_CACHE
-    if isinstance(_RUNTIME_PROFILE_CACHE, dict):
-        return dict(_RUNTIME_PROFILE_CACHE)
-    distro = _read_linux_distro_label()
-    if not distro:
-        distro = f"{platform.system()} {platform.release()}".strip()
-    cpu_name, cpu_ghz = _read_cpu_info_details()
-    if not cpu_name:
-        cpu_name = str(platform.processor() or platform.machine() or "").strip()
-    cpu = _format_cpu_label(cpu_name, cpu_ghz)
-    profile = {
-        "runtime_linux_distro": _sanitize_runtime_profile_value(distro),
-        "runtime_cpu_info": _sanitize_runtime_profile_value(cpu),
-    }
-    _RUNTIME_PROFILE_CACHE = dict(profile)
-    return profile
-
 
 def _safe_int(value: object, default: int = 0) -> int:
     try:
@@ -159,8 +40,6 @@ def _runtime_backend_profile() -> dict[str, str]:
         and (now - float(_RUNTIME_BACKEND_CACHE_TS)) <= _RUNTIME_BACKEND_CACHE_TTL_SEC
     ):
         return dict(_RUNTIME_BACKEND_CACHE)
-    sandbox_name = _sanitize_runtime_profile_value(getattr(config.preview_sandbox_backend, "name", ""), "n/a")
-    sandbox_count = "1" if sandbox_name != "n/a" else "0"
     judgehost_enabled = False
     hosts_online = 0
     hosts_total = 0
@@ -197,8 +76,6 @@ def _runtime_backend_profile() -> dict[str, str]:
         judgehost_summary = "disabled"
     judgehost_danger = (not judgehost_enabled) or (hosts_online <= 0)
     profile = {
-        "runtime_sandbox_backend": sandbox_name,
-        "runtime_sandbox_backend_count": sandbox_count,
         "runtime_judgehost_backend_summary": _sanitize_runtime_profile_value(judgehost_summary),
         "runtime_judgehost_backend_danger": "1" if judgehost_danger else "0",
         "runtime_judgehost_enabled": "1" if judgehost_enabled else "0",
@@ -236,7 +113,7 @@ def _startup_cancel_summary_rows(table_name: str, reason: str, *, now_text: str)
         summary_obj["cancel_reason"] = reason
         summary_obj["status"] = "failed"
         summary_obj["finished_at"] = now_text
-        if not str(summary_obj.get("error") or "").strip():
+        if not summary_obj.get("error"):
             summary_obj["error"] = reason
         try:
             config.db.execute(
@@ -266,26 +143,25 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
             warnings.warn(f"startup judgehost job/case cancel failed: {exc}", RuntimeWarning)
     if not inflight_entries:
         return
-    try:
-        from app.service.verification import (
-            load_verification_run,
-            load_verification_record,
-            load_verification_summary,
-            save_verification_run_summary,
-        )
-    except Exception as exc:
-        warnings.warn(f"startup verification inflight import failed: {exc}", RuntimeWarning)
-        return
+    from app.service.verification.store import (
+        load_verification_run,
+        load_verification_record,
+        load_verification_summary,
+        save_verification_run_summary,
+    )
     for item in inflight_entries:
-        verification_id = str(item.get("verification_id") or "").strip()
-        run_id = str(item.get("run_id") or "").strip()
+        verification_id_raw = item.get("verification_id")
+        run_id_raw = item.get("run_id")
+        verification_id = verification_id_raw.strip() if isinstance(verification_id_raw, str) else ""
+        run_id = run_id_raw.strip() if isinstance(run_id_raw, str) else ""
         if not verification_id or not run_id:
             continue
         verification_row_raw = load_verification_record(config.db, verification_id)
         verification_row = dict(verification_row_raw) if verification_row_raw is not None else None
         if verification_row is None:
             continue
-        status = str(verification_row.get("status") or "").strip().lower()
+        status_raw = verification_row.get("status")
+        status = status_raw.strip().lower() if isinstance(status_raw, str) else ""
         if status not in {"running", "queued", "pending"}:
             continue
         verification_summary = load_verification_summary(config.db, verification_id)
@@ -298,29 +174,67 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
         summary_obj = dict(run_summary) if isinstance(run_summary, dict) else {}
         summary_obj["cancelled"] = True
         summary_obj["cancel_reason"] = reason
-        if not str(summary_obj.get("error") or "").strip():
+        summary_error = summary_obj.get("error")
+        if not (summary_error.strip() if isinstance(summary_error, str) else ""):
             summary_obj["error"] = reason
-        source_label = str(summary_obj.get("source") or "").strip() or run_id
+        source_raw = summary_obj.get("source")
+        source_label = source_raw.strip() if isinstance(source_raw, str) and source_raw.strip() else run_id
         source_paths_obj = verification_summary.get("source_paths")
         source_paths = list(source_paths_obj) if isinstance(source_paths_obj, list) else ([source_label] if source_label else [])
+        kind_raw = verification_row.get("kind")
+        kind = kind_raw.strip() if isinstance(kind_raw, str) and kind_raw.strip() else "verification"
+        mode_raw = summary_obj.get("mode")
+        verification_mode_raw = verification_summary.get("mode")
+        mode = (
+            mode_raw.strip()
+            if isinstance(mode_raw, str) and mode_raw.strip()
+            else verification_mode_raw.strip()
+            if isinstance(verification_mode_raw, str) and verification_mode_raw.strip()
+            else "pass-fail"
+        )
+        verification_source_raw = verification_summary.get("verification_source")
+        verification_source = (
+            verification_source_raw.strip()
+            if isinstance(verification_source_raw, str) and verification_source_raw.strip()
+            else "run.execute"
+        )
+        run_expected_raw = run_row.get("expected_behavior") if isinstance(run_row, dict) else None
+        summary_expected_raw = summary_obj.get("expected_behavior")
+        expected_behavior = (
+            run_expected_raw.strip()
+            if isinstance(run_expected_raw, str) and run_expected_raw.strip()
+            else summary_expected_raw.strip()
+            if isinstance(summary_expected_raw, str) and summary_expected_raw.strip()
+            else "unknown"
+        )
+        artifact_path_raw = run_row.get("artifact_path") if isinstance(run_row, dict) else None
+        artifact_path = artifact_path_raw.strip() if isinstance(artifact_path_raw, str) else ""
+        error_text_raw = summary_obj.get("error")
+        error_text = error_text_raw.strip() if isinstance(error_text_raw, str) else ""
         try:
+            problem_id_value = verification_row.get("problem_id")
+            if not isinstance(problem_id_value, int):
+                raise RuntimeError("verification row missing problem_id")
+            workspace_id_value = verification_row.get("workspace_id")
+            if workspace_id_value is not None and not isinstance(workspace_id_value, int):
+                raise RuntimeError("verification row has invalid workspace_id")
             save_verification_run_summary(
                 config.db,
                 config.fs_manager,
                 verification_id=verification_id,
-                problem_id=int(verification_row.get("problem_id") or 0),
-                workspace_id=int(verification_row.get("workspace_id") or 0) if verification_row.get("workspace_id") is not None else None,
-                kind=str(verification_row.get("kind") or "verification").strip() or "verification",
-                mode=str(summary_obj.get("mode") or verification_summary.get("mode") or "pass-fail").strip() or "pass-fail",
-                verification_source=str(verification_summary.get("verification_source") or "run.execute").strip() or "run.execute",
+                problem_id=problem_id_value,
+                workspace_id=workspace_id_value,
+                kind=kind,
+                mode=mode,
+                verification_source=verification_source,
                 source_paths=source_paths,
                 run_id=run_id,
                 run_status="failed",
                 source_label=source_label,
-                expected_behavior=str(run_row.get("expected_behavior") or summary_obj.get("expected_behavior") or "unknown").strip() or "unknown",
+                expected_behavior=expected_behavior,
                 run_summary=summary_obj,
-                artifact_path=str(run_row.get("artifact_path") or "").strip(),
-                error_text=str(summary_obj.get("error") or "").strip(),
+                artifact_path=artifact_path,
+                error_text=error_text,
                 finished=True,
             )
         except Exception as exc:

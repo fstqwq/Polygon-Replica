@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 ARTIFACT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
@@ -74,21 +74,13 @@ def run_cmd(
         stdout_text = ""
     else:
         if binary_mode:
-            stdout_raw = proc.stdout or b""
+            stdout_text = cast(bytes, proc.stdout or b"").decode("utf-8", errors="replace")
         else:
-            stdout_raw = proc.stdout or ""
-        if isinstance(stdout_raw, bytes):
-            stdout_text = stdout_raw.decode("utf-8", errors="replace")
-        else:
-            stdout_text = stdout_raw
+            stdout_text = cast(str, proc.stdout or "")
     if binary_mode:
-        stderr_raw = proc.stderr or b""
+        stderr_text = cast(bytes, proc.stderr or b"").decode("utf-8", errors="replace")
     else:
-        stderr_raw = proc.stderr or ""
-    if isinstance(stderr_raw, bytes):
-        stderr_text = stderr_raw.decode("utf-8", errors="replace")
-    else:
-        stderr_text = stderr_raw
+        stderr_text = cast(str, proc.stderr or "")
     return CmdResult(
         command=cmd,
         returncode=proc.returncode,

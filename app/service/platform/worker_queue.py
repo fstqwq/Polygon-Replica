@@ -7,10 +7,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypedDict, cast
 
 
 WorkerFunc = Callable[[], None]
+WorkerPayload = tuple[str, str, WorkerFunc]
 
 
 @dataclass
@@ -31,7 +32,7 @@ class WorkerJobRecord:
 
 class WorkerFuture:
     def __init__(self, job_id: str):
-        self.job_id = str(job_id or "").strip()
+        self.job_id = str(job_id).strip()
         self._done_event = threading.Event()
         self._lock = threading.Lock()
         self._error: Exception | None = None
@@ -51,6 +52,29 @@ class WorkerFuture:
         with self._lock:
             self._error = error
         self._done_event.set()
+
+
+JobTypeStatsBucket = TypedDict(
+    "JobTypeStatsBucket",
+    {
+        "total": int,
+        "queued": int,
+        "running": int,
+        "done": int,
+        "failed": int,
+        "rejected": int,
+        "cancelled": int,
+        "avg_wait_ms": float,
+        "p95_wait_ms": float,
+        "avg_run_ms": float,
+        "p95_run_ms": float,
+        "failure_rate": float,
+        "_wait_samples": list[float],
+        "_run_samples": list[float],
+        "_fail_codes": dict[str, int],
+        "top_failure_codes": list[dict[str, int | str]],
+    },
+)
 
 
 class WorkerQueueService:
@@ -83,11 +107,10 @@ class WorkerQueueService:
             if durable_history_limit is not None
             else 20000
         )
-        durable_raw = durable_log_path
-        durable_text = str(durable_raw or "").strip()
+        durable_text = str(durable_log_path).strip() if durable_log_path is not None else ""
         self._durable_log_path = Path(durable_text).resolve() if durable_text else None
 
-        self._queue: queue.Queue[object] = queue.Queue(maxsize=self._queue_capacity)
+        self._queue: queue.Queue[WorkerPayload | object] = queue.Queue(maxsize=self._queue_capacity)
         self._lock = threading.Lock()
         self._started = False
         self._workers: list[threading.Thread] = []
@@ -111,7 +134,7 @@ class WorkerQueueService:
             return default
 
     def _normalize_job_type(self, raw: object) -> str:
-        token = str(raw or "").strip().lower().replace("_", "-")
+        token = str(raw).strip().lower().replace("_", "-") if raw is not None else ""
         if not token:
             return "generic"
         parts = [part for part in token.split("-") if part]
@@ -123,7 +146,7 @@ class WorkerQueueService:
         return cleaned or "generic"
 
     def _sanitize_error_code(self, raw: object) -> str:
-        token = str(raw or "").strip().lower().replace(" ", "_")
+        token = str(raw).strip().lower().replace(" ", "_") if raw is not None else ""
         if not token:
             return ""
         clipped = token[:64]
@@ -142,7 +165,7 @@ class WorkerQueueService:
         explicit = self._sanitize_error_code(getattr(error, "error_code", ""))
         if explicit:
             return explicit
-        text = str(error or "").strip().lower()
+        text = str(error).strip().lower() if error is not None else ""
         if not text:
             return "worker_error"
         if "queue rejected" in text:
@@ -193,42 +216,52 @@ class WorkerQueueService:
         if len(lines) > self._durable_history_limit:
             lines = lines[-self._durable_history_limit :]
         for line in lines:
-            text = str(line or "").strip()
+            text = str(line).strip()
             if not text:
                 continue
             try:
-                event = json.loads(text)
+                event = cast(dict[str, object], json.loads(text))
             except Exception:
-                continue
-            if not isinstance(event, dict):
                 continue
             self._apply_durable_event_locked(event)
         self._recover_inflight_jobs_locked()
         self._prune_locked()
 
     def _record_from_event(self, event: dict[str, object], *, default_status: str = "queued") -> WorkerJobRecord:
-        job_id = str(event.get("job_id") or "").strip()
+        job_id = str(event["job_id"]).strip()
         created = self._safe_float(event.get("created_at"), self._safe_float(event.get("ts"), time.time()))
         started = self._safe_float(event.get("started_at"), 0.0)
         finished = self._safe_float(event.get("finished_at"), 0.0)
+        name_obj = event.get("name")
+        name = str(name_obj).strip() if name_obj is not None else ""
+        queue_name_obj = event.get("queue_name")
+        queue_name = str(queue_name_obj).strip() if queue_name_obj is not None else ""
+        backend_obj = event.get("backend")
+        backend = str(backend_obj).strip() if backend_obj is not None else ""
+        dedupe_key_obj = event.get("dedupe_key")
+        dedupe_key = str(dedupe_key_obj).strip() if dedupe_key_obj is not None else ""
+        status_obj = event.get("status")
+        status = str(status_obj).strip().lower() if status_obj is not None else ""
+        error_obj = event.get("error")
+        error = str(error_obj).strip() if error_obj is not None else ""
         return WorkerJobRecord(
             id=job_id,
-            name=str(event.get("name") or "job").strip() or "job",
+            name=name if name else "job",
             job_type=self._normalize_job_type(event.get("job_type")),
-            queue_name=str(event.get("queue_name") or "default").strip() or "default",
-            backend=str(event.get("backend") or "domjudge-judgehost").strip() or "domjudge-judgehost",
-            dedupe_key=str(event.get("dedupe_key") or "").strip(),
-            status=str(event.get("status") or default_status).strip().lower() or default_status,
+            queue_name=queue_name if queue_name else "default",
+            backend=backend if backend else "domjudge-judgehost",
+            dedupe_key=dedupe_key,
+            status=status if status else default_status,
             created_at=created,
             started_at=started,
             finished_at=finished,
-            error=str(event.get("error") or "").strip(),
+            error=error,
             error_code=self._sanitize_error_code(event.get("error_code")),
         )
 
     def _apply_durable_event_locked(self, event: dict[str, object]) -> None:
-        event_type = str(event.get("event") or "").strip().lower()
-        job_id = str(event.get("job_id") or "").strip()
+        event_type = str(event["event"]).strip().lower()
+        job_id = str(event["job_id"]).strip()
         if not event_type or not job_id:
             return
         record = self._records.get(job_id)
@@ -236,26 +269,41 @@ class WorkerQueueService:
             record = self._record_from_event(event)
             self._register_record_locked(record)
         if event_type == "job_created":
-            record.name = str(event.get("name") or record.name).strip() or record.name
-            record.job_type = self._normalize_job_type(event.get("job_type") or record.job_type)
-            record.queue_name = str(event.get("queue_name") or record.queue_name).strip() or record.queue_name
-            record.backend = str(event.get("backend") or record.backend).strip() or record.backend
-            record.dedupe_key = str(event.get("dedupe_key") or record.dedupe_key).strip()
+            if "name" in event:
+                name = str(event["name"]).strip()
+                if name:
+                    record.name = name
+            if "job_type" in event:
+                record.job_type = self._normalize_job_type(event["job_type"])
+            if "queue_name" in event:
+                queue_name = str(event["queue_name"]).strip()
+                if queue_name:
+                    record.queue_name = queue_name
+            if "backend" in event:
+                backend = str(event["backend"]).strip()
+                if backend:
+                    record.backend = backend
+            if "dedupe_key" in event:
+                record.dedupe_key = str(event["dedupe_key"]).strip()
             record.status = "queued"
-            record.created_at = self._safe_float(event.get("created_at"), record.created_at or self._safe_float(event.get("ts"), time.time()))
+            record.created_at = self._safe_float(
+                event.get("created_at"),
+                record.created_at if record.created_at > 0.0 else self._safe_float(event.get("ts"), time.time()),
+            )
             return
         if event_type == "job_started":
             record.status = "running"
             record.started_at = self._safe_float(event.get("started_at"), self._safe_float(event.get("ts"), time.time()))
             return
         if event_type in {"job_finished", "job_recovered"}:
-            status = str(event.get("status") or "").strip().lower()
+            status = str(event["status"]).strip().lower()
             if status not in {"done", "failed", "rejected", "cancelled"}:
                 status = "failed"
             record.status = status
             record.started_at = self._safe_float(event.get("started_at"), record.started_at)
             record.finished_at = self._safe_float(event.get("finished_at"), self._safe_float(event.get("ts"), time.time()))
-            record.error = str(event.get("error") or "").strip()
+            error_obj = event.get("error")
+            record.error = str(error_obj).strip() if error_obj is not None else ""
             record.error_code = self._sanitize_error_code(event.get("error_code"))
             return
 
@@ -322,11 +370,11 @@ class WorkerQueueService:
             raise ValueError("worker job fn must be callable")
         if not self._started:
             self.start()
-        safe_name = str(name or "job").strip() or "job"
+        safe_name = safe_name_text if (safe_name_text := str(name).strip() if name is not None else "") else "job"
         safe_job_type = self._normalize_job_type(job_type)
-        safe_queue_name = str(queue_name or "default").strip() or "default"
-        safe_backend = str(backend or "domjudge-judgehost").strip() or "domjudge-judgehost"
-        safe_dedupe_key = str(dedupe_key or "").strip()
+        safe_queue_name = safe_queue_name_text if (safe_queue_name_text := str(queue_name).strip() if queue_name is not None else "") else "default"
+        safe_backend = safe_backend_text if (safe_backend_text := str(backend).strip() if backend is not None else "") else "domjudge-judgehost"
+        safe_dedupe_key = str(dedupe_key).strip() if dedupe_key is not None else ""
         with self._lock:
             if safe_dedupe_key:
                 existing = self._dedupe.get(safe_dedupe_key)
@@ -463,10 +511,10 @@ class WorkerQueueService:
             dedupe_key = ""
             fn: WorkerFunc | None = None
             try:
-                if isinstance(payload, tuple) and len(payload) == 3:
-                    job_id = str(payload[0] or "").strip()
-                    dedupe_key = str(payload[1] or "").strip()
-                    fn = payload[2] if callable(payload[2]) else None
+                queue_payload = cast(WorkerPayload, payload)
+                job_id = queue_payload[0].strip()
+                dedupe_key = queue_payload[1].strip()
+                fn = queue_payload[2]
                 if not job_id:
                     continue
                 if not self._mark_running(job_id):
@@ -513,7 +561,7 @@ class WorkerQueueService:
             record = self._records.get(job_id)
             future = self._futures.get(job_id)
             if record is not None:
-                current_status = str(record.status or "").strip().lower()
+                current_status = record.status.strip().lower()
                 if current_status in {"done", "failed", "rejected", "cancelled"}:
                     return
                 if error is None:
@@ -545,8 +593,6 @@ class WorkerQueueService:
     def wait_for_futures(self, futures: list[WorkerFuture], timeout_sec: float = 300.0) -> None:
         deadline = time.monotonic() + max(0.0, float(timeout_sec))
         for future in futures:
-            if not isinstance(future, WorkerFuture):
-                continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return
@@ -561,8 +607,8 @@ class WorkerQueueService:
         idx = int(round((len(ordered) - 1) * 0.95))
         return ordered[max(0, min(len(ordered) - 1, idx))]
 
-    def _job_type_stats_locked(self) -> dict[str, dict[str, object]]:
-        rows: dict[str, dict[str, object]] = {}
+    def _job_type_stats_locked(self) -> dict[str, JobTypeStatsBucket]:
+        rows: dict[str, JobTypeStatsBucket] = {}
         for job_id in self._record_order:
             record = self._records.get(job_id)
             if record is None:
@@ -589,44 +635,39 @@ class WorkerQueueService:
                 }
                 rows[key] = bucket
             bucket["total"] = int(bucket["total"]) + 1
-            status = str(record.status or "").strip().lower()
+            status = record.status.strip().lower()
             if status in {"queued", "running", "done", "failed", "rejected", "cancelled"}:
                 bucket[status] = int(bucket[status]) + 1
             if record.started_at > 0.0 and record.created_at > 0.0:
                 wait_ms = max(0.0, (record.started_at - record.created_at) * 1000.0)
-                wait_samples = bucket["_wait_samples"]
-                if isinstance(wait_samples, list):
-                    wait_samples.append(wait_ms)
+                bucket["_wait_samples"].append(wait_ms)
             if record.finished_at > 0.0 and record.started_at > 0.0:
                 run_ms = max(0.0, (record.finished_at - record.started_at) * 1000.0)
-                run_samples = bucket["_run_samples"]
-                if isinstance(run_samples, list):
-                    run_samples.append(run_ms)
+                bucket["_run_samples"].append(run_ms)
             if status in {"failed", "rejected", "cancelled"}:
                 fail_codes = bucket["_fail_codes"]
-                if isinstance(fail_codes, dict):
-                    code = self._sanitize_error_code(record.error_code) or "unknown"
-                    fail_codes[code] = int(fail_codes.get(code, 0)) + 1
+                code = self._sanitize_error_code(record.error_code) or "unknown"
+                fail_codes[code] = int(fail_codes.get(code, 0)) + 1
         for key, bucket in rows.items():
-            wait_samples = bucket.get("_wait_samples")
-            run_samples = bucket.get("_run_samples")
-            fail_codes = bucket.get("_fail_codes")
-            if isinstance(wait_samples, list) and wait_samples:
+            wait_samples = bucket["_wait_samples"]
+            run_samples = bucket["_run_samples"]
+            fail_codes = bucket["_fail_codes"]
+            if wait_samples:
                 bucket["avg_wait_ms"] = round(sum(wait_samples) / len(wait_samples), 3)
                 bucket["p95_wait_ms"] = round(self._p95(wait_samples), 3)
             else:
                 bucket["avg_wait_ms"] = 0.0
                 bucket["p95_wait_ms"] = 0.0
-            if isinstance(run_samples, list) and run_samples:
+            if run_samples:
                 bucket["avg_run_ms"] = round(sum(run_samples) / len(run_samples), 3)
                 bucket["p95_run_ms"] = round(self._p95(run_samples), 3)
             else:
                 bucket["avg_run_ms"] = 0.0
                 bucket["p95_run_ms"] = 0.0
-            total = max(1, int(bucket.get("total") or 0))
-            failures = int(bucket.get("failed") or 0) + int(bucket.get("rejected") or 0) + int(bucket.get("cancelled") or 0)
+            total = max(1, int(bucket["total"]))
+            failures = int(bucket["failed"]) + int(bucket["rejected"]) + int(bucket["cancelled"])
             bucket["failure_rate"] = round(failures / total, 4)
-            if isinstance(fail_codes, dict) and fail_codes:
+            if fail_codes:
                 ordered_codes = sorted(fail_codes.items(), key=lambda item: (-int(item[1]), str(item[0])))
                 bucket["top_failure_codes"] = [{"code": code, "count": int(count)} for code, count in ordered_codes[:3]]
             else:
@@ -662,8 +703,8 @@ class WorkerQueueService:
                         "error_code": record.error_code,
                     }
                 )
-            running = sum(1 for item in jobs if str(item.get("status") or "") == "running")
-            queued = sum(1 for item in jobs if str(item.get("status") or "") == "queued")
+            running = sum(1 for item in jobs if item["status"] == "running")
+            queued = sum(1 for item in jobs if item["status"] == "queued")
             return {
                 "worker_count": len(self._workers),
                 "queue_capacity": self._queue_capacity,

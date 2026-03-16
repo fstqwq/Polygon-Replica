@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -6,7 +6,7 @@ from urllib.parse import quote_plus
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.impl.auth.public import redirect_response, set_flash_cookie, template_response
+from app.impl.auth.shared import redirect_response, set_flash_cookie, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.problem.shared import (
@@ -14,22 +14,10 @@ from app.impl.problem.shared import (
     MAIN_CORRECT_EXPECTED_VALUE,
     _normalize_component_create_path,
 )
-from app.impl.workspace.public import (
-    audit,
-    ensure_solution_metadata_for_source,
-    list_solution_entries,
-    normalize_optional_component_source_path_safe,
-    normalize_solution_source_path_required,
-    read_build_config,
-    read_text_safe_limited,
-    require_write_access,
-    resolve_build_accepted_solution_source,
-    solution_behavior_options,
-    solution_metadata_entry,
-    workspace_rel_file_exists,
-    write_build_config,
-    page_ctx,
-)
+from app.impl.workspace.context_operation import audit, list_solution_entries, normalize_optional_component_source_path_safe, read_build_config, read_text_safe_limited, resolve_build_accepted_solution_source, solution_metadata_entry, workspace_rel_file_exists, write_build_config
+from app.impl.workspace.solution import ensure_solution_metadata_for_source, normalize_solution_source_path_required, solution_behavior_options
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx
 from app.service.problem.solution_metadata import (
     desc_rel_path_for_source,
     normalize_expected_behavior,
@@ -50,17 +38,17 @@ def solutions_page(request: Request, problem: str, user: str):
     workspace = Path(ctx['workspace']['path'])
     entries, entries_truncated = list_solution_entries(workspace)
     selected = normalize_workspace_rel_path(request.query_params.get('path'))
-    if not selected or not any((str(row.get('source_path')) == selected for row in entries)):
-        selected = str(entries[0].get('source_path')) if entries else ''
-    selected_entry = next((row for row in entries if str(row.get('source_path')) == selected), None)
+    if not selected or not any(row.get('source_path') == selected for row in entries):
+        selected = entries[0]['source_path'] if entries else ''
+    selected_entry = next((row for row in entries if row.get('source_path') == selected), None)
     accepted_source = resolve_build_accepted_solution_source(workspace, entries)
     accepted_source_exists = bool(accepted_source) and workspace_rel_file_exists(workspace, accepted_source)
     expected_behavior_options = [{'value': MAIN_CORRECT_EXPECTED_VALUE, 'label': MAIN_CORRECT_EXPECTED_LABEL}, *solution_behavior_options()]
     entries_view: list[dict] = []
     for row in entries:
         row_view = dict(row)
-        source_path = str(row_view.get('source_path') or '')
-        raw_expected = normalize_expected_behavior(str(row_view.get('expected_behavior') or 'unknown'))
+        source_path = row_view['source_path']
+        raw_expected = normalize_expected_behavior(row_view['expected_behavior'])
         effective_expected = raw_expected
         # Main correct solution is controlled by build config and must be unique in UI.
         if accepted_source_exists and source_path == accepted_source:
@@ -109,8 +97,8 @@ def solutions_editor_page(request: Request, problem: str, user: str):
         except ValueError:
             selected = ''
     if not selected:
-        selected = str(entries[0].get('source_path')) if entries else 'solutions/accepted.cpp'
-    selected_entry = next((row for row in entries if str(row.get('source_path')) == selected), None)
+        selected = entries[0]['source_path'] if entries else 'solutions/accepted.cpp'
+    selected_entry = next((row for row in entries if row.get('source_path') == selected), None)
     selected_exists = False
     content = ''
     content_truncated = False
@@ -137,9 +125,10 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
     save_ok = False
     metadata_created = False
     normalized_expected = 'unknown'
-    json_requested = str(request.headers.get('x-requested-with') or '').strip().lower() in {'fetch', 'xmlhttprequest'}
+    requested_with = request.headers.get('x-requested-with')
+    json_requested = requested_with is not None and requested_with.strip().lower() in {'fetch', 'xmlhttprequest'}
     if not json_requested:
-        accept = str(request.headers.get('accept') or '').lower()
+        accept = request.headers.get('accept', '').lower()
         json_requested = 'application/json' in accept
     try:
         selected = normalize_solution_source_path_required(source_path)
@@ -156,7 +145,9 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
             if desc_existed_before:
                 desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
                 parsed_desc = parse_solution_desc(desc_text)
-                desc_note = str(parsed_desc.get('note') or '')
+                note = parsed_desc.get('note')
+                if isinstance(note, str):
+                    desc_note = note
             config.git_service.write_file(workspace, selected, content)
             compile_check_error = judgehost_compile_check_error(
                 problem=problem,
@@ -177,7 +168,7 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
         if metadata_created:
             msg = 'solution source and metadata saved'
         save_ok = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.save_source', {'path': selected, 'bytes': len(str(content or '').encode('utf-8')), 'metadata_created': metadata_created, 'expected_behavior': normalized_expected})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.save_source', {'path': selected, 'bytes': len(content.encode('utf-8')), 'metadata_created': metadata_created, 'expected_behavior': normalized_expected})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
@@ -202,7 +193,7 @@ def solutions_set_tag(problem: str, user: str, source_path: str=Form(...), expec
         source_abs = safe_workspace_path(workspace, selected)
         if source_abs.is_symlink() or not source_abs.exists() or (not source_abs.is_file()):
             raise ValueError('solution source does not exist')
-        raw_expected = str(expected_behavior or '').strip().lower()
+        raw_expected = expected_behavior.strip().lower()
         is_main_correct = raw_expected in {MAIN_CORRECT_EXPECTED_VALUE, 'main-correct', 'maincorrect'}
         normalized_expected = 'accepted' if is_main_correct else normalize_expected_behavior(expected_behavior)
         desc_path = desc_rel_path_for_source(selected)
@@ -212,7 +203,9 @@ def solutions_set_tag(problem: str, user: str, source_path: str=Form(...), expec
                 desc_abs = safe_workspace_path(workspace, desc_path)
                 desc_text, _ = read_text_safe_limited(desc_abs, _C.SOLUTION_NOTE_CHAR_LIMIT * 8)
                 parsed = parse_solution_desc(desc_text)
-                note = str(parsed.get('note') or '')
+                parsed_note = parsed.get('note')
+                if isinstance(parsed_note, str):
+                    note = parsed_note
             build_cfg, cfg_path = read_build_config(workspace)
             configured = normalize_optional_component_source_path_safe(build_cfg.get('accepted_solution_source'), 'solutions', 'accepted solution source')
             build_cfg_changed = False
@@ -249,12 +242,11 @@ def solutions_rename(problem: str, user: str, old_path: str=Form(...), new_path:
     msg = 'solution renamed'
     try:
         old_source = normalize_solution_source_path_required(old_path)
-        new_source_raw = normalize_workspace_rel_path(new_path)
-        if not new_source_raw:
+        if not (new_source := normalize_workspace_rel_path(new_path)):
             raise ValueError('new solution source is required')
-        if not new_source_raw.startswith('solutions/'):
-            new_source_raw = f'solutions/{new_source_raw}'
-        new_source = normalize_component_source_path(new_source_raw, 'solutions', 'accepted.cpp')
+        if not new_source.startswith('solutions/'):
+            new_source = f'solutions/{new_source}'
+        new_source = normalize_component_source_path(new_source, 'solutions', 'accepted.cpp')
         selected = old_source
         if old_source == new_source:
             msg = 'solution rename skipped'

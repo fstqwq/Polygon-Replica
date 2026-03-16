@@ -10,10 +10,6 @@ RUN_DETAIL_TEST_LIST_LIMIT = 200
 RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT = 200
 RUN_TEST_FEEDBACK_FILE_LIST_LIMIT = 32
 RUN_DETAIL_PREVIEW_MAX_BYTES = 256
-RUN_VERIFICATION_LIST_SCAN_FACTOR = 8
-RUN_VERIFICATION_LIST_SUMMARY_ROW_CHAR_LIMIT = 65536
-RUN_VERIFICATION_LIST_SUMMARY_TOTAL_CHAR_BUDGET = 4194304
-RUN_VERIFICATION_LIST_SUMMARY_MAX_ROWS = 256
 RUN_TEST_SELECTOR_LIMIT = 600
 PREVIEW_LOG_REF_LIST_LIMIT = 200
 STATEMENT_EDITOR_CHAR_LIMIT = 262144
@@ -91,8 +87,7 @@ TESTS_SPEC_MAX_ITEMS = 4096
 TESTS_SPEC_MANUAL_MAX_CHARS = 262144
 TESTS_SPEC_GEN_COMMAND_MAX_CHARS = 1024
 TESTS_SPEC_ID_RE = re.compile(r"^[0-9]{3,12}$")
-IMPLICIT_BUILD_DIRTY_REUSE_SEC = 60
-RUN_PLACEHOLDER_BUILD_ID = "pending"
+RUN_PLACEHOLDER_VERIFICATION_ID = "pending"
 WORKER_QUEUE_THREADS = 4
 WORKER_QUEUE_HISTORY_LIMIT = 1024
 WORKER_QUEUE_CAPACITY = 512
@@ -119,9 +114,9 @@ TOOLCHAIN_COMPILE_OUTPUT_KB = 262144
 TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC = 600
 TOOLCHAIN_CACHE_MAX_BYTES = 2147483648
 TOOLCHAIN_CACHE_MAX_ENTRIES = 0
-BUILD_EXEC_MEMORY_MB = 1024
-BUILD_EXEC_PROCESS_LIMIT = 64
-BUILD_EXEC_OUTPUT_KB = 65536
+VERIFICATION_EXEC_MEMORY_MB = 1024
+VERIFICATION_EXEC_PROCESS_LIMIT = 64
+VERIFICATION_EXEC_OUTPUT_KB = 65536
 RUN_EXEC_MEMORY_MB = 1024
 RUN_EXEC_PROCESS_LIMIT = 64
 RUN_EXEC_OUTPUT_KB = 65536
@@ -206,7 +201,6 @@ TOOLCHAIN_JAVA_RUNTIME_FLAGS = (
 TOOLCHAIN_JAVA_RUNTIME_DEFAULT_HEAP_MB = 256
 TOOLCHAIN_JAVA_RUNTIME_MIN_HEAP_MB = 64
 TOOLCHAIN_JAVA_RUNTIME_INITIAL_HEAP_MB = 16
-TOOLCHAIN_CACHE_CLEANUP_LOCK = ".cleanup.lock"
 TOOLCHAIN_CPP_COMPILER = "g++"
 TOOLCHAIN_PYTHON_EXECUTABLE = "python3"
 TOOLCHAIN_JAVA_COMPILER = "javac"
@@ -250,10 +244,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max diagnostics shown in run details."},
     "RUN_TEST_FEEDBACK_FILE_LIST_LIMIT": {"type": "int", "min": 1, "max": 1024, "description": "Max feedback files listed per test."},
     "RUN_DETAIL_PREVIEW_MAX_BYTES": {"type": "int", "min": 32, "max": 65536, "description": "Max preview bytes for artifact snippets."},
-    "RUN_VERIFICATION_LIST_SCAN_FACTOR": {"type": "int", "min": 1, "max": 64, "description": "Verification list scan multiplier over page size."},
-    "RUN_VERIFICATION_LIST_SUMMARY_ROW_CHAR_LIMIT": {"type": "int", "min": 256, "max": 2097152, "description": "Per-row verification summary char cap."},
-    "RUN_VERIFICATION_LIST_SUMMARY_TOTAL_CHAR_BUDGET": {"type": "int", "min": 1024, "max": 16777216, "description": "Total verification summary char budget in run list."},
-    "RUN_VERIFICATION_LIST_SUMMARY_MAX_ROWS": {"type": "int", "min": 1, "max": 2048, "description": "Max summary rows shown for verifications."},
     "RUN_TEST_SELECTOR_LIMIT": {"type": "int", "min": 1, "max": 10000, "description": "Max test options shown in run form."},
     "PREVIEW_LOG_REF_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max statement log references parsed."},
     "STATEMENT_EDITOR_CHAR_LIMIT": {"type": "int", "min": 2048, "max": 4194304, "description": "Statement editor content limit."},
@@ -301,9 +291,9 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC": {"type": "int", "min": 0, "max": 86400, "description": "Compile cache cleanup interval in seconds.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_MAX_BYTES": {"type": "int", "min": 0, "max": 1125899906842624, "description": "Compile cache size cap in bytes.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_MAX_ENTRIES": {"type": "int", "min": 0, "max": 10000000, "description": "Compile cache entry cap (0 disables entry-count eviction).", "restart_required": False, "impact": "runtime"},
-    "BUILD_EXEC_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "Build-time sandbox memory limit in MB.", "restart_required": False, "impact": "runtime"},
-    "BUILD_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Build-time sandbox process limit.", "restart_required": False, "impact": "runtime"},
-    "BUILD_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Build-time sandbox output cap in KB.", "restart_required": False, "impact": "runtime"},
+    "VERIFICATION_EXEC_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "Verification-stage sandbox memory limit in MB.", "restart_required": False, "impact": "runtime"},
+    "VERIFICATION_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Verification-stage sandbox process limit.", "restart_required": False, "impact": "runtime"},
+    "VERIFICATION_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Verification-stage sandbox output cap in KB.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "Run-time sandbox memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Run-time sandbox process limit.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Run-time sandbox output cap in KB.", "restart_required": False, "impact": "runtime"},
@@ -314,7 +304,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "PREVIEW_TEX_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "TeX compile memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "PREVIEW_TEX_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "TeX compile process limit.", "restart_required": False, "impact": "runtime"},
     "PREVIEW_TEX_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "TeX compile output cap in KB.", "restart_required": False, "impact": "runtime"},
-    "IMPLICIT_BUILD_DIRTY_REUSE_SEC": {"type": "int", "min": 0, "max": 86400, "description": "Dirty implicit-build reuse window in seconds."},
     "WORKER_QUEUE_THREADS": {"type": "int", "min": 1, "max": 64, "description": "Worker queue thread count.", "restart_required": True, "impact": "restart"},
     "WORKER_QUEUE_HISTORY_LIMIT": {"type": "int", "min": 32, "max": 10000, "description": "In-memory worker queue history row cap.", "restart_required": True, "impact": "restart"},
     "WORKER_QUEUE_CAPACITY": {"type": "int", "min": 1, "max": 100000, "description": "Worker queue pending capacity.", "restart_required": True, "impact": "restart"},
@@ -345,9 +334,9 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC,
     TOOLCHAIN_CACHE_MAX_BYTES,
     TOOLCHAIN_CACHE_MAX_ENTRIES,
-    BUILD_EXEC_MEMORY_MB,
-    BUILD_EXEC_PROCESS_LIMIT,
-    BUILD_EXEC_OUTPUT_KB,
+    VERIFICATION_EXEC_MEMORY_MB,
+    VERIFICATION_EXEC_PROCESS_LIMIT,
+    VERIFICATION_EXEC_OUTPUT_KB,
     PREVIEW_TEX_TIMEOUT_SEC,
     PREVIEW_TEX_MEMORY_MB,
     PREVIEW_TEX_PROCESS_LIMIT,
@@ -357,3 +346,5 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
 ADMIN_CONFIG_DEFAULTS: dict[str, object] = {
     key: globals()[key] for key in ADMIN_CONFIG_SPECS
 }
+
+

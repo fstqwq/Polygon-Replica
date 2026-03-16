@@ -6,7 +6,6 @@ import re
 import sqlite3
 import threading
 import time
-import json
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -292,8 +291,10 @@ class DB:
 
     @staticmethod
     def _coerce_bool(value: object, default: bool = False) -> bool:
-        if isinstance(value, bool):
-            return value
+        if value is True:
+            return True
+        if value is False:
+            return False
         text = str(value or "").strip().lower()
         if text in {"1", "true", "yes", "on", "y"}:
             return True

@@ -26,9 +26,7 @@ class FsManager:
         self.artifacts_root = artifacts_root
         self.run_root = run_root
 
-    def compute_artifact_ref(self, payload: dict) -> str:
-        if not isinstance(payload, dict):
-            raise TypeError("payload must be a dict")
+    def compute_artifact_ref(self, payload: dict[str, object]) -> str:
         return sha256_hex_json(payload, ensure_ascii=True)
 
     def artifact_paths(self, artifact_ref: str) -> ArtifactPaths:
@@ -78,15 +76,14 @@ class FsManager:
         return target
 
     def _normalize_artifact_ref(self, artifact_ref: str) -> str:
-        token = str(artifact_ref or "").strip().lower()
+        token = artifact_ref.strip().lower()
         if not _BUILD_REF_RE.fullmatch(token):
             raise ValueError("artifact_ref must be a 64-char lowercase hex digest")
         return token
 
     def _normalize_token(self, value: str, *, field_name: str) -> str:
-        token = str(value or "").strip()
+        token = value.strip()
         if not _TOKEN_RE.fullmatch(token):
             raise ValueError(f"{field_name} has invalid format")
         return token
-
 

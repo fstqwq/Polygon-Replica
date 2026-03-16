@@ -1,36 +1,79 @@
 from __future__ import annotations
 
-from .shared import (
-    Path,
-    RUN_TEST_NAME_RE,
-    _VERIFICATION_ID_RE,
-    _RUN_ID_RE,
-    base64,
-    domjudge_executable_hash,
-    json,
-    now_iso,
-    re,
-    time,
-    uuid,
-)
+import base64
+import json
+import re
+import time
+import uuid
+from typing import cast
+from pathlib import Path
+
+from app.db import now_iso
+from app.service.judgehost.domjudge.cache import domjudge_source_hash
+from app.service.judgehost.internal.shared import _RUN_ID_RE, _VERIFICATION_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
+from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
+from app.service.platform.hashing import domjudge_executable_hash
+from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
-from app.service.verification import (
-    VERIFICATION_KIND_VERIFICATION,
+from app.service.verification.store import (
     save_verification_run_summary,
 )
+from app.service.verification.types import Kind
 
 
 class JudgehostEnqueueMixin:
     @staticmethod
+    def _normalize_text(value: object) -> str:
+        return "" if not value else str(value).strip()
+
+    @staticmethod
+    def _normalize_text_with_default(value: object, *, default: str) -> str:
+        text = JudgehostEnqueueMixin._normalize_text(value)
+        return text if text else default
+
+    @staticmethod
+    def _normalize_status(value: object) -> str:
+        return JudgehostEnqueueMixin._normalize_text(value).lower()
+
+    @staticmethod
+    def _json_object(text: str) -> dict[str, object]:
+        if not text:
+            return {}
+        try:
+            return cast(dict[str, object], json.loads(text))
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _normalize_list(
+        values: list[str] | None,
+        *,
+        matcher: re.Pattern[str] | None = None,
+    ) -> list[str]:
+        if not values:
+            return []
+        normalized: list[str] = []
+        for raw in values:
+            token = JudgehostEnqueueMixin._normalize_text(raw)
+            if not token:
+                continue
+            if matcher is not None and not matcher.fullmatch(token):
+                continue
+            if token not in normalized:
+                normalized.append(token)
+        return normalized
+
+
+    @staticmethod
     def _verification_kind(verification_source: str) -> str:
-        return VERIFICATION_KIND_VERIFICATION
+        return Kind.VERIFICATION
 
     @staticmethod
     def _verification_id(run_id: str, verification_id: str) -> str:
-        token = str(verification_id or "").strip()
+        token = JudgehostEnqueueMixin._normalize_text(verification_id)
         if _VERIFICATION_ID_RE.fullmatch(token):
             return token
-        return f"ver-{str(run_id or '').strip()}"
+        return f"ver-{JudgehostEnqueueMixin._normalize_text(run_id)}"
 
     def _ensure_verification_run(
         self,
@@ -57,8 +100,8 @@ class JudgehostEnqueueMixin:
             problem_id=problem_id,
             workspace_id=workspace_id,
             kind=self._verification_kind(verification_source),
-            mode=str(mode or "").strip() or "pass-fail",
-            verification_source=str(verification_source or "run.execute").strip() or "run.execute",
+            mode=JudgehostEnqueueMixin._normalize_text_with_default(mode, default="pass-fail"),
+            verification_source=JudgehostEnqueueMixin._normalize_text_with_default(verification_source, default="run.execute"),
             source_paths=[source_label] if source_label else [],
             source_commit="",
             source_ref="",
@@ -68,10 +111,11 @@ class JudgehostEnqueueMixin:
             expected_behavior=expected_behavior,
             run_summary=dict(summary or {}),
             artifact_path=str(run_root),
-            task_kind=str(task_kind or "").strip(),
+            task_kind=JudgehostEnqueueMixin._normalize_text(task_kind),
             finished=False,
         )
-        return str(merged.get("status") or "running").strip().lower() or "running"
+        status = JudgehostEnqueueMixin._normalize_status(status_obj) if (status_obj := merged.get("status")) is not None else "running"
+        return status if status else "running"
 
     def _collect_verification_payload(
         self,
@@ -86,9 +130,13 @@ class JudgehostEnqueueMixin:
             return {}
         verification_row = self._db_fetch_one(
             "SELECT artifact_path FROM verifications WHERE id=?",
-            [str(artifact_verification_id or "").strip()],
+            [JudgehostEnqueueMixin._normalize_text(artifact_verification_id)],
         )
-        artifact_path = str(verification_row["artifact_path"] or "").strip() if verification_row is not None else ""
+        artifact_path = (
+            JudgehostEnqueueMixin._normalize_text(verification_row["artifact_path"])
+            if verification_row is not None
+            else ""
+        )
         if not artifact_path:
             return {}
         artifact_root = Path(artifact_path).resolve()
@@ -102,7 +150,7 @@ class JudgehostEnqueueMixin:
         wanted_tests: list[str] = []
         if selected_tests:
             for raw in selected_tests:
-                token = Path(str(raw or "").strip()).name
+                token = Path(JudgehostEnqueueMixin._normalize_text(raw)).name
                 if not RUN_TEST_NAME_RE.fullmatch(token):
                     continue
                 if token in wanted_tests:
@@ -156,12 +204,7 @@ class JudgehostEnqueueMixin:
                 label="run config payload",
             )
             run_config_text = run_cfg_bytes.decode("utf-8", errors="replace")
-            try:
-                parsed_cfg = json.loads(run_config_text)
-                if isinstance(parsed_cfg, dict):
-                    run_cfg_obj = parsed_cfg
-            except Exception:
-                run_cfg_obj = {}
+            run_cfg_obj = self._json_object(run_config_text)
 
         binaries: dict[str, str] = {}
         for name in ("checker", "validator", "interactor"):
@@ -178,7 +221,7 @@ class JudgehostEnqueueMixin:
         workspace_resolved = workspace.resolve()
 
         def _safe_workspace_rel_file(rel_path: str) -> Path | None:
-            token = str(rel_path or "").strip().replace("\\", "/")
+            token = JudgehostEnqueueMixin._normalize_text(rel_path).replace("\\", "/")
             if not token:
                 return None
             candidate = (workspace_resolved / token).resolve()
@@ -204,21 +247,11 @@ class JudgehostEnqueueMixin:
         build_cfg_obj: dict[str, object] = {}
         build_cfg_path = _safe_workspace_rel_file("config/build.json")
         if build_cfg_path is not None:
-            try:
-                parsed_build_cfg = json.loads(build_cfg_path.read_text(encoding="utf-8", errors="replace"))
-                if isinstance(parsed_build_cfg, dict):
-                    build_cfg_obj = parsed_build_cfg
-            except Exception:
-                build_cfg_obj = {}
+            build_cfg_obj = self._json_object(build_cfg_path.read_text(encoding="utf-8", errors="replace"))
         problem_cfg_obj: dict[str, object] = {}
         problem_cfg_path = _safe_workspace_rel_file("config/problem.json")
         if problem_cfg_path is not None:
-            try:
-                parsed_problem_cfg = json.loads(problem_cfg_path.read_text(encoding="utf-8", errors="replace"))
-                if isinstance(parsed_problem_cfg, dict):
-                    problem_cfg_obj = parsed_problem_cfg
-            except Exception:
-                problem_cfg_obj = {}
+            problem_cfg_obj = self._json_object(problem_cfg_path.read_text(encoding="utf-8", errors="replace"))
         try:
             problem_time_limit_ms = int(problem_cfg_obj.get("time_limit_ms", 0))
         except Exception:
@@ -233,7 +266,10 @@ class JudgehostEnqueueMixin:
             problem_memory_limit_mb = 0
 
         checker_source: Path | None = None
-        checker_standard = str(run_cfg_obj.get("checker_standard") or build_cfg_obj.get("checker_standard") or "").strip()
+        checker_standard_obj = run_cfg_obj.get("checker_standard")
+        if checker_standard_obj is None:
+            checker_standard_obj = build_cfg_obj.get("checker_standard")
+        checker_standard = JudgehostEnqueueMixin._normalize_text(checker_standard_obj)
         repo_root = Path(__file__).resolve().parents[4]
         if checker_standard:
             token = checker_standard[5:] if checker_standard.startswith("std::") else checker_standard
@@ -243,22 +279,31 @@ class JudgehostEnqueueMixin:
                 if source.exists() and source.is_file():
                     checker_source = source
         if checker_source is None:
-            checker_source = _safe_workspace_rel_file(str(build_cfg_obj.get("checker_source") or ""))
+            checker_source_token = cast(str | None, build_cfg_obj.get("checker_source"))
+            if checker_source_token is None:
+                checker_source_token = ""
+            checker_source = _safe_workspace_rel_file(checker_source_token)
         if checker_source is None:
             checker_source = _safe_workspace_rel_file("checkers/checker.cpp")
         if checker_source is None:
             checker_source = _first_cpp_under("checkers")
 
-        validator_source: Path | None = _safe_workspace_rel_file(str(build_cfg_obj.get("validator_source") or ""))
+        validator_source_token = cast(str | None, build_cfg_obj.get("validator_source"))
+        if validator_source_token is None:
+            validator_source_token = ""
+        validator_source: Path | None = _safe_workspace_rel_file(validator_source_token)
         if validator_source is None:
             validator_source = _safe_workspace_rel_file("validators/validator.cpp")
         if validator_source is None:
             validator_source = _first_cpp_under("validators")
 
-        interactive_mode = str(mode or "").strip().lower() in {"interactive", "multi-pass"}
+        interactive_mode = JudgehostEnqueueMixin._normalize_status(mode) in {"interactive", "multi-pass"}
         interactor_source: Path | None = None
         if interactive_mode:
-            interactor_source = _safe_workspace_rel_file(str(build_cfg_obj.get("interactor_source") or ""))
+            interactor_source_token = cast(str | None, build_cfg_obj.get("interactor_source"))
+            if interactor_source_token is None:
+                interactor_source_token = ""
+            interactor_source = _safe_workspace_rel_file(interactor_source_token)
             if interactor_source is None:
                 interactor_source = _safe_workspace_rel_file("interactors/interactor.cpp")
             if interactor_source is None:
@@ -317,24 +362,24 @@ class JudgehostEnqueueMixin:
         compile_only: bool = False,
     ) -> dict[str, object]:
         ctx = self._workspace_service.workspace_context(problem, username, include_recent=False)
-        workspace = Path(str(ctx["workspace"]["path"]))
+        workspace = Path(ctx["workspace"]["path"])
 
         source_bytes: bytes
         source_name: str
         source_label: str
-        if isinstance(upload_content, (bytes, bytearray)):
-            source_bytes = bytes(upload_content)
-            source_name = str(upload_filename or "submission.cpp").strip() or "submission.cpp"
+        if upload_content is not None:
+            source_bytes = upload_content
+            source_name = JudgehostEnqueueMixin._normalize_text_with_default(upload_filename, default="submission.cpp")
             source_label = source_name
         else:
-            source_path = self._safe_workspace_source(workspace, str(submission_path or ""))
+            source_path = self._safe_workspace_source(workspace, JudgehostEnqueueMixin._normalize_text(submission_path))
             source_bytes = self._safe_read_bytes(
                 source_path,
                 max_bytes=self._max_source_bytes,
                 label="submission payload",
             )
             source_name = source_path.name
-            source_label = str(submission_path or source_name)
+            source_label = JudgehostEnqueueMixin._normalize_text(submission_path) or source_name
 
         verification_payload = self._collect_verification_payload(
             problem=problem,
@@ -358,7 +403,7 @@ class JudgehostEnqueueMixin:
             "username": username,
             "artifact_verification_id": artifact_verification_id,
             "mode": mode,
-            "submission_path": str(submission_path or ""),
+            "submission_path": JudgehostEnqueueMixin._normalize_text(submission_path),
             "source_name": source_name,
             "source_label": source_label,
             "source_b64": base64.b64encode(source_bytes).decode("ascii"),
@@ -375,51 +420,47 @@ class JudgehostEnqueueMixin:
         }
 
     def _domjudge_precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
-        source_name = self._domjudge_path_name(payload.get("source_name"), default="submission.cpp")
+        source_name = domjudge_path_name(payload.get("source_name"), default="submission.cpp")
         source_bytes = self._domjudge_b64_decode(payload.get("source_b64"))
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
-        extra_sources_raw = payload.get("extra_sources_b64")
-        extra_sources_obj = extra_sources_raw if isinstance(extra_sources_raw, dict) else {}
+        extra_sources_obj = cast(dict[str, object] | None, payload.get("extra_sources_b64"))
+        if extra_sources_obj is None:
+            extra_sources_obj = {}
         extra_source_items: list[tuple[str, bytes]] = []
-        for raw_name, raw_blob in sorted(extra_sources_obj.items(), key=lambda item: str(item[0] or "")):
-            safe_name = self._domjudge_path_name(raw_name)
+        for raw_name, raw_blob in sorted(extra_sources_obj.items(), key=lambda item: JudgehostEnqueueMixin._normalize_text(item[0])):
+            safe_name = domjudge_path_name(raw_name)
             if (not safe_name) or safe_name == source_name:
                 continue
             blob = self._domjudge_b64_decode(raw_blob)
             if not blob:
                 continue
             extra_source_items.append((safe_name, blob))
-        verification_payload = payload.get("verification_payload")
-        if not isinstance(verification_payload, dict):
+        verification_payload = cast(dict[str, object] | None, payload.get("verification_payload"))
+        if verification_payload is None:
             raise RuntimeError("verification payload is required for DOMjudge compatibility")
         run_cfg_obj: dict[str, object] = {}
-        run_cfg_raw = self._domjudge_text(verification_payload.get("run_config_json"))
+        run_cfg_raw = domjudge_text(verification_payload.get("run_config_json"))
         if run_cfg_raw:
-            try:
-                parsed = json.loads(run_cfg_raw)
-                if isinstance(parsed, dict):
-                    run_cfg_obj = parsed
-            except Exception:
-                run_cfg_obj = {}
-        problem_limits_obj = verification_payload.get("problem_limits")
-        if not isinstance(problem_limits_obj, dict):
+            run_cfg_obj = self._json_object(run_cfg_raw)
+        problem_limits_obj = cast(dict[str, object] | None, verification_payload.get("problem_limits"))
+        if problem_limits_obj is None:
             problem_limits_obj = {}
-        checker_args_raw = run_cfg_obj.get("checker_args")
+        checker_args_raw = cast(list[object] | None, run_cfg_obj.get("checker_args"))
         checker_args: list[str] = []
-        if isinstance(checker_args_raw, list):
+        if checker_args_raw is not None:
             for item in checker_args_raw:
-                token = self._domjudge_text(item)
+                token = domjudge_text(item)
                 if token:
                     checker_args.append(token)
-        mode = self._domjudge_lower_text(payload.get("mode"), default="pass-fail")
+        mode = domjudge_lower_text(payload.get("mode"), default="pass-fail")
         compile_only, generate_mode, solve_mode = self._domjudge_execution_modes(payload)
-        manual_validate_only = self._domjudge_bool(payload.get("manual_validate_only"), default=False)
+        manual_validate_only = domjudge_bool(payload.get("manual_validate_only"), default=False)
         configured_max_passes = max(
             1,
-            self._domjudge_parse_int(
+            domjudge_parse_int(
                 run_cfg_obj.get("max_passes"),
-                self._domjudge_parse_int(problem_limits_obj.get("max_passes"), 16),
+                domjudge_parse_int(problem_limits_obj.get("max_passes"), 16),
             ),
         )
         max_passes = configured_max_passes if mode == "multi-pass" else 1
@@ -429,18 +470,18 @@ class JudgehostEnqueueMixin:
         run_output_kb = max(64, int(getattr(self._constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536))
         run_process_limit = max(1, int(getattr(self._constants, "RUN_EXEC_PROCESS_LIMIT", 64) or 64))
         default_cfg = getattr(self._constants, "GENERAL_CONFIG_DEFAULTS", {}) or {}
-        run_tl_ms = self._domjudge_parse_int(
+        run_tl_ms = domjudge_parse_int(
             run_cfg_obj.get("time_limit_ms"),
-            self._domjudge_parse_int(
+            domjudge_parse_int(
                 problem_limits_obj.get("time_limit_ms"),
-                self._domjudge_parse_int(default_cfg.get("time_limit_ms", 2000), 2000),
+                domjudge_parse_int(default_cfg.get("time_limit_ms", 2000), 2000),
             ),
         )
-        run_mem_mb = self._domjudge_parse_int(
+        run_mem_mb = domjudge_parse_int(
             run_cfg_obj.get("memory_limit_mb"),
-            self._domjudge_parse_int(
+            domjudge_parse_int(
                 problem_limits_obj.get("memory_limit_mb"),
-                self._domjudge_parse_int(default_cfg.get("memory_limit_mb", 1024), 1024),
+                domjudge_parse_int(default_cfg.get("memory_limit_mb", 1024), 1024),
             ),
         )
         run_tl_ms = max(100, run_tl_ms)
@@ -449,12 +490,16 @@ class JudgehostEnqueueMixin:
         run_overshoot_sec = 0.0
         run_mem_kb = max(16 * 1024, int(run_mem_mb * 1024))
         binaries_b64 = verification_payload.get("binaries_b64")
-        binaries_obj = binaries_b64 if isinstance(binaries_b64, dict) else {}
+        binaries_obj = cast(dict[str, object] | None, binaries_b64)
+        if binaries_obj is None:
+            binaries_obj = {}
         checker_bytes = self._domjudge_b64_decode(binaries_obj.get("checker"))
         validator_bytes = self._domjudge_b64_decode(binaries_obj.get("validator"))
         interactor_bytes = self._domjudge_b64_decode(binaries_obj.get("interactor"))
         sources_b64 = verification_payload.get("sources_b64")
-        sources_obj = sources_b64 if isinstance(sources_b64, dict) else {}
+        sources_obj = cast(dict[str, object] | None, sources_b64)
+        if sources_obj is None:
+            sources_obj = {}
         checker_source_bytes = self._domjudge_b64_decode(sources_obj.get("checker.cpp"))
         validator_source_bytes = self._domjudge_b64_decode(sources_obj.get("validator.cpp"))
         interactor_source_bytes = self._domjudge_b64_decode(sources_obj.get("interactor.cpp"))
@@ -542,7 +587,7 @@ class JudgehostEnqueueMixin:
                 elif checker_bytes:
                     compare_files.append(("checker", checker_bytes, True))
 
-        source_hash = self._domjudge_source_hash(source_name, source_bytes)
+        source_hash = domjudge_source_hash(source_name, source_bytes)
         if extra_source_items:
             hash_blobs: list[bytes] = [f"{source_name}\0".encode("utf-8") + source_bytes]
             hash_blobs.extend(f"{name}\0".encode("utf-8") + blob for name, blob in extra_source_items)
@@ -584,7 +629,7 @@ class JudgehostEnqueueMixin:
                 [*(['--validate-input'] if manual_validate_only else []), *checker_args]
             ),
             "script_timelimit": int(compare_script_timelimit),
-            "script_memory_limit": run_mem_kb,
+            "script_memory_limit": max(run_mem_kb, int(compile_mem_mb * 1024)),
             "script_filesize_limit": int(run_output_kb),
         }
         return {
@@ -618,12 +663,8 @@ class JudgehostEnqueueMixin:
         force_recompile: bool = False,
         compile_only: bool = False,
     ) -> dict[str, object]:
-        selected = [str(item or "").strip() for item in (selected_tests or [])]
-        selected = [item for item in selected if RUN_TEST_NAME_RE.fullmatch(item)]
-        selected = list(dict.fromkeys(selected))
-        verification_run_id_list = [str(item or "").strip() for item in (verification_run_ids or [])]
-        verification_run_id_list = [item for item in verification_run_id_list if _RUN_ID_RE.fullmatch(item)]
-        verification_run_id_list = list(dict.fromkeys(verification_run_id_list))
+        selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
+        verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
         safe_run_id = self._normalize_run_id(run_id)
         payload = self._build_task_payload(
             problem=problem,
@@ -673,7 +714,9 @@ class JudgehostEnqueueMixin:
             "source": source_label,
             "selected_tests": list(selected_tests),
             "selected_tests_count": len(selected_tests),
-            "verification_source": str(verification_source or "").strip() or "run.execute",
+            "verification_source": JudgehostEnqueueMixin._normalize_text_with_default(
+                verification_source, default="run.execute"
+            ),
             "task_kind": safe_task_kind,
             "tests": [],
             "compile_log": "",
@@ -713,14 +756,12 @@ class JudgehostEnqueueMixin:
         persist_verification_run: bool = True,
         prepared_payload: dict[str, object] | None = None,
     ) -> str:
-        safe_run_id = self._normalize_run_id(run_id or verification_id)
-        safe_verification_id = str(verification_id or safe_run_id).strip()
-        selected = [str(item or "").strip() for item in (selected_tests or [])]
-        selected = [item for item in selected if RUN_TEST_NAME_RE.fullmatch(item)]
-        selected = list(dict.fromkeys(selected))
-        verification_run_id_list = [str(item or "").strip() for item in (verification_run_ids or [])]
-        verification_run_id_list = [item for item in verification_run_id_list if _RUN_ID_RE.fullmatch(item)]
-        verification_run_id_list = list(dict.fromkeys(verification_run_id_list))
+        safe_run_id = self._normalize_run_id(run_id if run_id else verification_id)
+        safe_verification_id = JudgehostEnqueueMixin._normalize_text(
+            verification_id if verification_id else safe_run_id
+        )
+        selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
+        verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
         if not verification_run_id_list:
             verification_run_id_list = [safe_run_id]
         payload = self._build_task_payload(
@@ -741,7 +782,7 @@ class JudgehostEnqueueMixin:
             force_recompile=bool(force_recompile),
             compile_only=bool(compile_only),
         )
-        if isinstance(prepared_payload, dict):
+        if prepared_payload is not None:
             payload.update(dict(prepared_payload))
         safe_task_kind = self._domjudge_task_kind(payload)
         payload["run_id"] = safe_run_id
@@ -749,7 +790,7 @@ class JudgehostEnqueueMixin:
         payload["username"] = username
         payload["artifact_verification_id"] = artifact_verification_id
         payload["mode"] = mode
-        payload["submission_path"] = str(submission_path or "")
+        payload["submission_path"] = JudgehostEnqueueMixin._normalize_text(submission_path)
         payload["selected_tests"] = list(selected)
         payload["verification_id"] = safe_verification_id
         payload["verification_run_ids"] = list(verification_run_id_list)
@@ -758,25 +799,42 @@ class JudgehostEnqueueMixin:
         payload["task_kind"] = safe_task_kind
         payload["force_recompile"] = bool(force_recompile)
         payload["compile_only"] = bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY)
-        safe_verification_id = str(verification_id or self._verification_id(safe_run_id, safe_verification_id)).strip()
+        safe_verification_id_source = (
+            self._verification_id(safe_run_id, safe_verification_id)
+            if not verification_id
+            else verification_id
+        )
+        safe_verification_id = JudgehostEnqueueMixin._normalize_text(safe_verification_id_source)
         payload["verification_id"] = safe_verification_id
         payload["run_id"] = safe_run_id
         task_id = ""
         summary: dict[str, object] | None = None
         while True:
             with self._state_lock:
-                existing_task_id = str(self._task_id_by_run.get(safe_run_id) or "").strip()
+                existing_task_id = (
+                        JudgehostEnqueueMixin._normalize_text(existing_task_id_obj)
+                        if (existing_task_id_obj := self._task_id_by_run.get(safe_run_id))
+                        is not None
+                        else ""
+                    )
                 if existing_task_id:
                     existing_task = self._tasks_by_id.get(existing_task_id)
                     if existing_task is None:
                         self._task_id_by_run.pop(safe_run_id, None)
                     else:
-                        existing_status = str(existing_task.get("status") or "").strip().lower()
+                        existing_status = (
+                            JudgehostEnqueueMixin._normalize_status(existing_status_obj)
+                            if (existing_status_obj := existing_task.get("status")) is not None
+                            else ""
+                        )
                         if existing_status != self.STATUS_ENQUEUING:
                             return existing_task_id
                 if not existing_task_id or existing_task_id not in self._tasks_by_id:
                     task_id = f"jt-{uuid.uuid4().hex[:12]}"
-                    source_label = str(payload.get("source_label") or payload.get("source_name") or "upload")
+                    source_label_obj = payload.get("source_label")
+                    if source_label_obj is None:
+                        source_label_obj = payload.get("source_name")
+                    source_label = str(source_label_obj) if source_label_obj is not None else "upload"
                     summary = self._initial_summary(
                         run_id=safe_run_id,
                         task_id=task_id,
@@ -829,7 +887,13 @@ class JudgehostEnqueueMixin:
                     verification_id=safe_verification_id,
                     run_id=safe_run_id,
                     mode=mode,
-                    source_label=str(payload.get("source_label") or payload.get("source_name") or "upload"),
+                    source_label=(
+                        str(payload.get("source_label"))
+                        if payload.get("source_label") is not None
+                        else str(payload.get("source_name"))
+                        if payload.get("source_name") is not None
+                        else "upload"
+                    ),
                     expected_behavior=expected_behavior,
                     verification_source=verification_source,
                     task_kind=safe_task_kind,
@@ -838,10 +902,18 @@ class JudgehostEnqueueMixin:
             except Exception:
                 with self._state_lock:
                     row = self._tasks_by_id.get(task_id)
-                    if row is not None and str(row.get("status") or "").strip().lower() == self.STATUS_ENQUEUING:
-                        self._tasks_by_id.pop(task_id, None)
-                        if self._task_id_by_run.get(safe_run_id) == task_id:
-                            self._task_id_by_run.pop(safe_run_id, None)
+                    if row is not None:
+                        row_status = (
+                            JudgehostEnqueueMixin._normalize_status(row_status_obj)
+                            if (row_status_obj := row.get("status")) is not None
+                            else ""
+                        )
+                        if row_status == self.STATUS_ENQUEUING:
+                            self._tasks_by_id.pop(task_id, None)
+                            if self._task_id_by_run.get(safe_run_id) == task_id:
+                                self._task_id_by_run.pop(safe_run_id, None)
+                    else:
+                        pass
                 raise
 
         self._domjudge_try_prequeue_cache_finalize(
@@ -851,9 +923,12 @@ class JudgehostEnqueueMixin:
         )
         with self._state_lock:
             row = self._tasks_by_id.get(task_id)
-            if row is not None and str(row.get("status") or "").strip().lower() == self.STATUS_ENQUEUING:
-                row["status"] = self.STATUS_QUEUED
-                row["updated_at"] = now_iso()
+            if row is not None:
+                row_status_obj = row.get("status")
+                row_status = JudgehostEnqueueMixin._normalize_status(row_status_obj) if row_status_obj is not None else ""
+                if row_status == self.STATUS_ENQUEUING:
+                    row["status"] = self.STATUS_QUEUED
+                    row["updated_at"] = now_iso()
         return task_id
 
     def enqueue_compile_only_task(
@@ -878,15 +953,16 @@ class JudgehostEnqueueMixin:
             mode="pass-fail",
             submission_path=None,
             upload_content=bytes(upload_content),
-            upload_filename=str(upload_filename or "submission.cpp"),
+            upload_filename=upload_filename or "submission.cpp",
             run_id=run_id,
             selected_tests=[],
-            verification_id=str(verification_id or ""),
+            verification_id=JudgehostEnqueueMixin._normalize_text(verification_id),
             verification_run_ids=list(verification_run_ids or [run_id]),
-            expected_behavior=str(expected_behavior or "compile"),
-            verification_source=str(verification_source or "compile.only"),
+            expected_behavior=expected_behavior or "compile",
+            verification_source=verification_source or "compile.only",
             task_kind=self._TASK_KIND_COMPILE_ONLY,
             compile_only=True,
             persist_verification_run=False,
-            prepared_payload=dict(prepared_payload) if isinstance(prepared_payload, dict) else None,
+            prepared_payload=None if prepared_payload is None else dict(prepared_payload),
         )
+

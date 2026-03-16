@@ -10,11 +10,8 @@ from .artifact import (
 from .context import count_label
 from .problem_config import read_problem_config
 from .context_operation import (
-    _expected_status_rule,
     parse_summary_json,
     solution_metadata_entry,
-    _status_rule_expected_display,
-    _verification_solution_match,
     workspace_rel_file_exists,
 )
 from .context_run_detail import (
@@ -42,6 +39,9 @@ from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
     safe_workspace_path,
 )
+from app.service.verification.runtime import (
+    effective_run_timeout_ms,
+)
 from app.service.problem.solution_metadata import (
     expected_behavior_label,
     infer_expected_behavior_from_name,
@@ -54,7 +54,12 @@ from app.impl.workspace.run_view_lifecycle_card import (
     load_verification_detail_snapshot,
     _verification_tests_meta_stats,
 )
-from app.service.verification import (
+from app.impl.workspace.context_verification import (
+    _expected_status_rule,
+    _status_rule_expected_display,
+    _verification_solution_match,
+)
+from app.service.verification.store import (
     load_verification_record,
     load_verification_summary,
     verification_run,
@@ -63,21 +68,22 @@ from app.service.verification import (
     verification_source_paths,
 )
 from app.impl.workspace.run_view_list import (
-    _effective_run_timeout_ms,
     _latest_iso_timestamp,
-    _run_actual_display,
-    _run_actual_short,
     _run_cell_kind,
-    _run_cpu_wall_ms_text,
-    _run_error_display,
     _run_expected_behavior_from_summary,
     _verification_source_from_summary,
     _is_main_correct_verification_source,
-    _run_memory_mb_text,
     _run_test_answer_name,
     _run_test_sort_key,
     _run_timeout_ms_from_summary,
-    _run_verdict_short,
+)
+from app.impl.workspace.run_display import (
+    run_actual_display,
+    run_actual_short,
+    run_cpu_wall_ms_text,
+    run_error_display,
+    run_memory_mb_text,
+    run_verdict_short,
 )
 
 _C = config.constants
@@ -93,15 +99,20 @@ def build_run_detail_context(
     workspace = Path(ctx['workspace']['path'])
     workspace_id = int(ctx['workspace']['id'])
     problem_id = int(ctx['problem']['id'])
-    actor_user_id = int(ctx['user']['id'])
-    problem_slug = str(ctx.get('problem', {}).get('slug') or '').strip()
-    username = str(ctx.get('user', {}).get('username') or '').strip()
+    problem_slug = ctx['problem']['slug']
+    username = ctx['user']['username']
     fallback_timeout_ms = 0
     try:
         _payload, general_cfg, _cfg_path = read_problem_config(workspace)
-        fallback_timeout_ms = _effective_run_timeout_ms(
+        fallback_timeout_ms = effective_run_timeout_ms(
             int(general_cfg.get('time_limit_ms') or _C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
             mode=general_cfg.get('mode'),
+            default_ms=int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
+            min_ms=int(_C.GENERAL_TIME_LIMIT_MIN_MS),
+            max_ms=int(_C.GENERAL_TIME_LIMIT_MAX_MS),
+            pass_fail_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC),
+            multi_pass_slack_sec=int(_C.RUN_WALL_TIME_SLACK_MULTI_PASS_SEC),
+            interactive_slack_sec=int(_C.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC),
         )
     except Exception:
         fallback_timeout_ms = 0
@@ -109,17 +120,13 @@ def build_run_detail_context(
     verification_run_rows: dict[str, dict[str, object]] = {}
     verification_id_hint = normalize_run_id_token(requested_verification_id)
     verification_details: dict[str, object] = {}
-    verification_record_raw = load_verification_record(config.db, verification_id_hint) if verification_id_hint else None
-    verification_record = dict(verification_record_raw) if verification_record_raw is not None else None
-    if verification_record is not None and int(verification_record.get('workspace_id') or 0) == workspace_id:
-        persisted_summary = load_verification_summary(config.db, verification_id_hint)
-        if isinstance(persisted_summary, dict) and persisted_summary:
-            merged_details = dict(persisted_summary)
-            for key, value in verification_details.items():
-                if key not in merged_details:
-                    merged_details[key] = value
-            merged_details.setdefault('verification_id', verification_id_hint)
-            verification_details = merged_details
+    verification_record = load_verification_record(config.db, verification_id_hint) if verification_id_hint else None
+    if verification_record is not None and verification_record['workspace_id'] == workspace_id:
+        verification_details = load_verification_summary(config.db, verification_id_hint)
+        verification_details['verification_id'] = verification_id_hint
+        verification_details['status'] = verification_record['status']
+        verification_details['created_at'] = verification_record['created_at']
+        verification_details['finished_at'] = verification_record['finished_at'] or ''
         if not selected_ids:
             for run_id in verification_run_ids(verification_details):
                 token = normalize_run_id_token(run_id)
@@ -129,52 +136,44 @@ def build_run_detail_context(
             run_token = normalize_run_id_token(run_id)
             if not run_token:
                 continue
-            run_obj = verification_run(verification_details, run_id)
-            if not isinstance(run_obj, dict) or (not run_obj):
+            run_row = verification_run(verification_details, run_id)
+            if not run_row:
                 continue
-            run_summary = run_obj.get('summary') if isinstance(run_obj, dict) else None
             verification_run_rows[run_token] = {
                 'id': run_token,
-                'artifact_verification_id': str(
-                    verification_details.get('artifact_verification_id')
-                    or verification_id_hint
-                    or ''
-                ).strip(),
-                'mode': str(verification_details.get('mode') or execute_mode).strip() or execute_mode,
-                'status': str(run_obj.get('status') or verification_record.get('status') or verification_details.get('status') or 'running').strip().lower() or 'running',
-                'source_label': str(run_obj.get('source_label') or '').strip(),
-                'summary_obj': dict(run_summary) if isinstance(run_summary, dict) else {},
-                'created_at': str(verification_record.get('created_at') or '').strip(),
-                'finished_at': str(verification_record.get('finished_at') or verification_details.get('finished_at') or '').strip(),
+                'artifact_verification_id': verification_details.get('artifact_verification_id') or verification_id_hint or '',
+                'mode': verification_details.get('mode') or execute_mode,
+                'status': run_row['status'],
+                'source_label': run_row['source_label'],
+                'summary': dict(run_row['summary']),
+                'created_at': verification_record['created_at'],
+                'finished_at': verification_record['finished_at'] or verification_details.get('finished_at') or '',
             }
-    if (not selected_ids) and isinstance(verification_details, dict) and verification_details:
+    if not selected_ids and verification_details:
         for run_id in verification_run_ids(verification_details):
             token = normalize_run_id_token(run_id)
             if token and token not in selected_ids:
                 selected_ids.append(token)
     verification_created_at = ''
-    if (not verification_created_at) and verification_record is not None:
-        verification_created_at = str(verification_record.get('created_at') or '').strip()
+    if not verification_created_at and verification_record is not None:
+        verification_created_at = verification_record['created_at']
     expected_by_run_id: dict[str, str] = {}
     expected_by_source: dict[str, str] = {}
-    solutions_raw = verification_details.get('solutions')
-    if isinstance(solutions_raw, list):
-        for item in solutions_raw:
-            if not isinstance(item, dict):
-                continue
-            expected_token = normalize_expected_behavior(str(item.get('expected_behavior') or 'unknown'))
-            if expected_token == 'unknown':
-                continue
-            run_token = normalize_run_id_token(item.get('run_id'))
-            if run_token and run_token not in expected_by_run_id:
-                expected_by_run_id[run_token] = expected_token
-            source_token = normalize_optional_component_source_path_safe(
-                str(item.get('source_path') or ''),
-                'solutions',
-                'solution path',
-            )
-            if source_token and source_token not in expected_by_source:
-                expected_by_source[source_token] = expected_token
+    solutions = verification_details.get('solutions') or []
+    for item in solutions:
+        expected_token = normalize_expected_behavior((item.get('expected_behavior') or 'unknown'))
+        if expected_token == 'unknown':
+            continue
+        run_token = normalize_run_id_token(item.get('run_id'))
+        if run_token and run_token not in expected_by_run_id:
+            expected_by_run_id[run_token] = expected_token
+        source_token = normalize_optional_component_source_path_safe(
+            (item.get('source_path') or ''),
+            'solutions',
+            'solution path',
+        )
+        if source_token and source_token not in expected_by_source:
+            expected_by_source[source_token] = expected_token
     expected_by_source_cache: dict[str, str] = dict(expected_by_source)
 
     def _expected_from_workspace_source(source_rel: str) -> str:
@@ -185,13 +184,13 @@ def build_run_detail_context(
         )
         if not safe_source:
             return ''
-        cached = normalize_expected_behavior(str(expected_by_source_cache.get(safe_source) or 'unknown'))
+        cached = normalize_expected_behavior((expected_by_source_cache.get(safe_source) or 'unknown'))
         if cached != 'unknown':
             return cached
         expected_token = 'unknown'
         try:
             entry = solution_metadata_entry(workspace, safe_source)
-            expected_token = normalize_expected_behavior(str(entry.get('expected_behavior') or 'unknown'))
+            expected_token = normalize_expected_behavior((entry.get('expected_behavior') or 'unknown'))
         except Exception:
             expected_token = normalize_expected_behavior(infer_expected_behavior_from_name(safe_source))
         if expected_token != 'unknown':
@@ -200,7 +199,7 @@ def build_run_detail_context(
         return ''
 
     def _collect_build_stage_markers() -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], str]:
-        if not isinstance(verification_details, dict) or not verification_details:
+        if not verification_details:
             return ({}, {}, '')
         stage_summaries: list[dict[str, object]] = []
         generate_stage = verification_stage_summary(verification_details, 'generate_input')
@@ -226,48 +225,45 @@ def build_run_detail_context(
             safe_test = normalize_run_test_name_token(test_name)
             if not safe_test:
                 return
-            safe_stamp = str(updated_at or '').strip()
+            safe_stamp = (updated_at or '')
             existing = target.get(safe_test)
-            if isinstance(existing, dict):
-                existing_stamp = str(existing.get('updated_at') or '').strip()
+            if existing is not None:
+                existing_stamp = (existing.get('updated_at') or '')
                 if existing_stamp and safe_stamp and existing_stamp > safe_stamp:
                     return
             target[safe_test] = {
-                'short': str(short or '--').strip() or '--',
-                'kind': str(kind or 'neutral').strip() or 'neutral',
-                'detail': str(detail or '').strip(),
+                'short': short or '--',
+                'kind': kind or 'neutral',
+                'detail': (detail or ''),
                 'updated_at': safe_stamp,
-                'stage_label': str(stage_label or '').strip(),
+                'stage_label': (stage_label or ''),
             }
 
-        for summary_obj in stage_summaries:
-            source_token = str(summary_obj.get('verification_source') or '').strip().lower()
+        for summary_entry in stage_summaries:
+            source_token = (summary_entry.get('verification_source') or '')
             if not source_token:
-                source_token = str(_verification_source_from_summary(summary_obj) or '').strip().lower()
+                source_token = (_verification_source_from_summary(summary_entry) or '')
             marker_target: dict[str, dict[str, str]] | None = None
-            run_status = str(summary_obj.get('status') or '').strip().lower()
-            tests_raw = summary_obj.get('tests')
+            run_status = (summary_entry.get('status') or '')
+            tests_raw = summary_entry.get('tests')
             if source_token == 'verification.generate-input':
                 marker_target = generate_markers
             elif source_token == 'verification.solve-main':
                 marker_target = main_markers
                 if not main_source_path:
-                    source_rel = normalize_workspace_rel_path(str(_run_source_from_summary(summary_obj) or summary_obj.get('source') or ''))
+                    source_rel = normalize_workspace_rel_path((_run_source_from_summary(summary_entry) or summary_entry.get('source') or ''))
                     if source_rel:
                         main_source_path = source_rel
             else:
                 continue
             run_status = run_status
-            stamp = str(summary_obj.get('updated_at') or '').strip()
-            if not isinstance(tests_raw, list):
-                continue
-            for test_item in tests_raw:
-                if not isinstance(test_item, dict):
-                    continue
-                test_name = str(test_item.get('test') or '').strip()
+            stamp = (summary_entry.get('updated_at') or '')
+            tests = tests_raw or []
+            for test_item in tests:
+                test_name = (test_item.get('test') or '')
                 if not test_name:
                     continue
-                verdict_short = _run_verdict_short(str(test_item.get('verdict') or ''))
+                verdict_short = run_verdict_short((test_item.get('verdict') or ''))
                 verdict_display = verdict_short if verdict_short and verdict_short != '--' else '--'
                 if run_status in {'running', 'queued', 'pending'} and verdict_display == '--':
                     verdict_display = '..'
@@ -277,7 +273,7 @@ def build_run_detail_context(
                     kind = 'neutral'
                 else:
                     kind = 'fail'
-                detail = compact_error_text(str(test_item.get('message') or test_item.get('error') or ''))
+                detail = compact_error_text((test_item.get('message') or test_item.get('error') or ''))
                 if (not detail) and kind == 'fail':
                     detail = f'verdict {verdict_display}'
                 _upsert_marker(
@@ -287,7 +283,7 @@ def build_run_detail_context(
                     short=verdict_display,
                     kind=kind,
                     detail=detail,
-                    stage_label='validated' if str(test_item.get('source_kind') or '').strip().lower() == 'manual' else 'generated' if source_token == 'verification.generate-input' else '',
+                    stage_label='validated' if (test_item.get('source_kind') or '') == 'manual' else 'generated' if source_token == 'verification.generate-input' else '',
                 )
         return (generate_markers, main_markers, main_source_path)
 
@@ -300,18 +296,18 @@ def build_run_detail_context(
         return bool(safe_source)
 
     def _generate_stage_label(source_value: str, verification_source: str) -> str:
-        source_token = str(verification_source or '').strip().lower()
+        source_token = (verification_source or '')
         if source_token != 'verification.generate-input':
             return ''
-        filename = Path(str(source_value or '').strip()).name.lower()
+        filename = Path((source_value or '')).name
         if filename == 'manual_validate.cpp':
             return 'validated'
         return 'generated'
 
     def _stage_note_status(*, short: str, kind: str, run_status: str) -> tuple[str, str]:
-        short_token = str(short or '').strip().upper()
-        kind_token = str(kind or '').strip().lower()
-        run_token = str(run_status or '').strip().lower()
+        short_token = (short or '').upper()
+        kind_token = (kind or '')
+        run_token = (run_status or '')
         if kind_token == 'ok' or short_token == 'AC':
             return ('ok', 'ok')
         if kind_token == 'fail':
@@ -336,8 +332,8 @@ def build_run_detail_context(
         source_label: str,
     ) -> None:
         def _stage_note_text(stage_label: str, stage_status: str) -> str:
-            label_token = str(stage_label or '').strip().lower()
-            status_token = str(stage_status or '').strip().lower()
+            label_token = (stage_label or '')
+            status_token = (stage_status or '')
             if label_token == 'generated':
                 if status_token == 'running':
                     return '.. generating'
@@ -356,39 +352,38 @@ def build_run_detail_context(
                     return 'validated'
                 if status_token == 'pending':
                     return '.. validation pending'
-            return f"{str(stage_label or '').strip()} {stage_status}".strip()
+            return f"{(stage_label or '')} {stage_status}"
 
         safe_test = normalize_run_test_name_token(test_name)
         if (not safe_test) or (not label):
             return
         tone, status_label = _stage_note_status(short=short, kind=kind, run_status=run_status)
-        notes = target.setdefault(safe_test, [])
-        stage_key = str(label or '').strip().lower()
+        notes = target.get(safe_test)
+        if notes is None:
+            notes = []
+            target[safe_test] = notes
+        stage_key = (label or '')
         note_payload = {
             'stage_key': stage_key,
-            'label': str(label or '').strip(),
+            'label': (label or ''),
             'status_label': status_label,
             'tone': tone,
-            'text': _stage_note_text(str(label or '').strip(), status_label),
-            'detail': str(detail or '').strip(),
-            'source_label': str(source_label or '').strip(),
+            'text': _stage_note_text((label or ''), status_label),
+            'detail': (detail or ''),
+            'source_label': (source_label or ''),
         }
         for idx, existing in enumerate(notes):
-            if str(existing.get('stage_key') or '').strip().lower() == stage_key:
+            if (existing.get('stage_key') or '') == stage_key:
                 notes[idx] = note_payload
                 return
         notes.append(note_payload)
 
-    def _primary_row_stage_note(notes: object) -> dict[str, str]:
-        if not isinstance(notes, list):
-            return {}
+    def _primary_row_stage_note(notes: list[dict[str, str]]) -> dict[str, str]:
         priority = {'fail': 4, 'running': 3, 'pending': 2, 'ok': 1}
         best: dict[str, str] = {}
         best_score = -1
         for note in notes:
-            if not isinstance(note, dict):
-                continue
-            score = int(priority.get(str(note.get('tone') or '').strip().lower(), 0))
+            score = int(priority.get((note.get('tone') or ''), 0))
             if score > best_score:
                 best = note
                 best_score = score
@@ -403,15 +398,15 @@ def build_run_detail_context(
         has_detail: bool,
     ) -> dict[str, object]:
         primary_note = _primary_row_stage_note(notes)
-        tone = str(primary_note.get('tone') or '').strip().lower()
-        note_text = str(primary_note.get('text') or '').strip()
-        note_detail = str(primary_note.get('detail') or '').strip()
+        tone = (primary_note.get('tone') or '')
+        note_text = (primary_note.get('text') or '')
+        note_detail = (primary_note.get('detail') or '')
         if tone in {'running', 'pending'}:
             short = note_text
             meta = ''
             if note_text.startswith('.. '):
                 short = '..'
-                meta = note_text[3:].strip()
+                meta = note_text[3:]
             return {
                 'kind': 'running' if tone == 'running' else 'neutral',
                 'text': '',
@@ -444,41 +439,33 @@ def build_run_detail_context(
     domjudge_case_cells_by_run = _run_domjudge_case_cells(selected_ids)
     for run_id in selected_ids:
         row = verification_run_rows.get(run_id)
-        row_dict = row if isinstance(row, dict) else {}
         status = 'running'
         mode = execute_mode
         created_at = verification_created_at
         finished_at = ''
         artifact_verification_id = ''
-        summary_raw = None
-        summary_obj = None
-        if row_dict:
-            status = str(row_dict.get('status') or '').strip().lower() or status
-            mode = str(row_dict.get('mode') or '').strip() or mode
-            created_at = row_dict.get('created_at') or created_at
-            finished_at = str(row_dict.get('finished_at') or '').strip()
-            artifact_verification_id = str(
-                row_dict.get('artifact_verification_id')
-                or verification_id_hint
-                or ''
-            ).strip()
-            summary_obj = row_dict.get('summary_obj')
-            if not isinstance(summary_obj, dict):
-                summary_raw = row_dict.get('summary_json')
-        summary = dict(summary_obj) if isinstance(summary_obj, dict) else (parse_summary_json(summary_raw, f'run/{run_id}') if summary_raw else None)
-        if isinstance(summary, dict):
-            _cap_summary_list(summary, 'tests', _C.RUN_DETAIL_TEST_LIST_LIMIT, 'tests_truncated', 'tests_total', 'tests_limit')
-            _cap_summary_list(summary, 'compile_diagnostics', _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT, 'compile_diagnostics_truncated', 'compile_diagnostics_total', 'compile_diagnostics_limit')
-            if include_row_details:
-                _cap_run_test_feedback_files(summary, _C.RUN_TEST_FEEDBACK_FILE_LIST_LIMIT)
-            compile_diags = summary.get('compile_diagnostics')
-            if isinstance(compile_diags, list):
-                normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
-                summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
+        summary: dict[str, object] = {}
+        source_label = ''
+        if row is not None:
+            status = row['status']
+            mode = row['mode']
+            created_at = row['created_at']
+            finished_at = row['finished_at']
+            artifact_verification_id = row['artifact_verification_id']
+            summary = dict(row['summary'])
+            source_label = row['source_label']
+        _cap_summary_list(summary, 'tests', _C.RUN_DETAIL_TEST_LIST_LIMIT, 'tests_truncated', 'tests_total', 'tests_limit')
+        _cap_summary_list(summary, 'compile_diagnostics', _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT, 'compile_diagnostics_truncated', 'compile_diagnostics_total', 'compile_diagnostics_limit')
+        if include_row_details:
+            _cap_run_test_feedback_files(summary, _C.RUN_TEST_FEEDBACK_FILE_LIST_LIMIT)
+        compile_diags = summary.get('compile_diagnostics') or []
+        if compile_diags:
+            normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+            summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
         source = _run_source_from_summary(summary)
-        verification_source = _verification_source_from_summary(summary) or str(verification_details.get('verification_source') or '').strip().lower()
+        verification_source = _verification_source_from_summary(summary) or (verification_details.get('verification_source') or '')
         is_main_correct_run = _is_main_correct_verification_source(verification_source)
-        source_for_display = source or str(row_dict.get('source_label') or '').strip()
+        source_for_display = source or source_label
         title = Path(source_for_display).name if source_for_display else ''
         if not title:
             title = run_id or 'unknown run'
@@ -500,48 +487,45 @@ def build_run_detail_context(
             if mapped_expected:
                 expected_behavior = mapped_expected
         matched, completed, observed_pass, match_reason = _verification_solution_match(expected_behavior, status, summary)
-        _, required_codes, allowed_codes = _expected_status_rule(expected_behavior)
+        required_codes, allowed_codes = _expected_status_rule(expected_behavior)
         expected_display = _status_rule_expected_display(expected_behavior)
         expected_is_ac_only = bool(required_codes == ('AC',) and allowed_codes == ('AC',))
-        got_short = _run_actual_short(status, summary)
-        got_display = _run_actual_display(status, summary)
+        got_short = run_actual_short(status, summary)
+        got_display = run_actual_display(status, summary)
+        result_kind = _run_cell_kind(got_short, expected_behavior) if got_short else 'neutral'
+        result_tone_class = f'tone-{result_kind}'
         expected_mismatch = bool(completed and (not matched))
-        execution_skipped_from_summary = False
-        if isinstance(summary, dict):
-            execution_skipped_from_summary = bool(summary.get('execution_skipped'))
-            if not execution_skipped_from_summary and str(summary.get('failure_stage') or '').strip().lower() == 'build':
-                execution_skipped_from_summary = True
+        execution_skipped_from_summary = bool(summary.get('execution_skipped'))
+        if not execution_skipped_from_summary and (summary.get('failure_stage') or '') == 'build':
+            execution_skipped_from_summary = True
         tests_map: dict[str, dict] = {}
         max_time_ms = 0
         max_memory_kb = 0
         has_test_metrics = False
-        tests_raw = summary.get('tests') if isinstance(summary, dict) else None
-        has_materialized_tests = isinstance(tests_raw, list) and any((isinstance(item, dict) for item in tests_raw))
+        tests_raw = summary.get('tests') or []
+        has_materialized_tests = bool(tests_raw)
         timeout_limit_ms = _run_timeout_ms_from_summary(summary)
         if timeout_limit_ms <= 0:
             timeout_limit_ms = fallback_timeout_ms
-        if isinstance(tests_raw, list):
-            for idx, item in enumerate(tests_raw, start=1):
-                if not isinstance(item, dict):
-                    continue
-                test_name = str(item.get('test') or idx).strip()
+        for idx, item in enumerate(tests_raw, start=1):
+                test_name = (item.get('test') or idx)
                 if not test_name:
                     continue
                 if selected_test_name_hint and test_name != selected_test_name_hint:
                     continue
-                verdict = str(item.get('verdict') or '').strip().upper() or '-'
-                verdict_short = _run_verdict_short(verdict)
+                verdict = (item.get('verdict') or '').upper() or '-'
+                verdict_short = run_verdict_short(verdict)
                 try:
                     time_ms = int(item.get('time_ms') or 0)
                 except Exception:
                     time_ms = 0
-                if str(verdict or '').strip().upper().startswith('TL') and timeout_limit_ms > 0 and (time_ms > timeout_limit_ms):
+                if (verdict or '').upper().startswith('TL') and timeout_limit_ms > 0 and (time_ms > timeout_limit_ms):
                     time_ms = timeout_limit_ms
                 try:
                     time_user_ms = int(item.get('time_user_ms', time_ms) or 0)
                 except Exception:
                     time_user_ms = time_ms
-                if str(verdict or '').strip().upper().startswith('TL') and timeout_limit_ms > 0 and (time_user_ms > timeout_limit_ms):
+                if (verdict or '').upper().startswith('TL') and timeout_limit_ms > 0 and (time_user_ms > timeout_limit_ms):
                     time_user_ms = timeout_limit_ms
                 try:
                     time_wall_ms = int(item.get('time_wall_ms', time_user_ms) or 0)
@@ -551,7 +535,7 @@ def build_run_detail_context(
                     memory_kb = int(item.get('memory_kb') or 0)
                 except Exception:
                     memory_kb = 0
-                memory_mb_text = _run_memory_mb_text(memory_kb)
+                memory_mb_text = run_memory_mb_text(memory_kb)
                 has_test_metrics = True
                 if time_ms > max_time_ms:
                     max_time_ms = time_ms
@@ -563,17 +547,16 @@ def build_run_detail_context(
                     test_stem = Path(test_name).stem
                     feedback_display = '-'
                     inline_feedback = preserve_error_text(
-                        str(item.get('message') or item.get('error') or ''),
+                        (item.get('message') or item.get('error') or ''),
                         max_chars=1600,
                         max_lines=24,
                     )
-                    feedback_files_raw = item.get('feedback_files')
+                    feedback_files = item.get('feedback_files') or []
                     feedback_items: list[str] = []
-                    if isinstance(feedback_files_raw, list):
-                        for feedback_entry in feedback_files_raw:
-                            token = str(feedback_entry or '').strip()
-                            if token:
-                                feedback_items.append(token)
+                    for feedback_entry in feedback_files:
+                        token = (feedback_entry or '')
+                        if token:
+                            feedback_items.append(token)
                     if inline_feedback:
                         feedback_display = inline_feedback
                     feedback_total = len(feedback_items)
@@ -589,17 +572,16 @@ def build_run_detail_context(
                         if hidden_count > 0 and feedback_display != '-':
                             feedback_display = f'{feedback_display} (+{hidden_count} more)' if feedback_display != '-' else f'+{count_label(hidden_count, "file")}'
                     pass_rows: list[dict[str, str]] = []
-                    if isinstance(passes_raw, list) and passes_raw:
-                        for pass_item in passes_raw:
-                            if not isinstance(pass_item, dict):
-                                continue
-                            pass_verdict = str(pass_item.get('verdict') or '').strip().upper() or '-'
-                            pass_verdict_short = _run_verdict_short(pass_verdict)
+                    passes = passes_raw or []
+                    if passes:
+                        for pass_item in passes:
+                            pass_verdict = (pass_item.get('verdict') or '').upper() or '-'
+                            pass_verdict_short = run_verdict_short(pass_verdict)
                             try:
                                 pass_time_user_ms = int(pass_item.get('time_user_ms', pass_item.get('time_ms', 0)) or 0)
                             except Exception:
                                 pass_time_user_ms = 0
-                            if str(pass_verdict or '').strip().upper().startswith('TL') and timeout_limit_ms > 0 and (pass_time_user_ms > timeout_limit_ms):
+                            if (pass_verdict or '').upper().startswith('TL') and timeout_limit_ms > 0 and (pass_time_user_ms > timeout_limit_ms):
                                 pass_time_user_ms = timeout_limit_ms
                             try:
                                 pass_time_wall_ms = int(pass_item.get('time_wall_ms', pass_time_user_ms) or 0)
@@ -610,31 +592,31 @@ def build_run_detail_context(
                             except Exception:
                                 pass_memory_kb = 0
                             pass_feedback = preserve_error_text(
-                                str(pass_item.get('feedback') or pass_item.get('message') or ''),
+                                (pass_item.get('feedback') or pass_item.get('message') or ''),
                                 max_chars=1600,
                                 max_lines=24,
                             )
                             row_feedback_display = pass_feedback or feedback_display
-                            output_rel = str(pass_item.get('output_ref') or '').strip()
+                            output_rel = (pass_item.get('output_ref') or '')
                             if (not output_rel) and test_stem:
                                 output_rel = f'{test_stem}.out'
                             checker_log_rel = f'feedback_dir/{test_stem}/checker.log' if test_stem else ''
                             feedback_rel = ''
                             if feedback_items:
-                                feedback_rel = str(feedback_items[0] or '').strip()
-                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': _run_cpu_wall_ms_text(pass_time_user_ms, pass_time_wall_ms), 'memory_display': _run_memory_mb_text(pass_memory_kb), 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                                feedback_rel = (feedback_items[0] or '')
+                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': run_cpu_wall_ms_text(pass_time_user_ms, pass_time_wall_ms), 'memory_display': run_memory_mb_text(pass_memory_kb), 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     if not pass_rows:
-                        output_rel = str(item.get('output_ref') or '').strip()
+                        output_rel = (item.get('output_ref') or '')
                         if (not output_rel) and test_stem:
                             output_rel = f'{test_stem}.out'
                         checker_log_rel = f'feedback_dir/{test_stem}/checker.log' if test_stem else ''
                         feedback_rel = ''
                         if feedback_items:
-                            feedback_rel = str(feedback_items[0] or '').strip()
-                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': _run_cpu_wall_ms_text(time_user_ms, time_wall_ms), 'memory_display': memory_mb_text, 'feedback_display': feedback_display, 'output_rel': output_rel, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                            feedback_rel = (feedback_items[0] or '')
+                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': run_cpu_wall_ms_text(time_user_ms, time_wall_ms), 'memory_display': memory_mb_text, 'feedback_display': feedback_display, 'output_rel': output_rel, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     final_row = dict(pass_rows[-1]) if pass_rows else {}
                     for candidate in reversed(pass_rows):
-                        verdict_token = str(candidate.get('verdict_short') or '').strip()
+                        verdict_token = (candidate.get('verdict_short') or '')
                         if verdict_token and verdict_token not in {'--', '-'}:
                             final_row = dict(candidate)
                             break
@@ -652,26 +634,24 @@ def build_run_detail_context(
                     'detail_available': True,
                 }
         execution_skipped = bool(execution_skipped_from_summary and (not has_materialized_tests))
-        execution_skipped_reason = ''
-        if isinstance(summary, dict):
-            execution_skipped_reason = preserve_error_text(
-                str(summary.get('execution_skipped_reason') or summary.get('error') or ''),
-                max_chars=1600,
-                max_lines=24,
-            )
+        execution_skipped_reason = preserve_error_text(
+            (summary.get('execution_skipped_reason') or summary.get('error') or ''),
+            max_chars=1600,
+            max_lines=24,
+        )
         if not execution_skipped:
             case_cells = domjudge_case_cells_by_run.get(run_id) or {}
             for test_name, case_cell in case_cells.items():
                 if selected_test_name_hint and test_name != selected_test_name_hint:
                     continue
                 all_tests.add(test_name)
-                current_cell = tests_map.get(test_name) if isinstance(tests_map.get(test_name), dict) else None
-                current_short = str(current_cell.get('short') or '').strip().upper() if isinstance(current_cell, dict) else ''
+                current_cell = tests_map.get(test_name)
+                current_short = (current_cell.get('short') or '').upper() if current_cell is not None else ''
                 current_has_verdict = bool(current_short and current_short not in {'--', '..'})
                 if current_has_verdict:
                     continue
-                verdict = str(case_cell.get('verdict') or '').strip().upper()
-                short = str(case_cell.get('short') or '..').strip().upper() or '..'
+                verdict = (case_cell.get('verdict') or '').upper()
+                short = (case_cell.get('short') or '..').upper() or '..'
                 try:
                     time_ms = max(0, int(case_cell.get('time_ms') or 0))
                 except Exception:
@@ -680,7 +660,7 @@ def build_run_detail_context(
                     memory_kb = max(0, int(case_cell.get('memory_kb') or 0))
                 except Exception:
                     memory_kb = 0
-                metrics = str(case_cell.get('metrics') or '-').strip() or '-'
+                metrics = (case_cell.get('metrics') or '-') or '-'
                 detail_payload = None
                 detail_available = False
                 if bool(case_cell.get('reported')):
@@ -699,8 +679,8 @@ def build_run_detail_context(
                         'pass_label': '-',
                         'verdict_short': short if short else '--',
                         'kind': _run_cell_kind(verdict, expected_behavior),
-                        'time_display': _run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms),
-                        'memory_display': _run_memory_mb_text(memory_kb),
+                        'time_display': run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms),
+                        'memory_display': run_memory_mb_text(memory_kb),
                         'feedback_display': '-',
                         'output_rel': output_rel,
                         'checker_log_rel': checker_log_rel,
@@ -710,7 +690,7 @@ def build_run_detail_context(
                         'verdict': verdict or '-',
                         'verdict_short': short if short else '--',
                         'time_display': f'{time_ms}ms',
-                        'memory_display': _run_memory_mb_text(memory_kb),
+                        'memory_display': run_memory_mb_text(memory_kb),
                         'feedback_display': '-',
                         'pass_rows': [pass_row],
                         'final_row': dict(pass_row),
@@ -734,21 +714,19 @@ def build_run_detail_context(
                     if memory_kb > max_memory_kb:
                         max_memory_kb = memory_kb
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
-        max_memory_display = _run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
-        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'verification_source': verification_source, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'status_upper': status.upper(), 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': str(summary.get('compile_log') or '') if isinstance(summary, dict) else '', 'compile_diagnostics': summary.get('compile_diagnostics') if isinstance(summary, dict) else [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')) if isinstance(summary, dict) else False, 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0) if isinstance(summary, dict) else 0, 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0) if isinstance(summary, dict) else 0, 'error': str(summary.get('error') or '') if isinstance(summary, dict) else '', 'error_display': _run_error_display(str(summary.get('error') or '')) if isinstance(summary, dict) else '', 'tests_total': int(summary.get('tests_total') or len(tests_map)) if isinstance(summary, dict) else len(tests_map), 'tests_truncated': bool(summary.get('tests_truncated')) if isinstance(summary, dict) else False, 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': str(match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
+        max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
+        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'verification_source': verification_source, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'status_upper': status.upper(), 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')), 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0), 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0), 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
         hidden_stage_label = _generate_stage_label(source_for_display, verification_source)
         if hidden_stage_label:
             for test_name, cell in tests_map.items():
-                if not isinstance(cell, dict):
-                    continue
                 _upsert_row_stage_note(
                     row_stage_notes,
                     test_name=test_name,
                     label=hidden_stage_label,
-                    short=str(cell.get('short') or cell.get('text') or '--'),
-                    kind=str(cell.get('kind') or 'neutral'),
+                    short=(cell.get('short') or cell.get('text') or '--'),
+                    kind=(cell.get('kind') or 'neutral'),
                     run_status=status,
-                    detail=str(((cell.get('detail') or {}) if isinstance(cell.get('detail'), dict) else {}).get('feedback_display') or ''),
+                    detail=((cell.get('detail') or {}).get('feedback_display') or ''),
                     source_label=source_for_display,
                 )
             continue
@@ -757,12 +735,8 @@ def build_run_detail_context(
         columns.append(column_payload)
     ordered_tests = sorted(all_tests, key=_run_test_sort_key)
     status_summary = _verification_status_summary(columns)
-    if isinstance(verification_details, dict) and verification_details:
-        overall_status = str(
-            verification_details.get('status')
-            or (verification_record.get('status') if isinstance(verification_record, dict) else '')
-            or ''
-        ).strip().lower()
+    if verification_details:
+        overall_status = verification_details.get('status') or (verification_record['status'] if verification_record is not None else '') or ''
         if overall_status in {'running', 'queued', 'pending'}:
             status_summary = {
                 'status': 'running',
@@ -781,12 +755,8 @@ def build_run_detail_context(
                 'matched_count': int(status_summary.get('matched_count') or 0),
                 'total_count': int(status_summary.get('total_count') or len(columns)),
             }
-    if (not columns) and isinstance(verification_details, dict) and verification_details:
-        fallback_status = str(
-            verification_details.get('status')
-            or (verification_record.get('status') if isinstance(verification_record, dict) else '')
-            or ''
-        ).strip().lower()
+    if (not columns) and verification_details:
+        fallback_status = verification_details.get('status') or (verification_record['status'] if verification_record is not None else '') or ''
         fallback_total = 0
         for raw_total in (
             verification_details.get('solution_count'),
@@ -824,16 +794,30 @@ def build_run_detail_context(
                 'matched_count': fallback_total,
                 'total_count': fallback_total,
             }
-    artifact_verification_id = str(
-        verification_details.get('artifact_verification_id')
-        or verification_id_hint
-        or ''
-    ).strip() if isinstance(verification_details, dict) else str(verification_id_hint or '').strip()
+    detail_verification_sources = {
+        (col.get('verification_source') or '')
+        for col in columns
+        if col.get('verification_source')
+    }
+    detail_is_main_correct_run = bool(detail_verification_sources) and detail_verification_sources.issubset({'verification.solve-main'})
+    if not detail_is_main_correct_run:
+        details_source = verification_details.get('source') or ''
+        if details_source == 'verification.solve-main':
+            detail_is_main_correct_run = True
+    if not detail_is_main_correct_run:
+        artifact_verification_status_token = verification_details.get('artifact_verification_status') or ''
+        has_materialized_summary = any(col.get('summary') for col in columns)
+        if (artifact_verification_status_token in {'running', 'queued', 'pending'}) and (not has_materialized_summary):
+            detail_is_main_correct_run = True
+    safe_verification_hint = normalize_run_id_token(verification_id_hint)
+    if (not detail_is_main_correct_run) and safe_verification_hint.startswith('inv-buildsolve-'):
+        detail_is_main_correct_run = True
+    artifact_verification_id = verification_details.get('artifact_verification_id') or verification_id_hint or ''
     if not is_canonical_artifact_id(artifact_verification_id):
         artifact_verification_id = ''
     if not artifact_verification_id:
         for col in columns:
-            candidate_build = str(col.get('artifact_verification_id') or '').strip()
+            candidate_build = (col.get('artifact_verification_id') or '')
             if is_canonical_artifact_id(candidate_build):
                 artifact_verification_id = candidate_build
                 break
@@ -844,11 +828,11 @@ def build_run_detail_context(
         _upsert_row_stage_note(
             row_stage_notes,
             test_name=test_name,
-            label=str(marker.get('stage_label') or 'generated'),
-            short=str(marker.get('short') or '--'),
-            kind=str(marker.get('kind') or 'neutral'),
+            label=(marker.get('stage_label') or 'generated'),
+            short=(marker.get('short') or '--'),
+            kind=(marker.get('kind') or 'neutral'),
             run_status='',
-            detail=str(marker.get('detail') or ''),
+            detail=(marker.get('detail') or ''),
             source_label='',
         )
     all_tests.update(generate_stage_map.keys())
@@ -861,7 +845,7 @@ def build_run_detail_context(
             continue
         if test_index > 0 and test_index not in known_tests_by_index:
             known_tests_by_index[test_index] = test_name
-    tests_meta_stats = _verification_tests_meta_stats(problem_slug, artifact_verification_id)
+    tests_meta_stats = _verification_tests_meta_stats(verification_details)
     try:
         tests_meta_total = max(0, int(tests_meta_stats.get('total') or 0))
     except Exception:
@@ -873,7 +857,7 @@ def build_run_detail_context(
         row_entries: list[tuple[int, str, str, bool]] = []
         if bool(status_summary['has_running']) and display_test_total > 0:
             for idx in range(1, display_test_total + 1):
-                actual_name = str(known_tests_by_index.get(idx) or '').strip()
+                actual_name = (known_tests_by_index.get(idx) or '')
                 row_entries.append((idx, actual_name, actual_name or f'test {idx}', not bool(actual_name)))
         else:
             row_entries = [(idx, test_name, test_name, False) for idx, test_name in enumerate(ordered_tests, start=1)]
@@ -883,7 +867,7 @@ def build_run_detail_context(
             for col in columns:
                 cell = col['tests_map'].get(actual_test_name) if actual_test_name else None
                 if cell is None:
-                    col_status = str(col.get('status') or '').strip().lower()
+                    col_status = (col.get('status') or '')
                     missing_running = col_status == 'running'
                     missing_pending = col_status in {'queued', 'pending'}
                     cells.append(
@@ -900,10 +884,10 @@ def build_run_detail_context(
                     has_detail = True
                 cells.append(
                     {
-                        'text': str(cell.get('text') or '--'),
-                        'short': str(cell.get('short') or cell.get('text') or '--'),
-                        'metrics': str(cell.get('metrics') or '-'),
-                        'kind': str(cell.get('kind') or 'neutral'),
+                        'text': (cell.get('text') or '--'),
+                        'short': (cell.get('short') or cell.get('text') or '--'),
+                        'metrics': (cell.get('metrics') or '-'),
+                        'kind': (cell.get('kind') or 'neutral'),
                         'detail': None,
                     }
                 )
@@ -934,8 +918,8 @@ def build_run_detail_context(
             target_tests = [name for name in ordered_tests if name == selected_test_name]
 
         def _verification_artifact_preview(verification_id: str, rel_path: str) -> dict[str, object]:
-            safe_verification_id = str(verification_id or '').strip()
-            safe_rel_path = str(rel_path or '').strip().lstrip('/')
+            safe_verification_id = (verification_id or '')
+            safe_rel_path = (rel_path or '').lstrip('/')
             if not problem_slug or not username or (not safe_rel_path) or (not is_canonical_artifact_id(safe_verification_id)):
                 return _run_detail_preview_unavailable('missing')
             try:
@@ -947,7 +931,7 @@ def build_run_detail_context(
 
         def _run_artifact_preview(run_id: str, rel_path: str) -> dict[str, object]:
             safe_run_id = normalize_run_id_token(run_id)
-            safe_rel_path = str(rel_path or '').strip().lstrip('/')
+            safe_rel_path = (rel_path or '').lstrip('/')
             if not problem_slug or not username or (not safe_run_id) or (not safe_rel_path):
                 return _run_detail_preview_unavailable('missing')
             if safe_rel_path.startswith("cache://"):
@@ -974,7 +958,7 @@ def build_run_detail_context(
         def _workspace_answer_preview(test_name: str) -> dict[str, object]:
             if not problem_slug or not username:
                 return _run_detail_preview_unavailable('missing')
-            test_stem = Path(str(test_name or '').strip()).stem
+            test_stem = Path((test_name or '')).stem
             if not test_stem:
                 return _run_detail_preview_unavailable('missing')
             answer_source_rel = f'tests/answers/{test_stem}.ans'
@@ -998,7 +982,7 @@ def build_run_detail_context(
             answer_preview = _run_detail_preview_unavailable('missing')
             source_answer_preview = _workspace_answer_preview(test_name)
             for col in columns:
-                artifact_verification_id = str(col.get('artifact_verification_id') or '').strip()
+                artifact_verification_id = (col.get('artifact_verification_id') or '')
                 if not is_canonical_artifact_id(artifact_verification_id):
                     continue
                 if not bool(input_preview.get('available')):
@@ -1015,61 +999,58 @@ def build_run_detail_context(
                 if cell is None:
                     cells.append({'text': '--', 'short': '--', 'metrics': '-', 'kind': 'neutral', 'detail': None})
                     continue
-                detail_raw = cell.get('detail') if isinstance(cell.get('detail'), dict) else None
-                detail_payload = dict(detail_raw) if isinstance(detail_raw, dict) else None
+                detail_raw = cell.get('detail')
+                detail_payload = dict(detail_raw) if detail_raw is not None else None
                 if detail_payload is not None:
                     pass_rows_payload: list[dict[str, object]] = []
-                    pass_rows_raw = detail_payload.get('pass_rows')
-                    if isinstance(pass_rows_raw, list):
-                        for pass_item in pass_rows_raw:
-                            if not isinstance(pass_item, dict):
-                                continue
-                            row_payload = dict(pass_item)
-                            output_rel = str(row_payload.get('output_rel') or '').strip()
-                            output_preview = _run_detail_preview_unavailable('missing')
-                            if output_rel:
-                                output_preview = _run_artifact_preview(str(col.get('id') or ''), output_rel)
-                            row_payload['output_preview'] = output_preview
-                            checker_log_rel = str(row_payload.get('checker_log_rel') or '').strip()
-                            feedback_rel = str(row_payload.get('feedback_rel') or '').strip()
-                            feedback_preview = _run_detail_preview_unavailable('missing')
-                            if feedback_rel:
-                                feedback_preview = _run_artifact_preview(str(col.get('id') or ''), feedback_rel)
-                            elif checker_log_rel:
-                                feedback_preview = _run_artifact_preview(str(col.get('id') or ''), checker_log_rel)
-                            row_payload['feedback_preview'] = feedback_preview
-                            if str(row_payload.get('feedback_display') or '-').strip() == '-':
-                                if bool(feedback_preview.get('available')):
-                                    preview_text = str(feedback_preview.get('text') or '').replace('\r\n', '\n').replace('\r', '\n')
-                                    first_line = ''
-                                    for raw_line in preview_text.splitlines():
-                                        line = str(raw_line or '').strip()
-                                        if line:
-                                            first_line = line
-                                            break
-                                    if first_line:
-                                        if len(first_line) > 160:
-                                            first_line = first_line[:157].rstrip() + '...'
-                                        row_payload['feedback_display'] = first_line
-                            pass_rows_payload.append(row_payload)
+                    pass_rows_raw = detail_payload.get('pass_rows') or []
+                    for pass_item in pass_rows_raw:
+                        row_payload = dict(pass_item)
+                        output_rel = (row_payload.get('output_rel') or '')
+                        output_preview = _run_detail_preview_unavailable('missing')
+                        if output_rel:
+                            output_preview = _run_artifact_preview((col.get('id') or ''), output_rel)
+                        row_payload['output_preview'] = output_preview
+                        checker_log_rel = (row_payload.get('checker_log_rel') or '')
+                        feedback_rel = (row_payload.get('feedback_rel') or '')
+                        feedback_preview = _run_detail_preview_unavailable('missing')
+                        if feedback_rel:
+                            feedback_preview = _run_artifact_preview((col.get('id') or ''), feedback_rel)
+                        elif checker_log_rel:
+                            feedback_preview = _run_artifact_preview((col.get('id') or ''), checker_log_rel)
+                        row_payload['feedback_preview'] = feedback_preview
+                        if (row_payload.get('feedback_display') or '-') == '-':
+                            if bool(feedback_preview.get('available')):
+                                preview_text = (feedback_preview.get('text') or '').replace('\r\n', '\n').replace('\r', '\n')
+                                first_line = ''
+                                for raw_line in preview_text.splitlines():
+                                    line = (raw_line or '')
+                                    if line:
+                                        first_line = line
+                                        break
+                                if first_line:
+                                    if len(first_line) > 160:
+                                        first_line = first_line[:157].rstrip() + '...'
+                                    row_payload['feedback_display'] = first_line
+                        pass_rows_payload.append(row_payload)
                     detail_payload['pass_rows'] = pass_rows_payload
                     final_row_raw = detail_payload.get('final_row')
-                    final_row_payload = dict(final_row_raw) if isinstance(final_row_raw, dict) else {}
+                    final_row_payload = dict(final_row_raw) if final_row_raw is not None else {}
                     if pass_rows_payload:
                         final_row_payload = dict(pass_rows_payload[-1])
                         for candidate in reversed(pass_rows_payload):
-                            verdict_token = str(candidate.get('verdict_short') or '').strip()
+                            verdict_token = (candidate.get('verdict_short') or '')
                             if verdict_token and verdict_token not in {'--', '-'}:
                                 final_row_payload = dict(candidate)
                                 break
-                    feedback_token = str(final_row_payload.get('feedback_display') or '-').strip()
-                    feedback_preview_obj = final_row_payload.get('feedback_preview')
+                    feedback_token = (final_row_payload.get('feedback_display') or '-')
+                    feedback_preview = final_row_payload.get('feedback_preview')
                     if (not feedback_token) or feedback_token == '-' or feedback_token.startswith('feedback_dir/'):
-                        if isinstance(feedback_preview_obj, dict) and bool(feedback_preview_obj.get('available')):
-                            preview_text = str(feedback_preview_obj.get('text') or '').replace('\r\n', '\n').replace('\r', '\n')
+                        if feedback_preview is not None and bool(feedback_preview.get('available')):
+                            preview_text = (feedback_preview.get('text') or '').replace('\r\n', '\n').replace('\r', '\n')
                             first_line = ''
                             for raw_line in preview_text.splitlines():
-                                line = str(raw_line or '').strip()
+                                line = (raw_line or '')
                                 if line:
                                     first_line = line
                                     break
@@ -1080,12 +1061,20 @@ def build_run_detail_context(
                     if not feedback_token or feedback_token.startswith('feedback_dir/'):
                         feedback_token = '-'
                     final_row_payload['feedback_display'] = feedback_token
-                    output_preview_obj = final_row_payload.get('output_preview')
-                    interactive_mode = str(col.get('mode') or '').strip().lower() in {'interactive', 'multi-pass'}
-                    if interactive_mode and isinstance(output_preview_obj, dict):
-                        final_row_payload['interactive_transcript'] = _interactive_transcript_preview(output_preview_obj)
+                    output_preview = final_row_payload.get('output_preview')
+                    interactive_mode = (col.get('mode') or '') in {'interactive', 'multi-pass'}
+                    if interactive_mode and output_preview is not None:
+                        final_row_payload['interactive_transcript'] = _interactive_transcript_preview(output_preview)
                     detail_payload['final_row'] = final_row_payload
-                cells.append({'text': str(cell['text']), 'short': str(cell.get('short') or cell.get('text') or '--'), 'metrics': str(cell.get('metrics') or '-'), 'kind': str(cell['kind']), 'detail': detail_payload})
+                cells.append({'text': (cell['text']), 'short': (cell.get('short') or cell.get('text') or '--'), 'metrics': (cell.get('metrics') or '-'), 'kind': (cell['kind']), 'detail': detail_payload})
+            if detail_is_main_correct_run:
+                for cell in cells:
+                    detail_payload = cell.get('detail') or {}
+                    final_row_payload = detail_payload.get('final_row') or {}
+                    output_preview = final_row_payload.get('output_preview')
+                    if output_preview is not None and bool(output_preview.get('available')):
+                        answer_preview = output_preview
+                        break
             stage_notes = list(row_stage_notes.get(test_name) or [])
             test_cell = _test_name_cell(
                 actual_test_name=test_name,
@@ -1108,34 +1097,8 @@ def build_run_detail_context(
                     'has_detail': any((cell.get('detail') is not None for cell in cells)),
                 }
             )
-    detail_verification_sources = {
-        str(col.get('verification_source') or '').strip().lower()
-        for col in columns
-        if isinstance(col, dict) and str(col.get('verification_source') or '').strip()
-    }
-    detail_is_main_correct_run = bool(detail_verification_sources) and detail_verification_sources.issubset({'verification.solve-main'})
-    if (not detail_is_main_correct_run) and isinstance(verification_details, dict):
-        details_source = str(verification_details.get('source') or '').strip().lower()
-        if details_source == 'verification.solve-main':
-            detail_is_main_correct_run = True
-    if (not detail_is_main_correct_run) and isinstance(verification_details, dict):
-        artifact_verification_status_token = str(
-            verification_details.get('artifact_verification_status')
-            or ''
-        ).strip().lower()
-        has_materialized_summary = any(
-            isinstance(col, dict) and isinstance(col.get('summary'), dict)
-            for col in columns
-        )
-        if (artifact_verification_status_token in {'running', 'queued', 'pending'}) and (not has_materialized_summary):
-            detail_is_main_correct_run = True
-    safe_verification_hint = normalize_run_id_token(verification_id_hint)
-    if (not detail_is_main_correct_run) and safe_verification_hint.startswith('inv-buildsolve-'):
-        detail_is_main_correct_run = True
     rejudge_context = _run_rejudge_context_for_entries(columns, workspace)
-    rerun_paths = rejudge_context.get('paths')
-    if not isinstance(rerun_paths, list):
-        rerun_paths = []
+    rerun_paths = rejudge_context.get('paths') or []
     progress_total = 0
     for col in columns:
         if bool(col.get('execution_skipped')):
@@ -1146,11 +1109,10 @@ def build_run_detail_context(
             continue
     progress_reported = len(ordered_tests)
     progress_placeholder_total = min(progress_total, 24) if bool(status_summary['has_running']) and progress_total > 0 else 0
-    last_updated_candidates: list[str] = [str(col.get('finished_at') or '').strip() for col in columns]
-    last_updated_candidates.extend([str(col.get('created_at') or '').strip() for col in columns])
-    if isinstance(verification_details, dict):
-        last_updated_candidates.append(str(verification_details.get('updated_at') or '').strip())
-        last_updated_candidates.append(str(verification_details.get('finished_at') or '').strip())
+    last_updated_candidates: list[str] = [(col.get('finished_at') or '') for col in columns]
+    last_updated_candidates.extend([(col.get('created_at') or '') for col in columns])
+    last_updated_candidates.append((verification_details.get('updated_at') or ''))
+    last_updated_candidates.append((verification_details.get('finished_at') or ''))
     if verification_created_at:
         last_updated_candidates.append(verification_created_at)
     last_updated = _latest_iso_timestamp(last_updated_candidates)
@@ -1159,25 +1121,28 @@ def build_run_detail_context(
     if (not verification_details) and verification_id:
         detail_snapshot = load_verification_detail_snapshot(problem_id, verification_id)
         detail_details = detail_snapshot.get('details')
-        verification_details = dict(detail_details) if isinstance(detail_details, dict) else {}
+        if detail_details is not None:
+            verification_details = dict(detail_details)
         if not verification_created_at:
-            verification_created_at = str(detail_snapshot.get('created_at') or '').strip()
+            verification_created_at = (detail_snapshot.get('created_at') or '')
     has_verification_context = bool(
         verification_id
-        or (isinstance(verification_details, dict) and verification_details)
+        or verification_details
         or verification_record is not None
     )
     if selected_ids or has_verification_context:
         lifecycle_cards = [
             _build_verification_lifecycle_card(
-                problem_slug=str(ctx['problem']['slug']),
+                problem_slug=(ctx['problem']['slug']),
                 problem_id=int(ctx['problem']['id']),
                 workspace_id=int(ctx['workspace']['id']),
                 actor_user_id=int(ctx['user']['id']),
                 verification_id=verification_id,
                 verification_details=verification_details,
                 columns=columns,
-                detail_status=str(status_summary['status']),
+                row_test_stage_states=row_stage_notes,
+                test_row_total=display_test_total,
+                detail_status=(status_summary['status']),
                 detail_running=bool(status_summary['has_running']),
                 progress_reported=progress_reported,
                 progress_total=progress_total,
@@ -1187,6 +1152,7 @@ def build_run_detail_context(
         ]
     verification_logs: dict[str, object] = {
         'available': False,
+        'title': 'Verification',
         'verification_id': '',
         'status': '',
         'error': '',
@@ -1197,69 +1163,89 @@ def build_run_detail_context(
         'diagnostics_truncated': False,
         'diagnostics_limit': _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
     }
-    try:
-        artifact_verification_id = str(
-            verification_details.get('artifact_verification_id')
-            or verification_id_hint
-            or ''
-        ).strip() if isinstance(verification_details, dict) else str(verification_id_hint or '').strip()
-        source_verification_id = artifact_verification_id if is_canonical_artifact_id(artifact_verification_id) else ''
-        if source_verification_id and problem_slug and username:
-            source_verification_row = config.db.fetch_one(
-                "SELECT status,summary_json FROM verifications WHERE id=? AND problem_id=?",
-                [source_verification_id, problem_id],
+    artifact_verification_id = verification_details.get('artifact_verification_id') or verification_id_hint or ''
+    source_verification_id = artifact_verification_id if is_canonical_artifact_id(artifact_verification_id) else ''
+    if source_verification_id and problem_slug and username:
+        source_verification_row = config.db.fetch_one(
+            "SELECT status,summary_json FROM verifications WHERE id=? AND problem_id=?",
+            [source_verification_id, problem_id],
+        )
+        source_verification_summary = parse_summary_json(source_verification_row['summary_json'], f'verification/{source_verification_id}') if source_verification_row is not None else {}
+        artifact_verification_status = source_verification_row['status'] if source_verification_row is not None else (verification_details.get('artifact_verification_status') or '')
+        artifact_verification_error = verification_details.get('artifact_verification_error') or ''
+        if not artifact_verification_error:
+            artifact_verification_error = source_verification_summary.get('error') or ''
+        if not artifact_verification_error:
+            artifact_verification_error = verification_details.get('error') or ''
+        diagnostics_title = 'Verification'
+        log_rows: list[dict[str, str]] = []
+        for name in ('failure.log', 'compile.log', 'generate.log', 'validate.log', 'solve.log'):
+            rel = f'logs/{name}'
+            try:
+                safe_artifact_path(problem_slug, source_verification_id, rel)
+            except HTTPException:
+                continue
+            log_rows.append(
+                {
+                    'name': name,
+                    'href': f'/problems/{problem_slug}/{username}/artifacts/{source_verification_id}/{rel}',
+                }
             )
-            source_verification_summary = parse_summary_json(source_verification_row['summary_json'], f'verification/{source_verification_id}') if source_verification_row is not None else {}
-            artifact_verification_status = str(source_verification_row['status'] or '').strip().lower() if source_verification_row is not None else str(
-                verification_details.get('artifact_verification_status')
-                or ''
-            ).strip().lower()
-            artifact_verification_error = str(
-                verification_details.get('artifact_verification_error')
-                or ''
-            ).strip()
-            if not artifact_verification_error and isinstance(source_verification_summary, dict):
-                artifact_verification_error = str(source_verification_summary.get('error') or '').strip()
-            if not artifact_verification_error:
-                artifact_verification_error = str(verification_details.get('error') or '').strip()
-            log_rows: list[dict[str, str]] = []
-            for name in ('failure.log', 'compile.log', 'generate.log', 'validate.log', 'solve.log'):
-                rel = f'logs/{name}'
-                try:
-                    safe_artifact_path(problem_slug, source_verification_id, rel)
-                except HTTPException:
+        diagnostics_rows: list[dict[str, object]] = []
+        diagnostics_total = 0
+        diagnostics_truncated = False
+        raw_diags = source_verification_summary.get('diagnostics') or []
+        if raw_diags:
+            diagnostics_total = len(raw_diags)
+            capped_diags = raw_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
+            diagnostics_truncated = diagnostics_total > len(capped_diags)
+            normalized_diags = _normalize_diagnostics(capped_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+            diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
+        if not diagnostics_rows:
+            for run_id in verification_run_ids(verification_details):
+                run_row = verification_run(verification_details, run_id)
+                if not run_row:
                     continue
-                log_rows.append(
-                    {
-                        'name': name,
-                        'href': f'/problems/{problem_slug}/{username}/artifacts/{source_verification_id}/{rel}',
-                    }
+                run_summary = run_row['summary']
+                raw_diags = run_summary.get('compile_diagnostics') or []
+                if not raw_diags:
+                    continue
+                diagnostics_total = len(raw_diags)
+                capped_diags = raw_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
+                diagnostics_truncated = diagnostics_total > len(capped_diags)
+                normalized_diags = _normalize_diagnostics(capped_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+                diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
+                diagnostics_title = (
+                    (run_row.get('source_label') or '')
+                    or (_run_source_from_summary(run_summary) or '')
+                    or 'Verification'
                 )
-            diagnostics_rows: list[dict[str, object]] = []
-            diagnostics_total = 0
-            diagnostics_truncated = False
-            if isinstance(source_verification_summary, dict):
-                raw_diags = source_verification_summary.get('diagnostics')
-                if isinstance(raw_diags, list):
-                    diagnostics_total = len(raw_diags)
-                    capped_diags = raw_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
-                    diagnostics_truncated = diagnostics_total > len(capped_diags)
-                    normalized_diags = _normalize_diagnostics(capped_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
-                    diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
-            verification_logs = {
-                'available': True,
-                'verification_id': source_verification_id,
-                'status': artifact_verification_status,
-                'error': artifact_verification_error,
-                'error_display': _run_error_display(artifact_verification_error),
-                'log_rows': log_rows,
-                'diagnostics': diagnostics_rows,
-                'diagnostics_total': diagnostics_total,
-                'diagnostics_truncated': diagnostics_truncated,
-                'diagnostics_limit': _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
-            }
-    except Exception:
-        pass
+                break
+        if diagnostics_rows and (
+            (not artifact_verification_error)
+            or ('/opt/domjudge/judgehost/judgings/' in artifact_verification_error)
+        ):
+            first_diag = diagnostics_rows[0]
+            diag_location = (first_diag.get('location_display') or '')
+            diag_message = (first_diag.get('message') or '')
+            if diag_location and diag_message:
+                artifact_verification_error = f'{diag_location}: {diag_message}'
+            elif diag_message:
+                artifact_verification_error = diag_message
+        artifact_verification_error = preserve_error_text(artifact_verification_error)
+        verification_logs = {
+            'available': True,
+            'title': diagnostics_title,
+            'verification_id': source_verification_id,
+            'status': artifact_verification_status,
+            'error': artifact_verification_error,
+            'error_display': run_error_display(artifact_verification_error),
+            'log_rows': log_rows,
+            'diagnostics': diagnostics_rows,
+            'diagnostics_total': diagnostics_total,
+            'diagnostics_truncated': diagnostics_truncated,
+            'diagnostics_limit': _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
+        }
 
     return {
         'verification_id': verification_id,
@@ -1267,13 +1253,13 @@ def build_run_detail_context(
         'detail_rows': detail_rows,
         'selected_run_ids': selected_ids,
         'rerun_solution_paths': rerun_paths,
-        'rerun_solution_query': str(rejudge_context.get('query') or ''),
-        'rerun_unavailable_reason': str(rejudge_context.get('unavailable_reason') or ''),
+        'rerun_solution_query': (rejudge_context.get('query') or ''),
+        'rerun_unavailable_reason': (rejudge_context.get('unavailable_reason') or ''),
         'matched_count': int(status_summary['matched_count']),
         'match_total': int(status_summary['total_count']),
         'all_matched': bool(columns) and all((bool(col.get('matched')) for col in columns)),
-        'detail_status': str(status_summary['status']),
-        'detail_status_upper': str(status_summary['status_upper']),
+        'detail_status': (status_summary['status']),
+        'detail_status_upper': (status_summary['status_upper']),
         'detail_is_main_correct_run': bool(detail_is_main_correct_run),
         'detail_running': bool(status_summary['has_running']),
         'detail_last_updated': last_updated,
@@ -1283,3 +1269,4 @@ def build_run_detail_context(
         'detail_lifecycle_cards': lifecycle_cards,
         'detail_verification_logs': verification_logs,
     }
+

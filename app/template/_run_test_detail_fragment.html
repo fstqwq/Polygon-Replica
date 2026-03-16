@@ -1,13 +1,13 @@
-<div class="verification-test-preview-grid">
-  <div class="verification-preview-card">
-    <div class="verification-preview-head">
+<div class="test-grid">
+  <div class="preview-card">
+    <div class="preview-head">
       <strong>Input {{ row.test_name }}</strong>
       {% if row.input_preview.available %}
       <a href="{{ row.input_preview.download_href }}">download</a>
       {% endif %}
     </div>
     {% if row.input_preview.available %}
-    <pre class="verification-preview-content{{ ' verification-empty-text' if row.input_preview.text == '(empty)' else '' }}">{{ row.input_preview.text }}</pre>
+    <pre class="preview-content{{ ' empty-text' if row.input_preview.text == '(empty)' else '' }}">{{ row.input_preview.text }}</pre>
     {% if row.input_preview.truncated %}
     <p class="muted">Showing first {{ row.input_preview.limit }} bytes.</p>
     {% endif %}
@@ -15,15 +15,15 @@
     <p class="muted">{{ row.input_preview.message }}</p>
     {% endif %}
   </div>
-  <div class="verification-preview-card">
-    <div class="verification-preview-head">
+  <div class="preview-card">
+    <div class="preview-head">
       <strong>Answer</strong>
       {% if row.answer_preview.available %}
       <a href="{{ row.answer_preview.download_href }}">download</a>
       {% endif %}
     </div>
     {% if row.answer_preview.available %}
-    <pre class="verification-preview-content{{ ' verification-empty-text' if row.answer_preview.text == '(empty)' else '' }}">{{ row.answer_preview.text }}</pre>
+    <pre class="preview-content{{ ' empty-text' if row.answer_preview.text == '(empty)' else '' }}">{{ row.answer_preview.text }}</pre>
     {% if row.answer_preview.truncated %}
     <p class="muted">Showing first {{ row.answer_preview.limit }} bytes.</p>
     {% endif %}
@@ -32,24 +32,24 @@
     {% endif %}
   </div>
 </div>
-<div class="verification-solution-list">
+<div class="sol-list">
   {% for cell in row.cells %}
   {% set col = detail_columns[loop.index0] %}
   {% set final_row = cell.detail.final_row if cell.detail and cell.detail.final_row else None %}
   {% if final_row %}
   {% set row_kind = final_row.kind if final_row.kind is defined else cell.kind %}
   {% set verdict_class = 'run-verdict-ok' if row_kind == 'ok' else 'run-verdict-unexpected' if row_kind == 'fail' else 'run-verdict-expected' if row_kind == 'expected-nonac' else 'muted' %}
-  <section class="verification-solution-card" data-run-id="{{ col.id }}">
-    <div class="verification-solution-head">
-      <strong class="verification-solution-title">{{ col.title }}</strong>
-      <span class="verification-solution-verdict {{ verdict_class }}">{{ final_row.verdict_short or '-' }}</span>
+  <section class="sol-card" data-run-id="{{ col.id }}">
+    <div class="sol-head">
+      <strong class="sol-title">{{ col.title }}</strong>
+      <span class="sol-verdict {{ verdict_class }}">{{ final_row.verdict_short or '-' }}</span>
     </div>
     {% set feedback_text = final_row.feedback_display or '-' %}
-    <table class="verification-solution-metrics-table">
+    <table class="sol-metrics">
       <colgroup>
-        <col class="verification-metrics-col-time" />
-        <col class="verification-metrics-col-memory" />
-        <col class="verification-metrics-col-feedback" />
+        <col class="time-col" />
+        <col class="mem-col" />
+        <col class="fb-col" />
       </colgroup>
       <thead>
         <tr>
@@ -62,23 +62,23 @@
         <tr>
           <td>{{ final_row.time_display or '-' }}</td>
           <td>{{ final_row.memory_display or '-' }}</td>
-          <td class="verification-feedback-cell {{ 'verification-empty-text' if feedback_text == '(empty)' else '' }}" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ feedback_text }}</td>
+          <td class="fb-cell {{ 'empty-text' if feedback_text == '(empty)' else '' }}">{{ feedback_text }}</td>
         </tr>
       </tbody>
     </table>
-    <div class="verification-solution-output">
+    <div class="sol-output">
       {% if final_row.interactive_transcript and final_row.interactive_transcript.available %}
-      <div class="verification-transcript-preview">
-        <div class="verification-transcript-head">
+      <div class="transcript">
+        <div class="transcript-head">
           <strong>Transcript (first {{ final_row.interactive_transcript.shown }} lines)</strong>
           {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_href %}
           <a href="{{ final_row.output_preview.download_href }}">download</a>
           {% endif %}
         </div>
-        <div class="verification-transcript-list">
+        <div class="transcript-list">
           {% for item in final_row.interactive_transcript.rows %}
-          <div class="verification-transcript-row verification-transcript-row-{{ item.side }}">
-            <span class="verification-transcript-bubble">{{ item.text }}</span>
+          <div class="transcript-row transcript-{{ item.side }}">
+            <span class="transcript-bubble">{{ item.text }}</span>
           </div>
           {% endfor %}
         </div>
@@ -87,27 +87,27 @@
         {% endif %}
       </div>
       {% else %}
-      <div class="verification-solution-output-head">
+      <div class="sol-output-head">
         <strong>Output</strong>
         {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.download_href %}
         <a href="{{ final_row.output_preview.download_href }}">download</a>
         {% endif %}
       </div>
       {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.text != '(empty)' %}
-      <pre class="verification-preview-content verification-output-preview"><code>{{ final_row.output_preview.text }}</code></pre>
+      <pre class="preview-content output-preview"><code>{{ final_row.output_preview.text }}</code></pre>
       {% if final_row.output_preview.truncated %}
       <div class="muted">Showing first {{ final_row.output_preview.limit }} bytes.</div>
       {% endif %}
       {% else %}
-      <p class="muted">-</p>
+      <p class="muted empty-text">(output file missing)</p>
       {% endif %}
       {% endif %}
     </div>
   </section>
   {% else %}
-  <section class="verification-solution-card" data-run-id="{{ col.id }}">
-    <div class="verification-solution-head">
-      <strong class="verification-solution-title">{{ col.title }}</strong>
+  <section class="sol-card" data-run-id="{{ col.id }}">
+    <div class="sol-head">
+      <strong class="sol-title">{{ col.title }}</strong>
       <span class="muted">-</span>
     </div>
     <p class="muted">No detail.</p>
@@ -115,3 +115,4 @@
   {% endif %}
   {% endfor %}
 </div>
+

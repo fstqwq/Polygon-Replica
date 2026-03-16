@@ -50,8 +50,7 @@ def _safe_read_json(path: Path) -> dict:
 
 
 def _statement_section_text(workspace: Path, language: str, section_name: str, fallback: str = "") -> str:
-    rel = STATEMENT_SECTIONS_DIR / language / section_name
-    return _safe_read_text(workspace / rel, fallback)
+    return _safe_read_text(workspace / (STATEMENT_SECTIONS_DIR / language / section_name), fallback)
 
 
 def _safe_workspace_regular_file(workspace: Path, rel: Path) -> Path | None:
@@ -80,14 +79,12 @@ def _collect_sample_tests(workspace: Path, rendered_lang_root: Path) -> list[dic
     for index, entry in enumerate(entries, start=1):
         if not bool(entry.get("sample")):
             continue
-        kind = str(entry.get("kind") or "").strip().lower()
+        kind = entry["kind"]
         if kind not in {"manual", "gen"}:
-            raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind or '(empty)'}")
-        test_id = str(entry.get("id") or "").strip()
-        if not test_id:
-            continue
-        sample_input_text = str(entry.get("sample_input") or "")
-        sample_output_text = str(entry.get("sample_output") or "")
+            raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind}")
+        test_id = entry["id"]
+        sample_input_text = entry["sample_input"]
+        sample_output_text = entry["sample_output"]
         try:
             input_rel = Path(payload_rel_path_for_test(test_id, kind))
         except Exception:
@@ -126,14 +123,22 @@ def _problem_context_for_language(
     sample_tests: list[dict[str, str]] | None = None,
 ) -> dict[str, object]:
     cfg = _safe_read_json(workspace / "config" / "problem.json")
-    input_file = str(cfg.get("input_file") or "stdin").strip() or "stdin"
-    output_file = str(cfg.get("output_file") or "stdout").strip() or "stdout"
+    input_file_obj = cfg.get("input_file", "stdin")
+    input_file = input_file_obj.strip() if isinstance(input_file_obj, str) else "stdin"
+    if not input_file:
+        input_file = "stdin"
+    output_file_obj = cfg.get("output_file", "stdout")
+    output_file = output_file_obj.strip() if isinstance(output_file_obj, str) else "stdout"
+    if not output_file:
+        output_file = "stdout"
+    time_limit_ms_obj = cfg.get("time_limit_ms", 2000)
     try:
-        time_limit_ms = int(cfg.get("time_limit_ms") or 2000)
+        time_limit_ms = int(time_limit_ms_obj)
     except Exception:
         time_limit_ms = 2000
+    memory_limit_mb_obj = cfg.get("memory_limit_mb", 1024)
     try:
-        memory_limit_mb = int(cfg.get("memory_limit_mb") or 1024)
+        memory_limit_mb = int(memory_limit_mb_obj)
     except Exception:
         memory_limit_mb = 1024
     title_from_section = _statement_section_text(workspace, language, "name.tex", fallback="").strip()

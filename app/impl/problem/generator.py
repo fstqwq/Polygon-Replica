@@ -1,26 +1,18 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import quote_plus
 
 from fastapi import Form, HTTPException, Request
 
-from app.impl.auth.public import redirect_response, template_response
+from app.impl.auth.shared import redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _normalize_component_create_path
-from app.impl.workspace.public import (
-    audit,
-    generator_sources_from_build_cfg,
-    generator_status_context,
-    normalize_optional_component_source_path_safe,
-    read_build_config,
-    require_write_access,
-    template_for_kind,
-    workspace_rel_file_exists,
-    write_build_config,
-    page_ctx,
-)
+from app.impl.workspace.context_operation import audit, generator_sources_from_build_cfg, normalize_optional_component_source_path_safe, read_build_config, template_for_kind, workspace_rel_file_exists, write_build_config
+from app.impl.workspace.context_component_status import generator_status_context
+from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_job import page_ctx
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
 _C = config.constants
@@ -30,10 +22,9 @@ def generators_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     generator_status = generator_status_context(workspace)
-    source_rows_raw = generator_status.get('configured_sources')
     source_rows: list[dict[str, object]] = []
-    if isinstance(source_rows_raw, list):
-        for row in source_rows_raw:
+    if isinstance(generator_status.get('configured_sources'), list):
+        for row in generator_status['configured_sources']:
             if not isinstance(row, dict):
                 continue
             path = normalize_optional_component_source_path_safe(row.get('path'), 'generators', 'generator source')
@@ -43,10 +34,10 @@ def generators_page(request: Request, problem: str, user: str):
                 continue
             source_rows.append({'path': path, 'configured': bool(row.get('configured'))})
     requested_source = normalize_optional_component_source_path_safe(request.query_params.get('path'), 'generators', 'generator source')
-    repo_source = str(generator_status.get('repo_source') or 'generators/generator.cpp')
+    repo_source = generator_status['repo_source'] if isinstance(generator_status.get('repo_source'), str) and generator_status['repo_source'] else 'generators/generator.cpp'
     selected_source = requested_source or repo_source or 'generators/generator.cpp'
     selected_exists = workspace_rel_file_exists(workspace, selected_source)
-    if selected_source and selected_exists and all((str(row.get('path') or '') != selected_source for row in source_rows)):
+    if selected_source and selected_exists and all((row.get('path') != selected_source for row in source_rows)):
         source_rows.insert(0, {'path': selected_source, 'configured': False})
     repo_content = ''
     repo_content_truncated = False
@@ -130,7 +121,7 @@ def generator_save_source(problem: str, user: str, path: str=Form('generators/ge
                 else:
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
-        audit(ctx['user']['id'], ctx['problem']['id'], 'generators.save_source', {'path': target, 'bytes': len(str(content or '').encode('utf-8'))})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'generators.save_source', {'path': target, 'bytes': len(content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

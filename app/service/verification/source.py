@@ -143,8 +143,9 @@ def select_checker_source(
     cpp_extensions: tuple[str, ...],
     snapshot_resolved: Path | None = None,
 ) -> Path | None:
+    checker_standard = build_cfg.get("checker_standard") or ""
     standard_source = resolve_standard_checker_source(
-        str(build_cfg.get("checker_standard") or ""),
+        checker_standard,
         standard_checker_root=standard_checker_root,
         standard_checker_name_re=standard_checker_name_re,
     )

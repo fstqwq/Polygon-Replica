@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import resource
 import shutil
-import signal
 import subprocess
 from pathlib import Path
 from time import monotonic
@@ -136,9 +135,9 @@ class TexSandboxBackend(SandboxBackend):
             env_map = {}
         if spec.env:
             for k, v in spec.env.items():
-                key = str(k or "").strip()
+                key = str(k).strip()
                 if key:
-                    env_map[key] = str(v or "")
+                    env_map[key] = str(v)
         home = Path(os.path.expanduser("~"))
         candidates: list[Path] = [home / "texmf"]
         try:
@@ -148,7 +147,7 @@ class TexSandboxBackend(SandboxBackend):
         except OSError:
             pass
         for key in ("TEXMFHOME", "TEXMFCONFIG", "TEXMFVAR", "TEXMFCACHE"):
-            raw = str(env_map.get(key) or "").strip()
+            raw = raw.strip() if isinstance(raw := env_map.get(key), str) else ""
             if not raw:
                 continue
             for token in raw.split(os.pathsep):
@@ -285,10 +284,6 @@ class TexSandboxBackend(SandboxBackend):
                 stderr=self._decode_output(exc.stderr, output_kb=spec.output_kb),
                 details={"root_switched": True, "root_switch_tool": self._root_switch_tool},
             )
-
-    def popen_command(self, spec: ExecSpec) -> list[str]:
-        command, _ = self._prepared_command(spec)
-        return command
 
     @staticmethod
     def _decode_output(raw: bytes | str | None, *, output_kb: int | None) -> str:

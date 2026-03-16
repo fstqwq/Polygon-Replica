@@ -83,9 +83,8 @@ def load_problem_runtime_config(
     path = Path(snapshot) / "config" / "problem.json"
     if path.exists():
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                cfg.update(payload)
+            payload = json.loads(path.read_text(encoding="utf-8")) or {}
+            cfg.update(dict(payload))
         except Exception:
             pass
     cfg["time_limit_ms"] = normalize_time_limit_ms(

@@ -20,20 +20,18 @@ def tests_spec_workspace_path(workspace: Path) -> Path:
 
 
 def tests_spec_payload_rel_path(test_id: str, kind: str) -> str:
-    safe_id = normalize_test_id(test_id)
-    safe_kind = normalize_test_kind(kind)
-    return payload_rel_path_for_test(safe_id, safe_kind)
+    return payload_rel_path_for_test(normalize_test_id(test_id), normalize_test_kind(kind))
 
 
 def tests_spec_payload_file_path(workspace: Path, test_id: str, kind: str) -> Path:
     return safe_workspace_path(workspace, tests_spec_payload_rel_path(test_id, kind))
 
 
-def tests_spec_read_payload(workspace: Path, entry: dict) -> str:
-    test_id = str(entry.get("id") or "").strip()
+def tests_spec_read_payload(workspace: Path, entry: dict[str, str]) -> str:
+    test_id = entry.get("id") or ""
     if not test_id:
         return ""
-    kind = str(entry.get("kind") or "").strip().lower()
+    kind = entry.get("kind") or ""
     try:
         payload_path = tests_spec_payload_file_path(workspace, test_id, kind)
     except (HTTPException, ValueError):
@@ -50,7 +48,7 @@ def tests_spec_write_payload(workspace: Path, test_id: str, kind: str, content: 
     safe_kind = normalize_test_kind(kind)
     payload_path = tests_spec_payload_file_path(workspace, test_id, safe_kind)
     payload_path.parent.mkdir(parents=True, exist_ok=True)
-    payload_path.write_text(str(content), encoding="utf-8")
+    payload_path.write_text(content, encoding="utf-8")
     stale_kind = "gen" if safe_kind == "manual" else "manual"
     stale_payload_path = tests_spec_payload_file_path(workspace, test_id, stale_kind)
     stale_payload_path.unlink(missing_ok=True)
@@ -65,30 +63,28 @@ def tests_spec_remove_payload(workspace: Path, test_id: str) -> None:
         payload_path.unlink(missing_ok=True)
 
 
-def tests_spec_bool_flag(raw: object) -> bool:
-    if isinstance(raw, bool):
-        return raw
-    text = str(raw or "").strip().lower()
-    return text in {"1", "true", "yes", "on"}
+def tests_spec_bool_flag(raw: bool | str | None) -> bool:
+    if raw is None:
+        return False
+    if raw is True:
+        return True
+    if raw is False:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def tests_spec_form_text(raw: object) -> str:
+def tests_spec_form_text(raw: str | None) -> str:
     if raw is None:
         return ""
-    if raw.__class__.__module__.startswith("fastapi.params") and hasattr(raw, "default"):
-        raw = getattr(raw, "default", "")
-        if raw is None:
-            return ""
-    return str(raw)
+    return raw
 
 
 def tests_spec_resolve_index(raw_index: str, total: int) -> int:
     count = max(0, int(total))
     if count <= 0:
         raise ValueError("no tests available")
-    token = str(raw_index or "").strip()
     try:
-        index = int(token)
+        index = int(raw_index)
     except Exception as exc:
         raise ValueError("invalid test index") from exc
     if index < 1 or index > count:
@@ -96,7 +92,7 @@ def tests_spec_resolve_index(raw_index: str, total: int) -> int:
     return index
 
 
-def read_tests_spec(workspace: Path) -> tuple[list[dict], Path]:
+def read_tests_spec(workspace: Path) -> tuple[list[dict[str, str]], Path]:
     path = tests_spec_workspace_path(workspace)
     try:
         entries = load_tests_spec(path)
@@ -105,10 +101,6 @@ def read_tests_spec(workspace: Path) -> tuple[list[dict], Path]:
     return (entries, path)
 
 
-def write_tests_spec(path: Path, entries: list[dict]) -> None:
+def write_tests_spec(path: Path, entries: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dumps_tests_spec(entries), encoding="utf-8")
-
-
-
-

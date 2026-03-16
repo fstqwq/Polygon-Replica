@@ -51,9 +51,10 @@ def domjudge_solve_main_progress(
     run_ids: list[str] = []
     with state_lock:
         for row in tasks_by_id.values():
-            if str(row.get("artifact_verification_id") or "").strip() != safe_verification_id:
+            artifact_verification_id = row["artifact_verification_id"].strip()
+            if artifact_verification_id != safe_verification_id:
                 continue
-            run_id = str(row.get("run_id") or "").strip()
+            run_id = row["run_id"].strip()
             if (not run_id) or (not run_id.startswith("r-solve-main-")):
                 continue
             if run_id not in run_ids:

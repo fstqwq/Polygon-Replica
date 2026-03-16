@@ -77,7 +77,7 @@ class TestDBSqlTrace(TestCase):
                 int(problem_row["id"] or 0),
                 "",
                 "main",
-                "materialization",
+                "build",
                 "ok",
                 json.dumps({"seed": True}),
                 str(Path("/tmp/verification")),

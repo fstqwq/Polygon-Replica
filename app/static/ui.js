@@ -695,7 +695,7 @@
   function initRunDetailsToggle() {
     var table = document.querySelector(".verification-detail-table");
     if (!table) return;
-    var toggles = table.querySelectorAll(".verification-test-toggle[data-test-name], .verification-cell-toggle[data-test-name]");
+    var toggles = table.querySelectorAll('[data-popup-open="run-test-detail-popup"][data-test-name]');
     if (!toggles.length) return;
     var popupTitle = document.getElementById("run-test-detail-popup-title");
     var popupContent = document.getElementById("run-test-detail-popup-content");
@@ -742,12 +742,12 @@
       }
       var wrapper = document.createElement("div");
       wrapper.innerHTML = fullHtml;
-      var solutionList = wrapper.querySelector(".verification-solution-list");
+      var solutionList = wrapper.querySelector(".sol-list");
       if (!solutionList) {
         popupContent.innerHTML = fullHtml;
         return;
       }
-      var cards = Array.prototype.slice.call(solutionList.querySelectorAll(".verification-solution-card[data-run-id]"));
+      var cards = Array.prototype.slice.call(solutionList.querySelectorAll(".sol-card[data-run-id]"));
       var matchedCard = null;
       cards.forEach(function (card) {
         if (String(card.getAttribute("data-run-id") || "").trim() === safeRunId) {
@@ -2342,3 +2342,4 @@
     initSettingsJudgehostToggles();
   });
 })();
+

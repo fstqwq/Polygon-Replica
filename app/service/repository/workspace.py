@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import errno
 import fcntl
@@ -19,7 +19,7 @@ from app.service.platform.testlib_source import maintained_testlib_header
 from app.setting import Settings
 from app.service.statement.render import seed_statement_sources
 from app.service.platform.process import run_cmd
-from app.service.verification import verification_run_ids
+from app.service.verification.store import verification_run_ids
 
 PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
 USERNAME_RULE_MESSAGE: str = "invalid username"
@@ -141,7 +141,7 @@ class WorkspaceService:
         cached = self._cache_get(self._user_cache, username)
         if cached is not None:
             try:
-                cached_id = int(cached.get("id") or 0)
+                cached_id = int(cached["id"])
             except Exception:
                 cached_id = 0
             if cached_id > 0:
@@ -188,7 +188,7 @@ class WorkspaceService:
         cached = self._cache_get(self._problem_cache, slug)
         if cached is not None:
             try:
-                cached_id = int(cached.get("id") or 0)
+                cached_id = int(cached["id"])
             except Exception:
                 cached_id = 0
             if cached_id > 0:
@@ -337,8 +337,8 @@ class WorkspaceService:
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
         status = self.read_workspace_status(workspace)
-        branch = str(status.get("branch") or "main")
-        head = str(status.get("head_commit") or "")
+        branch = branch if isinstance(branch := status.get("branch"), str) and branch else "main"
+        head = head if isinstance(head := status.get("head_commit"), str) else ""
         dirty = 1 if bool(status.get("dirty")) else 0
         self.db.execute(
             """
@@ -556,12 +556,11 @@ class WorkspaceService:
         p = self._problem_row(safe_problem)
         problem_id = int(p["id"])
         repo_name = str(p["repo_name"] or "").strip()
-        repo_name_path = Path(repo_name)
         expected_repo_name = f"{safe_problem}.git"
         if (
             (not repo_name)
             or repo_name in {".", ".."}
-            or repo_name_path.is_absolute()
+            or Path(repo_name).is_absolute()
             or ("\\" in repo_name)
             or (repo_name != expected_repo_name)
         ):

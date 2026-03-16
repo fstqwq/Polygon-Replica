@@ -52,7 +52,10 @@ def normalize_test_id(raw: object) -> str:
 def next_test_id(entries: list[dict]) -> str:
     max_value = 0
     for row in entries:
-        raw = str(row.get("id") or "").strip()
+        raw_id = row.get("id")
+        if not isinstance(raw_id, str):
+            continue
+        raw = raw_id.strip()
         if not raw.isdigit():
             continue
         try:
@@ -155,7 +158,10 @@ def normalize_sample_output(raw: object) -> str:
 def normalize_tests_spec_entry(raw: object, *, index: int = 0) -> dict:
     if not isinstance(raw, dict):
         raise ValueError(f"tests[{index}] must be an object")
-    kind = str(raw.get("kind") or "").strip().lower()
+    raw_kind = raw.get("kind")
+    if not isinstance(raw_kind, str):
+        raise ValueError(f"tests[{index}] kind must be manual or gen")
+    kind = raw_kind.strip().lower()
     if kind not in {"manual", "gen"}:
         raise ValueError(f"tests[{index}] kind must be manual or gen")
     sample = _normalize_sample_flag(raw.get("sample", False))
@@ -164,7 +170,9 @@ def normalize_tests_spec_entry(raw: object, *, index: int = 0) -> dict:
     sample_output_validate = _normalize_sample_output_validate_flag(
         raw.get("sample_output_validate", True)
     )
-    raw_id = str(raw.get("id") or "").strip()
+    if not isinstance(raw_id_obj := raw.get("id"), str):
+        raise ValueError(f"tests[{index}] id is required")
+    raw_id = raw_id_obj.strip()
     if not raw_id:
         raise ValueError(f"tests[{index}] id is required")
     return {
@@ -186,7 +194,7 @@ def normalize_tests_spec_entries(raw: object) -> list[dict]:
     seen_ids: set[str] = set()
     for idx, item in enumerate(raw, start=1):
         row = normalize_tests_spec_entry(item, index=idx)
-        row_id = str(row.get("id") or "")
+        row_id = row["id"]
         if row_id in seen_ids:
             raise ValueError(f"tests[{idx}] duplicated id: {row_id}")
         seen_ids.add(row_id)
@@ -250,10 +258,10 @@ def dumps_tests_spec(entries: list[dict]) -> str:
         dumped_row: dict[str, object] = {
             "id": normalized_row["id"],
             "kind": normalized_row["kind"],
-            "sample": bool(normalized_row.get("sample")),
+            "sample": normalized_row["sample"],
         }
-        normalized_sample_input = str(normalized_row.get("sample_input") or "")
-        normalized_sample_output = str(normalized_row.get("sample_output") or "")
+        normalized_sample_input = normalized_row["sample_input"]
+        normalized_sample_output = normalized_row["sample_output"]
         normalized_sample_validate = _normalize_sample_output_validate_flag(
             normalized_row.get("sample_output_validate", True)
         )
@@ -276,11 +284,11 @@ def summarize_tests_spec(entries: list[dict]) -> dict:
     gen = 0
     sample = 0
     for row in entries:
-        if str(row.get("kind") or "") == "manual":
+        if row["kind"] == "manual":
             manual += 1
-        elif str(row.get("kind") or "") == "gen":
+        elif row["kind"] == "gen":
             gen += 1
-        if bool(row.get("sample")):
+        if row["sample"]:
             sample += 1
     return {
         "total": len(entries),

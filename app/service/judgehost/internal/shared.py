@@ -1,75 +1,8 @@
 from __future__ import annotations
 
-import base64  
-import json  
-import logging
 import re
-import secrets  
-import shlex  
-import sqlite3  
-import threading  
-import time  
-import uuid  
-from contextlib import contextmanager  
-from datetime import datetime, timezone  
-from pathlib import Path  
-
-from app.db import DB, now_iso  
-from app.runtime_value import RuntimeValues  
-from app.service.platform.hashing import (
-    canonical_json,
-    compile_command_digest,
-    domjudge_executable_hash,
-    sha256_hex_bytes,
-    sha256_hex_json,
-    sha256_hex_text,
-    sha256_hex_of_hashes,
-)
-from app.service.platform.judge_fs_index import JudgeFsIndexService  
-from app.service.run.runtime import RUN_TEST_NAME_RE  
-from app.setting import Settings  
-
-from ..artifact import domjudge_read_artifact_blob, resolve_artifact_blob  
-from ..domdb import (
-    domjudge_active_job_for_host,
-    domjudge_cases_for_job,
-    domjudge_shared_pending_job,
-    is_domjudge_sql,
-)  
-from ..domjudge.cache import (
-    domjudge_cache_blob_ref,
-    domjudge_case_cache_ref,
-    domjudge_hash_of_hashes,
-    domjudge_json_hash,
-    domjudge_manifest_digest,
-    domjudge_parse_cache_blob_ref,
-    domjudge_safe_hash,
-    domjudge_set_hash_from_blobs,
-    domjudge_sha256_bytes,
-    domjudge_solve_output_cache_ref,
-    domjudge_source_hash,
-)  
-from ..domjudge.client import (
-    domjudge_parse_script_id,
-    domjudge_script_dir_has_files,
-    domjudge_script_hash_field,
-    domjudge_script_ids,
-    domjudge_script_provider_job_id,
-)  
-from ..progress import domjudge_solve_main_progress, domjudge_case_progress_for_runs  
-from ..runtime import (
-    domjudge_bool,
-    domjudge_feedback_line_from_bytes,
-    domjudge_feedback_line_from_text,
-    domjudge_parse_float,
-    domjudge_parse_int,
-    domjudge_parse_meta_text,
-    domjudge_rewrite_untrusted_runresult,
-    domjudge_run_time_limit_sec,
-    now_iso_after,
-    parse_iso_utc,
-)  
-
+from pathlib import Path
+from typing import cast
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -78,20 +11,14 @@ _DOMJUDGE_SUBMIT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DOMJUDGE_CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DOMJUDGE_PROTOCOL_TRACE_RE = re.compile(r"\[\s*[0-9]+(?:\.[0-9]+)?s/[0-9]+\]")
 _DOMJUDGE_PROTOCOL_TRACE_BYTES_RE = re.compile(rb"\[\s*[0-9]+(?:\.[0-9]+)?s/[0-9]+\]")
-_DOMJUDGE_CACHE_BLOB_REF_RE = re.compile(
-    r"^cache://(?P<kind>[a-z-]+)/(?P<key>[0-9a-f]{64})/(?P<sig>[0-9a-f]{64})/(?P<name>[A-Za-z0-9][A-Za-z0-9._-]{0,127})$"
-)
 _DOMJUDGE_CACHE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
-logger = logging.getLogger(__name__)
 
 
 def domjudge_text(raw: object, *, default: str = "") -> str:
-    if raw is None:
+    text = cast(str | None, raw)
+    if text is None:
         return default
-    if not isinstance(raw, str):
-        raise RuntimeError("DOMjudge text field must be str")
-    text = raw.strip()
+    text = text.strip()
     if text:
         return text
     return default
@@ -181,5 +108,3 @@ def task_status_counts(
         if token in out:
             out[token] = int(out[token]) + 1
     return out
-
-

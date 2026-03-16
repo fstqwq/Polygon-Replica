@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-from .shared import (
-    Path,
-    RuntimeValues,
-    _HOSTNAME_RE,
-    _RUN_ID_RE,
-    contextmanager,
-    is_domjudge_sql,
-    now_iso,
-    secrets,
-    task_status_counts,
-    time,
-)
+import secrets
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
+from app.db import now_iso
+from app.runtime_value import RuntimeValues
+from app.service.judgehost.domdb import is_domjudge_sql
+from app.service.judgehost.internal.shared import _HOSTNAME_RE, _RUN_ID_RE, task_status_counts
 
 
 class JudgehostCoreMixin:
@@ -94,27 +91,24 @@ class JudgehostCoreMixin:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_status ON judgehost_domjudge_cases(status,job_id,ordinal ASC)")
             conn.commit()
 
-    @staticmethod
-    def _is_domjudge_sql(sql: str) -> bool:
-        return is_domjudge_sql(sql)
 
     def _db_fetch_one(self, sql: str, values: list[object] | tuple[object, ...] | None = None):
         params = [] if values is None else list(values)
-        if self._is_domjudge_sql(sql):
+        if is_domjudge_sql(sql):
             with self._domdb_lock:
                 return self._domdb.execute(sql, params).fetchone()
         return self.db.fetch_one(sql, params)
 
     def _db_fetch_all(self, sql: str, values: list[object] | tuple[object, ...] | None = None):
         params = [] if values is None else list(values)
-        if self._is_domjudge_sql(sql):
+        if is_domjudge_sql(sql):
             with self._domdb_lock:
                 return self._domdb.execute(sql, params).fetchall()
         return self.db.fetch_all(sql, params)
 
     def _db_execute(self, sql: str, values: list[object] | tuple[object, ...] | None = None):
         params = [] if values is None else list(values)
-        if self._is_domjudge_sql(sql):
+        if is_domjudge_sql(sql):
             with self._domdb_lock:
                 cur = self._domdb.execute(sql, params)
                 self._domdb.commit()
@@ -204,7 +198,7 @@ class JudgehostCoreMixin:
 
     def _task_by_id(self, task_id: str) -> dict[str, object] | None:
         with self._state_lock:
-            row = self._tasks_by_id.get(str(task_id or "").strip())
+            row = self._tasks_by_id.get(task_id.strip())
             if row is None:
                 return None
             return dict(row)
@@ -213,22 +207,22 @@ class JudgehostCoreMixin:
         row = self._task_by_id(task_id)
         if row is None:
             return {}
-        payload = row.get("payload")
-        return dict(payload) if isinstance(payload, dict) else {}
+        return dict(row["payload"])
 
     def _record_host_judging(self, hostname: str, *, label: str = "-", updated_at: str | None = None) -> None:
         safe_host = self._normalize_hostname(hostname)
-        if not safe_host:
-            return
         ts = time.time()
-        now_text = str(updated_at or now_iso()).strip() or now_iso()
+        now_text = now_iso() if updated_at is None else updated_at
         with self._state_lock:
-            events = self._host_judged_case_events.setdefault(safe_host, [])
+            events = self._host_judged_case_events.get(safe_host)
+            if events is None:
+                events = []
+                self._host_judged_case_events[safe_host] = events
             events.append(ts)
             cutoff = ts - (5 * 3600.0)
             while events and events[0] < cutoff:
                 events.pop(0)
-            self._host_last_judging[safe_host] = {"label": str(label or "-"), "updated_at": now_text}
+            self._host_last_judging[safe_host] = {"label": label, "updated_at": now_text}
 
     def _host_state_row(self, hostname: str) -> dict[str, object]:
         safe_host = self._normalize_hostname(hostname)
@@ -267,4 +261,3 @@ class JudgehostCoreMixin:
         if size > max_bytes:
             raise RuntimeError(f"{label} exceeds payload limit: {path.name} ({size} bytes)")
         return path.read_bytes()
-

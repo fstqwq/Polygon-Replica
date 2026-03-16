@@ -15,8 +15,9 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.formparsers import MultiPartParser
 
+from app.service.judgehost.runtime import domjudge_rewrite_untrusted_runresult
 from app.service.platform.hashing import domjudge_executable_hash
-from app.service.verification import save_verification_run_summary, save_verification_summary, verification_run
+from app.service.verification.store import save_verification_run_summary, save_verification_summary, verification_run
 from .common import SmokeBase, config
 
 
@@ -213,7 +214,7 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(list(payload.get("runs_order") or []), [run_a, run_b])
         self.assertEqual(list(payload.get("source_paths") or []), ["solutions/a.cpp", "solutions/b.cpp"])
 
-    def _seed_materialization_verification(self, verification_id: str) -> None:
+    def _seed_build_verification(self, verification_id: str) -> None:
         ws = Path(self._workspace_path())
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "ac.cpp").write_text(
@@ -244,7 +245,7 @@ class TestJudgehostService(SmokeBase):
                 workspace_id,
                 "",
                 "main",
-                "materialization",
+                "build",
                 "ok",
                 "{}",
                 str(artifact_root),
@@ -299,7 +300,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -383,7 +384,7 @@ class TestJudgehostService(SmokeBase):
         self._reset_task_queue_state(service)
         verification_id = f"b-jh-lock-enqueue-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-lock-enqueue-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         original_ensure = service._ensure_verification_run
         observed = {"called": 0}
@@ -420,7 +421,7 @@ class TestJudgehostService(SmokeBase):
         self._reset_task_queue_state(service)
         verification_id = f"b-jh-lock-fetch-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-lock-fetch-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         service.enqueue_task(
             problem=self.problem,
@@ -457,7 +458,7 @@ class TestJudgehostService(SmokeBase):
         self._reset_task_queue_state(service)
         verification_id = f"b-jh-lock-report-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-lock-report-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -518,7 +519,7 @@ class TestJudgehostService(SmokeBase):
         self._reset_task_queue_state(service)
         verification_id = f"ver-jh-nondict-summary-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-nondict-summary-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -556,12 +557,12 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(str(result.get("status") or ""), "ok")
 
-    def test_wait_for_task_result_tolerates_non_dict_cached_summary(self) -> None:
+    def test_wait_for_task_result_rejects_non_dict_cached_summary(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
         verification_id = f"ver-jh-wait-summary-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-wait-summary-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -588,9 +589,8 @@ class TestJudgehostService(SmokeBase):
             row["error_text"] = "boom"
             row["summary"] = "corrupted"
 
-        result = service.wait_for_task_result(task_id, timeout_sec=1.0)
-        self.assertEqual(str(result.get("task_status") or ""), service.STATUS_FAILED)
-        self.assertEqual(result.get("summary"), {})
+        with self.assertRaises(ValueError):
+            service.wait_for_task_result(task_id, timeout_sec=1.0)
 
     def test_load_run_summary_falls_back_to_in_memory_task_without_recursing(self) -> None:
         service = config.judgehost_task_service
@@ -598,7 +598,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-recursion-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-recursion-{uuid.uuid4().hex[:8]}"
         verification_id = f"ver-jh-recursion-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -662,7 +662,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-dom-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -786,7 +786,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-dom-notrunc-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-notrunc-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "tests" / "002.in").write_text("second\n", encoding="utf-8")
         (artifact_root / "ans" / "002.ans").write_text("second\n", encoding="utf-8")
@@ -839,7 +839,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-dom-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-dom-cache-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-dom-cache-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         service.enqueue_task(
             problem=self.problem,
@@ -946,7 +946,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-dom-mp-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-mp-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "logs" / "run_config.json").write_text(
             json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 2}, indent=2) + "\n",
@@ -1026,9 +1026,8 @@ class TestJudgehostService(SmokeBase):
         self.assertFalse((run_root / "001.out").exists())
 
     def test_domjudge_rewrites_untrusted_non_tl_result_when_cpu_exceeds_time_limit(self) -> None:
-        service = config.judgehost_task_service
         self.assertEqual(
-            service._domjudge_rewrite_untrusted_runresult(
+            domjudge_rewrite_untrusted_runresult(
                 "wrong-answer",
                 cpu_sec=6.5,
                 run_cfg_obj={"time_limit": 6.0},
@@ -1036,7 +1035,7 @@ class TestJudgehostService(SmokeBase):
             "timelimit",
         )
         self.assertEqual(
-            service._domjudge_rewrite_untrusted_runresult(
+            domjudge_rewrite_untrusted_runresult(
                 "run-error",
                 cpu_sec=6.1,
                 run_cfg_obj={"time_limit_ms": 6000},
@@ -1044,7 +1043,7 @@ class TestJudgehostService(SmokeBase):
             "timelimit",
         )
         self.assertEqual(
-            service._domjudge_rewrite_untrusted_runresult(
+            domjudge_rewrite_untrusted_runresult(
                 "wrong-answer",
                 cpu_sec=5.9,
                 run_cfg_obj={"time_limit": 6.0},
@@ -1052,7 +1051,7 @@ class TestJudgehostService(SmokeBase):
             "wrong-answer",
         )
         self.assertEqual(
-            service._domjudge_rewrite_untrusted_runresult(
+            domjudge_rewrite_untrusted_runresult(
                 "correct",
                 cpu_sec=15.0,
                 run_cfg_obj={"time_limit": 6.0},
@@ -1060,7 +1059,7 @@ class TestJudgehostService(SmokeBase):
             "correct",
         )
         self.assertEqual(
-            service._domjudge_rewrite_untrusted_runresult(
+            domjudge_rewrite_untrusted_runresult(
                 "run-error",
                 cpu_sec=0.6,
                 run_cfg_obj={"time_limit": 0.5},
@@ -1068,7 +1067,7 @@ class TestJudgehostService(SmokeBase):
             "timelimit",
         )
         self.assertEqual(
-            service._domjudge_rewrite_untrusted_runresult(
+            domjudge_rewrite_untrusted_runresult(
                 "run-error",
                 cpu_sec=0.4,
                 run_cfg_obj={"time_limit": 0.5},
@@ -1093,7 +1092,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "logs" / "run_config.json").write_text(
             json.dumps({"checker_mode": "testlib", "checker_args": [], "time_limit_ms": 6000}, indent=2) + "\n",
@@ -1176,7 +1175,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-dom-reconnect-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-reconnect-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         task_id = service.enqueue_task(
             problem=self.problem,
@@ -1231,7 +1230,7 @@ class TestJudgehostService(SmokeBase):
 
         build_bad = f"b-jh-dom-bad-{uuid.uuid4().hex[:8]}"
         run_bad = f"r-jh-dom-bad-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(build_bad)
+        self._seed_build_verification(build_bad)
         service._include_build_payload = False
         bad_task = service.enqueue_task(
             problem=self.problem,
@@ -1251,7 +1250,7 @@ class TestJudgehostService(SmokeBase):
 
         build_good = f"b-jh-dom-good-{uuid.uuid4().hex[:8]}"
         run_good = f"r-jh-dom-good-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(build_good)
+        self._seed_build_verification(build_good)
         service._include_build_payload = True
         good_task = service.enqueue_task(
             problem=self.problem,
@@ -1300,7 +1299,7 @@ class TestJudgehostService(SmokeBase):
 
         build_a = f"b-jh-cache-a-{uuid.uuid4().hex[:8]}"
         run_a = f"r-jh-cache-a-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(build_a)
+        self._seed_build_verification(build_a)
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -1334,7 +1333,7 @@ class TestJudgehostService(SmokeBase):
 
         build_b = f"b-jh-cache-b-{uuid.uuid4().hex[:8]}"
         run_b = f"r-jh-cache-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(build_b)
+        self._seed_build_verification(build_b)
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -1561,7 +1560,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "logs" / "run_config.json").write_text(
             json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 7}, indent=2) + "\n",
@@ -1600,7 +1599,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "logs" / "run_config.json").write_text(
             json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 7}, indent=2) + "\n",
@@ -1655,7 +1654,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-interactor-source-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-interactor-source-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         interactor_bin = artifact_root / "bin" / "interactor"
         interactor_bin.parent.mkdir(parents=True, exist_ok=True)
@@ -2038,7 +2037,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-generate-scripts-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-scripts-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         validator_bin = artifact_root / "bin" / "validator"
         validator_bin.parent.mkdir(parents=True, exist_ok=True)
@@ -2095,7 +2094,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-generate-interactive-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-interactive-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         validator_bin = artifact_root / "bin" / "validator"
         validator_bin.parent.mkdir(parents=True, exist_ok=True)
@@ -2261,7 +2260,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         task_id = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -2340,7 +2339,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         interactor_bin = artifact_root / "bin" / "interactor"
         interactor_bin.parent.mkdir(parents=True, exist_ok=True)
@@ -2421,7 +2420,7 @@ class TestJudgehostService(SmokeBase):
 
         host = "judgehost-compile-only-extra-cache"
         verification_id = f"b-jh-compile-only-extra-cache-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         extra_testlib = base64.b64encode(b"// testlib\n").decode("ascii")
         prepared = {"extra_sources_b64": {"testlib.h": extra_testlib}}
 
@@ -2599,7 +2598,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         extra_testlib = base64.b64encode(b"// testlib\n").decode("ascii")
 
         task_id = service.enqueue_task(
@@ -2649,7 +2648,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-extra-src-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-extra-src-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         extra_testlib = base64.b64encode(b"// testlib helper\n").decode("ascii")
 
         _task_id = service.enqueue_task(
@@ -2722,7 +2721,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compile-only-ok-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-ok-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         shutil.rmtree(artifact_root / "tests", ignore_errors=True)
         shutil.rmtree(artifact_root / "ans", ignore_errors=True)
@@ -2798,7 +2797,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         shutil.rmtree(artifact_root / "tests", ignore_errors=True)
         shutil.rmtree(artifact_root / "ans", ignore_errors=True)
@@ -2875,7 +2874,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compile-only-ce-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-ce-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         shutil.rmtree(artifact_root / "tests", ignore_errors=True)
         shutil.rmtree(artifact_root / "ans", ignore_errors=True)
@@ -2941,7 +2940,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-extra-source-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-extra-source-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         task_id = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -3024,10 +3023,28 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(cleaned.decode("utf-8"), "hello\n")
 
-    def test_domjudge_feedback_line_parser_keeps_first_non_empty_line(self) -> None:
-        service = config.judgehost_task_service
-        self.assertEqual(service._domjudge_feedback_line_from_text("\n\nfailed on pass 2\nignored"), "failed on pass 2")
-        self.assertEqual(service._domjudge_feedback_line_from_bytes(b"\r\nmessage\r\nsecond"), "message")
+    def test_domjudge_feedback_line_parser_prefers_error_line_and_redacts_internal_path(self) -> None:
+        from app.service.judgehost.runtime import (
+            domjudge_feedback_line_from_bytes,
+            domjudge_feedback_line_from_text,
+        )
+
+        self.assertEqual(domjudge_feedback_line_from_text("\n\nfailed on pass 2\nignored"), "failed on pass 2")
+        compile_output = (
+            "\n"
+            "/opt/domjudge/judgehost/judgings/judgedaemon-2-2/endpoint-default/executable/compare/123/"
+            "b0e49bdbe272b5206d97ca5e888a7b00/build/validator.cpp: In function 'void EachTestCase()':\n"
+            "/opt/domjudge/judgehost/judgings/judgedaemon-2-2/endpoint-default/executable/compare/123/"
+            "b0e49bdbe272b5206d97ca5e888a7b00/build/validator.cpp:4:35: error: expected ';' before 'inf'\n"
+        )
+        self.assertEqual(
+            domjudge_feedback_line_from_text(compile_output),
+            "validator.cpp:4:35: error: expected ';' before 'inf'",
+        )
+        self.assertEqual(
+            domjudge_feedback_line_from_bytes(compile_output.encode("utf-8")),
+            "validator.cpp:4:35: error: expected ';' before 'inf'",
+        )
 
     def test_domjudge_add_judging_run_endpoint_accepts_large_multipart_payload(self) -> None:
         from app.main import app
@@ -3048,7 +3065,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-large-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-large-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -3132,7 +3149,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"ver-jh-solve-main-{uuid.uuid4().hex[:8]}"
         solve_run_id = f"r-solve-main-{uuid.uuid4().hex[:8]}"
         target_run_id = f"r-accepted-target-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         save_verification_run_summary(
             config.db,
@@ -3248,7 +3265,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-spool-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-spool-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -3333,7 +3350,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-limits-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-limits-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         run_cfg_path = self._verification_artifact_root(verification_id) / "logs" / "run_config.json"
         if run_cfg_path.exists():
             run_cfg_path.unlink()
@@ -3375,8 +3392,95 @@ class TestJudgehostService(SmokeBase):
             int(getattr(service._constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
         )
         self.assertEqual(
+            int(compare_config.get("script_memory_limit") or 0),
+            int(getattr(service._constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048) * 1024,
+        )
+        self.assertEqual(
             int(compile_config.get("script_filesize_limit") or 0),
             int(getattr(service._constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536),
+        )
+
+    def test_domjudge_compare_config_uses_compile_memory_when_checker_source_compiles_during_compare(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service._enabled
+        old_token = service._api_token
+        old_username = service._api_username
+        old_include_build_payload = service._include_build_payload
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        self.addCleanup(setattr, service, "_api_username", old_username)
+        self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
+        service._enabled = True
+        service._api_token = "test-token"
+        service._api_username = "judgehost"
+        service._include_build_payload = True
+
+        ws = Path(self._workspace_path())
+        (ws / "checkers").mkdir(parents=True, exist_ok=True)
+        (ws / "checkers" / "checker.cpp").write_text(
+            "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
+            encoding="utf-8",
+        )
+
+        compile_mem_mb = max(
+            64,
+            int(getattr(service._constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048),
+        )
+        run_mem_mb = compile_mem_mb + 1024
+
+        verification_id = f"b-jh-compare-compile-mem-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-compare-compile-mem-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        artifact_root = self._verification_artifact_root(verification_id)
+        (artifact_root / "logs" / "run_config.json").write_text(
+            json.dumps(
+                {
+                    "checker_mode": "testlib",
+                    "checker_args": [],
+                    "max_passes": 1,
+                    "memory_limit_mb": run_mem_mb,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id="",
+            verification_run_ids=[],
+            expected_behavior="accepted",
+            verification_source="build.solve",
+        )
+
+        host = "judgehost-compare-compile-memory"
+        service.domjudge_register_host(host)
+        tasks = service.domjudge_fetch_work(host, max_batchsize=1)
+        self.assertEqual(len(tasks), 1)
+
+        run_config = json.loads(str(tasks[0].get("run_config") or "{}"))
+        compare_config = json.loads(str(tasks[0].get("compare_config") or "{}"))
+        compare_files = service.domjudge_get_executable_files(
+            "compare",
+            str(tasks[0].get("compare_script_id") or ""),
+        )
+        compare_names = {str(item.get("filename") or "") for item in compare_files}
+
+        self.assertIn("checker.cpp", compare_names)
+        self.assertEqual(int(run_config.get("memory_limit") or 0), run_mem_mb * 1024)
+        self.assertGreater(int(run_config.get("memory_limit") or 0), compile_mem_mb * 1024)
+        self.assertEqual(
+            int(compare_config.get("script_memory_limit") or 0),
+            max(int(run_config.get("memory_limit") or 0), compile_mem_mb * 1024),
         )
 
     def test_domjudge_build_solve_multi_pass_defaults_pass_limit_when_run_config_missing(self) -> None:
@@ -3408,7 +3512,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-multipass-default-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-multipass-default-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         run_cfg_path = self._verification_artifact_root(verification_id) / "logs" / "run_config.json"
         if run_cfg_path.exists():
             run_cfg_path.unlink()
@@ -3454,7 +3558,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-solve-cache-{uuid.uuid4().hex[:8]}"
         run_id_solve = f"r-jh-solve-cache-{uuid.uuid4().hex[:8]}"
         run_id_exec = f"r-jh-exec-cache-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "tests" / "001.in").write_text("42\n", encoding="utf-8")
         (artifact_root / "ans" / "001.ans").write_text("42\n", encoding="utf-8")
@@ -3571,7 +3675,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-partial-cache-{uuid.uuid4().hex[:8]}"
         run_id_seed = f"r-jh-partial-seed-{uuid.uuid4().hex[:8]}"
         run_id_target = f"r-jh-partial-target-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "tests" / "002.in").write_text("miss\n", encoding="utf-8")
         (artifact_root / "ans" / "002.ans").write_text("miss\n", encoding="utf-8")
@@ -3652,6 +3756,67 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(len(leased), 1)
         self.assertEqual(int(leased[0].get("judgetaskid") or 0), expected_case_id)
 
+    def test_enqueue_task_keeps_distinct_hidden_run_ids_within_one_verification(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service._enabled
+        old_token = service._api_token
+        old_username = service._api_username
+        old_include_build_payload = service._include_build_payload
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        self.addCleanup(setattr, service, "_api_username", old_username)
+        self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
+        service._enabled = True
+        service._api_token = "test-token"
+        service._api_username = "judgehost"
+        service._include_build_payload = True
+
+        verification_id = f"ver-jh-hidden-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+
+        first_run_id = f"r-jh-hidden-{uuid.uuid4().hex[:8]}"
+        second_run_id = f"r-jh-hidden-{uuid.uuid4().hex[:8]}"
+        first_task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=first_run_id,
+            selected_tests=["001.in"],
+            verification_id=verification_id,
+            verification_run_ids=[first_run_id],
+            expected_behavior="accepted",
+            verification_source="verification.generate-input",
+            persist_verification_run=False,
+        )
+        second_task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=second_run_id,
+            selected_tests=["002.in"],
+            verification_id=verification_id,
+            verification_run_ids=[second_run_id],
+            expected_behavior="accepted",
+            verification_source="verification.generate-input",
+            persist_verification_run=False,
+        )
+
+        self.assertNotEqual(first_task_id, second_task_id)
+        first_row = service._task_by_id(first_task_id)
+        second_row = service._task_by_id(second_task_id)
+        self.assertIsNotNone(first_row)
+        self.assertIsNotNone(second_row)
+        self.assertEqual(str(first_row["run_id"]), first_run_id)
+        self.assertEqual(str(second_row["run_id"]), second_run_id)
+
     def test_domjudge_shared_pending_job_ignores_prequeue_owned_job(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service._enabled
@@ -3669,7 +3834,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
             username=self.user,
@@ -3726,7 +3891,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
             username=self.user,
@@ -3795,7 +3960,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-cache-blob-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-cache-blob-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-cache-blob-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-cache-blob")
 
         service.enqueue_task(
@@ -3896,7 +4061,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-manifest-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-manifest-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-manifest-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-manifest")
 
         service.enqueue_task(
@@ -3992,7 +4157,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-blobsha-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-blobsha-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-blobsha-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-blobsha")
 
         service.enqueue_task(
@@ -4079,7 +4244,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-accepted-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-accepted-cache-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-accepted-cache-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-accepted-cache")
 
         service.enqueue_task(
@@ -4170,7 +4335,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-checker-fail-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-checker-fail-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-checker-fail")
 
         service.enqueue_task(
@@ -4240,6 +4405,91 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(str((pass_row or {}).get("runresult") or "").strip().lower(), "checker-fail")
         self.assertIn("comparing failed", str((pass_row or {}).get("feedback") or ""))
 
+    def test_domjudge_run_error_prefers_program_stderr_feedback(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service._enabled
+        old_token = service._api_token
+        old_username = service._api_username
+        old_include_build_payload = service._include_build_payload
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        self.addCleanup(setattr, service, "_api_username", old_username)
+        self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
+        service._enabled = True
+        service._api_token = "test-token"
+        service._api_username = "judgehost"
+        service._include_build_payload = True
+
+        verification_id = f"b-jh-run-error-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-run-error-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        service.domjudge_register_host("judgehost-run-error")
+
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id="inv-run-error",
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        leased = service.domjudge_fetch_work("judgehost-run-error", max_batchsize=8)
+        self.assertEqual(len(leased), 1)
+        case_id = int(leased[0].get("judgetaskid") or 0)
+        self.assertGreater(case_id, 0)
+
+        service.domjudge_update_judging(
+            "judgehost-run-error",
+            case_id,
+            {
+                "compile_success": "1",
+                "output_compile": "",
+                "compile_metadata": "",
+            },
+        )
+        stderr_text = (
+            "terminate called after throwing an instance of 'std::runtime_error'\n"
+            "  what(): boom\n"
+        )
+        meta_text = "cpu-time: 0.001\nwall-time: 0.001\nmemory-bytes: 4096\n"
+        service.domjudge_add_judging_run(
+            "judgehost-run-error",
+            case_id,
+            {
+                "runresult": "run-error",
+                "runtime": "0.001",
+                "output_run": "",
+                "output_diff": base64.b64encode(b"judge fallback message\n").decode("ascii"),
+                "output_error": base64.b64encode(stderr_text.encode("utf-8")).decode("ascii"),
+                "output_system": "",
+                "metadata": base64.b64encode(meta_text.encode("utf-8")).decode("ascii"),
+                "compare_metadata": "",
+            },
+        )
+
+        run_row = self._verification_run_row(run_id)
+        self.assertIsNotNone(run_row)
+        summary = json.loads(str(run_row["summary_json"] or "{}"))
+        tests = summary.get("tests") if isinstance(summary, dict) else []
+        self.assertIsInstance(tests, list)
+        first = tests[0] if tests else {}
+        self.assertEqual(str((first or {}).get("verdict") or ""), "RE")
+        feedback_files = (first or {}).get("feedback_files") if isinstance(first, dict) else []
+        self.assertIsInstance(feedback_files, list)
+        self.assertTrue(feedback_files)
+        self.assertTrue(str(feedback_files[0] or "").endswith("program.err"))
+        passes = (first or {}).get("passes") if isinstance(first, dict) else []
+        pass_row = passes[0] if isinstance(passes, list) and passes else {}
+        self.assertIn("terminate called after throwing", str((pass_row or {}).get("feedback") or ""))
+        self.assertNotIn("judge fallback message", str((pass_row or {}).get("feedback") or ""))
+
     def test_domjudge_compare_exitcode_negative_with_hard_tl_is_tl(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service._enabled
@@ -4257,7 +4507,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-compare-neg-tl")
 
         service.enqueue_task(
@@ -4346,7 +4596,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compare-internal-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-internal-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-compare-internal")
 
         service.enqueue_task(
@@ -4409,7 +4659,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compare-debug-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-debug-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-compare-debug")
 
         service.enqueue_task(
@@ -4476,7 +4726,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compare-payload-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-payload-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-compare-payload")
 
         service.enqueue_task(
@@ -4539,7 +4789,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compare-job-debug-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-job-debug-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "tests" / "002.in").write_text("ok\n", encoding="utf-8")
         (artifact_root / "ans" / "002.ans").write_text("ok\n", encoding="utf-8")
@@ -4614,7 +4864,7 @@ class TestJudgehostService(SmokeBase):
 
         verification_id = f"b-jh-compare-jhlog-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-jhlog-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-compare-jhlog")
 
         service.enqueue_task(
@@ -4683,7 +4933,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-fl-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-fl-cache-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-fl-cache-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
         service.domjudge_register_host("judgehost-fl-cache")
 
         before_count = self._judge_index_entry_count(service.CASE_CACHE_KIND)
@@ -4784,7 +5034,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-recompile-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-recompile-a-{uuid.uuid4().hex[:8]}"
         run_id_b = f"r-jh-recompile-b-{uuid.uuid4().hex[:8]}"
-        self._seed_materialization_verification(verification_id)
+        self._seed_build_verification(verification_id)
 
         service.enqueue_task(
             problem=self.problem,

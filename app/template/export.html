@@ -5,7 +5,7 @@
 
 <section>
   <h2>Generate</h2>
-  <p class="muted">{{ verification_note }}</p>
+  <p class="muted">{{ build_note }}</p>
   <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/create">
     <label>Revision</label>
     <strong class="{{ 'danger' if generate_revision_display == 'missing' else '' }}">{{ generate_revision_display }}</strong>

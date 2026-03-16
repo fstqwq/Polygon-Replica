@@ -21,7 +21,7 @@
     </td>
     <td>
       {{ r.source_display }}
-      {% if r.has_running %}
+      {% if r.has_running and r.completed_count > 0 %}
       <div class="muted">{{ r.matched_completed_count }}/{{ r.completed_count }} completed matched{% if r.completed_count != r.run_count %} ({{ r.run_count }} total){% endif %}</div>
       {% else %}
       <div class="muted">{{ r.matched_count }}/{{ r.run_count }} expected</div>
@@ -45,7 +45,7 @@
         <a href="#" class="linkish danger" data-submit-form="1">Cancel</a>
       </form>
       {% endif %}
-      {% if r.rerun_solution_paths %}
+      {% if r.rerun_solution_paths and not r.has_running %}
       <a class="verification-inline-action linkish" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
       {% endif %}
     </td>

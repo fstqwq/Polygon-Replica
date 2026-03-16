@@ -8,9 +8,7 @@ from pathlib import Path
 
 from app.db import now_iso
 from app.impl.runtime.config import config
-from app.impl.workspace.public import (
-    normalize_contest_slug_required,
-)
+from app.impl.workspace.context_operation import normalize_contest_slug_required
 
 """
 Boundary:
@@ -30,7 +28,7 @@ _PROBLEM_SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def _slugify_contest_id(raw: str) -> str:
-    token = str(raw or "").strip().lower()
+    token = raw.strip().lower()
     if not token:
         return ""
     token = re.sub(r"[^a-z0-9]+", "-", token)
@@ -41,7 +39,7 @@ def _slugify_contest_id(raw: str) -> str:
 
 
 def _import_contest_slug_base_from_package_name(package_name: str) -> str:
-    raw_stem = str(Path(str(package_name or "imported-contest.zip")).stem or "").strip()
+    raw_stem = Path(package_name or "imported-contest.zip").stem.strip()
     normalized_stem = _CONTEST_IMPORT_SUFFIX_RE.sub("", raw_stem).strip()
     if not normalized_stem:
         normalized_stem = raw_stem
@@ -53,7 +51,7 @@ def _import_contest_slug_base_from_package_name(package_name: str) -> str:
 
 
 def _next_available_contest_slug(base: str) -> str:
-    token = str(base or "").strip() or "imported-contest"
+    token = base.strip() or "imported-contest"
     candidate = token
     idx = 2
     while config.db.fetch_one("SELECT id FROM contests WHERE slug=?", [candidate]) is not None:
@@ -66,7 +64,7 @@ def _next_available_contest_slug(base: str) -> str:
 
 
 def _resolve_import_contest_slug(requested_slug: str, package_name: str) -> str:
-    requested = str(requested_slug or "").strip()
+    requested = requested_slug.strip()
     if requested:
         slug = normalize_contest_slug_required(requested)
         exists = config.db.fetch_one("SELECT id FROM contests WHERE slug=?", [slug])
@@ -109,7 +107,7 @@ def _contest_import_draft_root() -> Path:
 
 
 def _safe_contest_import_draft_id(raw: str) -> str:
-    token = str(raw or "").strip().lower()
+    token = raw.strip().lower()
     if not _CONTEST_IMPORT_DRAFT_ID_RE.fullmatch(token):
         raise ValueError("invalid contest import draft id")
     return token
@@ -132,7 +130,7 @@ def _cleanup_stale_contest_import_drafts() -> None:
         for meta in root.glob("*.json"):
             if meta.is_symlink() or (not meta.is_file()):
                 continue
-            stem = str(meta.stem or "").strip().lower()
+            stem = meta.stem.strip().lower()
             if not _CONTEST_IMPORT_DRAFT_ID_RE.fullmatch(stem):
                 continue
             try:
@@ -149,7 +147,7 @@ def _cleanup_stale_contest_import_drafts() -> None:
 
 
 def _slugify_problem_id(raw: str) -> str:
-    token = str(raw or "").strip().lower()
+    token = raw.strip().lower()
     if not token:
         return ""
     token = re.sub(r"[^a-z0-9]+", "-", token)
@@ -167,7 +165,7 @@ def _normalize_problem_slug_segment_required(raw: str) -> str:
 
 
 def _problem_full_slug(owner: str, slug_segment: str) -> str:
-    safe_owner = str(owner or "").strip().lower()
+    safe_owner = owner.strip().lower()
     if not _C.USER_IDENT_RE.fullmatch(safe_owner):
         raise ValueError(_C.USERNAME_RULE_MESSAGE)
     safe_segment = _normalize_problem_slug_segment_required(slug_segment)
@@ -175,7 +173,7 @@ def _problem_full_slug(owner: str, slug_segment: str) -> str:
 
 
 def _next_available_problem_slug(owner: str, base: str, reserved: set[str] | None = None) -> str:
-    token = str(base or "").strip().lower()
+    token = base.strip().lower()
     token = _slugify_problem_id(token)
     if not token:
         token = "imported-problem"
@@ -200,9 +198,18 @@ def _build_contest_import_problem_draft_rows(owner: str, parsed_rows: list[dict[
     reserved: set[str] = set()
     for seq, raw in enumerate(parsed_rows, start=1):
         row = dict(raw) if isinstance(raw, dict) else {}
-        source_slug = _slugify_problem_id(str(row.get("source_slug") or "")) or f"problem-{seq}"
-        package_name = str(row.get("package_name") or "").strip() or f"{source_slug}.zip"
-        index = str(row.get("index") or "").strip().upper() or _contest_idx_label(seq)
+        source_slug_obj = row.get("source_slug")
+        source_slug = _slugify_problem_id(str(source_slug_obj) if source_slug_obj is not None else "")
+        if not source_slug:
+            source_slug = f"problem-{seq}"
+        package_name_obj = row.get("package_name")
+        package_name = str(package_name_obj).strip() if package_name_obj is not None else ""
+        if not package_name:
+            package_name = f"{source_slug}.zip"
+        index_obj = row.get("index")
+        index = str(index_obj).strip().upper() if index_obj is not None else ""
+        if not index:
+            index = _contest_idx_label(seq)
         suggested = _next_available_problem_slug(owner, source_slug, reserved=reserved)
         reserved.add(suggested)
         rows.append(
@@ -231,17 +238,17 @@ def _create_contest_import_draft(
     _cleanup_stale_contest_import_drafts()
     draft_id = uuid.uuid4().hex[:24]
     meta_path, payload_path = _contest_import_draft_paths(draft_id)
-    payload_path.write_bytes(bytes(package_payload or b""))
+    payload_path.write_bytes(package_payload)
     payload_stat = payload_path.stat()
     meta = {
         "draft_id": draft_id,
         "actor_user_id": int(actor_user_id),
-        "actor_username": str(actor_username or "").strip(),
-        "package_name": str(package_name or "").strip(),
+        "actor_username": actor_username.strip(),
+        "package_name": package_name.strip(),
         "package_size": int(payload_stat.st_size),
-        "contest_slug_input": str(contest_slug_input or "").strip(),
-        "contest_title_input": str(contest_title_input or "").strip(),
-        "parsed_title": str(parsed_title or "").strip(),
+        "contest_slug_input": contest_slug_input.strip(),
+        "contest_title_input": contest_title_input.strip(),
+        "parsed_title": parsed_title.strip(),
         "problem_rows": [dict(row) for row in problem_rows],
         "created_at": now_iso(),
     }
@@ -261,9 +268,14 @@ def _load_contest_import_draft(actor_user_id: int, actor_username: str, draft_id
         raise ValueError(f"invalid contest import draft metadata: {exc}") from exc
     if not isinstance(meta_raw, dict):
         raise ValueError("invalid contest import draft metadata")
-    owner_id = int(meta_raw.get("actor_user_id") or 0)
-    owner_name = str(meta_raw.get("actor_username") or "").strip()
-    if owner_id != int(actor_user_id) or owner_name != str(actor_username or "").strip():
+    owner_id_obj = meta_raw.get("actor_user_id")
+    owner_id = int(owner_id_obj) if owner_id_obj is not None else 0
+    owner_name = meta_raw.get("actor_username")
+    if not isinstance(owner_name, str):
+        owner_name = ""
+    else:
+        owner_name = owner_name.strip()
+    if owner_id != int(actor_user_id) or owner_name != actor_username.strip():
         raise ValueError("contest import draft owner mismatch")
     return dict(meta_raw), payload_path
 
@@ -285,9 +297,12 @@ def _build_problem_slug_review_rows(
     rows: list[dict[str, object]] = []
     requested_tokens: list[str] = []
     for row in draft_rows:
-        seq = int(row.get("seq") or 0)
-        fallback = str(row.get("suggested_slug") or "").strip()
-        requested = _slugify_problem_id(str(requested_overrides.get(seq, fallback) or "").strip().lower())
+        seq_obj = row.get("seq")
+        seq = int(seq_obj) if seq_obj is not None else 0
+        fallback_obj = row.get("suggested_slug")
+        fallback = str(fallback_obj).strip() if fallback_obj is not None else ""
+        requested_raw = requested_overrides.get(seq, fallback)
+        requested = _slugify_problem_id(str(requested_raw).strip().lower())
         requested_tokens.append(requested)
     duplicate_counts: dict[str, int] = {}
     for token in requested_tokens:
@@ -296,7 +311,8 @@ def _build_problem_slug_review_rows(
         duplicate_counts[token] = int(duplicate_counts.get(token, 0)) + 1
     has_error = False
     for idx, row in enumerate(draft_rows):
-        seq = int(row.get("seq") or 0)
+        seq_obj = row.get("seq")
+        seq = int(seq_obj) if seq_obj is not None else 0
         requested = requested_tokens[idx]
         valid = bool(requested and _PROBLEM_SEGMENT_RE.fullmatch(requested))
         full_requested = _problem_full_slug(owner, requested) if valid else ""
@@ -318,14 +334,15 @@ def _build_problem_slug_review_rows(
         if not ok:
             base = requested if valid else _slugify_problem_id(requested)
             if not base:
-                base = str(row.get("source_slug") or "").strip()
+                source_slug_obj = row.get("source_slug")
+                base = str(source_slug_obj).strip() if source_slug_obj is not None else ""
             suggested = _next_available_problem_slug(owner, base)
         rows.append(
             {
                 "seq": seq,
-                "index": str(row.get("index") or "").strip().upper(),
-                "source_slug": str(row.get("source_slug") or "").strip(),
-                "package_name": str(row.get("package_name") or "").strip(),
+                "index": str(row.get("index")).strip().upper() if row.get("index") is not None else "",
+                "source_slug": str(row.get("source_slug")).strip() if row.get("source_slug") is not None else "",
+                "package_name": str(row.get("package_name")).strip() if row.get("package_name") is not None else "",
                 "slug_input": requested,
                 "slug_full": full_requested,
                 "valid": valid,
@@ -340,7 +357,7 @@ def _build_problem_slug_review_rows(
 
 
 def _contest_slug_review_state(raw_slug: str, package_name: str) -> dict[str, object]:
-    requested = str(raw_slug or "").strip()
+    requested = raw_slug.strip()
     if not requested:
         base = _import_contest_slug_base_from_package_name(package_name)
         suggested = _next_available_contest_slug(base)

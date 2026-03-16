@@ -1,22 +1,81 @@
 from __future__ import annotations
 
+import base64
 import logging
+import json
+import re
+from pathlib import Path
+from typing import cast
 
 from app.service.judgehost.internal.shared import (
-    Path,
-    base64,
-    domjudge_lower_text,
     domjudge_task_lease_owner,
-    json,
-    logger,
-    now_iso,
-    re,
+    domjudge_text,
+    domjudge_lower_text,
 )
+from app.db import now_iso
+from app.service.judgehost.domjudge.cache import domjudge_json_hash, domjudge_source_hash
+from app.service.judgehost.domjudge.client import domjudge_parse_script_id
+from app.service.judgehost.runtime import (
+    domjudge_bool,
+    domjudge_feedback_line_from_bytes,
+    domjudge_feedback_line_from_text,
+    domjudge_parse_float,
+    domjudge_parse_int,
+    domjudge_parse_meta_text,
+    domjudge_rewrite_untrusted_runresult,
+)
+from app.service.platform.hashing import sha256_hex_bytes as domjudge_sha256_bytes
+
+logger = logging.getLogger(__name__)
 
 _diag_logger = logging.getLogger("uvicorn.error")
 
 
 class JudgehostDomjudgeResultsMixin:
+    @staticmethod
+    def _domjudge_feedback_token_order(
+        *,
+        runresult: str,
+        output_error_rel: str,
+        output_diff_rel: str,
+        team_message_rel: str,
+    ) -> list[str]:
+        runresult_token = domjudge_lower_text(runresult)
+        if runresult_token in {"run-error", "internal-error"}:
+            ordered = [output_error_rel, output_diff_rel, team_message_rel]
+        else:
+            ordered = [output_diff_rel, team_message_rel, output_error_rel]
+        feedback_tokens: list[str] = []
+        for token in ordered:
+            feedback_token = domjudge_text(token)
+            if feedback_token:
+                feedback_tokens.append(feedback_token)
+        return feedback_tokens
+
+    def _domjudge_feedback_text_and_files(
+        self,
+        *,
+        work_root: Path,
+        runresult: str,
+        output_error_rel: str,
+        output_diff_rel: str,
+        team_message_rel: str,
+    ) -> tuple[str, list[str]]:
+        feedback_files = self._domjudge_feedback_token_order(
+            runresult=runresult,
+            output_error_rel=output_error_rel,
+            output_diff_rel=output_diff_rel,
+            team_message_rel=team_message_rel,
+        )
+        feedback_text = ""
+        for token in feedback_files:
+            if feedback_text:
+                break
+            blob = self._domjudge_read_artifact_blob(work_root, token)
+            if blob is not None:
+                feedback_text = domjudge_feedback_line_from_bytes(blob)
+        return feedback_text, feedback_files
+
     def _domjudge_update_verification_run_case_progress(
         self,
         *,
@@ -32,104 +91,82 @@ class JudgehostDomjudgeResultsMixin:
         output_ref: str,
         run_status: str = "running",
     ) -> None:
-        safe_task_id = str(task_id or "").strip()
-        if not safe_task_id:
+        if not task_id:
             return
-        task_row = self._task_by_id(safe_task_id)
-        if not isinstance(task_row, dict):
+        task_row = self._task_by_id(task_id)
+        if task_row is None:
             return
-        payload = task_row.get("payload")
-        payload_obj = payload if isinstance(payload, dict) else {}
-        verification_id = str(
-            payload_obj.get("artifact_verification_id")
-            or task_row.get("artifact_verification_id")
-            or payload_obj.get("verification_id")
-            or ""
-        ).strip()
-        target_run_id = str(
-            payload_obj.get("verification_target_run_id")
-            or task_row.get("run_id")
-            or payload_obj.get("run_id")
-            or ""
-        ).strip()
+        payload = task_row["payload"]
+        verification_id = payload.get("artifact_verification_id") or payload.get("verification_id") or task_row["artifact_verification_id"]
+        target_run_id = payload.get("verification_target_run_id") or task_row["run_id"] or payload.get("run_id")
         if (not verification_id) or (not target_run_id):
             return
-        summary_obj = self._load_run_summary(target_run_id, verification_id)
-        tests_obj = summary_obj.get("tests")
-        existing_tests = tests_obj if isinstance(tests_obj, list) else []
+        summary = self._load_run_summary(target_run_id, verification_id)
+        existing_tests = summary.get("tests", [])
         updated_tests: list[dict[str, object]] = []
-        safe_test_name = str(test_name or "").strip()
-        safe_feedback = str(feedback_text or "").strip()
-        verdict_token = str(verdict or "").strip().upper() or "FL"
-        time_ms = max(0, int(round(float(runtime_sec or 0.0) * 1000.0)))
-        time_user_ms = max(0, int(round(float(cpu_sec or runtime_sec or 0.0) * 1000.0)))
-        time_wall_ms = max(0, int(round(float(wall_sec or cpu_sec or runtime_sec or 0.0) * 1000.0)))
+        verdict_token = verdict.upper() or "FL"
+        time_ms = max(0, int(round(runtime_sec * 1000.0)))
+        time_user_ms = max(0, int(round((cpu_sec if cpu_sec > 0.0 else runtime_sec) * 1000.0)))
+        time_wall_ms = max(0, int(round((wall_sec if wall_sec > 0.0 else (cpu_sec if cpu_sec > 0.0 else runtime_sec)) * 1000.0)))
+        memory_kb_int = max(0, memory_kb)
         pass_row = {
             "pass": 1,
             "verdict": verdict_token,
-            "time_ms": int(time_ms),
-            "time_user_ms": int(time_user_ms),
-            "time_wall_ms": int(time_wall_ms),
-            "memory_kb": int(max(0, int(memory_kb or 0))),
-            "feedback": safe_feedback,
-            "output_ref": str(output_ref or "").strip(),
+            "time_ms": time_ms,
+            "time_user_ms": time_user_ms,
+            "time_wall_ms": time_wall_ms,
+            "memory_kb": memory_kb_int,
+            "feedback": feedback_text,
+            "output_ref": output_ref,
         }
         test_row = {
-            "test": safe_test_name,
+            "test": test_name,
             "verdict": verdict_token,
-            "time_ms": int(time_ms),
-            "time_user_ms": int(time_user_ms),
-            "time_wall_ms": int(time_wall_ms),
-            "memory_kb": int(max(0, int(memory_kb or 0))),
-            "message": safe_feedback,
-            "output_ref": str(output_ref or "").strip(),
+            "time_ms": time_ms,
+            "time_user_ms": time_user_ms,
+            "time_wall_ms": time_wall_ms,
+            "memory_kb": memory_kb_int,
+            "message": feedback_text,
+            "output_ref": output_ref,
             "passes": [pass_row],
         }
         replaced = False
         for item in existing_tests:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("test") or "").strip() == safe_test_name:
-                updated_tests.append(dict(test_row))
+            if item["test"] == test_name:
+                updated_tests.append(test_row)
                 replaced = True
             else:
-                updated_tests.append(dict(item))
+                updated_tests.append(item)
         if not replaced:
             updated_tests.append(test_row)
-        updated_tests.sort(key=lambda item: str(item.get("test") or ""))
-        summary_obj["tests"] = updated_tests
-        summary_obj["tests_total"] = max(
+        updated_tests.sort(key=lambda item: item["test"])
+        summary["tests"] = updated_tests
+        summary["tests_total"] = max(
             len(updated_tests),
-            int(summary_obj.get("tests_total") or 0),
-            len(payload_obj.get("selected_tests") or []),
+            summary.get("tests_total", 0),
+            len(payload.get("selected_tests", [])),
         )
-        usage_obj = summary_obj.get("usage")
-        usage = usage_obj if isinstance(usage_obj, dict) else {}
-        summary_obj["usage"] = {
+        usage = summary.get("usage", {})
+        summary["usage"] = {
             "tests": len(updated_tests),
-            "time_ms_total": max(time_user_ms, int(usage.get("time_ms_total") or 0)),
-            "time_user_ms_total": max(time_user_ms, int(usage.get("time_user_ms_total") or 0)),
-            "time_wall_ms_total": max(time_wall_ms, int(usage.get("time_wall_ms_total") or 0)),
-            "memory_kb_peak": max(int(memory_kb or 0), int(usage.get("memory_kb_peak") or 0)),
+            "time_ms_total": max(time_user_ms, usage.get("time_ms_total", 0)),
+            "time_user_ms_total": max(time_user_ms, usage.get("time_user_ms_total", 0)),
+            "time_wall_ms_total": max(time_wall_ms, usage.get("time_wall_ms_total", 0)),
+            "memory_kb_peak": max(memory_kb_int, usage.get("memory_kb_peak", 0)),
         }
-        summary_obj["source"] = str(summary_obj.get("source") or source_path or "").strip()
-        summary_obj["verification_source"] = str(
-            payload_obj.get("verification_source")
-            or summary_obj.get("verification_source")
-            or "verification.start"
-        ).strip()
-        summary_obj["artifact_verification_id"] = verification_id
+        summary["source"] = summary.get("source") or source_path
+        summary["verification_source"] = payload.get("verification_source") or summary.get("verification_source") or "verification.start"
+        summary["artifact_verification_id"] = verification_id
         self._ensure_verification_result(
             row=task_row,
             verification_id=verification_id,
             run_id=target_run_id,
-            run_status=str(run_status or "running").strip().lower() or "running",
-            summary_obj=summary_obj,
+            run_status=run_status,
+            summary_obj=summary,
             error_text="",
         )
-
     def domjudge_get_source_files(self, submit_id: str, contest_id: str | None = None) -> list[dict[str, object]]:
-        safe_submit = self._domjudge_text(submit_id)
+        safe_submit = domjudge_text(submit_id)
         if not safe_submit:
             raise RuntimeError("source files not found")
         row = None
@@ -163,10 +200,10 @@ class JudgehostDomjudgeResultsMixin:
             )
         if row is None:
             raise RuntimeError("source files not found")
-        source_path = Path(self._domjudge_text(row["source_path"])).resolve()
+        source_path = Path(domjudge_text(row["source_path"])).resolve()
         if not source_path.exists() or not source_path.is_file():
             raise RuntimeError("source files not found")
-        source_name = self._domjudge_text(row["source_name"], default=source_path.name)
+        source_name = domjudge_text(row["source_name"], default=source_path.name)
         files: list[Path] = []
         try:
             source_dir = source_path.parent.resolve()
@@ -184,15 +221,13 @@ class JudgehostDomjudgeResultsMixin:
         out: list[dict[str, object]] = []
         seen_names: set[str] = set()
         for file_path in files:
-            filename = self._domjudge_text(file_path.name)
+            filename = domjudge_text(file_path.name)
             if not filename or filename in seen_names:
                 continue
             seen_names.add(filename)
-            content = base64.b64encode(file_path.read_bytes()).decode("ascii")
-            out.append({"filename": filename, "content": content})
+            out.append({"filename": filename, "content": base64.b64encode(file_path.read_bytes()).decode("ascii")})
         if not out:
-            content = base64.b64encode(source_path.read_bytes()).decode("ascii")
-            out = [{"filename": source_name, "content": content}]
+            out = [{"filename": source_name, "content": base64.b64encode(source_path.read_bytes()).decode("ascii")}]
         return out
 
     def domjudge_get_testcase_files(self, testcase_id: int) -> list[dict[str, object]]:
@@ -222,26 +257,26 @@ class JudgehostDomjudgeResultsMixin:
             )
         if row is None:
             with self._testcase_registry_lock:
-                record = self._testcase_registry_by_id.get(int(token))
-                if isinstance(record, dict):
+                record = self._testcase_registry_by_id.get(token)
+                if record is not None:
                     resolution_source = "registry"
                     row = {
-                        "input_path": self._domjudge_text(record.get("input_path")),
-                        "answer_path": self._domjudge_text(record.get("answer_path")),
+                        "input_path": record["input_path"],
+                        "answer_path": record["answer_path"],
                     }
         if row is None:
             _diag_logger.warning("judgehost.get_testcase_files testcase_id=%s resolved=missing", token)
             raise RuntimeError("testcase files not found")
-        in_path = Path(self._domjudge_text(row["input_path"])).resolve()
-        ans_path = Path(self._domjudge_text(row["answer_path"])).resolve()
+        in_path = Path(row["input_path"]).resolve()
+        ans_path = Path(row["answer_path"]).resolve()
         if not in_path.exists() or not ans_path.exists():
             _diag_logger.warning(
                 "judgehost.get_testcase_files testcase_id=%s resolved=%s exists=%s input=%s answer=%s",
                 token,
                 resolution_source,
                 False,
-                str(in_path),
-                str(ans_path),
+                in_path,
+                ans_path,
             )
             raise RuntimeError("testcase files not found")
         _diag_logger.warning(
@@ -249,8 +284,8 @@ class JudgehostDomjudgeResultsMixin:
             token,
             resolution_source,
             True,
-            str(in_path),
-            str(ans_path),
+            in_path,
+            ans_path,
         )
         return [
             {"filename": "input", "content": base64.b64encode(in_path.read_bytes()).decode("ascii")},
@@ -258,15 +293,15 @@ class JudgehostDomjudgeResultsMixin:
         ]
 
     def domjudge_get_executable_files(self, kind: str, script_id: object) -> list[dict[str, object]]:
-        job_id, offset = self._domjudge_parse_script_id(script_id)
+        job_id, offset = domjudge_parse_script_id(script_id)
         expected = {"compile": 1, "run": 2, "compare": 3}
-        token = self._domjudge_lower_text(kind)
+        token = domjudge_lower_text(kind)
         if token not in expected or expected[token] != offset:
             raise RuntimeError("script id/type mismatch")
         job_row = self._db_fetch_one("SELECT work_root FROM judgehost_domjudge_jobs WHERE job_id=?", [job_id])
         if job_row is None:
             raise RuntimeError("script files not found")
-        base = (Path(self._domjudge_text(job_row["work_root"])).resolve() / "scripts" / token).resolve()
+        base = (Path(domjudge_text(job_row["work_root"])).resolve() / "scripts" / token).resolve()
         if not base.exists() or not base.is_dir():
             raise RuntimeError("script files not found")
         rows: list[dict[str, object]] = []
@@ -298,9 +333,9 @@ class JudgehostDomjudgeResultsMixin:
         runner: str = "",
     ) -> dict[str, object]:
         _ = int(judgetask_id)
-        _ = self._domjudge_text(hostname)
-        _ = self._domjudge_text(compiler)
-        _ = self._domjudge_text(runner)
+        _ = domjudge_text(hostname)
+        _ = domjudge_text(compiler)
+        _ = domjudge_text(runner)
         return {}
 
     @staticmethod
@@ -335,15 +370,15 @@ class JudgehostDomjudgeResultsMixin:
         )
         if job_row is None:
             return
-        current_status = self._domjudge_lower_text(job_row["status"])
+        current_status = domjudge_lower_text(job_row["status"])
         if current_status in {"completed", "failed"}:
             return
         cases = self._domjudge_cases_for_job(int(job_id))
         if not cases:
             return
-        task_id = self._domjudge_text(job_row["task_id"])
-        task_payload_obj = self._task_payload(task_id) if task_id else {}
-        task_kind = self._domjudge_task_kind(task_payload_obj)
+        task_id = domjudge_text(job_row["task_id"])
+        task_payload = self._task_payload(task_id) if task_id else {}
+        task_kind = self._domjudge_task_kind(task_payload)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
         compile_success_raw = job_row["compile_success"]
         compile_success = None
@@ -354,7 +389,7 @@ class JudgehostDomjudgeResultsMixin:
                 compile_success = None
         ready = force_failed or compile_success == 0
         if not ready:
-            ready = all(self._domjudge_lower_text(row["status"]) == "reported" for row in cases)
+            ready = all(domjudge_lower_text(row["status"]) == "reported" for row in cases)
         if not ready:
             return
 
@@ -363,44 +398,30 @@ class JudgehostDomjudgeResultsMixin:
         usage_time_user = 0
         usage_time_wall = 0
         usage_mem_peak = 0
-        work_root = Path(self._domjudge_text(job_row["work_root"])).resolve()
+        work_root = Path(domjudge_text(job_row["work_root"])).resolve()
 
         for row in cases:
-            test_name = self._domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in")
-            test_stem = Path(test_name).stem
-            runresult = self._domjudge_text(row["runresult"])
-            runresult_token = runresult.lower()
+            test_name = domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in")
+            runresult = domjudge_text(row["runresult"])
+            runresult_token = domjudge_lower_text(runresult)
             verdict = self._domjudge_verdict_from_runresult(runresult)
             if compile_success == 0:
                 verdict = "CE"
-            cpu_sec = self._domjudge_parse_float(row["cpu_sec"], self._domjudge_parse_float(row["runtime_sec"], 0.0))
-            wall_sec = self._domjudge_parse_float(row["wall_sec"], cpu_sec)
-            memory_kb = max(0, self._domjudge_parse_int(row["memory_kb"], 0))
+            cpu_sec = domjudge_parse_float(row["cpu_sec"], domjudge_parse_float(row["runtime_sec"], 0.0))
+            wall_sec = domjudge_parse_float(row["wall_sec"], cpu_sec)
+            memory_kb = max(0, domjudge_parse_int(row["memory_kb"], 0))
             cpu_ms = max(0, int(round(cpu_sec * 1000)))
             wall_ms = max(0, int(round(wall_sec * 1000)))
             usage_time_user += cpu_ms
             usage_time_wall += wall_ms
             usage_mem_peak = max(usage_mem_peak, memory_kb)
-            feedback_files: list[str] = []
-            feedback_text = ""
-            has_output_diff = False
-            has_team_message = False
-            for key in ("output_diff_rel", "team_message_rel"):
-                token = self._domjudge_text(row[key])
-                if token:
-                    if key == "output_diff_rel":
-                        has_output_diff = True
-                    elif key == "team_message_rel":
-                        has_team_message = True
-                    if not feedback_text:
-                        blob = self._domjudge_read_artifact_blob(work_root, token)
-                        if blob is not None:
-                            feedback_text = self._domjudge_feedback_line_from_bytes(blob)
-            if test_stem:
-                for filename, present in (("judgemessage.txt", has_output_diff), ("teammessage.txt", has_team_message)):
-                    if not present:
-                        continue
-                    feedback_files.append(f"feedback_dir/{test_stem}/{filename}")
+            feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
+                work_root=work_root,
+                runresult=runresult,
+                output_error_rel=row["output_error_rel"],
+                output_diff_rel=row["output_diff_rel"],
+                team_message_rel=row["team_message_rel"],
+            )
             final_pass = {
                 "verdict": verdict,
                 "time_ms": cpu_ms,
@@ -409,7 +430,7 @@ class JudgehostDomjudgeResultsMixin:
                 "memory_kb": memory_kb,
                 "runresult": runresult,
             }
-            output_ref = self._domjudge_text(row["output_run_rel"])
+            output_ref = domjudge_text(row["output_run_rel"])
             if output_ref:
                 final_pass["output_ref"] = output_ref
             if feedback_text:
@@ -432,7 +453,7 @@ class JudgehostDomjudgeResultsMixin:
                 and (not internal_failure_error)
                 and runresult_token in {"checker-fail", "compare-error", "internal-error"}
             ):
-                detail = self._domjudge_text(feedback_text)
+                detail = domjudge_text(feedback_text)
                 if not detail:
                     detail = runresult_token.replace("-", " ")
                 internal_failure_error = f"{test_name}: {detail}" if test_name else detail
@@ -448,7 +469,7 @@ class JudgehostDomjudgeResultsMixin:
             if compile_text.strip():
                 message = compile_text.strip()
             compile_error_summary = message
-            compile_error_task = self._domjudge_feedback_line_from_text(message, max_chars=320) or "compilation failed"
+            compile_error_task = domjudge_feedback_line_from_text(message, max_chars=320) or "compilation failed"
             compile_diag.append(
                 {
                     "level": "error",
@@ -463,8 +484,7 @@ class JudgehostDomjudgeResultsMixin:
         run_status = "failed" if (force_failed or compile_success == 0) else "ok"
         if (not force_failed) and internal_failure_error:
             run_status = "failed"
-        summary = self._load_run_summary(self._domjudge_text(job_row["run_id"]))
-        summary = dict(summary or {})
+        summary = self._load_run_summary(domjudge_text(job_row["run_id"]))
         summary["tests"] = tests
         summary["compile_log"] = compile_log
         summary["compile_diagnostics"] = compile_diag
@@ -477,24 +497,22 @@ class JudgehostDomjudgeResultsMixin:
             "time_wall_ms_total": usage_time_wall,
             "memory_kb_peak": usage_mem_peak,
         }
-        judgehost_obj = summary.get("judgehost")
-        if not isinstance(judgehost_obj, dict):
-            judgehost_obj = {}
-        judgehost_obj["script_hashes"] = {
-            "compile": self._domjudge_lower_text(job_row["compile_hash"]),
-            "run": self._domjudge_lower_text(job_row["run_hash"]),
-            "compare": self._domjudge_lower_text(job_row["compare_hash"]),
+        summary["judgehost"] = {
+            "script_hashes": {
+                "compile": domjudge_lower_text(job_row["compile_hash"]),
+                "run": domjudge_lower_text(job_row["run_hash"]),
+                "compare": domjudge_lower_text(job_row["compare_hash"]),
+            }
         }
-        summary["judgehost"] = judgehost_obj
         if force_failed and error_text:
-            summary["error"] = str(error_text)
+            summary["error"] = error_text
         elif compile_error_summary:
             summary["error"] = compile_error_summary
         elif internal_failure_error:
             summary["error"] = internal_failure_error
         result_payload: dict[str, object] = {"run_status": run_status, "summary": summary}
         if force_failed and error_text:
-            result_payload["error"] = str(error_text)
+            result_payload["error"] = error_text
         elif compile_error_task:
             result_payload["error"] = compile_error_task
         elif internal_failure_error:
@@ -525,15 +543,13 @@ class JudgehostDomjudgeResultsMixin:
         job_id = int(case_row["job_id"])
         compile_success = None
         if "compile_success" in payload:
-            compile_success = 1 if self._domjudge_bool(payload.get("compile_success"), default=False) else 0
+            compile_success = 1 if domjudge_bool(payload.get("compile_success"), default=False) else 0
 
         def _payload_blob_as_b64(value: object) -> str:
-            if isinstance(value, (bytes, bytearray, memoryview)):
-                raw = bytes(value)
-                if not raw:
-                    return ""
+            raw = self._domjudge_payload_blob_bytes(value)
+            if raw:
                 return base64.b64encode(raw).decode("ascii")
-            return self._domjudge_text(value)
+            return domjudge_text(value)
 
         compile_output = _payload_blob_as_b64(payload.get("output_compile"))
         compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
@@ -579,13 +595,13 @@ class JudgehostDomjudgeResultsMixin:
             logger.info("ignoring add_judging_run for unknown judging run id: %s", case_id)
             return case_id
         job_id = int(row["job_id"])
-        safe_task_id = self._domjudge_text(row["task_id"])
-        work_root = Path(self._domjudge_text(row["work_root"])).resolve()
+        safe_task_id = domjudge_text(row["task_id"])
+        work_root = Path(domjudge_text(row["work_root"])).resolve()
         result_root = (work_root / "results" / f"{case_id}").resolve()
         result_root.mkdir(parents=True, exist_ok=True)
-        task_payload_obj = self._task_payload(safe_task_id) if safe_task_id else {}
-        verification_source = self._domjudge_lower_text(task_payload_obj.get("verification_source"))
-        task_kind = self._domjudge_task_kind(task_payload_obj, verification_source=verification_source)
+        task_payload = self._task_payload(safe_task_id) if safe_task_id else {}
+        verification_source = task_payload.get("verification_source", "")
+        task_kind = self._domjudge_task_kind(task_payload, verification_source=verification_source)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
 
         def _store_payload_file(
@@ -602,7 +618,7 @@ class JudgehostDomjudgeResultsMixin:
             target = (result_root / name).resolve()
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
-            return str(target.relative_to(work_root).as_posix())
+            return target.relative_to(work_root).as_posix()
 
         output_run_rel = ""
         if not compile_only:
@@ -618,7 +634,7 @@ class JudgehostDomjudgeResultsMixin:
         compare_meta_rel = _store_payload_file("compare.meta", payload.get("compare_metadata"))
         team_message_rel = _store_payload_file("teammessage.txt", payload.get("team_message"))
 
-        runtime_sec = self._domjudge_parse_float(payload.get("runtime"), 0.0)
+        runtime_sec = domjudge_parse_float(payload.get("runtime"), 0.0)
         cpu_sec = runtime_sec
         wall_sec = runtime_sec
         memory_kb = 0
@@ -627,57 +643,47 @@ class JudgehostDomjudgeResultsMixin:
         if metadata_rel:
             meta_path = (work_root / metadata_rel).resolve()
             if meta_path.exists() and meta_path.is_file():
-                program_meta = self._domjudge_parse_meta_text(meta_path.read_text(encoding="utf-8", errors="replace"))
-                cpu_total_sec = self._domjudge_parse_float(program_meta.get("cpu-time"), runtime_sec)
-                wall_sec = self._domjudge_parse_float(program_meta.get("wall-time"), cpu_total_sec)
-                cpu_sec = cpu_total_sec
-                runtime_sec = cpu_sec
-                mem_bytes = self._domjudge_parse_int(program_meta.get("memory-bytes"), 0)
+                program_meta = domjudge_parse_meta_text(meta_path.read_text(encoding="utf-8", errors="replace"))
+                cpu_total_sec = domjudge_parse_float(program_meta.get("cpu-time"), runtime_sec)
+                wall_sec = domjudge_parse_float(program_meta.get("wall-time"), cpu_total_sec)
+                runtime_sec = cpu_sec = cpu_total_sec
+                mem_bytes = domjudge_parse_int(program_meta.get("memory-bytes"), 0)
                 memory_kb = max(0, int(mem_bytes // 1024))
         if compare_meta_rel:
             compare_meta_path = (work_root / compare_meta_rel).resolve()
             if compare_meta_path.exists() and compare_meta_path.is_file():
-                compare_meta = self._domjudge_parse_meta_text(
+                compare_meta = domjudge_parse_meta_text(
                     compare_meta_path.read_text(encoding="utf-8", errors="replace")
                 )
-                compare_exit_code = self._domjudge_parse_int(compare_meta.get("exitcode"), -1)
+                compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
 
-        score_text = self._domjudge_text(payload.get("score"))
-        feedback_text = ""
-        for rel in (output_diff_rel, team_message_rel):
-            token = self._domjudge_text(rel)
-            if (not token) or feedback_text:
-                continue
-            blob = self._domjudge_read_artifact_blob(work_root, token)
-            if blob is not None:
-                feedback_text = self._domjudge_feedback_line_from_bytes(blob)
+        score_text = domjudge_text(payload.get("score"))
 
         def _load_json_object(raw: object) -> dict[str, object]:
-            text = self._domjudge_text(raw)
+            text = domjudge_text(raw)
             if not text:
                 return {}
             try:
-                parsed = json.loads(text)
+                return cast(dict[str, object], json.loads(text))
             except Exception:
                 return {}
-            return parsed if isinstance(parsed, dict) else {}
 
-        source_name = self._domjudge_text(row["source_name"])
-        source_hash = self._domjudge_lower_text(row["source_hash"])
+        source_name = domjudge_text(row["source_name"])
+        source_hash = domjudge_lower_text(row["source_hash"])
         # Reuse the enqueue-time source hash directly so cache keys stay stable
         # when payload contains extra sources (for example testlib.h).
         if re.fullmatch(r"[0-9a-f]{64}", source_hash) is None:
             source_bytes = b""
-            source_path = Path(self._domjudge_text(row["source_path"])).resolve()
+            source_path = Path(domjudge_text(row["source_path"])).resolve()
             try:
                 if source_path.exists() and source_path.is_file() and (not source_path.is_symlink()):
                     source_bytes = source_path.read_bytes()
             except OSError:
                 source_bytes = b""
-            source_hash = self._domjudge_source_hash(source_name, source_bytes)
+            source_hash = domjudge_source_hash(source_name, source_bytes)
 
         input_bytes = b""
-        input_path = Path(self._domjudge_text(row["input_path"])).resolve()
+        input_path = Path(domjudge_text(row["input_path"])).resolve()
         try:
             if input_path.exists() and input_path.is_file() and (not input_path.is_symlink()):
                 input_bytes = input_path.read_bytes()
@@ -685,41 +691,41 @@ class JudgehostDomjudgeResultsMixin:
             input_bytes = b""
 
         answer_bytes = b""
-        answer_path = Path(self._domjudge_text(row["answer_path"])).resolve()
+        answer_path = Path(domjudge_text(row["answer_path"])).resolve()
         try:
             if answer_path.exists() and answer_path.is_file() and (not answer_path.is_symlink()):
                 answer_bytes = answer_path.read_bytes()
         except OSError:
             answer_bytes = b""
 
-        testcase_hash = self._domjudge_lower_text(row["testcase_hash"])
-        testcase_input_hash = self._domjudge_sha256_bytes(input_bytes)
-        testcase_answer_hash = self._domjudge_sha256_bytes(answer_bytes)
+        testcase_hash = domjudge_lower_text(row["testcase_hash"])
+        testcase_input_hash = domjudge_sha256_bytes(input_bytes)
+        testcase_answer_hash = domjudge_sha256_bytes(answer_bytes)
         if not re.fullmatch(r"[0-9a-f]{64}", testcase_hash):
             if verification_source in {"verification.solve-main", "solve.main"}:
                 testcase_hash = testcase_input_hash
             else:
                 testcase_hash = self._domjudge_set_hash_from_blobs([input_bytes, answer_bytes])
 
-        compile_hash = self._domjudge_lower_text(row["compile_hash"])
-        run_hash = self._domjudge_lower_text(row["run_hash"])
-        compare_hash = self._domjudge_lower_text(row["compare_hash"])
-        compile_cfg_obj = _load_json_object(row["compile_config_json"])
-        run_cfg_obj = _load_json_object(row["run_config_json"])
-        compare_cfg_obj = _load_json_object(row["compare_config_json"])
-        runresult = self._domjudge_lower_text(payload.get("runresult"), default="internal-error")
-        runresult = self._domjudge_rewrite_untrusted_runresult(
+        compile_hash = domjudge_lower_text(row["compile_hash"])
+        run_hash = domjudge_lower_text(row["run_hash"])
+        compare_hash = domjudge_lower_text(row["compare_hash"])
+        compile_cfg = _load_json_object(row["compile_config_json"])
+        run_cfg = _load_json_object(row["run_config_json"])
+        compare_cfg = _load_json_object(row["compare_config_json"])
+        runresult = domjudge_lower_text(payload.get("runresult"), default="internal-error")
+        runresult = domjudge_rewrite_untrusted_runresult(
             runresult,
             cpu_sec=cpu_sec,
-            run_cfg_obj=run_cfg_obj,
+            run_cfg_obj=run_cfg,
         )
         if runresult in {"compare-error", "run-error", "internal-error"} and compare_exit_code < 0:
-            time_result = self._domjudge_lower_text(program_meta.get("time-result"))
-            signal_num = self._domjudge_parse_int(program_meta.get("signal"), 0)
-            output_limit_kb = self._domjudge_parse_int(run_cfg_obj.get("output_limit"), 0)
+            time_result = domjudge_lower_text(program_meta.get("time-result"))
+            signal_num = domjudge_parse_int(program_meta.get("signal"), 0)
+            output_limit_kb = domjudge_parse_int(run_cfg.get("output_limit"), 0)
             output_limit_bytes = max(0, int(output_limit_kb) * 1024)
-            stdout_bytes = self._domjudge_parse_int(program_meta.get("stdout-bytes"), 0)
-            output_truncated = self._domjudge_lower_text(program_meta.get("output-truncated"))
+            stdout_bytes = domjudge_parse_int(program_meta.get("stdout-bytes"), 0)
+            output_truncated = domjudge_lower_text(program_meta.get("output-truncated"))
             timed_out = ("timelimit" in time_result) or signal_num == 14
             output_limited = False
             if output_limit_bytes > 0 and stdout_bytes >= output_limit_bytes:
@@ -733,15 +739,22 @@ class JudgehostDomjudgeResultsMixin:
         if runresult in {"compare-error", "run-error"} and compare_exit_code == 3:
             runresult = "checker-fail"
         verdict = self._domjudge_verdict_from_runresult(runresult)
-        if (not compile_only) and verdict == "OK" and (not self._domjudge_text(output_run_rel)):
+        feedback_text, _ = self._domjudge_feedback_text_and_files(
+            work_root=work_root,
+            runresult=runresult,
+            output_error_rel=output_err_rel,
+            output_diff_rel=output_diff_rel,
+            team_message_rel=team_message_rel,
+        )
+        if (not compile_only) and verdict == "OK" and (not output_run_rel):
             target = (result_root / "program.out").resolve()
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"")
-            output_run_rel = str(target.relative_to(work_root).as_posix())
-        compile_config_hash = self._domjudge_json_hash(compile_cfg_obj)
-        run_config_hash = self._domjudge_json_hash(run_cfg_obj)
-        compare_config_hash = self._domjudge_json_hash(compare_cfg_obj)
-        toolchain_cmd_digest = self._domjudge_lower_text(compile_cfg_obj.get("toolchain_cmd_digest"))
+            output_run_rel = target.relative_to(work_root).as_posix()
+        compile_config_hash = domjudge_json_hash(compile_cfg)
+        run_config_hash = domjudge_json_hash(run_cfg)
+        compare_config_hash = domjudge_json_hash(compare_cfg)
+        toolchain_cmd_digest = domjudge_lower_text(compile_cfg.get("toolchain_cmd_digest"))
         if re.fullmatch(r"[0-9a-f]{64}", toolchain_cmd_digest) is None:
             toolchain_cmd_digest = self._domjudge_toolchain_cmd_digest(source_name)
 
@@ -759,7 +772,7 @@ class JudgehostDomjudgeResultsMixin:
             (compare_meta_rel, "compare.meta"),
             (team_message_rel, "teammessage.txt"),
         ):
-            blob = _read_rel_blob(str(rel or ""))
+            blob = _read_rel_blob(rel)
             if blob is not None:
                 cache_files[blob_name] = blob
 
@@ -798,9 +811,8 @@ class JudgehostDomjudgeResultsMixin:
         use_case_cache_tokens = bool(should_store_case_cache and self._judge_fs_index_service is not None)
 
         def _case_blob_token(blob_name: str, fallback_rel: str) -> str:
-            rel_token = self._domjudge_text(fallback_rel)
             if (not use_case_cache_tokens) or (blob_name not in cache_files):
-                return rel_token
+                return fallback_rel
             return self._domjudge_cache_blob_ref(
                 kind=self.CASE_CACHE_KIND,
                 key_hash=case_key_hash,
@@ -808,13 +820,13 @@ class JudgehostDomjudgeResultsMixin:
                 name=blob_name,
             )
 
-        output_run_token = _case_blob_token("program.out", str(output_run_rel or ""))
-        output_err_token = _case_blob_token("program.err", str(output_err_rel or ""))
-        output_sys_token = _case_blob_token("system.out", str(output_sys_rel or ""))
-        output_diff_token = _case_blob_token("judgemessage.txt", str(output_diff_rel or ""))
-        metadata_token = _case_blob_token("program.meta", str(metadata_rel or ""))
-        compare_meta_token = _case_blob_token("compare.meta", str(compare_meta_rel or ""))
-        team_message_token = _case_blob_token("teammessage.txt", str(team_message_rel or ""))
+        output_run_token = _case_blob_token("program.out", output_run_rel)
+        output_err_token = _case_blob_token("program.err", output_err_rel)
+        output_sys_token = _case_blob_token("system.out", output_sys_rel)
+        output_diff_token = _case_blob_token("judgemessage.txt", output_diff_rel)
+        metadata_token = _case_blob_token("program.meta", metadata_rel)
+        compare_meta_token = _case_blob_token("compare.meta", compare_meta_rel)
+        team_message_token = _case_blob_token("teammessage.txt", team_message_rel)
         # Prefer cache refs for summary output_ref so build/run consumers can still
         # resolve artifacts after judgehost temp work directories are cleaned.
 
@@ -828,8 +840,7 @@ class JudgehostDomjudgeResultsMixin:
                 toolchain_cmd_digest=toolchain_cmd_digest,
                 testcase_input_hash=testcase_input_hash,
             )
-            output_bytes = cache_files.get("program.out", b"")
-            output_hash = self._domjudge_sha256_bytes(output_bytes)
+            output_hash = domjudge_sha256_bytes(cache_files.get("program.out", b""))
             self._domjudge_store_solve_output_cache(
                 key_parts={"key_hash": solve_key_hash, "signature": solve_signature},
                 tags={
@@ -884,8 +895,8 @@ class JudgehostDomjudgeResultsMixin:
             try:
                 self._domjudge_update_verification_run_case_progress(
                     task_id=safe_task_id,
-                    source_path=self._domjudge_text(row["source_path"]),
-                    test_name=self._domjudge_text(row["test_name"]),
+                    source_path=row["source_path"],
+                    test_name=row["test_name"],
                     verdict=verdict,
                     runtime_sec=runtime_sec,
                     cpu_sec=cpu_sec,
@@ -912,7 +923,7 @@ class JudgehostDomjudgeResultsMixin:
         judgetask_id: int | None = None,
         payload: dict[str, object] | None = None,
     ) -> int:
-        safe_desc = self._domjudge_text(description, default="judgehost internal error")
+        safe_desc = domjudge_text(description, default="judgehost internal error")
         if judgetask_id is None:
             return 0
         case_id = int(judgetask_id)
@@ -927,8 +938,8 @@ class JudgehostDomjudgeResultsMixin:
         )
         if row is not None:
             job_id = int(row["job_id"])
-            case_debug = self._domjudge_text(row["case_debug_text"])
-            job_debug = self._domjudge_text(row["job_debug_text"])
+            case_debug = domjudge_text(row["case_debug_text"])
+            job_debug = domjudge_text(row["job_debug_text"])
             debug_text = case_debug
             if job_debug and job_debug not in debug_text:
                 debug_text = job_debug if not debug_text else f"{debug_text}\n{job_debug}"
@@ -938,30 +949,27 @@ class JudgehostDomjudgeResultsMixin:
             if job_row is None:
                 return 0
             job_id = int(job_row["job_id"])
-            debug_text = self._domjudge_text(job_row["debug_text"])
+            debug_text = domjudge_text(job_row["debug_text"])
             result_id = job_id
-        payload_text = self._domjudge_debug_payload_text(payload if isinstance(payload, dict) else {})
+        payload_text = self._domjudge_debug_payload_text({} if payload is None else payload)
         if payload_text:
             debug_text = payload_text if not debug_text else f"{debug_text}\n{payload_text}"
             if len(debug_text) > 4000:
                 debug_text = debug_text[-4000:]
         if debug_text:
-            lowered = safe_desc.lower()
-            if debug_text.lower() not in lowered:
+            if debug_text.lower() not in safe_desc.lower():
                 safe_desc = f"{safe_desc}\n\n{debug_text}"
         self._domjudge_finalize_if_ready(job_id, force_failed=True, error_text=safe_desc)
         return result_id
 
     def _domjudge_debug_payload_text(self, payload: dict[str, object]) -> str:
-        payload_obj = payload if isinstance(payload, dict) else {}
-        if not payload_obj:
+        if not payload:
             return ""
 
         def _decode_maybe_b64(text: str) -> str:
-            raw = self._domjudge_text(text)
-            if not raw:
+            if not text:
                 return ""
-            compact = "".join(raw.split())
+            compact = "".join(text.split())
             if compact and (len(compact) % 4 == 0) and re.fullmatch(r"[A-Za-z0-9+/=]+", compact):
                 try:
                     blob = self._domjudge_b64_decode(compact)
@@ -973,7 +981,7 @@ class JudgehostDomjudgeResultsMixin:
                         printable = sum((ch.isprintable() or ch in {"\n", "\r", "\t"}) for ch in decoded)
                         if printable >= int(len(decoded) * 0.9):
                             return decoded
-            return raw
+            return text
 
         lines: list[str] = []
         seen: set[str] = set()
@@ -983,7 +991,7 @@ class JudgehostDomjudgeResultsMixin:
             if not decoded:
                 return
             for raw_line in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-                line = self._domjudge_text(raw_line)
+                line = domjudge_text(raw_line)
                 if not line:
                     continue
                 token = line.lower()
@@ -998,7 +1006,7 @@ class JudgehostDomjudgeResultsMixin:
             decoded = _decode_maybe_b64(text)
             if not decoded:
                 return
-            raw_lines = [self._domjudge_text(item) for item in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+            raw_lines = [domjudge_text(item) for item in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
             raw_lines = [item for item in raw_lines if item]
             if not raw_lines:
                 return
@@ -1028,34 +1036,12 @@ class JudgehostDomjudgeResultsMixin:
                     return
 
         def _walk_scalars(value: object) -> list[str]:
+            compact = json.dumps(value, ensure_ascii=False, default=str)
             out: list[str] = []
-
-            def _walk(node: object) -> None:
-                if len(out) >= 32:
-                    return
-                if isinstance(node, dict):
-                    for key, child in node.items():
-                        safe_key = self._domjudge_lower_text(key)
-                        if safe_key in {
-                            "judgetaskid",
-                            "judgetask_id",
-                            "judgingid",
-                            "judging_id",
-                            "runid",
-                            "run_id",
-                            "hostname",
-                            "host",
-                        }:
-                            continue
-                        _walk(child)
-                    return
-                if isinstance(node, (list, tuple, set)):
-                    for child in node:
-                        _walk(child)
-                    return
-                text = self._domjudge_text(node)
+            for raw_line in compact.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+                text = domjudge_text(raw_line)
                 if not text:
-                    return
+                    continue
                 low = text.lower()
                 if any(
                     marker in low
@@ -1071,8 +1057,8 @@ class JudgehostDomjudgeResultsMixin:
                     )
                 ):
                     out.append(text)
-
-            _walk(value)
+                if len(out) >= 32:
+                    break
             return out
 
         for key in (
@@ -1092,16 +1078,18 @@ class JudgehostDomjudgeResultsMixin:
             "judgemessage",
             "team_message",
         ):
-            if key not in payload_obj:
+            if key not in payload:
                 continue
+            value = payload[key]
+            text = "" if value is None else str(value)
             if key == "judgehostlog":
-                _append_judgehost_log(str(payload_obj.get(key) or ""))
+                _append_judgehost_log(text)
             else:
-                _append_text(str(payload_obj.get(key) or ""))
+                _append_text(text)
             if len(lines) >= 16:
                 break
         if len(lines) < 16:
-            for text in _walk_scalars(payload_obj):
+            for text in _walk_scalars(payload):
                 _append_text(text)
                 if len(lines) >= 16:
                     break
@@ -1128,21 +1116,21 @@ class JudgehostDomjudgeResultsMixin:
         target_case_id: int | None = None
         target_job_id: int | None = None
         if case_row is not None:
-            safe_task_id = self._domjudge_text(case_row["task_id"])
-            safe_run_id = self._domjudge_text(case_row["run_id"])
+            safe_task_id = domjudge_text(case_row["task_id"])
+            safe_run_id = domjudge_text(case_row["run_id"])
             target_case_id = int(case_row["id"])
             target_job_id = int(case_row["job_id"])
         elif job_row is not None:
-            safe_task_id = self._domjudge_text(job_row["task_id"])
-            safe_run_id = self._domjudge_text(job_row["run_id"])
+            safe_task_id = domjudge_text(job_row["task_id"])
+            safe_run_id = domjudge_text(job_row["run_id"])
             target_job_id = int(job_row["job_id"])
-        debug_payload = payload if isinstance(payload, dict) else {}
+        debug_payload = {} if payload is None else payload
         if debug_payload:
             logger.debug(
                 "domjudge debug info host=%s judgetask_id=%s payload_keys=%s",
                 safe_host,
                 case_id,
-                sorted(str(key) for key in debug_payload.keys()),
+                sorted(debug_payload.keys()),
             )
         with self._domdb_conn() as conn:
             debug_text = self._domjudge_debug_payload_text(debug_payload)
@@ -1153,7 +1141,7 @@ class JudgehostDomjudgeResultsMixin:
                         "SELECT debug_text FROM judgehost_domjudge_cases WHERE id=?",
                         [target_case_id],
                     ).fetchone()
-                    current_text = self._domjudge_text(current_row["debug_text"]) if current_row is not None else ""
+                    current_text = domjudge_text(current_row["debug_text"]) if current_row is not None else ""
                     merged_text = debug_text if not current_text else f"{current_text}\n{debug_text}"
                     if len(merged_text) > 4000:
                         merged_text = merged_text[-4000:]
@@ -1166,7 +1154,7 @@ class JudgehostDomjudgeResultsMixin:
                         "SELECT debug_text FROM judgehost_domjudge_jobs WHERE job_id=?",
                         [target_job_id],
                     ).fetchone()
-                    current_text = self._domjudge_text(current_row["debug_text"]) if current_row is not None else ""
+                    current_text = domjudge_text(current_row["debug_text"]) if current_row is not None else ""
                     merged_text = debug_text if not current_text else f"{current_text}\n{debug_text}"
                     if len(merged_text) > 4000:
                         merged_text = merged_text[-4000:]
@@ -1181,4 +1169,5 @@ class JudgehostDomjudgeResultsMixin:
                 task_id=safe_task_id,
                 run_id=safe_run_id,
             )
+
 

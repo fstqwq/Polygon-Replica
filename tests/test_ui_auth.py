@@ -1,12 +1,15 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import sqlite3
+from unittest.mock import patch
+
+from fastapi import HTTPException
+from starlette.responses import PlainTextResponse
 
 from .ui_support import (
     ADMIN_CONFIG_DEFAULTS,
     AUTH_COOKIE_NAME,
-    HTTPException,
-    PlainTextResponse,
     Request,
     UIBaseSuite,
     _cookie_value_from_response,
@@ -26,7 +29,6 @@ from .ui_support import (
     _sha256_hex,
     _setup_with_password_proof,
     _sudo_with_password_proof,
-    asyncio,
     auth_middleware,
     auth_password_meta,
     config,
@@ -43,7 +45,6 @@ from .ui_support import (
     settings_password_update,
     settings_system_config_reset,
     settings_worker_queue_snapshot,
-    patch,
     setup_page,
     setup_submit,
     sudo_page,
@@ -51,7 +52,6 @@ from .ui_support import (
     uuid,
     workspace_service,
 )
-from app.impl.auth import api
 SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
 SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
 
@@ -938,7 +938,6 @@ class TestUIAuth(UIBaseSuite):
         )
         self.assertEqual(valid.status_code, 303)
         self.assertIn("/problems/alice/minimal-spanning-tree/alice/statement", valid.headers.get("location", ""))
-
 
 
 

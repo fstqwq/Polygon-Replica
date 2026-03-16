@@ -18,9 +18,9 @@
 
 <section>
   <h2>Properties</h2>
-  <p><strong>Location:</strong> {{ contest_properties.get("location", "") or "-" }}</p>
-  <p><strong>Date:</strong> {{ contest_properties.get("date", "") or "-" }}</p>
-  <p><strong>Source mode:</strong> {{ contest_properties.get("source_mode", "latest_committed") or "latest_committed" }}</p>
+  <p><strong>Location:</strong> {{ contest_properties.get("location") if contest_properties.get("location") else "-" }}</p>
+  <p><strong>Date:</strong> {{ contest_properties.get("date") if contest_properties.get("date") else "-" }}</p>
+  <p><strong>Source mode:</strong> {{ contest_properties.get("source_mode") if contest_properties.get("source_mode") else "latest_committed" }}</p>
 </section>
 
 <section>

@@ -1,9 +1,7 @@
 ﻿from __future__ import annotations
 
 import re
-import tempfile
 from pathlib import Path
-from typing import Callable
 
 from fastapi import HTTPException
 
@@ -32,6 +30,9 @@ _apply_runtime_values(build_runtime_values())
 _LOG_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _LOG_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 _LOG_BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
+    r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
+)
 
 
 def contains_symlink_component(root: Path, candidate: Path) -> bool:
@@ -178,23 +179,20 @@ def preserve_error_text(raw: str | None, *, max_chars: int = 1600, max_lines: in
     return result
 
 
-def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[str | tuple[str, str]] | None = None) -> str:
+def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
     text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
     text = _LOG_ANSI_ESCAPE_RE.sub("", text)
     text = _LOG_CONTROL_CHAR_RE.sub("", text)
     text = _LOG_BIDI_CONTROL_RE.sub("", text)
     normalized = text.replace("\\", "/")
+    normalized = _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE.sub("", normalized)
     pairs: list[tuple[str, str]] = []
     fallback_marker_index = 0
-    for raw_item in path_prefixes or []:
-        marker = ""
-        prefix_raw = raw_item
-        if isinstance(raw_item, tuple) and len(raw_item) >= 2:
-            prefix_raw = raw_item[0]
-            marker = str(raw_item[1] or "").strip().replace("\\", "/")
+    for prefix_raw, marker_raw in path_prefixes or []:
         prefix = str(prefix_raw or "").strip().replace("\\", "/")
         if not prefix:
             continue
+        marker = str(marker_raw or "").strip().replace("\\", "/")
         if not marker:
             fallback_marker_index += 1
             marker = f"__redacted_path_{fallback_marker_index}__"
@@ -206,114 +204,5 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[str | tuple[str, s
         normalized = normalized.replace(prefix_token, marker_token)
     return normalized
 
-
-def _pick_compile_error_line(lines: list[str]) -> str:
-    lowered = [line.lower() for line in lines]
-    for idx, line in enumerate(lowered):
-        if "syntaxerror" in line:
-            return lines[idx]
-    for idx, line in enumerate(lowered):
-        if "error" in line and "traceback" not in line:
-            return lines[idx]
-    for idx, line in enumerate(lowered):
-        if "exception" in line and "traceback" not in line:
-            return lines[idx]
-    for idx, line in enumerate(lowered):
-        if ("error" in line) or ("exception" in line) or ("traceback" in line) or ("syntax" in line):
-            return lines[idx]
-    return ""
-
-
-def _compile_check_include_dirs(workspace: Path) -> list[Path]:
-    include_dirs: list[Path] = []
-    workspace_testlib = workspace / "third_party" / "testlib"
-    if workspace_testlib.exists() and workspace_testlib.is_dir():
-        include_dirs.append(workspace_testlib)
-    return include_dirs
-
-
-def upload_compile_check_error(
-    workspace: Path,
-    upload_filename: str,
-    upload_content: bytes,
-    *,
-    compile_program: Callable[..., tuple[bool, str, str, str]],
-    cxxflags: list[str],
-) -> str:
-    name = Path(str(upload_filename or "").strip()).name or "submission.cpp"
-    suffix = Path(name).suffix or ".cpp"
-    try:
-        with tempfile.TemporaryDirectory(prefix="run-upload-check-") as tmp_name:
-            temp_root = Path(tmp_name).resolve()
-            source = temp_root / f"uploaded_submission{suffix}"
-            source.write_bytes(upload_content)
-            output = temp_root / "submission"
-            include_dirs = _compile_check_include_dirs(workspace)
-            ok, out, err, _digest = compile_program(
-                source,
-                output,
-                include_dirs,
-                path_roots=[temp_root, workspace],
-                cxxflags=cxxflags,
-            )
-            if ok:
-                return ""
-            raw = "\n".join([str(out or ""), str(err or "")]).strip()
-            cleaned = sanitize_log_text_for_ui(
-                raw,
-                path_prefixes=[(str(temp_root), "<upload>"), (str(workspace), "<workspace>")],
-            )
-            lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-            if not lines:
-                return "compile check failed"
-            preferred = _pick_compile_error_line(lines)
-            return compact_error_text(preferred or lines[0], max_chars=320)
-    except Exception as exc:
-        return compact_error_text(str(exc), max_chars=320) or "compile check failed"
-
-
-def workspace_source_compile_check_error(
-    workspace: Path,
-    source_path: str,
-    *,
-    compile_program: Callable[..., tuple[bool, str, str, str]],
-    cxxflags: list[str],
-) -> str:
-    safe_path = str(source_path or "").strip()
-    if not safe_path:
-        return "compile check failed"
-    try:
-        source = safe_workspace_path(workspace, safe_path)
-        if not source.exists() or not source.is_file():
-            return f"{safe_path}: source file not found"
-        with tempfile.TemporaryDirectory(prefix="run-solution-check-") as tmp_name:
-            temp_root = Path(tmp_name).resolve()
-            output = temp_root / "submission"
-            include_dirs = _compile_check_include_dirs(workspace)
-            ok, out, err, _digest = compile_program(
-                source,
-                output,
-                include_dirs,
-                path_roots=[temp_root, workspace],
-                cxxflags=cxxflags,
-            )
-            if ok:
-                return ""
-            raw = "\n".join([str(out or ""), str(err or "")]).strip()
-            cleaned = sanitize_log_text_for_ui(
-                raw,
-                path_prefixes=[(str(temp_root), "<check>"), (str(workspace), "<workspace>")],
-            )
-            lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-            if not lines:
-                return f"{safe_path}: compile check failed"
-            preferred = _pick_compile_error_line(lines)
-            compact = compact_error_text(preferred or lines[0], max_chars=320)
-            return f"{safe_path}: {compact}" if compact else f"{safe_path}: compile check failed"
-    except HTTPException:
-        return f"{safe_path}: invalid source path"
-    except Exception as exc:
-        compact = compact_error_text(str(exc), max_chars=320)
-        return f"{safe_path}: {compact}" if compact else f"{safe_path}: compile check failed"
 
 

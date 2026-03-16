@@ -1,14 +1,21 @@
 from __future__ import annotations
+
+import asyncio
 import io
+import os
 import re
 import zipfile
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
+
+from fastapi import HTTPException
+
+from app.service.platform.process import run_cmd
 
 from .ui_support import (
     AUTH_COOKIE_NAME,
-    HTTPException,
     Path,
     UIBaseSuite,
-    asyncio,
     _cookie_value_from_response,
     _flash_messages_from_response,
     _post_form_request,
@@ -34,16 +41,11 @@ from .ui_support import (
     git_service,
     history_page,
     json,
-    os,
-    patch,
     problem_delete,
     problems_root_import,
     problems_root_import_slug_hint,
     problems_root_page,
-    run_cmd,
     switch_workspace,
-    urlparse,
-    parse_qs,
     uuid,
     workspace_access_grant,
     workspace_access_revoke,
@@ -1054,11 +1056,11 @@ class TestUIWorkspace(UIBaseSuite):
             "problem_slug_4": custom_problem_slugs[4],
         }
         with patch(
-            "app.impl.run_export.import_source._materialize_polygon_sample_answers",
+            "app.impl.run_export.import_source._build_polygon_sample_answers",
             return_value={
                 "sample_manual_total": 0,
                 "sample_answers_missing": 0,
-                "sample_answers_materialized": 0,
+                "sample_answers_built": 0,
                 "build_id": "",
             },
         ):

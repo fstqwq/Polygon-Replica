@@ -31,7 +31,6 @@ class ExportService:
     STANDARD_CHECKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     STANDARD_CHECKER_ROOT = (Path(__file__).resolve().parents[2] / "third_party" / "upstream" / "testlib" / "checkers").resolve()
     STATEMENT_PDF_TIMEOUT_SEC = 60
-    STATEMENT_PDF_PASSES = 2
 
     def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path):
         self.db = db
@@ -55,8 +54,7 @@ class ExportService:
         return "'" + value.replace("'", "''") + "'"
 
     def _package_root_name(self, slug: str) -> str:
-        out = "".join(ch.lower() for ch in slug if ch.isalnum())
-        return out or "problem"
+        return "".join(ch.lower() for ch in slug if ch.isalnum()) or "problem"
 
     def _archive_filename_slug(self, slug: str) -> str:
         token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(slug or "").strip())
@@ -248,7 +246,7 @@ class ExportService:
         if self._is_safe_regular_file(source_file.parent, desc_path):
             try:
                 payload = parse_solution_desc(desc_path.read_text(encoding="utf-8", errors="replace"))
-                expected = normalize_expected_behavior(str(payload.get("expected_behavior") or expected))
+                expected = normalize_expected_behavior(expected_behavior if isinstance(expected_behavior := payload.get("expected_behavior"), str) else expected)
             except OSError:
                 pass
         return expected
@@ -300,8 +298,7 @@ class ExportService:
         return source_path
 
     def _effective_validator_source(self, snapshot: Path, strict: bool) -> Path | None:
-        build_cfg = self._load_build_config(snapshot)
-        configured = str(build_cfg.get("validator_source") or "").strip()
+        configured = validator_source.strip() if isinstance(validator_source := self._load_build_config(snapshot).get("validator_source"), str) else ""
         if configured:
             try:
                 return self._resolve_snapshot_source(snapshot, configured)
@@ -339,7 +336,7 @@ class ExportService:
 
     def _effective_checker_source(self, snapshot: Path, strict: bool) -> Path | None:
         build_cfg = self._load_build_config(snapshot)
-        checker_standard = str(build_cfg.get("checker_standard") or "").strip()
+        checker_standard = checker_standard.strip() if isinstance(checker_standard := build_cfg.get("checker_standard"), str) else ""
         if checker_standard:
             source = self._resolve_standard_checker_source(checker_standard)
             if source is not None:
@@ -347,7 +344,7 @@ class ExportService:
             if strict:
                 raise ValueError("checker_standard is configured but invalid")
             return None
-        checker_source = str(build_cfg.get("checker_source") or "").strip()
+        checker_source = checker_source.strip() if isinstance(checker_source := build_cfg.get("checker_source"), str) else ""
         if checker_source:
             try:
                 return self._resolve_snapshot_source(snapshot, checker_source)
@@ -356,9 +353,6 @@ class ExportService:
                     raise ValueError("checker_source is configured but invalid")
                 return None
         return self._find_first_source(snapshot / "checkers")
-
-    def _is_source_filename(self, filename: str) -> bool:
-        return Path(str(filename or "")).suffix.lower() in self.SOURCE_SUFFIX_ORDER
 
     def _file_contains_token(self, path: Path, token: str) -> bool:
         needle = str(token or "").encode("utf-8")
@@ -583,8 +577,7 @@ class ExportService:
         if src_sections.exists() and src_sections.is_dir() and not src_sections.is_symlink():
             self._copy_dir_contents(src_sections, dst_statement.parent / "statement-sections")
 
-        rendered = render_statement_main(snapshot / "statement", problem_title=problem_name)
-        shutil.copy2(rendered, dst_statement / "problem.en.tex")
+        shutil.copy2(render_statement_main(snapshot / "statement", problem_title=problem_name), dst_statement / "problem.en.tex")
 
     def _try_compile_statement_pdf(self, snapshot: Path, dst_statement: Path) -> bool:
         try:
@@ -622,8 +615,7 @@ class ExportService:
         if self._is_safe_regular_file(ans_dir, first_answer):
             shutil.copy2(first_answer, sample_dir / "1.ans")
         for input_file in input_files:
-            target_input = secret_dir / input_file.name
-            shutil.copy2(input_file, target_input)
+            shutil.copy2(input_file, secret_dir / input_file.name)
             answer_file = ans_dir / f"{input_file.stem}.ans"
             if self._is_safe_regular_file(ans_dir, answer_file):
                 shutil.copy2(answer_file, secret_dir / answer_file.name)
@@ -644,8 +636,7 @@ class ExportService:
                 continue
             target_dir = dst_submissions / target_group
             target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = self._ensure_unique_file_path(target_dir, source_file.name)
-            shutil.copy2(source_file, target_path)
+            shutil.copy2(source_file, self._ensure_unique_file_path(target_dir, source_file.name))
 
     def _build_kattis(
         self,
@@ -673,8 +664,7 @@ class ExportService:
         self._copy_solutions(snapshot, package_root)
 
     def create_export(self, problem: str, verification_id: str, export_type: str) -> Path:
-        export_type_raw = str(export_type or "").strip().lower()
-        resolved_export_type = export_type_raw or "icpc"
+        resolved_export_type = str(export_type or "").strip().lower() or "icpc"
         if resolved_export_type not in self.TYPES:
             raise ValueError("unsupported export type (ICPC only)")
 

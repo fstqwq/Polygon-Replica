@@ -6,6 +6,7 @@ import re
 import shutil
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import TypedDict
 
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.statement.constant import (
@@ -41,8 +42,63 @@ SOURCE_SUFFIX_ALLOW = {
     ".go",
     ".pas",
 }
+
+
+ProblemMeta = TypedDict(
+    "ProblemMeta",
+    {
+        "title": str,
+        "mode": str,
+        "time_limit_ms": int | None,
+        "memory_limit_mb": int | None,
+    },
+)
+
+StatementSummary = TypedDict(
+    "StatementSummary",
+    {
+        "copied_statement_files": int,
+        "copied_section_files": int,
+        "language": str,
+        "language_warning": str,
+        "header": dict[str, str],
+    },
+)
+
+TestsSummary = TypedDict(
+    "TestsSummary",
+    {
+        "total": int,
+        "manual": int,
+        "gen": int,
+        "answers": int,
+        "sample": int,
+    },
+)
+
+SolutionsSummary = TypedDict(
+    "SolutionsSummary",
+    {
+        "count": int,
+        "accepted_source": str,
+    },
+)
+
+ComponentsSummary = TypedDict(
+    "ComponentsSummary",
+    {
+        "validator_files": int,
+        "checker_files": int,
+        "interactor_files": int,
+        "validator_source": str,
+        "checker_source": str,
+        "interactor_source": str,
+    },
+)
+
+
 def _normalize_zip_path(raw: str) -> str:
-    text = str(raw or "").replace("\\", "/").strip()
+    text = raw.replace("\\", "/").strip()
     if not text:
         return ""
     pure = PurePosixPath(text)
@@ -50,7 +106,7 @@ def _normalize_zip_path(raw: str) -> str:
         return ""
     parts: list[str] = []
     for part in pure.parts:
-        token = str(part or "").strip()
+        token = part.strip()
         if not token or token == ".":
             continue
         if token == "..":
@@ -60,7 +116,7 @@ def _normalize_zip_path(raw: str) -> str:
 
 
 def _normalize_text_newlines_bytes(payload: bytes) -> bytes:
-    return bytes(payload or b"").replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
 def _read_text_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
@@ -83,12 +139,10 @@ def _read_bytes_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     return raw
 
 
-def _safe_read_json(path: Path) -> dict:
+def _read_json_or_empty(path: Path) -> dict[str, object]:
     try:
         if path.exists() and path.is_file() and (not path.is_symlink()):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
+            return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     return {}
@@ -122,7 +176,7 @@ def _entry_map_from_zip(zf: zipfile.ZipFile, marker: str) -> dict[str, zipfile.Z
 
 
 def _yaml_strip_comment(raw: str) -> str:
-    line = str(raw or "")
+    line = raw
     out: list[str] = []
     in_single = False
     in_double = False
@@ -151,7 +205,7 @@ def _yaml_strip_comment(raw: str) -> str:
 
 
 def _yaml_unquote(raw: str) -> str:
-    text = str(raw or "").strip()
+    text = raw.strip()
     if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
         return text[1:-1].replace("''", "'")
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
@@ -163,11 +217,11 @@ def _yaml_unquote(raw: str) -> str:
 
 
 def _yaml_parse_inline_list(raw: str) -> list[str]:
-    value = str(raw or "").strip()
+    value = raw.strip()
     if not value:
         return []
     if not (value.startswith("[") and value.endswith("]")):
-        token = _yaml_unquote(value).strip()
+        token = _yaml_unquote(value)
         return [token] if token else []
     body = value[1:-1].strip()
     if not body:
@@ -194,7 +248,7 @@ def _yaml_parse_inline_list(raw: str) -> list[str]:
             i += 1
             continue
         if ch == "," and (not in_single) and (not in_double):
-            token = _yaml_unquote("".join(buf)).strip()
+            token = _yaml_unquote("".join(buf))
             if token:
                 items.append(token)
             buf = []
@@ -202,7 +256,7 @@ def _yaml_parse_inline_list(raw: str) -> list[str]:
             continue
         buf.append(ch)
         i += 1
-    token = _yaml_unquote("".join(buf)).strip()
+    token = _yaml_unquote("".join(buf))
     if token:
         items.append(token)
     return items
@@ -210,7 +264,7 @@ def _yaml_parse_inline_list(raw: str) -> list[str]:
 
 def _coerce_int(raw: object, default: int, *, min_value: int = 1) -> int:
     try:
-        value = int(str(raw or "").strip())
+        value = int(str(raw).strip())
     except Exception:
         value = int(default)
     return max(int(min_value), value)
@@ -218,13 +272,13 @@ def _coerce_int(raw: object, default: int, *, min_value: int = 1) -> int:
 
 def _coerce_float(raw: object, default: float) -> float:
     try:
-        return float(str(raw or "").strip())
+        return float(str(raw).strip())
     except Exception:
         return float(default)
 
 
 def _normalize_language_token(raw: str) -> str:
-    token = str(raw or "").strip().lower().replace("_", "-")
+    token = raw.strip().lower().replace("_", "-")
     if token in {"en", "eng", "english"}:
         return "english"
     if token in {"ru", "rus", "russian"}:
@@ -237,7 +291,7 @@ def _normalize_language_token(raw: str) -> str:
 
 
 def _time_limit_ms_from_text(raw: str) -> int | None:
-    text = str(raw or "").strip().lower()
+    text = raw.strip().lower()
     if not text:
         return None
     m = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
@@ -254,7 +308,7 @@ def _time_limit_ms_from_text(raw: str) -> int | None:
 
 
 def _memory_limit_mb_from_text(raw: str) -> int | None:
-    text = str(raw or "").strip().lower()
+    text = raw.strip().lower()
     if not text:
         return None
     m = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
@@ -269,7 +323,7 @@ def _memory_limit_mb_from_text(raw: str) -> int | None:
 
 
 def _submission_expected_from_group(raw_group: str) -> str:
-    token = str(raw_group or "").strip().lower().replace("-", "_")
+    token = raw_group.strip().lower().replace("-", "_")
     direct = normalize_expected_behavior(token)
     if direct != "unknown":
         return direct
@@ -287,14 +341,14 @@ def _submission_expected_from_group(raw_group: str) -> str:
 
 
 def _unique_rel_path(workspace: Path, parent_rel: Path, filename: str) -> str:
-    safe_name = Path(str(filename or "")).name
-    if not safe_name:
-        safe_name = "source.cpp"
-    candidate = parent_rel / safe_name
+    filename_leaf = Path(filename).name
+    if not filename_leaf:
+        filename_leaf = "source.cpp"
+    candidate = parent_rel / filename_leaf
     if not (workspace / candidate).exists():
         return candidate.as_posix()
-    stem = Path(safe_name).stem
-    suffix = Path(safe_name).suffix
+    stem = Path(filename_leaf).stem
+    suffix = Path(filename_leaf).suffix
     idx = 2
     while True:
         item = parent_rel / f"{stem}-{idx}{suffix}"
@@ -304,11 +358,11 @@ def _unique_rel_path(workspace: Path, parent_rel: Path, filename: str) -> str:
 
 
 class ICPCPackageImportService:
-    def _parse_problem_yaml(self, text: str) -> dict[str, object]:
+    def _parse_problem_yaml(self, text: str) -> ProblemMeta:
         top: dict[str, str] = {}
         limits: dict[str, str] = {}
         in_limits = False
-        for raw_line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
             line = _yaml_strip_comment(raw_line)
             if not line.strip():
                 continue
@@ -319,16 +373,16 @@ class ICPCPackageImportService:
                 if ":" not in nested:
                     continue
                 key, value = nested.split(":", 1)
-                key_norm = str(key or "").strip().lower().replace("-", "_")
+                key_norm = key.strip().lower().replace("-", "_")
                 if key_norm in {"time_limit", "memory_limit"}:
-                    limits[key_norm] = str(value or "").strip()
+                    limits[key_norm] = value.strip()
                 continue
             in_limits = False
             if ":" not in line:
                 continue
             key, value = line.split(":", 1)
-            key_norm = str(key or "").strip().lower().replace("-", "_")
-            value_text = str(value or "").strip()
+            key_norm = key.strip().lower().replace("-", "_")
+            value_text = value.strip()
             top[key_norm] = value_text
             if key_norm == "limits" and not value_text:
                 in_limits = True
@@ -336,7 +390,9 @@ class ICPCPackageImportService:
         if "problem_format_version" not in top:
             raise ValueError("problem.yaml is missing problem_format_version")
 
-        title = _yaml_unquote(top.get("name", "")).strip() or DEFAULT_PROBLEM_TITLE
+        title = _yaml_unquote(top.get("name", ""))
+        if not title:
+            title = DEFAULT_PROBLEM_TITLE
         type_tokens = [item.lower().replace("_", "-") for item in _yaml_parse_inline_list(top.get("type", ""))]
         mode = "pass-fail"
         if any(token in {"multi-pass", "multipass"} for token in type_tokens):
@@ -344,8 +400,12 @@ class ICPCPackageImportService:
         elif any(token == "interactive" for token in type_tokens):
             mode = "interactive"
 
-        time_raw = limits.get("time_limit") or top.get("time_limit") or ""
-        memory_raw = limits.get("memory_limit") or top.get("memory_limit") or ""
+        time_raw = limits.get("time_limit")
+        if time_raw is None:
+            time_raw = top.get("time_limit")
+        memory_raw = limits.get("memory_limit")
+        if memory_raw is None:
+            memory_raw = top.get("memory_limit")
         time_limit_ms = _time_limit_ms_from_text(_yaml_unquote(time_raw)) if time_raw else None
         memory_limit_mb = _memory_limit_mb_from_text(_yaml_unquote(memory_raw)) if memory_raw else None
 
@@ -359,20 +419,20 @@ class ICPCPackageImportService:
     def _write_text(self, workspace: Path, rel: Path, text: str) -> None:
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(str(text or ""), encoding="utf-8")
+        target.write_text(text, encoding="utf-8")
 
     def _write_bytes(self, workspace: Path, rel: Path, payload: bytes) -> None:
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(bytes(payload or b""))
+        target.write_bytes(payload)
 
     def _import_statement(
         self,
         zf: zipfile.ZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
-        meta: dict[str, object],
-    ) -> dict[str, object]:
+        _meta: ProblemMeta,
+    ) -> StatementSummary:
         shutil.rmtree(workspace / STATEMENT_RENDERED_DIR_REL, ignore_errors=True)
         shutil.rmtree(workspace / STATEMENT_SECTIONS_DIR, ignore_errors=True)
 
@@ -435,7 +495,7 @@ class ICPCPackageImportService:
         workspace: Path,
         *,
         normalize_test_data_newlines: bool = False,
-    ) -> dict[str, object]:
+    ) -> TestsSummary:
         manual_dir = workspace / "tests" / "manual"
         gen_dir = workspace / "tests" / "generator"
         answers_dir = workspace / "tests" / "answers"
@@ -495,7 +555,7 @@ class ICPCPackageImportService:
 
         if sample_index > 0 and sample_index <= len(spec_entries):
             spec_entries[sample_index - 1]["sample"] = True
-            sample_answer_text = str(answer_text_by_index.get(sample_index) or "")
+            sample_answer_text = answer_text_by_index.get(sample_index, "")
             if sample_answer_text:
                 spec_entries[sample_index - 1]["sample_output"] = sample_answer_text
 
@@ -508,7 +568,7 @@ class ICPCPackageImportService:
             "sample": 1 if sample_index > 0 else 0,
         }
 
-    def _import_solutions(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path) -> dict[str, object]:
+    def _import_solutions(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path) -> SolutionsSummary:
         solutions_dir_rel = Path("solutions")
         solutions_dir = workspace / solutions_dir_rel
         shutil.rmtree(solutions_dir, ignore_errors=True)
@@ -522,7 +582,7 @@ class ICPCPackageImportService:
             rel_path = Path(rel)
             if len(rel_path.parts) < 3:
                 continue
-            group = str(rel_path.parts[1] or "")
+            group = rel_path.parts[1]
             filename = rel_path.name
             suffix = rel_path.suffix.lower()
             if suffix and suffix not in SOURCE_SUFFIX_ALLOW:
@@ -548,20 +608,15 @@ class ICPCPackageImportService:
         target_prefix: str,
     ) -> list[str]:
         copied: list[str] = []
-        safe_source = str(source_prefix or "").replace("\\", "/").strip("/")
-        safe_target = str(target_prefix or "").replace("\\", "/").strip("/")
-        if not safe_source or not safe_target:
-            return copied
-        src_prefix = safe_source + "/"
+        src_prefix = source_prefix + "/"
         for rel in sorted(entries):
             if not rel.startswith(src_prefix):
                 continue
-            suffix_rel = rel[len(src_prefix) :].strip("/")
+            suffix_rel = rel[len(src_prefix) :]
             if not suffix_rel:
                 continue
-            target_rel = Path(safe_target) / suffix_rel
-            info = entries[rel]
-            self._write_bytes(workspace, target_rel, _read_bytes_from_zip(zf, info))
+            target_rel = Path(target_prefix) / suffix_rel
+            self._write_bytes(workspace, target_rel, _read_bytes_from_zip(zf, entries[rel]))
             copied.append(target_rel.as_posix())
         return copied
 
@@ -575,7 +630,7 @@ class ICPCPackageImportService:
             return ""
         lower_map = {rel.lower(): rel for rel in source_candidates}
         for stem in preferred_stems:
-            token = str(stem or "").strip().lower()
+            token = stem
             if not token:
                 continue
             for rel_lower, rel in lower_map.items():
@@ -589,8 +644,8 @@ class ICPCPackageImportService:
         zf: zipfile.ZipFile,
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
-        meta: dict[str, object],
-    ) -> dict[str, object]:
+        meta: ProblemMeta,
+    ) -> ComponentsSummary:
         for folder in ("validators", "checkers", "interactors"):
             shutil.rmtree(workspace / folder, ignore_errors=True)
             (workspace / folder).mkdir(parents=True, exist_ok=True)
@@ -598,7 +653,7 @@ class ICPCPackageImportService:
         validators = self._copy_component_tree(zf, entries, "input_validators", workspace, "validators")
         validator_source = self._select_source_file(validators, ["validator", "validate"])
 
-        mode = str(meta.get("mode") or "pass-fail")
+        mode = meta["mode"]
         checker_source = ""
         interactor_source = ""
         output_files = self._copy_component_tree(
@@ -630,26 +685,31 @@ class ICPCPackageImportService:
     def _write_problem_config(
         self,
         workspace: Path,
-        meta: dict[str, object],
-        statement_summary: dict[str, object],
+        meta: ProblemMeta,
+        statement_summary: StatementSummary,
     ) -> dict[str, object]:
-        cfg = _safe_read_json(workspace / "config" / "problem.json")
-        header = statement_summary.get("header")
-        header_obj = header if isinstance(header, dict) else {}
+        cfg = _read_json_or_empty(workspace / "config" / "problem.json")
+        header = statement_summary["header"]
 
-        time_limit_ms = meta.get("time_limit_ms")
-        if not isinstance(time_limit_ms, int) or time_limit_ms <= 0:
-            time_limit_ms = _time_limit_ms_from_text(str(header_obj.get("time_text") or "")) or 2000
+        time_limit_ms = meta["time_limit_ms"]
+        if time_limit_ms is None or time_limit_ms <= 0:
+            header_time = header.get("time_text", "")
+            parsed_time_limit_ms = _time_limit_ms_from_text(header_time)
+            time_limit_ms = parsed_time_limit_ms if parsed_time_limit_ms is not None else 2000
 
-        memory_limit_mb = meta.get("memory_limit_mb")
-        if not isinstance(memory_limit_mb, int) or memory_limit_mb <= 0:
-            memory_limit_mb = _memory_limit_mb_from_text(str(header_obj.get("memory_text") or "")) or 1024
+        memory_limit_mb = meta["memory_limit_mb"]
+        if memory_limit_mb is None or memory_limit_mb <= 0:
+            header_memory = header.get("memory_text", "")
+            parsed_memory_limit_mb = _memory_limit_mb_from_text(header_memory)
+            memory_limit_mb = parsed_memory_limit_mb if parsed_memory_limit_mb is not None else 1024
 
-        input_file = str(header_obj.get("input_file") or "").strip() or "stdin"
-        output_file = str(header_obj.get("output_file") or "").strip() or "stdout"
-        mode = str(meta.get("mode") or "pass-fail")
-        if mode not in {"pass-fail", "interactive", "multi-pass"}:
-            mode = "pass-fail"
+        input_file = header.get("input_file", "")
+        if not input_file:
+            input_file = "stdin"
+        output_file = header.get("output_file", "")
+        if not output_file:
+            output_file = "stdout"
+        mode = meta["mode"]
 
         cfg["input_file"] = input_file
         cfg["output_file"] = output_file
@@ -663,16 +723,16 @@ class ICPCPackageImportService:
     def _write_build_config(
         self,
         workspace: Path,
-        meta: dict[str, object],
-        components: dict[str, object],
-        solutions: dict[str, object],
+        meta: ProblemMeta,
+        components: ComponentsSummary,
+        solutions: SolutionsSummary,
     ) -> dict[str, object]:
-        build_cfg = _safe_read_json(workspace / "config" / "build.json")
-        accepted_source = str(solutions.get("accepted_source") or "").strip()
+        build_cfg = _read_json_or_empty(workspace / "config" / "build.json")
+        accepted_source = solutions["accepted_source"]
         if accepted_source:
             build_cfg["accepted_solution_source"] = accepted_source
 
-        validator_source = str(components.get("validator_source") or "").strip()
+        validator_source = components["validator_source"]
         if validator_source:
             build_cfg["validator_source"] = validator_source
             build_cfg["require_validator"] = True
@@ -680,7 +740,7 @@ class ICPCPackageImportService:
             build_cfg.pop("validator_source", None)
             build_cfg["require_validator"] = False
 
-        checker_source = str(components.get("checker_source") or "").strip()
+        checker_source = components["checker_source"]
         if checker_source:
             build_cfg["checker_source"] = checker_source
             build_cfg.pop("checker_standard", None)
@@ -690,13 +750,13 @@ class ICPCPackageImportService:
             build_cfg.pop("checker_standard", None)
             build_cfg["require_checker"] = False
 
-        interactor_source = str(components.get("interactor_source") or "").strip()
+        interactor_source = components["interactor_source"]
         if interactor_source:
             build_cfg["interactor_source"] = interactor_source
         else:
             build_cfg.pop("interactor_source", None)
 
-        mode = str(meta.get("mode") or "pass-fail")
+        mode = meta["mode"]
         if mode == "interactive" and not interactor_source:
             raise ValueError("interactive ICPC package is missing output_validator/interactor source")
 
@@ -716,7 +776,8 @@ class ICPCPackageImportService:
         *,
         normalize_test_data_newlines: bool = False,
     ) -> dict[str, object]:
-        raw = bytes(package_bytes or b"")
+        package_name = package_name.strip()
+        raw = package_bytes
         if not raw:
             raise ValueError("empty package file")
         if len(raw) > ZIP_MAX_BYTES:
@@ -733,15 +794,15 @@ class ICPCPackageImportService:
                 zf,
                 entry_map,
                 workspace,
-                normalize_test_data_newlines=bool(normalize_test_data_newlines),
+                normalize_test_data_newlines=normalize_test_data_newlines,
             )
             solutions_summary = self._import_solutions(zf, entry_map, workspace)
             components_summary = self._import_components(zf, entry_map, workspace, meta)
             problem_cfg = self._write_problem_config(workspace, meta, statement_summary)
             build_cfg = self._write_build_config(workspace, meta, components_summary, solutions_summary)
             return {
-                "package_name": str(package_name or "").strip(),
-                "title": str(meta.get("title") or DEFAULT_PROBLEM_TITLE),
+                "package_name": package_name,
+                "title": meta["title"],
                 "statement": statement_summary,
                 "tests": tests_summary,
                 "solutions": solutions_summary,

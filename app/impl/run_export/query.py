@@ -1,42 +1,50 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from app.impl.run_export.context import (
-    Path,
-    dedupe_preserve_order,
-    normalize_optional_component_source_path_safe,
-    normalize_run_id_token,
-    config,
-    is_canonical_artifact_id,
-    json,
-    os,
-    quote_plus,
-    run_cmd,
-)
-from app.impl.workspace.context_operation import parse_summary_json
-from app.service.verification import load_verification_summary, verification_source_paths
+import json
+import os
+from pathlib import Path
+from typing import TypedDict, cast
+from urllib.parse import quote_plus
+
+from app.impl.runtime.config import config
+from app.impl.workspace.context_operation import dedupe_preserve_order
+from app.impl.workspace.context_verification import normalize_run_id_token
+from app.main_util import normalize_optional_component_source_path_safe
+from app.service.verification.store import load_verification_summary, verification_source_paths
+from app.service.platform.process import is_canonical_artifact_id, run_cmd
+
+
+class RuntimeProgress(TypedDict):
+    detail: str
+    log_href: str
+
+
+class VerificationDetailSummary(TypedDict, total=False):
+    error: str
+    failed_step: str
+    failed_test: str
+
+
 def _count_label(count: int, singular: str, plural: str | None = None) -> str:
-    safe_count = max(0, int(count))
-    token = singular if safe_count == 1 else (plural if plural is not None else f"{singular}s")
-    return f"{safe_count} {token}"
+    count_value = max(0, int(count))
+    token = singular if count_value == 1 else (plural if plural is not None else f"{singular}s")
+    return f"{count_value} {token}"
 
-def _summary_object(raw: object) -> dict[str, object]:
-    if isinstance(raw, dict):
-        return dict(raw)
-    text = str(raw or "").strip()
+def _summary_object(raw: str | None) -> dict[str, object]:
+    if raw is None:
+        return {}
+    text = raw.strip()
     if not text:
         return {}
     try:
-        parsed = json.loads(text)
+        return cast(dict[str, object], json.loads(text))
     except Exception:
         return {}
-    if isinstance(parsed, dict):
-        return parsed
-    return {}
 
 def _count_files_with_suffix(directory: Path, suffix: str) -> int:
     count = 0
-    safe_suffix = str(suffix or "").lower()
-    if not safe_suffix:
+    suffix_token = suffix.lower()
+    if not suffix_token:
         return 0
     try:
         if (not directory.exists()) or (not directory.is_dir()) or directory.is_symlink():
@@ -46,8 +54,8 @@ def _count_files_with_suffix(directory: Path, suffix: str) -> int:
     try:
         with os.scandir(directory) as entries:
             for entry in entries:
-                name = str(entry.name or "")
-                if not name.lower().endswith(safe_suffix):
+                name = entry.name
+                if not name.lower().endswith(suffix_token):
                     continue
                 try:
                     if not entry.is_file(follow_symlinks=False):
@@ -63,9 +71,8 @@ def _build_tests_total_from_artifacts(artifact_root: Path) -> int:
     logs_meta = artifact_root / "logs" / "tests_meta.json"
     try:
         if logs_meta.exists() and logs_meta.is_file() and (not logs_meta.is_symlink()):
-            payload = json.loads(logs_meta.read_text(encoding="utf-8", errors="replace"))
-            if isinstance(payload, list):
-                return max(0, int(len(payload)))
+            payload = cast(list[object], json.loads(logs_meta.read_text(encoding="utf-8", errors="replace")))
+            return max(0, len(payload))
     except Exception:
         pass
     tests_dir = artifact_root / "tests"
@@ -81,11 +88,11 @@ def _build_validated_count_from_log(validate_log: Path) -> int:
     try:
         with validate_log.open("r", encoding="utf-8", errors="replace") as fh:
             for raw in fh:
-                line = str(raw or "").strip()
+                line = raw.strip()
                 if ": " not in line:
                     continue
                 test_name, _rest = line.split(": ", 1)
-                token = str(test_name or "").strip()
+                token = test_name.strip()
                 if not token.lower().endswith(".in"):
                     continue
                 seen.add(token)
@@ -100,21 +107,28 @@ def _verification_runtime_progress(
     username: str,
     verification_id: str,
     event_status: str,
-) -> dict[str, str]:
-    result = {
+) -> RuntimeProgress:
+    result: RuntimeProgress = {
         "detail": "",
         "log_href": "",
     }
-    safe_verification_id = str(verification_id or "").strip()
-    if (not safe_verification_id) or (not is_canonical_artifact_id(safe_verification_id)):
+    if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return result
     verification_row = config.db.fetch_one(
         "SELECT status,summary_json,artifact_path FROM verifications WHERE id=? AND problem_id=?",
-        [safe_verification_id, int(problem_id)],
+        [verification_id, int(problem_id)],
     )
-    verification_status = str(verification_row["status"] or "").strip().lower() if verification_row is not None else ""
-    verification_summary = _summary_object(verification_row["summary_json"] if verification_row is not None else None)
-    artifact_path = str(verification_row["artifact_path"] or "").strip() if verification_row is not None else ""
+    verification_status = ""
+    verification_summary: VerificationDetailSummary = {}
+    artifact_path = ""
+    if verification_row is not None:
+        status_value = cast(str | None, verification_row["status"])
+        if status_value is not None:
+            verification_status = status_value
+        verification_summary = cast(VerificationDetailSummary, _summary_object(cast(str | None, verification_row["summary_json"])))
+        artifact_path_value = cast(str | None, verification_row["artifact_path"])
+        if artifact_path_value is not None:
+            artifact_path = artifact_path_value
     artifact_root = None
     if artifact_path:
         try:
@@ -145,7 +159,7 @@ def _verification_runtime_progress(
     validated_count = _build_validated_count_from_log(validate_log)
 
     def _log_href(name: str) -> str:
-        return f"/problems/{problem_slug}/{username}/artifacts/{safe_verification_id}/logs/{name}"
+        return f"/problems/{problem_slug}/{username}/artifacts/{verification_id}/logs/{name}"
 
     if event_status == "running":
         if verification_status in {"queued", "pending"}:
@@ -187,10 +201,18 @@ def _verification_runtime_progress(
         return result
 
     if event_status == "failed":
-        detail = str(verification_summary.get("error") or "").strip()
+        detail = verification_summary.get("error")
+        if detail is None:
+            detail = ""
+        else:
+            detail = detail.strip()
         if not detail:
-            failed_step = str(verification_summary.get("failed_step") or "").strip()
-            failed_test = str(verification_summary.get("failed_test") or "").strip()
+            failed_step = verification_summary.get("failed_step")
+            if failed_step is None:
+                failed_step = ""
+            failed_test = verification_summary.get("failed_test")
+            if failed_test is None:
+                failed_test = ""
             if failed_step and failed_test:
                 detail = f"{failed_step} failed on {failed_test}"
             elif failed_step:
@@ -208,23 +230,18 @@ def _verification_href(
     username: str,
     verification_id: str,
 ) -> str:
-    safe_verification_id = str(verification_id or "").strip()
-    if (not safe_verification_id) or (not is_canonical_artifact_id(safe_verification_id)):
+    if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return ""
     row = config.db.fetch_one(
         "SELECT id,status FROM verifications WHERE id=? AND problem_id=?",
-        [safe_verification_id, int(problem_id)],
+        [verification_id, int(problem_id)],
     )
     if row is None:
         return ""
-    status_token = str(row["status"] or "").strip().lower()
+    status_token = row["status"]
     if status_token not in {"queued", "pending", "running", "ok", "failed"}:
         return ""
-    return f"/problems/{problem_slug}/{username}/run/details?verification_id={quote_plus(safe_verification_id)}"
-
-
-def _detail_verification_id(detail_ctx: dict[str, object]) -> str:
-    return normalize_run_id_token(detail_ctx.get("verification_id"))
+    return f"/problems/{problem_slug}/{username}/run/details?verification_id={quote_plus(verification_id)}"
 
 def _rerun_solution_paths_from_verification(
     *,
@@ -234,47 +251,33 @@ def _rerun_solution_paths_from_verification(
     workspace: Path,
     verification_id: str,
 ) -> list[str]:
-    safe_verification_id = normalize_run_id_token(verification_id)
-    if not safe_verification_id:
+    verification_id = normalize_run_id_token(verification_id)
+    if not verification_id:
         return []
-    verification_summary = load_verification_summary(config.db, safe_verification_id)
-    if not isinstance(verification_summary, dict) or not verification_summary:
+    verification_summary = load_verification_summary(config.db, verification_id)
+    if not verification_summary:
         return []
     out: list[str] = []
     for source_rel in verification_source_paths(verification_summary):
-        safe_solution = normalize_optional_component_source_path_safe(
+        solution_path = normalize_optional_component_source_path_safe(
             source_rel,
             "solutions",
             "solution path",
         )
-        if not safe_solution:
+        if not solution_path:
             continue
-        candidate = (workspace / safe_solution).resolve()
+        candidate = (workspace / solution_path).resolve()
         try:
             candidate.relative_to(workspace.resolve())
         except Exception:
             continue
         if candidate.exists() and candidate.is_file() and (not candidate.is_symlink()):
-            out.append(safe_solution)
+            out.append(solution_path)
     return dedupe_preserve_order(out)
 
 def _run_detail_use_compact_layout(detail_ctx: dict[str, object]) -> bool:
-    columns = detail_ctx.get("detail_columns")
-    if not isinstance(columns, list):
-        return False
-    column_count = len(columns)
-    if column_count >= 12:
-        return True
-    if column_count <= 8:
-        return False
-    max_title_len = 0
-    for col in columns:
-        if not isinstance(col, dict):
-            continue
-        title = str(col.get("title") or col.get("source") or "").strip()
-        if len(title) > max_title_len:
-            max_title_len = len(title)
-    return max_title_len >= 28
+    columns = detail_ctx.get("detail_columns") or []
+    return len(columns) >= 12
 
 def _bare_repo_head_commit(bare_repo: Path) -> str:
     try:
@@ -285,21 +288,12 @@ def _bare_repo_head_commit(bare_repo: Path) -> str:
     except OSError:
         raise ValueError("import target bare repository path is invalid")
     proc = run_cmd(["git", "-C", str(bare_repo), "rev-parse", "--verify", "HEAD"])
-    if proc.returncode != 0:
-        return ""
-    return str(proc.stdout or "").strip()
+    return proc.stdout.strip() if proc.returncode == 0 else ""
 
 def _workspace_problem_mode(workspace: Path) -> str:
     cfg_path = workspace / "config" / "problem.json"
     try:
-        if cfg_path.exists() and cfg_path.is_file() and (not cfg_path.is_symlink()):
-            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                mode = str(payload.get("mode") or "").strip().lower()
-                if mode:
-                    return mode
+        return json.loads(cfg_path.read_text(encoding="utf-8")).get("mode", "pass-fail").strip()
     except Exception:
-        return "pass-fail"
+        pass
     return "pass-fail"
-
-

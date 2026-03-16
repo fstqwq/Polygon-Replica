@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -92,7 +92,7 @@ def _extract_tar_safe(tar_path: Path, target: Path) -> None:
             if member.isdir():
                 out.mkdir(parents=True, exist_ok=True)
                 continue
-            # Keep snapshot materialized as plain files/directories only.
+            # Keep snapshot built as plain files/directories only.
             if member.issym() or member.islnk() or not member.isfile():
                 continue
             src = tf.extractfile(member)

@@ -255,7 +255,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertIn(r"\begin{problem}{Guess the Number (Deluxe ver.)}", rendered_problem)
         self.assertTrue((ws / "statement" / "rendered" / "english" / "problem.pdf").is_file())
 
-        def _fake_run_verification(_service, problem: str, username: str, *args, **kwargs) -> str:
+        def _fake_run_build(_service, problem: str, username: str, *args, **kwargs) -> str:
             self.assertEqual(problem, self.problem)
             self.assertEqual(username, self.user)
             ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -275,7 +275,7 @@ class TestPolygonPackageImport(SmokeBase):
                     int(ctx["workspace"]["id"]),
                     "",
                     "main",
-                    "materialization",
+                    "build",
                     "ok",
                     "{}",
                     str(artifact_root),
@@ -285,7 +285,7 @@ class TestPolygonPackageImport(SmokeBase):
             )
             return verification_id
 
-        with patch("app.service.verification.service.run_verification_job", side_effect=_fake_run_materialization):
+        with patch("app.service.verification.service.run_verification_job", side_effect=_fake_run_build):
             verification_id = config.verification_service.run_verification(self.problem, self.user)
         verification_row = db.fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
@@ -364,4 +364,3 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertIn("pdflatex missing", str(summary.get("error") or ""))
         artifact_root = Path(str(row["artifact_path"]))
         self.assertFalse((artifact_root / "statement_preview" / "statement.pdf").exists())
-

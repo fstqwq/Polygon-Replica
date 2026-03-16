@@ -4,22 +4,32 @@ import base64
 import json
 from pathlib import Path
 import random
-import re
 import shlex
 import shutil
 import uuid
+from typing import Literal, TypedDict, cast
 
 from app.db import now_iso
+from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
 from app.service.platform.process import run_cmd
 from app.service.platform.testlib_source import workspace_testlib_header
-from app.service.verification import (
-    VERIFICATION_KIND_VERIFICATION,
+from app.service.verification.cache import (
+    artifact_ref_from_cache_key_hash,
+    ensure_artifact_paths,
+    verification_cache_key,
+    verification_cache_key_hash,
+)
+from app.service.verification.judge_solve import solve_result_error, solve_with_judge_backend
+from app.service.verification.pipeline import wait_build_terminal_status
+from app.service.verification.runtime import normalize_problem_mode
+from app.service.verification.store import (
     create_verification_record,
     load_verification_record,
     load_verification_summary,
     save_verification_summary,
     verification_update_lock,
 )
+from app.service.verification.types import Kind, Status
 from app.service.verification.diagnostic import compact_single_line, normalize_diagnostics_for_db
 from app.service.verification.source import resolve_source
 from app.service.verification.summary import summary_for_db
@@ -31,36 +41,268 @@ SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
 DEFAULT_TIME_LIMIT_MS = 2000
 
 
+NormalizedTestPayload = TypedDict(
+    "NormalizedTestPayload",
+    {
+        "name": str,
+        "input_b64": str,
+        "answer_name": str,
+        "answer_b64": str,
+    },
+)
+
+TestsSpecManualRow = TypedDict(
+    "TestsSpecManualRow",
+    {
+        "id": str,
+        "sample": bool,
+        "sample_input": str,
+        "sample_output": str,
+        "sample_output_validate": bool,
+        "index": int,
+        "source_rel": str,
+        "kind": Literal["manual"],
+        "input": str,
+    },
+)
+
+TestsSpecGenRow = TypedDict(
+    "TestsSpecGenRow",
+    {
+        "id": str,
+        "sample": bool,
+        "sample_input": str,
+        "sample_output": str,
+        "sample_output_validate": bool,
+        "index": int,
+        "source_rel": str,
+        "kind": Literal["gen"],
+        "target_name": str,
+        "args": list[str],
+        "cmd": str,
+        "payload_rel": str,
+    },
+)
+
+
+TestsSpecRuntimeRow = TestsSpecManualRow | TestsSpecGenRow
+
+
+CustomSampleRow = TypedDict(
+    "CustomSampleRow",
+    {
+        "id": str,
+        "sample_input": str,
+        "sample_output": str,
+        "sample_output_validate": bool,
+    },
+)
+
+PlannedManualRow = TypedDict(
+    "PlannedManualRow",
+    {
+        "kind": Literal["manual"],
+        "dst": Path,
+        "input_bytes": bytes,
+        "tests_meta": dict[str, object],
+        "log_prefix": str,
+        "error_context": str,
+        "custom_sample_row": CustomSampleRow | None,
+        "answer_source": Path | None,
+    },
+)
+
+PlannedGenRow = TypedDict(
+    "PlannedGenRow",
+    {
+        "kind": Literal["gen"],
+        "dst": Path,
+        "generator_source": Path,
+        "command_payload": str,
+        "tests_meta": dict[str, object],
+        "log_prefix": str,
+        "error_context": str,
+        "custom_sample_row": CustomSampleRow | None,
+        "answer_source": Path | None,
+    },
+)
+
+
+PlannedRow = PlannedManualRow | PlannedGenRow
+
+
+VerificationRunRecord = TypedDict(
+    "VerificationRunRecord",
+    {
+        "source_label": str,
+        "status": str,
+        "artifact_path": str,
+        "summary": dict[str, object],
+    },
+)
+
+SolveStageSummary = TypedDict(
+    "SolveStageSummary",
+    {
+        "verification_source": str,
+        "status": str,
+        "source": str,
+        "artifact_path": str,
+        "mode": str,
+        "error": str,
+        "tests_total": int,
+        "tests": list[dict[str, object]],
+        "usage": dict[str, object],
+        "compile_log": str,
+        "compile_diagnostics": list[dict[str, object]],
+    },
+    total=False,
+)
+
+SolveStageResultOut = TypedDict(
+    "SolveStageResultOut",
+    {
+        "artifact_path": str,
+        "run_id": str,
+        "status": str,
+        "summary": dict[str, object],
+    },
+    total=False,
+)
+
+SolveResultRow = TypedDict(
+    "SolveResultRow",
+    {
+        "rc": int,
+        "worker_error": str,
+        "timed_out": bool,
+        "stderr": str,
+        "verdict": str,
+    },
+)
+
+CompileDiagnosticRow = TypedDict(
+    "CompileDiagnosticRow",
+    {
+        "message": str,
+    },
+    total=False,
+)
+
+JudgehostState = TypedDict(
+    "JudgehostState",
+    {
+        "task_id": str,
+    },
+    total=False,
+)
+
+TestPassSummary = TypedDict(
+    "TestPassSummary",
+    {
+        "verdict": str,
+        "feedback": str,
+        "output_ref": str,
+        "output_artifact": str,
+        "output_rel": str,
+    },
+    total=False,
+)
+
+TestSummaryRow = TypedDict(
+    "TestSummaryRow",
+    {
+        "test": str,
+        "verdict": str,
+        "feedback": str,
+        "output_ref": str,
+        "output_artifact": str,
+        "output_rel": str,
+        "passes": list[TestPassSummary],
+    },
+    total=False,
+)
+
+JudgehostRunSummary = TypedDict(
+    "JudgehostRunSummary",
+    {
+        "compile_diagnostics": list[CompileDiagnosticRow],
+        "error": str,
+        "judgehost": JudgehostState,
+        "tests": list[TestSummaryRow],
+    },
+    total=False,
+)
+
+JudgehostTaskResult = TypedDict(
+    "JudgehostTaskResult",
+    {
+        "task_status": str,
+        "error": str,
+        "status": str,
+        "summary": JudgehostRunSummary,
+        "artifact_path": str,
+    },
+    total=False,
+)
+
+JudgehostJobRow = TypedDict(
+    "JudgehostJobRow",
+    {
+        "work_root": str,
+    },
+)
+
+JudgehostCaseRow = TypedDict(
+    "JudgehostCaseRow",
+    {
+        "id": int,
+        "output_run_rel": str,
+        "work_root": str,
+    },
+)
+
+
+def _default_accepted_solution_source(snapshot: Path) -> str:
+    solutions_root = snapshot / "solutions"
+    if not solutions_root.exists() or (not solutions_root.is_dir()) or solutions_root.is_symlink():
+        return ""
+    solution_paths: list[str] = []
+    accepted_paths: list[str] = []
+    for path in sorted(p for p in solutions_root.rglob("*") if p.is_file()):
+        rel = path.relative_to(snapshot).as_posix()
+        if Path(rel).suffix.lower() not in SOLUTION_SOURCE_EXTENSIONS:
+            continue
+        solution_paths.append(rel)
+        if normalize_expected_behavior(infer_expected_behavior_from_name(rel)) == "accepted":
+            accepted_paths.append(rel)
+    if accepted_paths:
+        return accepted_paths[0]
+    if len(solution_paths) == 1:
+        return solution_paths[0]
+    return ""
+
+
 def _promote_solve_main_stage_into_runs(summary: dict[str, object], *, verification_id: str) -> None:
-    if not isinstance(summary, dict):
+    stage_results = cast(dict[str, SolveStageSummary], summary.get("stage_results") or {})
+    solve_stage = stage_results.get("solve_main")
+    if solve_stage is None:
         return
-    stage_results_obj = summary.get("stage_results")
-    stage_results = stage_results_obj if isinstance(stage_results_obj, dict) else {}
-    solve_stage_obj = stage_results.get("solve_main")
-    solve_stage = dict(solve_stage_obj) if isinstance(solve_stage_obj, dict) else {}
-    source_token = str(solve_stage.get("source") or "").strip()
+    source_token = solve_stage["source"]
     if not source_token:
         return
-    runs_obj = summary.get("runs")
-    runs = runs_obj if isinstance(runs_obj, dict) else {}
+    runs = cast(dict[str, VerificationRunRecord], summary.get("runs") or {})
     for run_id, item in list(runs.items()):
-        if not isinstance(item, dict):
+        if item["source_label"] != source_token:
             continue
-        source_label = str(item.get("source_label") or "").strip()
-        if source_label != source_token:
-            continue
-        run_summary_obj = item.get("summary")
-        run_summary = dict(run_summary_obj) if isinstance(run_summary_obj, dict) else {}
+        run_summary = dict(item["summary"])
         run_summary.update(solve_stage)
-        item["status"] = str(solve_stage.get("status") or item.get("status") or "running").strip().lower() or "running"
-        item["artifact_path"] = str(solve_stage.get("artifact_path") or item.get("artifact_path") or "").strip()
+        item["status"] = solve_stage["status"]
+        item["artifact_path"] = solve_stage["artifact_path"]
         item["summary"] = run_summary
         runs[run_id] = item
         summary["runs"] = runs
-        summary["artifact_verification_id"] = str(verification_id or "").strip()
-        current_artifact_status = str(summary.get("artifact_verification_status") or "").strip().lower()
-        if not current_artifact_status:
-            summary["artifact_verification_status"] = "running"
+        summary["artifact_verification_id"] = verification_id
         break
 
 
@@ -79,7 +321,8 @@ def run_verification_job(
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
     source_commit = ""
-    source_ref = ref or commit or ctx["workspace"].get("branch") or "main"
+    workspace_branch = cast(str | None, ctx["workspace"].get("branch")) or ""
+    source_ref = ref if ref else commit if commit else workspace_branch if workspace_branch else "main"
     resolved_commit_override = ""
     generation_params_digest = ""
     toolchain_cmd_digest = self._toolchain_cmd_digest() or "unknown"
@@ -109,8 +352,8 @@ def run_verification_job(
             with self.workspace_service.workspace_lock(workspace):
                 status = self.workspace_service.read_workspace_status(workspace)
                 workspace_dirty = bool(status.get("dirty"))
-                workspace_head = str(status.get("head_commit") or "").strip()
-                workspace_branch = str(status.get("branch") or "").strip()
+                workspace_head = cast(str | None, status.get("head_commit")) or ""
+                workspace_branch = cast(str | None, status.get("branch")) or ""
                 if not workspace_head:
                     workspace_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                 if workspace_branch and (not ref):
@@ -138,65 +381,79 @@ def run_verification_job(
         if inflight_snapshot is not None:
             shutil.rmtree(inflight_snapshot.parent, ignore_errors=True)
 
-    target_verification_id = str(verification_id or "").strip()
+    target_verification_id = verification_id
     persist_into_existing_verification = bool(target_verification_id)
 
+    cache_source_commit = source_commit
+    cache_source_ref = source_ref
+    cache_generation_params_digest = generation_params_digest
+    cache_toolchain_cmd_digest = toolchain_cmd_digest
     if source_commit and generation_params_digest and (not persist_into_existing_verification):
         use_verification_result_cache = True
-        cache_key = self._verification_cache_key(
+        cache_key = verification_cache_key(
+            schema=self.VERIFICATION_CACHE_SCHEMA,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit=str(source_commit or "").strip(),
-            source_ref=str(source_ref or "").strip(),
-            generation_params_digest=str(generation_params_digest or "").strip().lower(),
-            toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
+            source_commit=cache_source_commit,
+            source_ref=cache_source_ref,
+            generation_params_digest=cache_generation_params_digest,
+            toolchain_cmd_digest=cache_toolchain_cmd_digest,
             sample_only=bool(sample_only),
         )
         cached_verification_id = self._cached_verification_id_for_source(
-            problem_slug=problem,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit=str(source_commit or "").strip(),
-            source_ref=str(source_ref or "").strip(),
-            generation_params_digest=str(generation_params_digest or "").strip().lower(),
-            toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
+            source_commit=cache_source_commit,
+            source_ref=cache_source_ref,
+            generation_params_digest=cache_generation_params_digest,
+            toolchain_cmd_digest=cache_toolchain_cmd_digest,
             sample_only=bool(sample_only),
         )
         if cached_verification_id:
             return cached_verification_id
-        cache_key_hash = self._verification_cache_key_hash(cache_key)
+        cache_key_hash = verification_cache_key_hash(cache_key)
 
     artifact_ref_key = (
         cache_key
-        if isinstance(cache_key, dict)
-        else self._verification_cache_key(
+        if cache_key is not None
+        else verification_cache_key(
+            schema=self.VERIFICATION_CACHE_SCHEMA,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit=str(source_commit or "").strip(),
-            source_ref=str(source_ref or "").strip(),
-            generation_params_digest=str(generation_params_digest or "").strip().lower(),
-            toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
+            source_commit=cache_source_commit,
+            source_ref=cache_source_ref,
+            generation_params_digest=cache_generation_params_digest,
+            toolchain_cmd_digest=cache_toolchain_cmd_digest,
             sample_only=bool(sample_only),
         )
     )
-    artifact_ref = self._artifact_ref_from_cache_key_hash(self._verification_cache_key_hash(artifact_ref_key))
+    artifact_ref = artifact_ref_from_cache_key_hash(
+        self.fs_manager,
+        schema=self.VERIFICATION_CACHE_SCHEMA,
+        cache_key_hash=verification_cache_key_hash(artifact_ref_key),
+    )
     verification_id = target_verification_id or f"ver-{uuid.uuid4().hex[:10]}"
     if cache_key is not None:
         existing_verification_id = ""
-        with self._build_inflight_lock:
-            existing_verification_id = str(self._build_inflight.get(cache_key_hash) or "").strip()
+        with self._verification_inflight_lock:
+            existing_verification_id = self._verification_inflight.get(cache_key_hash, "")
             if not existing_verification_id:
-                self._build_inflight[cache_key_hash] = verification_id
+                self._verification_inflight[cache_key_hash] = verification_id
                 inflight_owner = True
         if existing_verification_id:
-            status = self._wait_build_terminal_status(existing_verification_id, self.BUILD_JOIN_WAIT_TIMEOUT_SEC)
+            status = wait_build_terminal_status(
+                self.db,
+                verification_id=existing_verification_id,
+                timeout_sec=self.VERIFICATION_JOIN_WAIT_TIMEOUT_SEC,
+                poll_sec=self.VERIFICATION_JOIN_POLL_SEC,
+            )
             if status == "ok":
                 return existing_verification_id
             if status in {"failed", "cancelled"}:
                 raise RuntimeError("same-configuration verification already failed; check logs and retry")
             raise RuntimeError("same-configuration verification is still running; refresh later")
 
-    artifact_paths = self._artifact_paths(problem, artifact_ref)
+    artifact_paths = ensure_artifact_paths(self.fs_manager, artifact_ref=artifact_ref)
     # Artifact refs are content-addressed and can be reused across retries. Ensure
     # each verification starts from a clean artifact layout to avoid stale files from a
     # previous failed/incomplete attempt leaking into current verification.
@@ -220,7 +477,7 @@ def run_verification_job(
             existing_record = load_verification_record(self.db, verification_id)
             if existing_record is not None:
                 existing_summary = load_verification_summary(self.db, verification_id)
-                existing_status = str(existing_record.get("status") or "").strip().lower() or "running"
+                existing_status = existing_record["status"]
         summary_seed = dict(existing_summary)
         summary_seed["verification_id"] = verification_id
         create_verification_record(
@@ -231,7 +488,7 @@ def run_verification_job(
             workspace_id=workspace_id,
             source_commit=source_commit,
             source_ref=source_ref,
-            kind=VERIFICATION_KIND_VERIFICATION,
+            kind=Kind.VERIFICATION,
             status=existing_status if persist_into_existing_verification else "running",
             summary=summary_seed,
             artifact_path=artifact_paths.root,
@@ -251,8 +508,8 @@ def run_verification_job(
     diagnostics: list[dict] = []
     build_cfg: dict = {}
     tests_spec_entries: list[dict] | None = None
-    tests_spec_runtime: list[dict] = []
-    custom_sample_rows_by_test: dict[str, dict[str, object]] = {}
+    tests_spec_runtime: list[TestsSpecRuntimeRow] = []
+    custom_sample_rows_by_test: dict[str, CustomSampleRow] = {}
     current_step = "compile"
     failing_test: str | None = None
     snapshot: Path | None = None
@@ -266,6 +523,8 @@ def run_verification_job(
         "solve_main": {
             "verification_source": "verification.solve-main",
             "status": "pending",
+            "source": "",
+            "artifact_path": "",
             "tests": [],
         },
     }
@@ -282,8 +541,8 @@ def run_verification_job(
         else:
             with self.workspace_service.workspace_lock(workspace):
                 status = self.workspace_service.read_workspace_status(workspace)
-                source_commit = str(status.get("head_commit") or "").strip()
-                branch = str(status.get("branch") or "").strip()
+                source_commit = cast(str | None, status.get("head_commit")) or ""
+                branch = cast(str | None, status.get("branch")) or ""
                 dirty = bool(status.get("dirty"))
                 if not source_commit:
                     source_commit = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
@@ -312,7 +571,7 @@ def run_verification_job(
 
         build_cfg = self._load_build_config(snapshot)
         runtime_cfg = self._load_problem_runtime_config(snapshot)
-        problem_mode = self._normalize_problem_mode(runtime_cfg.get("mode"), "pass-fail")
+        problem_mode = normalize_problem_mode(runtime_cfg.get("mode"), "pass-fail")
         interactive_mode = problem_mode == "interactive"
         time_limit_ms = int(runtime_cfg.get("time_limit_ms", DEFAULT_TIME_LIMIT_MS))
         run_timeout_ms = self._effective_run_timeout_ms(time_limit_ms, mode=problem_mode)
@@ -332,7 +591,7 @@ def run_verification_job(
             )
             generator_targets.extend(tests_spec_generators)
         else:
-            configured_generators = [str(x) for x in build_cfg.get("generator_sources", []) if str(x).strip()]
+            configured_generators = cast(list[str], build_cfg.get("generator_sources", []))
             if configured_generators:
                 for idx, rel in enumerate(configured_generators, start=1):
                     generator_targets.append(
@@ -345,7 +604,9 @@ def run_verification_job(
             else:
                 generator_targets.append(("generator", None, bin_dir / "generator"))
 
-        accepted_rel = str(build_cfg.get("accepted_solution_source") or "").strip()
+        accepted_rel = cast(str | None, build_cfg.get("accepted_solution_source")) or ""
+        if not accepted_rel:
+            accepted_rel = _default_accepted_solution_source(snapshot)
         if not accepted_rel:
             raise RuntimeError("accepted solution source is required")
         if not accepted_rel.startswith("solutions/"):
@@ -389,14 +650,14 @@ def run_verification_job(
             ("accepted_solution", accepted_src, bin_dir / "accepted_solution"),
         ]
         generator_source_by_name: dict[str, Path] = {
-            str(name): source
+            name: source
             for name, source, _output in generator_targets
-            if isinstance(source, Path)
+            if source is not None
         }
         compile_source_by_name: dict[str, Path] = {
-            str(name): source
+            name: source
             for name, source, _output in compile_targets
-            if isinstance(source, Path)
+            if source is not None
         }
         shared_testlib_blob: bytes | None = None
         resolved_testlib = workspace_testlib_header(snapshot)
@@ -407,128 +668,101 @@ def run_verification_job(
         compile_backend = self.judgehost_task_service
         try:
             if (not compile_backend.enabled()) or (not compile_backend.auth_token_configured()):
-                raise RuntimeError("judge backend unavailable for build compile")
+                raise RuntimeError("judge backend unavailable for verification compile")
         except Exception as exc:
-            raise RuntimeError("judge backend unavailable for build compile") from exc
+            raise RuntimeError("judge backend unavailable for verification compile") from exc
 
-        def _first_compile_message(summary: dict) -> str:
-            diagnostics_obj = summary.get("compile_diagnostics")
-            if isinstance(diagnostics_obj, list):
-                for item in diagnostics_obj:
-                    if not isinstance(item, dict):
-                        continue
-                    message = str(item.get("message") or "").strip()
-                    if message:
-                        return message
-            return str(summary.get("error") or "").strip()
+        def _first_compile_message(summary: JudgehostRunSummary) -> str:
+            diagnostics = summary.get("compile_diagnostics", [])
+            for item in diagnostics:
+                message = item.get("message", "")
+                if message:
+                    return message
+            return summary.get("error", "")
 
-        def _run_summary_work_root(summary: dict) -> Path | None:
-            judgehost_obj = summary.get("judgehost")
-            if not isinstance(judgehost_obj, dict):
-                return None
-            task_id = str(judgehost_obj.get("task_id") or "").strip()
-            if not task_id:
+        def _run_summary_task_id(summary: JudgehostRunSummary) -> str:
+            judgehost = summary.get("judgehost")
+            if judgehost is None:
+                return ""
+            return judgehost.get("task_id", "")
+
+        def _domjudge_fetch_one(sql: str, values: list[object]) -> object | None:
+            fetch_one = getattr(compile_backend, "_db_fetch_one", None)
+            if not callable(fetch_one):
                 return None
             try:
-                job_row = self.db.fetch_one(
-                    "SELECT work_root FROM judgehost_domjudge_jobs WHERE task_id=? ORDER BY job_id DESC LIMIT 1",
-                    [task_id],
-                )
+                return fetch_one(sql, values)
             except Exception:
-                job_row = None
+                return None
+
+        def _run_summary_work_root(summary: JudgehostRunSummary) -> Path | None:
+            task_id = _run_summary_task_id(summary)
+            if not task_id:
+                return None
+            job_row = _domjudge_fetch_one(
+                "SELECT work_root FROM judgehost_domjudge_jobs WHERE task_id=? ORDER BY job_id DESC LIMIT 1",
+                [task_id],
+            )
             if job_row is not None:
-                work_root = str(job_row["work_root"] or "").strip()
+                work_root = cast(JudgehostJobRow, job_row)["work_root"]
                 if work_root:
                     try:
                         return Path(work_root).resolve()
                     except Exception:
                         return None
-            resolver = getattr(compile_backend, "_domjudge_work_root", None)
-            if not callable(resolver):
-                return None
-            try:
-                return Path(str(resolver(task_id))).resolve()
-            except Exception:
-                return None
+            return None
 
-        def _run_summary_verdict(summary: dict) -> str:
-            tests_obj = summary.get("tests")
-            tests = tests_obj if isinstance(tests_obj, list) else []
-            for row in tests:
-                if not isinstance(row, dict):
-                    continue
-                verdict = str(row.get("verdict") or "").strip().upper()
-                if verdict:
-                    return verdict
-                passes_obj = row.get("passes")
-                passes = passes_obj if isinstance(passes_obj, list) else []
-                for pass_row in passes:
-                    if not isinstance(pass_row, dict):
-                        continue
-                    verdict = str(pass_row.get("verdict") or "").strip().upper()
-                    if verdict:
-                        return verdict
-            return ""
+        def _run_summary_case_output(summary: JudgehostRunSummary, test_name: str) -> tuple[str, Path | None, int]:
+            task_id = _run_summary_task_id(summary)
+            if (not task_id) or (not test_name):
+                return ("", None, 0)
+            case_row = _domjudge_fetch_one(
+                """
+                SELECT c.id, c.output_run_rel, j.work_root
+                FROM judgehost_domjudge_cases c
+                JOIN judgehost_domjudge_jobs j ON j.job_id = c.job_id
+                WHERE c.task_id=? AND c.test_name=?
+                ORDER BY c.id DESC
+                LIMIT 1
+                """,
+                [task_id, test_name],
+            )
+            if case_row is None:
+                return ("", None, 0)
+            case_row = cast(JudgehostCaseRow, case_row)
+            output_ref = case_row["output_run_rel"]
+            case_id = int(case_row["id"])
+            work_root = None
+            work_root_text = case_row["work_root"]
+            if work_root_text:
+                try:
+                    work_root = Path(work_root_text).resolve()
+                except Exception:
+                    work_root = None
+            return (output_ref, work_root, case_id)
 
-        def _run_summary_feedback_line(summary: dict) -> str:
-            tests_obj = summary.get("tests")
-            tests = tests_obj if isinstance(tests_obj, list) else []
-            for row in tests:
-                if not isinstance(row, dict):
-                    continue
-                passes_obj = row.get("passes")
-                passes = passes_obj if isinstance(passes_obj, list) else []
-                for pass_row in passes:
-                    if not isinstance(pass_row, dict):
-                        continue
-                    feedback = str(pass_row.get("feedback") or "").strip()
-                    if feedback:
-                        return feedback
-                feedback = str(row.get("feedback") or "").strip()
-                if feedback:
-                    return feedback
-            return ""
-
-        def _run_summary_test_result_map(summary: dict) -> dict[str, dict[str, str]]:
-            tests_obj = summary.get("tests")
-            tests = tests_obj if isinstance(tests_obj, list) else []
+        def _run_summary_test_result_map(summary: JudgehostRunSummary) -> dict[str, dict[str, str]]:
+            tests = summary.get("tests", [])
             result_map: dict[str, dict[str, str]] = {}
             for row in tests:
-                if not isinstance(row, dict):
-                    continue
-                test_name = str(row.get("test") or "").strip()
+                test_name = row.get("test", "")
                 if not test_name:
                     continue
-                passes_obj = row.get("passes")
-                pass_rows = [item for item in passes_obj if isinstance(item, dict)] if isinstance(passes_obj, list) else []
-                first_pass = pass_rows[0] if pass_rows else {}
-                final_pass: dict[str, object] | None = None
+                pass_rows = row.get("passes", [])
+                first_pass: TestPassSummary = pass_rows[0] if pass_rows else {}
+                final_pass: TestPassSummary | None = None
                 for item in pass_rows:
-                    verdict_token = str(item.get("verdict") or "").strip().upper()
+                    verdict_token = item.get("verdict", "").upper()
                     if verdict_token and verdict_token != "-":
                         final_pass = item
                 if final_pass is None:
-                    final_pass = first_pass if isinstance(first_pass, dict) else {}
-                verdict = str(
-                    row.get("verdict")
-                    or final_pass.get("verdict")
-                    or (first_pass.get("verdict") if isinstance(first_pass, dict) else "")
-                    or ""
-                ).strip().upper()
-                feedback = str(
-                    final_pass.get("feedback")
-                    or (first_pass.get("feedback") if isinstance(first_pass, dict) else "")
-                    or row.get("feedback")
-                    or ""
-                ).strip()
+                    final_pass = first_pass
+                verdict = row.get("verdict") or final_pass.get("verdict", "") or first_pass.get("verdict", "")
+                verdict = verdict.upper()
+                feedback = final_pass.get("feedback", "") or first_pass.get("feedback", "") or row.get("feedback", "")
                 output_ref = ""
                 for key in ("output_ref", "output_artifact", "output_rel"):
-                    token = str(
-                        final_pass.get(key)
-                        or (first_pass.get(key) if isinstance(first_pass, dict) else "")
-                        or row.get(key)
-                        or ""
-                    ).strip()
+                    token = final_pass.get(key, "") or first_pass.get(key, "") or row.get(key, "")
                     if token:
                         output_ref = token
                         break
@@ -543,25 +777,23 @@ def run_verification_job(
             *,
             source_name: str,
             source_bytes: bytes,
-            tests_payload: list[dict[str, str]],
+            tests_payload: list[NormalizedTestPayload],
             extra_sources_b64: dict[str, str] | None = None,
             manual_validate_only: bool = False,
         ) -> dict[str, tuple[int, str]]:
             owner_verification_id = verification_id
-            safe_source_name = Path(str(source_name or "").strip() or "submission.cpp").name
-            normalized_tests: list[dict[str, str]] = []
+            safe_source_name = Path(source_name if source_name else "submission.cpp").name
+            normalized_tests: list[NormalizedTestPayload] = []
             for row in tests_payload:
-                if not isinstance(row, dict):
-                    continue
-                test_name = Path(str(row.get("name") or "").strip()).name
+                test_name = Path(row["name"]).name
                 if not RUN_TEST_NAME_RE.fullmatch(test_name):
                     continue
                 normalized_tests.append(
                     {
                         "name": test_name,
-                        "input_b64": str(row.get("input_b64") or ""),
-                        "answer_name": str(row.get("answer_name") or f"{Path(test_name).stem}.ans"),
-                        "answer_b64": str(row.get("answer_b64") or ""),
+                        "input_b64": row["input_b64"],
+                        "answer_name": row["answer_name"],
+                        "answer_b64": row["answer_b64"],
                     }
                 )
             if not normalized_tests:
@@ -572,19 +804,19 @@ def run_verification_job(
             binaries_payload: dict[str, str] = {}
             submission_extra_sources_payload: dict[str, str] = {}
 
-            if isinstance(validator_source, Path) and validator_source.exists() and validator_source.is_file():
+            if validator_source is not None and validator_source.exists() and validator_source.is_file():
                 sources_payload["validator.cpp"] = base64.b64encode(validator_source.read_bytes()).decode("ascii")
                 if shared_testlib_blob is not None:
                     sources_payload["testlib.h"] = base64.b64encode(shared_testlib_blob).decode("ascii")
-            if isinstance(extra_sources_b64, dict):
+            if extra_sources_b64 is not None:
                 for raw_name, raw_blob in extra_sources_b64.items():
-                    safe_name = Path(str(raw_name or "").strip()).name
+                    safe_name = Path(raw_name).name
                     if not safe_name:
                         continue
-                    submission_extra_sources_payload[safe_name] = str(raw_blob or "")
+                    submission_extra_sources_payload[safe_name] = raw_blob
                     if safe_name in sources_payload:
                         continue
-                    sources_payload[safe_name] = str(raw_blob or "")
+                    sources_payload[safe_name] = raw_blob
 
             checker_args: list[str] = []
             if manual_validate_only:
@@ -634,31 +866,31 @@ def run_verification_job(
                 persist_verification_run=False,
                 prepared_payload=prepared_payload,
             )
-            task_result = compile_backend.wait_for_task_result(task_id, timeout_sec=None)
-            if str(task_result.get("task_status") or "").strip().lower() == compile_backend.STATUS_FAILED:
-                detail = str(task_result.get("error") or "").strip() or "judge backend generate task failed"
-                return {row["name"]: (1, detail) for row in normalized_tests}
-            run_status = str(task_result.get("status") or "").strip().lower()
-            summary_raw = task_result.get("summary")
-            summary_obj: dict = dict(summary_raw) if isinstance(summary_raw, dict) else {}
+            task_result = cast(JudgehostTaskResult, compile_backend.wait_for_task_result(task_id, timeout_sec=None))
+            task_status = task_result.get("task_status", "")
+            if task_status == compile_backend.STATUS_FAILED:
+                task_error = task_result.get("error", "") or "judge backend generate task failed"
+                return {row["name"]: (1, task_error) for row in normalized_tests}
+            run_status = task_result.get("status", "")
+            summary_obj = task_result.get("summary", {})
             if run_status and run_status != "ok":
-                detail = str(summary_obj.get("error") or "").strip() or f"judge backend run status is {run_status}"
-                return {row["name"]: (1, detail) for row in normalized_tests}
-            artifact_path = str(task_result.get("artifact_path") or "").strip()
+                summary_error = summary_obj.get("error", "") or f"judge backend run status is {run_status}"
+                return {row["name"]: (1, summary_error) for row in normalized_tests}
+            artifact_path = task_result.get("artifact_path", "")
             run_root = Path(artifact_path).resolve() if artifact_path else Path()
             work_root_hint = _run_summary_work_root(summary_obj)
             test_result_map = _run_summary_test_result_map(summary_obj)
             results: dict[str, tuple[int, str]] = {}
             for row in normalized_tests:
-                case_name = str(row.get("name") or "").strip()
+                case_name = row["name"]
                 case_result = test_result_map.get(case_name, {})
-                verdict = str(case_result.get("verdict") or "").strip().upper()
+                verdict = case_result.get("verdict", "")
                 if verdict and verdict != "OK":
-                    detail = str(case_result.get("feedback") or "").strip()
+                    detail = case_result.get("feedback", "")
                     if (not detail) and verdict == "CE":
                         detail = _first_compile_message(summary_obj)
                     if not detail:
-                        detail = str(summary_obj.get("error") or "").strip()
+                        detail = summary_obj.get("error", "")
                     if not detail:
                         detail = f"judge verdict {verdict}"
                     results[case_name] = (1, detail)
@@ -666,19 +898,32 @@ def run_verification_job(
                 if manual_validate_only:
                     results[case_name] = (0, "")
                     continue
-                output_ref = str(case_result.get("output_ref") or "").strip()
+                output_ref = case_result.get("output_ref", "")
+                case_output_ref, case_work_root, case_id = _run_summary_case_output(summary_obj, case_name)
+                if not output_ref:
+                    output_ref = case_output_ref
+                blob_work_root = case_work_root or work_root_hint
                 output_blob: bytes | None = None
                 if output_ref:
                     try:
-                        output_blob = compile_backend.resolve_artifact_blob(output_ref, work_root=work_root_hint)
+                        output_blob = compile_backend.resolve_artifact_blob(output_ref, work_root=blob_work_root)
                     except Exception:
                         output_blob = None
                 if output_blob is None:
-                    fallback = (run_root / f"{Path(case_name).stem}.out").resolve()
-                    if fallback.exists() and fallback.is_file() and (not fallback.is_symlink()):
-                        output_blob = fallback.read_bytes()
+                    fallback_candidates = [(run_root / f"{Path(case_name).stem}.out").resolve()]
+                    if output_ref and (not output_ref.startswith("cache://")):
+                        fallback_root = blob_work_root or run_root
+                        fallback_candidates.append((fallback_root / output_ref).resolve())
+                    if (case_id > 0) and (case_work_root is not None):
+                        fallback_candidates.append((case_work_root / "results" / f"{case_id}" / "program.out").resolve())
+                    for fallback in fallback_candidates:
+                        if fallback.exists() and fallback.is_file() and (not fallback.is_symlink()):
+                            output_blob = fallback.read_bytes()
+                            break
                 if output_blob is None:
-                    detail = str(case_result.get("feedback") or "").strip() or str(summary_obj.get("error") or "").strip()
+                    detail = case_result.get("feedback", "")
+                    if not detail:
+                        detail = summary_obj.get("error", "")
                     if not detail:
                         detail = "judge backend did not produce generated input output"
                     results[case_name] = (1, detail)
@@ -686,11 +931,10 @@ def run_verification_job(
                 results[case_name] = (0, output_blob.decode("utf-8", errors="replace"))
             return results
 
-        compile_log_path = logs_dir / "compile.log"
-        with compile_log_path.open("w", encoding="utf-8") as clog:
+        with (logs_dir / "compile.log").open("w", encoding="utf-8") as clog:
             clog.write("compile_jobs=0\n")
             clog.write("compile_strategy=judgehost-source-only\n")
-            for name, source, output in compile_targets:
+            for name, source, _output in compile_targets:
                 if source is None:
                     clog.write(f"[{name}] missing source\n\n")
                     continue
@@ -710,35 +954,32 @@ def run_verification_job(
 
         current_step = "generate"
         test_files: list[Path] = []
-        tests_meta: list[dict] = []
+        tests_meta: list[dict[str, object]] = []
         source_answer_by_test: dict[str, Path] = {}
         generate_stage_tests: list[dict[str, object]] = []
         counter = 1
         manual_count = 0
         generated_count = 0
-        generate_log_path = logs_dir / "generate.log"
-        with generate_log_path.open("w", encoding="utf-8") as glog:
-            planned_rows: list[dict[str, object]] = []
+        with (logs_dir / "generate.log").open("w", encoding="utf-8") as glog:
+            planned_rows: list[PlannedRow] = []
             if tests_spec_entries is not None:
                 glog.write("tests_source=tests/spec.json\n")
                 for row in tests_spec_runtime:
-                    kind = str(row.get("kind") or "")
-                    test_id = str(row.get("id") or "").strip()
-                    is_sample = bool(row.get("sample"))
+                    test_id = row["id"]
+                    is_sample = row["sample"]
                     if sample_only and (not is_sample):
                         continue
-                    custom_sample_input = str(row.get("sample_input") or "")
-                    custom_sample_output = str(row.get("sample_output") or "")
-                    custom_sample_output_validate = bool(row.get("sample_output_validate", True))
-                    file_index = int(row.get("index") or counter) if sample_only else counter
+                    custom_sample_input = row["sample_input"]
+                    custom_sample_output = row["sample_output"]
+                    custom_sample_output_validate = row["sample_output_validate"]
+                    file_index = row["index"] if sample_only else counter
                     dst = artifact_paths.tests / f"{file_index:03d}.in"
-                    if kind == "manual":
-                        input_bytes = str(row.get("input") or "").encode("utf-8")
+                    if row["kind"] == "manual":
                         planned_rows.append(
                             {
                                 "kind": "manual",
                                 "dst": dst,
-                                "input_bytes": input_bytes,
+                                "input_bytes": row["input"].encode("utf-8"),
                                 "tests_meta": {
                                     "index": file_index,
                                     "kind": "manual",
@@ -746,12 +987,12 @@ def run_verification_job(
                                     "sample": is_sample,
                                     "sample_input_custom": bool(custom_sample_input),
                                     "sample_output_custom": bool(custom_sample_output),
-                                    "sample_output_validate": bool(custom_sample_output_validate),
+                                    "sample_output_validate": custom_sample_output_validate,
                                     "desc": f"manual {test_id}" if test_id else "manual",
-                                    "source": str(row.get("source_rel") or "tests/spec.json"),
+                                    "source": row["source_rel"],
                                 },
-                                "log_prefix": f"manual id={test_id} index={row.get('index')}",
-                                "error_context": f"tests/spec.json entry {row.get('index')} (id={test_id})",
+                                "log_prefix": f"manual id={test_id} index={row['index']}",
+                                "error_context": f"tests/spec.json entry {row['index']} (id={test_id})",
                                 "custom_sample_row": {
                                     "id": test_id,
                                     "sample_input": custom_sample_input,
@@ -767,21 +1008,16 @@ def run_verification_job(
                             counter += 1
                         continue
 
-                    if kind != "gen":
-                        raise RuntimeError(f"invalid test kind at tests/spec.json entry {row.get('index')}")
-                    target_name = str(row.get("target_name") or "")
-                    gen_source = generator_source_by_name.get(target_name)
+                    gen_source = generator_source_by_name.get(row["target_name"])
                     if gen_source is None:
                         raise RuntimeError(
-                            f"generator source is required for tests/spec.json entry {row.get('index')}"
+                            f"generator source is required for tests/spec.json entry {row['index']}"
                         )
-                    args = [str(x) for x in row.get("args") or []]
-                    desc = str(row.get("cmd") or "").strip() or "gen"
-                    command_payload = " ".join(
-                        ['"$SUBMISSION_BIN"', *[shlex.quote(str(item or "")) for item in args]]
-                    ).strip()
-                    if not command_payload:
-                        command_payload = '"$SUBMISSION_BIN"'
+                    command_payload = (
+                        " ".join(['"$SUBMISSION_BIN"', *[shlex.quote(item) for item in row["args"]]])
+                        if row["args"]
+                        else '"$SUBMISSION_BIN"'
+                    )
                     planned_rows.append(
                         {
                             "kind": "gen",
@@ -795,14 +1031,14 @@ def run_verification_job(
                                 "sample": is_sample,
                                 "sample_input_custom": bool(custom_sample_input),
                                 "sample_output_custom": bool(custom_sample_output),
-                                "sample_output_validate": bool(custom_sample_output_validate),
-                                "desc": desc,
-                                "command": str(row.get("cmd") or "").strip(),
-                                "source": str(row.get("source_rel") or "").strip(),
-                                "payload_source": str(row.get("payload_rel") or "").strip(),
+                                "sample_output_validate": custom_sample_output_validate,
+                                "desc": row["cmd"] if row["cmd"] else "gen",
+                                "command": row["cmd"],
+                                "source": row["source_rel"],
+                                "payload_source": row["payload_rel"],
                             },
-                            "log_prefix": f"gen id={test_id} index={row.get('index')} source={row.get('source_rel')} cmd={row.get('cmd')}",
-                            "error_context": f"tests/spec.json entry {row.get('index')} (id={test_id})",
+                            "log_prefix": f"gen id={test_id} index={row['index']} source={row['source_rel']} cmd={row['cmd']}",
+                            "error_context": f"tests/spec.json entry {row['index']} (id={test_id})",
                             "custom_sample_row": {
                                 "id": test_id,
                                 "sample_input": custom_sample_input,
@@ -821,9 +1057,9 @@ def run_verification_job(
                 for t in tests:
                     dst = artifact_paths.tests / f"{counter:03d}.in"
                     try:
-                        source_rel = str(t.relative_to(snapshot)).replace("\\", "/")
+                        source_rel = t.relative_to(snapshot).as_posix()
                     except ValueError:
-                        source_rel = str(t.name)
+                        source_rel = t.name
                     planned_rows.append(
                         {
                             "kind": "manual",
@@ -844,29 +1080,29 @@ def run_verification_job(
                     counter += 1
 
                 generator_execs: list[tuple[int, str, Path]] = []
-                for gen_index, (name, source, _target) in enumerate(generator_targets, start=1):
+                for gen_index, (_name, source, _target) in enumerate(generator_targets, start=1):
                     if source is None:
                         continue
                     try:
-                        source_label = str(source.relative_to(snapshot)).replace("\\", "/")
+                        source_label = source.relative_to(snapshot).as_posix()
                     except ValueError:
-                        source_label = str(source)
+                        source_label = source.as_posix()
                     generator_execs.append((gen_index, source_label, source))
 
                 if generator_execs:
                     runs = int(build_cfg.get("generator_runs", 3))
-                    generator_args = [str(x) for x in build_cfg.get("generator_args", [])]
+                    generator_args = cast(list[str], build_cfg.get("generator_args", []))
                     for gen_index, source_label, gen_source in generator_execs:
                         for i in range(runs):
                             dst = artifact_paths.tests / f"{counter:03d}.in"
                             desc = f"gen: {source_label}"
                             if generator_args:
                                 desc = f"{desc} {' '.join(generator_args)}"
-                            command_payload = " ".join(
-                                ['"$SUBMISSION_BIN"', *[shlex.quote(str(item or "")) for item in generator_args]]
-                            ).strip()
-                            if not command_payload:
-                                command_payload = '"$SUBMISSION_BIN"'
+                            command_payload = (
+                                " ".join(['"$SUBMISSION_BIN"', *[shlex.quote(item) for item in generator_args]])
+                                if generator_args
+                                else '"$SUBMISSION_BIN"'
+                            )
                             planned_rows.append(
                                 {
                                     "kind": "gen",
@@ -887,40 +1123,31 @@ def run_verification_job(
                             )
                             counter += 1
 
-            manual_batch_payload: list[dict[str, str]] = []
-            manual_batch_rows: list[dict[str, object]] = []
-            gen_batch_payloads_by_source: dict[Path, list[dict[str, str]]] = {}
-            gen_batch_rows_by_source: dict[Path, list[dict[str, object]]] = {}
+            manual_batch_payload: list[NormalizedTestPayload] = []
+            gen_batch_payloads_by_source: dict[Path, list[NormalizedTestPayload]] = {}
             for planned in planned_rows:
                 dst = planned["dst"]
-                if not isinstance(dst, Path):
-                    continue
-                if str(planned.get("kind") or "") == "manual":
-                    manual_batch_rows.append(planned)
+                if planned["kind"] == "manual":
                     manual_batch_payload.append(
                         {
                             "name": dst.name,
-                            "input_b64": base64.b64encode(bytes(planned.get("input_bytes") or b"")).decode("ascii"),
+                            "input_b64": base64.b64encode(planned["input_bytes"]).decode("ascii"),
                             "answer_name": f"{dst.stem}.ans",
                             "answer_b64": "",
                         }
                     )
                     continue
-                gen_source = planned.get("generator_source")
-                if not isinstance(gen_source, Path):
-                    continue
-                gen_batch_rows_by_source.setdefault(gen_source, []).append(planned)
-                gen_batch_payloads_by_source.setdefault(gen_source, []).append(
-                    {
-                        "name": dst.name,
-                        "input_b64": base64.b64encode(
-                            (str(planned.get("command_payload") or "") + "\n").encode("utf-8")
-                        ).decode("ascii"),
-                        "answer_name": f"{dst.stem}.ans",
-                        "answer_b64": "",
-                    }
-                )
-
+                gen_source = planned["generator_source"]
+                payload: NormalizedTestPayload = {
+                    "name": dst.name,
+                    "input_b64": base64.b64encode((planned["command_payload"] + "\n").encode("utf-8")).decode("ascii"),
+                    "answer_name": f"{dst.stem}.ans",
+                    "answer_b64": "",
+                }
+                if gen_source in gen_batch_payloads_by_source:
+                    gen_batch_payloads_by_source[gen_source].append(payload)
+                else:
+                    gen_batch_payloads_by_source[gen_source] = [payload]
             manual_results_by_name: dict[str, tuple[int, str]] = {}
             if manual_batch_payload:
                 manual_results_by_name = _run_generator_inputs_via_judgehost(
@@ -946,20 +1173,17 @@ def run_verification_job(
 
             for planned in planned_rows:
                 dst = planned["dst"]
-                if not isinstance(dst, Path):
-                    continue
-                kind = str(planned.get("kind") or "")
-                result_map = manual_results_by_name if kind == "manual" else gen_results_by_name
-                rc, output_or_err = result_map.get(dst.name, (1, "judge backend generate result missing"))
-                glog.write(f"{planned.get('log_prefix')} -> {dst.name} rc={rc}\n")
+                kind = planned["kind"]
+                rc, output_or_err = (manual_results_by_name if kind == "manual" else gen_results_by_name).get(dst.name, (1, "judge backend generate result missing"))
+                glog.write(f"{planned['log_prefix']} -> {dst.name} rc={rc}\n")
                 if rc != 0:
                     if output_or_err:
-                        glog.write(str(output_or_err) + "\n")
+                        glog.write(output_or_err + "\n")
                     generate_stage_tests.append(
                         {
                             "test": dst.name,
                             "verdict": "FL",
-                            "message": str(output_or_err or "").strip(),
+                            "message": output_or_err,
                             "source_kind": kind,
                         }
                     )
@@ -973,13 +1197,13 @@ def run_verification_job(
                     }
                     dst.unlink(missing_ok=True)
                     failing_test = dst.name
-                    action = "validator failed on" if kind == "manual" else "generator failed on"
-                    raise RuntimeError(f"{action} {planned.get('error_context')}: {output_or_err}")
+                    failure = "validator failed on" if kind == "manual" else "generator failed on"
+                    raise RuntimeError(f"{failure} {planned['error_context']}: {output_or_err}")
                 if kind == "manual":
-                    dst.write_bytes(bytes(planned.get("input_bytes") or b""))
+                    dst.write_bytes(planned["input_bytes"])
                     manual_count += 1
                 else:
-                    dst.write_text(str(output_or_err or ""), encoding="utf-8")
+                    dst.write_text(output_or_err, encoding="utf-8")
                     generated_count += 1
                 generate_stage_tests.append(
                     {
@@ -990,13 +1214,12 @@ def run_verification_job(
                     }
                 )
                 test_files.append(dst)
-                tests_meta_raw = planned.get("tests_meta")
-                tests_meta.append(dict(tests_meta_raw) if isinstance(tests_meta_raw, dict) else {})
-                custom_sample_row = planned.get("custom_sample_row")
-                if isinstance(custom_sample_row, dict):
-                    custom_sample_rows_by_test[dst.name] = dict(custom_sample_row)
-                answer_source = planned.get("answer_source")
-                if isinstance(answer_source, Path):
+                tests_meta.append(planned["tests_meta"])
+                custom_sample_row = planned["custom_sample_row"]
+                if custom_sample_row is not None:
+                    custom_sample_rows_by_test[dst.name] = custom_sample_row
+                answer_source = planned["answer_source"]
+                if answer_source is not None:
                     source_answer_by_test[dst.name] = answer_source
             glog.write(f"manual_tests={manual_count}\n")
             glog.write(f"generated_tests={generated_count}\n")
@@ -1028,40 +1251,39 @@ def run_verification_job(
         solve_jobs = self._effective_compile_jobs(build_cfg.get("solve_jobs", 0), len(test_files))
         custom_sample_output_validate_total = 0
         custom_sample_output_validate_checked = 0
-        solve_results: dict[str, dict[str, object]] = {}
-        solve_stage_result: dict[str, object] = {}
+        solve_results: dict[str, SolveResultRow] = {}
+        solve_stage_result: SolveStageResultOut = {}
         solve_backend = self.judgehost_task_service.backend_name()
         with (logs_dir / "solve.log").open("w", encoding="utf-8") as slog:
             slog.write(f"solve_jobs={solve_jobs}\n")
             slog.write(f"solve_backend={solve_backend}\n")
             slog.write(f"build_solve_timeout_sec={build_solve_timeout_sec}\n")
 
-            def _solve_failure_message(test_name: str, row: dict[str, object]) -> str:
-                def _main_status_token(result_row: dict[str, object]) -> str:
-                    verdict = str(result_row.get("verdict") or "").strip().upper()
-                    if verdict in {"OK", "AC", "ACCEPTED", "CORRECT"}:
+            def _solve_failure_message(test_name: str, row: SolveResultRow) -> str:
+                def _main_status_token(result_row: SolveResultRow) -> str:
+                    verdict = result_row["verdict"]
+                    if verdict == "AC":
                         return "AC"
-                    if verdict.startswith("TL"):
+                    if verdict == "TL":
                         return "TL"
-                    if verdict in {"WA", "WRONG-ANSWER", "WRONG_ANSWER"}:
+                    if verdict == "WA":
                         return "WA"
-                    if verdict in {"RE", "RUN-ERROR", "RUN_ERROR", "RUNTIME-ERROR", "RUNTIME_ERROR"}:
+                    if verdict == "RE":
                         return "RE"
-                    if verdict in {"CE", "COMPILER-ERROR", "COMPILER_ERROR"}:
+                    if verdict == "CE":
                         return "CE"
-                    if verdict in {"FL", "FAIL", "FAILED", "INTERNAL-ERROR", "INTERNAL_ERROR", "COMPARE-ERROR", "COMPARE_ERROR"}:
+                    if verdict == "FL":
                         return "FL"
-                    if bool(result_row.get("timed_out")):
+                    if result_row["timed_out"]:
                         return "TL"
-                    rc_token = int(result_row.get("rc") or 0)
-                    if rc_token != 0:
+                    if result_row["rc"] != 0:
                         return "FL"
                     return ""
 
-                rc = int(row.get("rc") or 0)
-                worker_error = str(row.get("worker_error") or "").strip()
-                timed_out = bool(row.get("timed_out"))
-                stderr_text = compact_single_line(str(row.get("stderr") or ""), 220)
+                rc = row["rc"]
+                worker_error = row["worker_error"]
+                timed_out = row["timed_out"]
+                stderr_text = compact_single_line(row["stderr"], 220)
                 status_token = _main_status_token(row)
                 if worker_error:
                     if status_token and status_token != "AC":
@@ -1079,61 +1301,72 @@ def run_verification_job(
                 return f"{base_msg}: {detail_text}"
 
             def _update_solve_stage(status_token: str) -> None:
-                solve_stage_summary_raw = solve_stage_result.get("summary")
-                solve_stage_summary = (
-                    dict(solve_stage_summary_raw)
-                    if isinstance(solve_stage_summary_raw, dict)
-                    else {}
-                )
-                if not solve_stage_summary:
-                    tests_payload: list[dict[str, object]] = []
-                    for test_name, result_row in solve_results.items():
-                        if not isinstance(result_row, dict):
-                            continue
-                        verdict = str(result_row.get("verdict") or "").strip().upper()
-                        if verdict in {"AC", "ACCEPTED", "CORRECT"}:
-                            verdict = "OK"
-                        if not verdict:
-                            verdict = "OK" if int(result_row.get("rc") or 0) == 0 else "FL"
-                        tests_payload.append(
-                            {
-                                "test": test_name,
-                                "verdict": verdict,
-                                "message": str(
-                                    result_row.get("worker_error")
-                                    or result_row.get("stderr")
-                                    or ""
-                                ).strip(),
-                            }
-                        )
-                    solve_stage_summary["tests"] = tests_payload
-                solve_stage_summary.setdefault("verification_source", "verification.solve-main")
-                solve_stage_summary["status"] = str(status_token or "ok").strip().lower() or "ok"
-                solve_stage_summary["source"] = accepted_rel
-                solve_stage_summary["artifact_path"] = str(solve_stage_result.get("artifact_path") or "").strip()
-                stage_results["solve_main"] = solve_stage_summary
+                solve_stage_summary = dict(solve_stage_result.get("summary") or {})
+                tests_payload: list[dict[str, object]] = []
+                for test_name, result_row in solve_results.items():
+                    verdict = result_row["verdict"]
+                    if verdict == "AC":
+                        verdict = "OK"
+                    if not verdict:
+                        verdict = "OK" if result_row["rc"] == 0 else "FL"
+                    message = result_row["worker_error"] if result_row["worker_error"] else result_row["stderr"]
+                    tests_payload.append(
+                        {
+                            "test": test_name,
+                            "verdict": verdict,
+                            "message": message,
+                        }
+                    )
+                solve_artifact_path = solve_stage_result["artifact_path"] if "artifact_path" in solve_stage_result else ""
+                if solve_stage_summary:
+                    solve_stage_summary["verification_source"] = "verification.solve-main"
+                    solve_stage_summary["status"] = status_token
+                    solve_stage_summary["source"] = accepted_rel
+                    solve_stage_summary["artifact_path"] = solve_artifact_path
+                    if not solve_stage_summary.get("mode"):
+                        solve_stage_summary["mode"] = problem_mode
+                    if not solve_stage_summary.get("tests_total"):
+                        solve_stage_summary["tests_total"] = len(test_files)
+                    stage_results["solve_main"] = cast(SolveStageSummary, solve_stage_summary)
+                    return
+                stage_results["solve_main"] = {
+                    "verification_source": "verification.solve-main",
+                    "status": status_token,
+                    "source": accepted_rel,
+                    "artifact_path": solve_artifact_path,
+                    "tests_total": len(test_files),
+                    "tests": tests_payload,
+                }
 
-            solve_results = self._solve_with_judge_backend(
-                problem=problem,
-                username=username,
-                verification_id=verification_id,
-                accepted_source_rel=accepted_rel,
-                mode=problem_mode,
-                test_files=test_files,
-                ans_dir=artifact_paths.ans,
-                solve_jobs=solve_jobs,
-                source_answer_by_test=source_answer_by_test,
-                stage_result_out=solve_stage_result,
+            solve_results = cast(
+                dict[str, SolveResultRow],
+                solve_with_judge_backend(
+                    self,
+                    problem=problem,
+                    username=username,
+                    artifact_verification_id=verification_id,
+                    accepted_source_rel=accepted_rel,
+                    mode=problem_mode,
+                    test_files=test_files,
+                    ans_dir=artifact_paths.ans,
+                    solve_jobs=solve_jobs,
+                    source_answer_by_test=source_answer_by_test,
+                    stage_result_out=solve_stage_result,
+                ),
             )
             pending_solve_failure = ""
             for t in test_files:
-                row = solve_results.get(t.name) or self._solve_result_error("missing judge solve result")
-                solve_results[t.name] = row
-                rc = int(row.get("rc") or 0)
-                timed_out = bool(row.get("timed_out"))
-                err = str(row.get("worker_error") or row.get("stderr") or "")
-                timeout_note = " timed_out=1" if timed_out else ""
-                slog.write(f"{t.name}: rc={rc}{timeout_note}\n{err}\n")
+                if t.name in solve_results:
+                    row = solve_results[t.name]
+                else:
+                    row = cast(SolveResultRow, solve_result_error("missing judge solve result"))
+                    solve_results[t.name] = row
+                rc = row["rc"]
+                timed_out = row["timed_out"]
+                err = row["worker_error"] if row["worker_error"] else row["stderr"]
+                slog.write(
+                    f"{t.name}: rc={rc}{' timed_out=1' if timed_out else ''}\n{err}\n"
+                )
                 fail_msg = _solve_failure_message(t.name, row)
                 if fail_msg:
                     failing_test = t.name
@@ -1145,8 +1378,7 @@ def run_verification_job(
                 raise RuntimeError(pending_solve_failure)
 
             if custom_sample_rows_by_test:
-                custom_validate_log = logs_dir / "sample_output_validate.log"
-                with custom_validate_log.open("w", encoding="utf-8") as cvlog:
+                with (logs_dir / "sample_output_validate.log").open("w", encoding="utf-8") as cvlog:
                     cvlog.write("sample custom output validation via local native execution is disabled\n")
                     cvlog.write("use judgehost verification pipeline for checker validation\n")
                 if custom_sample_output_validate_total > 0:
@@ -1179,18 +1411,18 @@ def run_verification_job(
             "time_limit_ms": time_limit_ms,
             "run_timeout_ms": run_timeout_ms,
             "run_timeout_sec": run_timeout_sec,
-            "generator_sources": [str(x) for x in build_cfg.get("generator_sources", [])],
-            "generator_args": [str(x) for x in build_cfg.get("generator_args", [])],
-            "validator_args": [str(x) for x in build_cfg.get("validator_args", [])],
-            "checker_args": [str(x) for x in build_cfg.get("checker_args", [])],
-            "checker_standard": str(build_cfg.get("checker_standard", "")),
+            "generator_sources": cast(list[str], build_cfg.get("generator_sources", [])),
+            "generator_args": cast(list[str], build_cfg.get("generator_args", [])),
+            "validator_args": cast(list[str], build_cfg.get("validator_args", [])),
+            "checker_args": cast(list[str], build_cfg.get("checker_args", [])),
+            "checker_standard": cast(str, build_cfg.get("checker_standard", "")),
             "max_passes": int(build_cfg.get("max_passes", 16)),
             "sandbox_backend": self.execution_backend_name,
             "sandbox_memory_mb": self.default_exec_memory_mb,
             "sandbox_process_limit": self.default_exec_process_limit,
             "sandbox_output_kb": self.default_exec_output_kb,
-            "generation_params_digest": str(generation_params_digest or "").strip().lower(),
-            "toolchain_cmd_digest": str(toolchain_cmd_digest or "").strip().lower(),
+            "generation_params_digest": cache_generation_params_digest,
+            "toolchain_cmd_digest": cache_toolchain_cmd_digest,
         }
         # Small runner-focused config sidecar avoids full manifest reads on run setup hot paths.
         (logs_dir / "run_config.json").write_text(json.dumps(generation_params, indent=2), encoding="utf-8")
@@ -1224,15 +1456,10 @@ def run_verification_job(
                 merged_summary["verification_id"] = verification_id
                 _promote_solve_main_stage_into_runs(merged_summary, verification_id=verification_id)
                 current_record = load_verification_record(self.db, verification_id)
-                current_status = (
-                    str(current_record.get("status") or "").strip().lower()
-                    if current_record is not None
-                    else ""
-                )
                 save_verification_summary(
                     self.db,
                     verification_id=verification_id,
-                    status=current_status or "running",
+                    status=current_record["status"] if current_record is not None else Status.RUNNING.value,
                     summary=merged_summary,
                     finished=False,
                 )
@@ -1246,25 +1473,26 @@ def run_verification_job(
                     verification_id,
                 ],
             )
-        if use_verification_result_cache and self._async_task_cache_service is not None and str(source_commit or "").strip():
+        if use_verification_result_cache and self._async_task_cache_service is not None and cache_source_commit:
             self._async_task_cache_service.put(
-                self.BUILD_CACHE_NAMESPACE,
+                self.VERIFICATION_CACHE_NAMESPACE,
                 cache_key
-                if isinstance(cache_key, dict)
-                else self._verification_cache_key(
+                if cache_key is not None
+                else verification_cache_key(
+                    schema=self.VERIFICATION_CACHE_SCHEMA,
                     problem_id=problem_id,
                     workspace_id=workspace_id,
-                    source_commit=str(source_commit or "").strip(),
-                    source_ref=str(source_ref or "").strip(),
-                    generation_params_digest=str(generation_params_digest or "").strip().lower(),
-                    toolchain_cmd_digest=str(toolchain_cmd_digest or "").strip().lower(),
+                    source_commit=cache_source_commit,
+                    source_ref=cache_source_ref,
+                    generation_params_digest=cache_generation_params_digest,
+                    toolchain_cmd_digest=cache_toolchain_cmd_digest,
                     sample_only=bool(sample_only),
                 ),
                 {"verification_id": verification_id},
                 tags={
                     "problem_id": str(problem_id),
                     "workspace_id": str(workspace_id),
-                    "source_commit": str(source_commit or "").strip(),
+                    "source_commit": cache_source_commit,
                     "sample_only": "1" if sample_only else "0",
                 },
             )
@@ -1324,9 +1552,9 @@ def run_verification_job(
         if snapshot is not None:
             shutil.rmtree(snapshot.parent, ignore_errors=True)
         if inflight_owner and cache_key_hash:
-            with self._build_inflight_lock:
-                current = str(self._build_inflight.get(cache_key_hash) or "").strip()
+            with self._verification_inflight_lock:
+                current = self._verification_inflight.get(cache_key_hash, "")
                 if current == verification_id:
-                    self._build_inflight.pop(cache_key_hash, None)
+                    self._verification_inflight.pop(cache_key_hash, None)
 
     return verification_id

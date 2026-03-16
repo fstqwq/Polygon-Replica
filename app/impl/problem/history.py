@@ -1,12 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
 from fastapi import Request
 
-from app.impl.auth.public import template_response
+from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.public import page_ctx
+from app.impl.workspace.context_job import page_ctx
 
 _C = config.constants
 
@@ -16,7 +16,7 @@ def history_page(request: Request, problem: str, user: str):
     workspace = Path(ctx['workspace']['path'])
     commits: list[dict] = []
     message = ''
-    selected_revision = str(request.query_params.get('revision') or '').strip()
+    selected_revision = request.query_params.get('revision', '')
     selected_commit = ''
     selected_subject = ''
     selected_diff = ''
@@ -31,14 +31,13 @@ def history_page(request: Request, problem: str, user: str):
             else:
                 row['version'] = max(1, revision_top - idx)
         if selected_revision:
-            selected_row = next((row for row in commits if str(row.get('commit') or '').strip() == selected_revision), None)
+            selected_row = next((row for row in commits if row.get('commit') == selected_revision), None)
             if selected_row is None:
                 raise ValueError('selected revision is not in visible history')
-            selected_commit = str(selected_row.get('commit') or '').strip()
-            selected_subject = str(selected_row.get('subject') or '').strip()
+            selected_commit = selected_row['commit']
+            selected_subject = selected_row['subject']
             selected_diff, selected_diff_truncated = config.git_service.diff_for_revision(workspace, selected_commit)
-            for raw in str(selected_diff).splitlines():
-                line = str(raw or '')
+            for line in selected_diff.splitlines():
                 if (
                     line.startswith('diff --git ')
                     or line.startswith('index ')

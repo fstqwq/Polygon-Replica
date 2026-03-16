@@ -90,18 +90,18 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
             continue
         if not bool(row.get("sample")):
             continue
-        test_id = str(row.get("id") or "").strip()
-        kind = str(row.get("kind") or "").strip().lower() or "manual"
+        test_id = row["id"].strip()
+        kind = row["kind"].strip().lower()
         if kind not in {"manual", "gen"}:
-            raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind or '(empty)'}")
+            raise RuntimeError(f"invalid test kind at tests/spec.json entry {index}: {kind}")
         if not test_id:
             continue
         # Custom sample text already changes tests/spec.json hash.
-        if not str(row.get("sample_input") or ""):
+        if not row["sample_input"]:
             sample_in = _safe_workspace_regular_file(workspace, payload_rel_path_for_test(test_id, kind))
             if sample_in is not None:
                 sample_related_files.append(sample_in)
-        if not str(row.get("sample_output") or ""):
+        if not row["sample_output"]:
             sample_ans = _safe_workspace_regular_file(workspace, TESTS_ANSWERS_DIR_REL / f"{test_id}.ans")
             if sample_ans is not None:
                 sample_related_files.append(sample_ans)

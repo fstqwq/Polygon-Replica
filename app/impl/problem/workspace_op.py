@@ -1,19 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import Form, Request
 
-from app.impl.auth.public import login_redirect, redirect_response, session_user
+from app.impl.auth.shared import login_redirect, redirect_response
+from app.impl.auth.session import session_user
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _has_destructive_sudo_for_ctx, _sudo_redirect_for_destructive
-from app.impl.workspace.public import (
-    audit,
-    form_text,
-    normalize_page_target,
-    require_manage_access,
-    require_write_access,
-    workspace_access_context,
-    page_ctx,
-)
+from app.impl.workspace.context_operation import audit, normalize_page_target
+from app.impl.workspace.problem_config import form_text
+from app.impl.workspace.access import require_manage_access, require_write_access, workspace_access_context
+from app.impl.workspace.context_job import page_ctx
 
 _C = config.constants
 
@@ -25,10 +21,10 @@ def switch_workspace(
     page: str = Form("statement"),
     problem_name: str = Form(""),
 ):
-    active_user = session_user(request) or str(user or '').strip()
+    active_user = session_user(request) or user.strip()
     if not active_user:
         return login_redirect(request)
-    raw_problem = str(problem or '').strip()
+    raw_problem = problem.strip()
     try:
         if not raw_problem:
             raise ValueError('problem id is required')
@@ -75,7 +71,10 @@ def workspace_delete(request: Request, problem: str, user: str):
             int(ctx['user']['id']),
             int(ctx['problem']['id']),
             'workspace.delete',
-            {'workspace_path': str(result.get('workspace_path') or ''), 'removed': bool(result.get('removed'))},
+            {
+                'workspace_path': result.get('workspace_path') if isinstance(result.get('workspace_path'), str) else '',
+                'removed': bool(result.get('removed')),
+            },
         )
     except (ValueError, RuntimeError) as exc:
         msg = str(exc)
@@ -93,12 +92,12 @@ def problem_delete(request: Request, problem: str, user: str, confirm_problem: s
         return _sudo_redirect_for_destructive(next_path)
     msg = 'problem deleted'
     try:
-        expected = str(ctx['problem'].get('slug') or '').strip()
+        expected = ctx['problem']['slug'].strip()
         if form_text(confirm_problem).strip() != expected:
             raise ValueError('problem deletion confirmation mismatch')
         result = config.workspace_service.delete_problem(problem)
         warnings = result.get('fs_warnings') if isinstance(result, dict) else []
-        warning_rows = [str(item).strip() for item in (warnings or []) if str(item or '').strip()]
+        warning_rows = [item.strip() for item in warnings if isinstance(item, str) and item.strip()]
         audit(
             int(ctx['user']['id']),
             None,
@@ -106,7 +105,7 @@ def problem_delete(request: Request, problem: str, user: str, confirm_problem: s
             {
                 'problem_slug': expected,
                 'problem_id': int(ctx['problem']['id']),
-                'workspace_count': int(result.get('workspace_count') or 0) if isinstance(result, dict) else 0,
+                'workspace_count': int(result.get('workspace_count', 0)) if isinstance(result, dict) else 0,
                 'fs_warnings': warning_rows,
             },
         )

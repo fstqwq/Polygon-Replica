@@ -1,43 +1,22 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import base64
+import json
+import re
+import sqlite3
+import time
+from datetime import datetime, timezone
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
+
+from fastapi import HTTPException, Request
+from fastapi.responses import RedirectResponse
+
+from app.db import now_iso
 from app.impl.auth.internal import runtime
-from app.impl.auth.internal.dependency import (
-    HTTPException,
-    RedirectResponse,
-    Request,
-    _C,
-    base64,
-    config,
-    datetime,
-    hmac_sha256_hex,
-    json,
-    now_iso,
-    parse_qsl,
-    quote_plus,
-    re,
-    sha256_hex_bytes,
-    sqlite3,
-    time,
-    timezone,
-    urlencode,
-    urlparse,
-    urlunparse,
-)
-from app.impl.auth.internal.runtime import (
-    _format_cpu_label,
-    _parse_cpu_frequency_ghz,
-    _read_cpu_info_details,
-    _read_linux_distro_label,
-    _runtime_footer_profile,
-    _safe_int,
-    _sanitize_runtime_profile_value,
-    _startup_cancel_judgehost_inflight,
-    _startup_cancel_summary_rows,
-    _startup_clear_all_caches,
-    _startup_reset_runtime_state,
-    shutdown,
-    startup,
-)
+from app.impl.runtime.config import config
+from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
+
+_C = config.constants
 
 _RUNTIME_BACKEND_CACHE: dict[str, str] | None = None
 _RUNTIME_BACKEND_CACHE_TS = 0.0
@@ -45,7 +24,6 @@ _RUNTIME_BACKEND_CACHE_TS = 0.0
 
 def _runtime_backend_profile() -> dict[str, str]:
     global _RUNTIME_BACKEND_CACHE, _RUNTIME_BACKEND_CACHE_TS
-    # Keep legacy cache knobs in shared.py wired to the internal runtime cache.
     runtime._RUNTIME_BACKEND_CACHE = (
         dict(_RUNTIME_BACKEND_CACHE) if isinstance(_RUNTIME_BACKEND_CACHE, dict) else None
     )
@@ -65,16 +43,12 @@ def _runtime_backend_profile() -> dict[str, str]:
         _RUNTIME_BACKEND_CACHE_TS = 0.0
     return dict(profile)
 
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
 def parse_iso_utc(raw: str) -> datetime | None:
-    text = str(raw or '').strip()
+    text = str(raw or "").strip()
     if not text:
         return None
-    if text.endswith('Z'):
-        text = text[:-1] + '+00:00'
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
     try:
         value = datetime.fromisoformat(text)
     except Exception:
@@ -83,25 +57,26 @@ def parse_iso_utc(raw: str) -> datetime | None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
+
 def _format_local_time(raw: object) -> str:
     if isinstance(raw, datetime):
         try:
-            return raw.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+            return raw.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
-            return raw.strftime('%Y-%m-%d %H:%M:%S')
-    text = str(raw or '').strip()
+            return raw.strftime("%Y-%m-%d %H:%M:%S")
+    text = str(raw or "").strip()
     if not text:
-        return '-'
+        return "-"
     parsed = parse_iso_utc(text)
     if parsed is None:
         return text
     try:
-        return parsed.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+        return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        return parsed.strftime('%Y-%m-%d %H:%M:%S')
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
 
-config.templates.env.filters['local_time'] = _format_local_time
+config.templates.env.filters["local_time"] = _format_local_time
 
 
 _STATUS_LABEL_MAP: dict[str, str] = {
@@ -132,16 +107,16 @@ _STATUS_LABEL_MAP: dict[str, str] = {
 
 
 def _format_status_label(raw: object) -> str:
-    text = str(raw or '').strip()
+    text = str(raw or "").strip()
     if not text:
-        return '-'
-    normalized = re.sub(r'[\s\-]+', '_', text.lower()).strip('_')
+        return "-"
+    normalized = re.sub(r"[\s\-]+", "_", text.lower()).strip("_")
     if not normalized:
-        return '-'
+        return "-"
     mapped = _STATUS_LABEL_MAP.get(normalized)
     if mapped:
         return mapped
-    tokens = [tok for tok in re.split(r'[_\s\-]+', normalized) if tok]
+    tokens = [tok for tok in re.split(r"[_\s\-]+", normalized) if tok]
     if not tokens:
         return text
     words: list[str] = []
@@ -152,53 +127,55 @@ def _format_status_label(raw: object) -> str:
             words.append(token.upper())
         else:
             words.append(token.capitalize())
-    return ' '.join(words)
+    return " ".join(words)
 
 
-config.templates.env.filters['status_label'] = _format_status_label
+config.templates.env.filters["status_label"] = _format_status_label
+
 
 def _normalize_flash_message(raw: object) -> str:
-    text = str(raw or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+    text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
-        return ''
-    # Preserve line breaks for compiler/runtime diagnostics while normalizing spacing per line.
-    lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
+        return ""
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
     lines = [line for line in lines if line]
-    text = '\n'.join(lines).strip()
-    # Keep wording stable, but normalize ending punctuation for consistent notice style.
-    if text and text[-1] not in '.!?':
-        if re.search(r'[A-Za-z0-9\)]$', text):
-            text += '.'
+    text = "\n".join(lines).strip()
+    if text and text[-1] not in ".!?":
+        if re.search(r"[A-Za-z0-9\)]$", text):
+            text += "."
     if len(text) > _C.FLASH_MESSAGE_MAX_LEN:
-        text = text[:_C.FLASH_MESSAGE_MAX_LEN].rstrip()
+        text = text[: _C.FLASH_MESSAGE_MAX_LEN].rstrip()
     return text
 
-def _flash_message_level(raw: object) -> str:
-    text = str(raw or '').strip().lower()
-    if not text:
-        return 'info'
-    if any((token in text for token in {'error', 'failed', 'invalid', 'denied', 'rejected'})):
-        return 'error'
-    if any((token in text for token in {'warning', 'stale', 'already running', 'already exists'})):
-        return 'warning'
-    if any((token in text for token in {'saved', 'created', 'updated', 'queued', 'running', 'ok', 'done', 'success'})):
-        return 'success'
-    return 'info'
 
-def _flash_message_event_id(message: str, *, scope: str = '') -> str:
+def _flash_message_level(message: str) -> str:
+    text = message.lower()
+    if not text:
+        return "info"
+    if any((token in text for token in {"error", "failed", "invalid", "denied", "rejected"})):
+        return "error"
+    if any((token in text for token in {"warning", "stale", "already running", "already exists"})):
+        return "warning"
+    if any((token in text for token in {"saved", "created", "updated", "queued", "running", "ok", "done", "success"})):
+        return "success"
+    return "info"
+
+
+def _flash_message_event_id(message: str, *, scope: str = "") -> str:
     normalized = _normalize_flash_message(message)
     if not normalized:
-        return ''
-    payload = f'{str(scope or "").strip()}|{normalized}'.encode('utf-8')
+        return ""
+    payload = f'{str(scope or "").strip()}|{normalized}'.encode("utf-8")
     return sha256_hex_bytes(payload)[:16]
 
+
 def _decode_flash_queue(raw_cookie: str) -> list[str]:
-    token = str(raw_cookie or '').strip()
+    token = str(raw_cookie or "").strip()
     if not token:
         return []
     try:
-        padded = token + '=' * ((4 - len(token) % 4) % 4)
-        payload = base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8')
+        padded = token + "=" * ((4 - len(token) % 4) % 4)
+        payload = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
         raw_queue = json.loads(payload)
     except Exception:
         return []
@@ -214,6 +191,7 @@ def _decode_flash_queue(raw_cookie: str) -> list[str]:
             break
     return queue
 
+
 def _encode_flash_queue(queue: list[str]) -> str:
     safe_items: list[str] = []
     for item in queue:
@@ -224,41 +202,61 @@ def _encode_flash_queue(queue: list[str]) -> str:
         if len(safe_items) >= _C.FLASH_QUEUE_MAX_ITEMS:
             break
     if not safe_items:
-        return ''
-    payload = json.dumps(safe_items, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-    return base64.urlsafe_b64encode(payload).decode('ascii').rstrip('=')
+        return ""
+    payload = json.dumps(safe_items, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
 
 def set_flash_cookie(response, queue: list[str]) -> None:
     encoded = _encode_flash_queue(queue)
     if not encoded:
-        response.delete_cookie(_C.FLASH_COOKIE_NAME, path='/', secure=_C.AUTH_COOKIE_SECURE, httponly=True, samesite='lax')
+        response.delete_cookie(
+            _C.FLASH_COOKIE_NAME,
+            path="/",
+            secure=_C.AUTH_COOKIE_SECURE,
+            httponly=True,
+            samesite="lax",
+        )
         return
-    response.set_cookie(_C.FLASH_COOKIE_NAME, encoded, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.FLASH_COOKIE_MAX_AGE, path='/')
+    response.set_cookie(
+        _C.FLASH_COOKIE_NAME,
+        encoded,
+        httponly=True,
+        samesite="lax",
+        secure=_C.AUTH_COOKIE_SECURE,
+        max_age=_C.FLASH_COOKIE_MAX_AGE,
+        path="/",
+    )
+
 
 def _sanitize_redirect_target(target: str) -> str:
-    url = str(target or '').strip() or '/'
+    url = str(target or "").strip() or "/"
     parsed = urlparse(url)
     if not parsed.query:
         return url
     kept: list[tuple[str, str]] = []
     for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-        if key == 'message':
+        if key == "message":
             continue
         kept.append((key, value))
-    cleaned = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(kept, doseq=True), parsed.fragment))
+    cleaned = urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(kept, doseq=True), parsed.fragment)
+    )
     if parsed.scheme or parsed.netloc:
         return cleaned or url
     if not cleaned:
         return url
     return cleaned
 
-def _apply_security_headers(response) -> None:
-    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
-    response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
-    response.headers.setdefault('Referrer-Policy', 'same-origin')
-    response.headers.setdefault('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'")
 
-def redirect_response(url: str, status_code: int=303, message: str='') -> RedirectResponse:
+def _apply_security_headers(response) -> None:
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+
+
+def redirect_response(url: str, status_code: int = 303, message: str = "") -> RedirectResponse:
     target = _sanitize_redirect_target(url)
     response = RedirectResponse(target, status_code=status_code)
     safe_message = _normalize_flash_message(message)
@@ -267,18 +265,10 @@ def redirect_response(url: str, status_code: int=303, message: str='') -> Redire
     _apply_security_headers(response)
     return response
 
-def template_response(request: Request, template_name: str, context: dict | None=None):
+
+def template_response(request: Request, template_name: str, context: dict | None = None):
     payload = dict(context or {})
-    runtime_profile = _runtime_footer_profile()
     runtime_backend = _runtime_backend_profile()
-    if "runtime_linux_distro" not in payload:
-        payload["runtime_linux_distro"] = runtime_profile.get("runtime_linux_distro", "n/a")
-    if "runtime_cpu_info" not in payload:
-        payload["runtime_cpu_info"] = runtime_profile.get("runtime_cpu_info", "n/a")
-    if "runtime_sandbox_backend" not in payload:
-        payload["runtime_sandbox_backend"] = runtime_backend.get("runtime_sandbox_backend", "n/a")
-    if "runtime_sandbox_backend_count" not in payload:
-        payload["runtime_sandbox_backend_count"] = runtime_backend.get("runtime_sandbox_backend_count", "0")
     if "runtime_judgehost_backend_summary" not in payload:
         payload["runtime_judgehost_backend_summary"] = runtime_backend.get(
             "runtime_judgehost_backend_summary",
@@ -296,23 +286,23 @@ def template_response(request: Request, template_name: str, context: dict | None
     if "runtime_judgehost_hosts_total" not in payload:
         payload["runtime_judgehost_hosts_total"] = runtime_backend.get("runtime_judgehost_hosts_total", "0")
     backend_render_ms: int | None = None
-    started = getattr(request.state, 'request_started_at', None)
+    started = getattr(request.state, "request_started_at", None)
     if isinstance(started, (int, float)):
         elapsed_ms = (time.monotonic() - started) * 1000.0
         if elapsed_ms >= 0:
             backend_render_ms = int(round(elapsed_ms))
-    if 'backend_render_ms' not in payload:
-        payload['backend_render_ms'] = backend_render_ms
-    raw_cookie = str(request.cookies.get(_C.FLASH_COOKIE_NAME, '') or '').strip()
+    if "backend_render_ms" not in payload:
+        payload["backend_render_ms"] = backend_render_ms
+    raw_cookie = str(request.cookies.get(_C.FLASH_COOKIE_NAME, "") or "").strip()
     queue = _decode_flash_queue(raw_cookie)
-    fallback_message = _normalize_flash_message(payload.get('message', ''))
+    fallback_message = _normalize_flash_message(payload.get("message", ""))
     message = queue[0] if queue else fallback_message
     message_ts = int(time.time() * 1000)
-    payload['message'] = message
-    payload['message_level'] = _flash_message_level(message)
-    payload['message_source'] = str(template_name or '').strip()
-    payload['message_event_id'] = _flash_message_event_id(message, scope=f"{payload['message_source']}:{message_ts}")
-    payload['message_ts'] = message_ts
+    payload["message"] = message
+    payload["message_level"] = _flash_message_level(message)
+    payload["message_source"] = str(template_name or "").strip()
+    payload["message_event_id"] = _flash_message_event_id(message, scope=f"{payload['message_source']}:{message_ts}")
+    payload["message_ts"] = message_ts
     response = config.templates.TemplateResponse(request, template_name, payload)
     if queue:
         set_flash_cookie(response, queue[1:])
@@ -321,75 +311,92 @@ def template_response(request: Request, template_name: str, context: dict | None
     _apply_security_headers(response)
     return response
 
+
 def normalize_password_salt_hex(value: str) -> str:
-    raw = str(value or '').strip().lower()
+    raw = str(value or "").strip().lower()
     if not _C.HEX_32_RE.fullmatch(raw):
-        raise ValueError('invalid password salt')
+        raise ValueError("invalid password salt")
     return raw
 
+
 def normalize_password_verifier_hex(value: str) -> str:
-    raw = str(value or '').strip().lower()
+    raw = str(value or "").strip().lower()
     if not _C.HEX_64_RE.fullmatch(raw):
-        raise ValueError('invalid password verifier')
+        raise ValueError("invalid password verifier")
     return raw
+
 
 def normalize_password_iters(value: object) -> int:
     try:
         iters = int(value)
     except Exception as exc:
-        raise ValueError('invalid password iterations') from exc
+        raise ValueError("invalid password iterations") from exc
     if iters < 10000 or iters > 10000000:
-        raise ValueError('invalid password iterations')
+        raise ValueError("invalid password iterations")
     return iters
 
+
 def dummy_password_salt_hex(username: str) -> str:
-    safe_user = str(username or '').strip().lower()
-    digest = hmac_sha256_hex(config.password_form_csrf_secret, f'dummy-meta|{safe_user}'.encode('utf-8'))
+    safe_user = str(username or "").strip().lower()
+    digest = hmac_sha256_hex(config.password_form_csrf_secret, f"dummy-meta|{safe_user}".encode("utf-8"))
     return digest[:32]
+
 
 def password_meta_for_username(username: str) -> tuple[str, int]:
     row = lookup_user_auth(username)
     if row is None:
         return (dummy_password_salt_hex(username), int(_C.PASSWORD_HASH_ITERS))
-    verifier = str(row['password_hash'] or '').strip().lower()
-    salt_hex = str(row['password_salt'] or '').strip().lower()
+    verifier = str(row["password_hash"] or "").strip().lower()
+    salt_hex = str(row["password_salt"] or "").strip().lower()
     try:
-        iterations = int(row['password_iters'] or 0)
+        iterations = int(row["password_iters"] or 0)
     except Exception:
         iterations = 0
     if _C.HEX_64_RE.fullmatch(verifier) and _C.HEX_32_RE.fullmatch(salt_hex) and (iterations > 0):
         return (salt_hex, iterations)
     return (dummy_password_salt_hex(username), int(_C.PASSWORD_HASH_ITERS))
 
+
 def lookup_user_auth(username: str):
-    safe = str(username or '').strip()
+    safe = str(username or "").strip()
     if not _C.USER_IDENT_RE.fullmatch(safe):
         return None
-    return config.db.fetch_one('SELECT id,username,password_hash,password_salt,password_iters FROM users WHERE username=?', [safe])
+    return config.db.fetch_one(
+        "SELECT id,username,password_hash,password_salt,password_iters FROM users WHERE username=?",
+        [safe],
+    )
+
 
 def _registered_user_count() -> int:
     row = config.db.fetch_one("SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''", [])
     if row is None:
         return 0
     try:
-        return max(0, int(row['c'] or 0))
+        return max(0, int(row["c"] or 0))
     except Exception:
         return 0
+
 
 def has_registered_users() -> bool:
     return _registered_user_count() > 0
 
+
 def normalize_username_required(value: str) -> str:
-    safe = str(value or '').strip()
+    safe = str(value or "").strip()
     if len(safe) > 64 or not _C.USER_IDENT_RE.fullmatch(safe):
         raise ValueError(_C.USERNAME_RULE_MESSAGE)
     return safe
+
 
 def set_user_password_verifier(user_id: int, verifier_hex: str, salt_hex: str, iterations: int) -> None:
     safe_verifier = normalize_password_verifier_hex(verifier_hex)
     safe_salt = normalize_password_salt_hex(salt_hex)
     safe_iters = normalize_password_iters(iterations)
-    config.db.execute('UPDATE users SET password_hash=?,password_salt=?,password_iters=?,password_updated_at=? WHERE id=?', [safe_verifier, safe_salt, safe_iters, now_iso(), int(user_id)])
+    config.db.execute(
+        "UPDATE users SET password_hash=?,password_salt=?,password_iters=?,password_updated_at=? WHERE id=?",
+        [safe_verifier, safe_salt, safe_iters, now_iso(), int(user_id)],
+    )
+
 
 def create_user_with_password_verifier(username: str, verifier_hex: str, salt_hex: str, iterations: int) -> int:
     safe_user = normalize_username_required(username)
@@ -399,31 +406,47 @@ def create_user_with_password_verifier(username: str, verifier_hex: str, salt_he
     now = now_iso()
 
     def _tx(conn: sqlite3.Connection) -> int:
-        has_registered_user = conn.execute("SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1").fetchone() is not None
+        has_registered_user = conn.execute(
+            "SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1"
+        ).fetchone() is not None
         admin_candidates = [0] if has_registered_user else [1, 0]
         inserted = False
         for is_admin in admin_candidates:
             try:
-                conn.execute('\n                    INSERT INTO users(\n                        username,password_hash,password_salt,password_iters,password_updated_at,created_at,is_system_admin\n                    )\n                    VALUES(?,?,?,?,?,?,?)\n                    ', [safe_user, safe_verifier, safe_salt, safe_iters, now, now, int(is_admin)])
+                conn.execute(
+                    """
+                    INSERT INTO users(
+                        username,password_hash,password_salt,password_iters,password_updated_at,created_at,is_system_admin
+                    )
+                    VALUES(?,?,?,?,?,?,?)
+                    """,
+                    [safe_user, safe_verifier, safe_salt, safe_iters, now, now, int(is_admin)],
+                )
                 inserted = True
                 break
             except sqlite3.IntegrityError as exc:
-                msg = str(exc or '').strip().lower()
-                if 'users.username' in msg:
-                    raise ValueError('user already exists') from exc
+                msg = str(exc or "").strip().lower()
+                if "users.username" in msg:
+                    raise ValueError("user already exists") from exc
                 if int(is_admin) == 1:
                     continue
                 raise
         if not inserted:
-            raise RuntimeError('failed to create user')
-        row = conn.execute('SELECT id FROM users WHERE username=?', [safe_user]).fetchone()
+            raise RuntimeError("failed to create user")
+        row = conn.execute("SELECT id FROM users WHERE username=?", [safe_user]).fetchone()
         if row is None:
-            raise RuntimeError('failed to create user')
-        return int(row['id'])
+            raise RuntimeError("failed to create user")
+        return int(row["id"])
 
     return int(config.db.write_transaction(_tx))
 
-def bootstrap_super_admin_with_password_verifier(username: str, verifier_hex: str, salt_hex: str, iterations: int) -> int:
+
+def bootstrap_super_admin_with_password_verifier(
+    username: str,
+    verifier_hex: str,
+    salt_hex: str,
+    iterations: int,
+) -> int:
     safe_user = normalize_username_required(username)
     safe_verifier = normalize_password_verifier_hex(verifier_hex)
     safe_salt = normalize_password_salt_hex(salt_hex)
@@ -431,9 +454,11 @@ def bootstrap_super_admin_with_password_verifier(username: str, verifier_hex: st
     now = now_iso()
 
     def _tx(conn: sqlite3.Connection) -> int:
-        has_registered_user = conn.execute("SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1").fetchone() is not None
+        has_registered_user = conn.execute(
+            "SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1"
+        ).fetchone() is not None
         if has_registered_user:
-            raise ValueError('setup already completed')
+            raise ValueError("setup already completed")
         existing = conn.execute("SELECT id,password_hash FROM users WHERE username=?", [safe_user]).fetchone()
         if existing is None:
             try:
@@ -447,93 +472,100 @@ def bootstrap_super_admin_with_password_verifier(username: str, verifier_hex: st
                     [safe_user, safe_verifier, safe_salt, safe_iters, now, now],
                 )
             except sqlite3.IntegrityError as exc:
-                msg = str(exc or '').strip().lower()
-                if 'users.username' in msg:
-                    raise ValueError('setup failed; username is unavailable') from exc
+                msg = str(exc or "").strip().lower()
+                if "users.username" in msg:
+                    raise ValueError("setup failed; username is unavailable") from exc
                 raise
             existing = conn.execute("SELECT id,password_hash FROM users WHERE username=?", [safe_user]).fetchone()
             if existing is None:
-                raise RuntimeError('failed to create super admin')
+                raise RuntimeError("failed to create super admin")
         else:
-            current_hash = str(existing['password_hash'] or '').strip()
+            current_hash = str(existing["password_hash"] or "").strip()
             if current_hash:
-                raise ValueError('setup failed; username is unavailable')
+                raise ValueError("setup failed; username is unavailable")
             conn.execute(
                 """
                 UPDATE users
                 SET password_hash=?,password_salt=?,password_iters=?,password_updated_at=?,is_system_admin=1
                 WHERE id=?
                 """,
-                [safe_verifier, safe_salt, safe_iters, now, int(existing['id'])],
+                [safe_verifier, safe_salt, safe_iters, now, int(existing["id"])],
             )
-        user_id = int(existing['id'])
+        user_id = int(existing["id"])
         conn.execute("UPDATE users SET is_system_admin=0 WHERE id<>?", [user_id])
         return user_id
 
     return int(config.db.write_transaction(_tx))
 
-def safe_next_path(raw: str | None, fallback: str='/') -> str:
-    candidate = str(raw or '').strip()
+
+def safe_next_path(raw: str | None, fallback: str = "/") -> str:
+    candidate = str(raw or "").strip()
     if not candidate:
         return fallback
-    if not candidate.startswith('/') or candidate.startswith('//'):
+    if not candidate.startswith("/") or candidate.startswith("//"):
         return fallback
     return candidate
+
 
 def login_redirect(request: Request) -> RedirectResponse:
     target = request.url.path
     if request.url.query:
-        target += f'?{request.url.query}'
+        target += f"?{request.url.query}"
     if not has_registered_users():
-        return redirect_response(f'/setup?next={quote_plus(target)}', status_code=303)
-    return redirect_response(f'/login?next={quote_plus(target)}', status_code=303)
+        return redirect_response(f"/setup?next={quote_plus(target)}", status_code=303)
+    return redirect_response(f"/login?next={quote_plus(target)}", status_code=303)
+
 
 def _request_origin_value(raw: str) -> str:
-    value = str(raw or '').strip()
+    value = str(raw or "").strip()
     if not value:
-        return ''
+        return ""
     parsed = urlparse(value)
-    scheme = str(parsed.scheme or '').strip().lower()
-    netloc = str(parsed.netloc or '').strip().lower()
+    scheme = str(parsed.scheme or "").strip().lower()
+    netloc = str(parsed.netloc or "").strip().lower()
     if not scheme or not netloc:
-        return ''
-    return f'{scheme}://{netloc}'
+        return ""
+    return f"{scheme}://{netloc}"
+
 
 def _expected_request_origin(request: Request) -> str:
-    return f'{str(request.url.scheme).strip().lower()}://{str(request.url.netloc).strip().lower()}'
+    return f"{str(request.url.scheme).strip().lower()}://{str(request.url.netloc).strip().lower()}"
+
 
 def enforce_same_origin_state_change(request: Request | None) -> None:
     if request is None:
         return
-    method = str(request.method or '').strip().upper()
-    if method in {'GET', 'HEAD', 'OPTIONS', 'TRACE'}:
+    method = str(request.method or "").strip().upper()
+    if method in {"GET", "HEAD", "OPTIONS", "TRACE"}:
         return
     expected = _expected_request_origin(request)
-    origin = _request_origin_value(str(request.headers.get('origin') or ''))
+    origin = _request_origin_value(str(request.headers.get("origin") or ""))
     if origin:
         if origin != expected:
-            raise HTTPException(status_code=403, detail='cross-site request blocked')
+            raise HTTPException(status_code=403, detail="cross-site request blocked")
         return
-    referer = _request_origin_value(str(request.headers.get('referer') or ''))
+    referer = _request_origin_value(str(request.headers.get("referer") or ""))
     if referer:
         if referer != expected:
-            raise HTTPException(status_code=403, detail='cross-site request blocked')
+            raise HTTPException(status_code=403, detail="cross-site request blocked")
         return
-    raise HTTPException(status_code=403, detail='missing origin/referrer for state-changing request')
+    raise HTTPException(status_code=403, detail="missing origin/referrer for state-changing request")
+
 
 def login_rate_limit_key(username: str, request: Request | None) -> str:
-    safe_user = str(username or '').strip().lower()
-    ip = ''
+    safe_user = str(username or "").strip().lower()
+    ip = ""
     if request is not None:
-        forwarded = str(request.headers.get('x-forwarded-for') or '').strip()
+        forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
         if forwarded:
-            ip = str(forwarded.split(',', 1)[0]).strip()
+            ip = str(forwarded.split(",", 1)[0]).strip()
         if not ip:
             client = request.client
-            ip = str(client.host).strip() if client is not None and client.host else ''
+            ip = str(client.host).strip() if client is not None and client.host else ""
     if not ip:
-        ip = 'unknown'
-    return f'{ip}|{safe_user}'
+        ip = "unknown"
+    return f"{ip}|{safe_user}"
+
 
 def login_rate_limit_check(key: str) -> None:
     now_monotonic = time.monotonic()
@@ -541,34 +573,33 @@ def login_rate_limit_check(key: str) -> None:
         state = config.login_rate_limit_state.get(key)
         if state is None:
             return
-        blocked_until = float(state.get('blocked_until') or 0.0)
+        blocked_until = float(state.get("blocked_until") or 0.0)
         if blocked_until > now_monotonic:
             wait_sec = max(1, int(round(blocked_until - now_monotonic)))
-            raise ValueError(f'too many failed attempts; retry in {wait_sec}s')
-        window_start = float(state.get('window_start') or 0.0)
+            raise ValueError(f"too many failed attempts; retry in {wait_sec}s")
+        window_start = float(state.get("window_start") or 0.0)
         if window_start <= 0.0 or now_monotonic - window_start > _C.LOGIN_RATE_LIMIT_WINDOW_SEC:
             config.login_rate_limit_state.pop(key, None)
+
 
 def login_rate_limit_fail(key: str) -> None:
     now_monotonic = time.monotonic()
     with config.login_rate_limit_lock:
         state = config.login_rate_limit_state.get(key)
         if state is None:
-            state = {'window_start': now_monotonic, 'failures': 0, 'blocked_until': 0.0}
-        window_start = float(state.get('window_start') or 0.0)
+            state = {"window_start": now_monotonic, "failures": 0, "blocked_until": 0.0}
+        window_start = float(state.get("window_start") or 0.0)
         if window_start <= 0.0 or now_monotonic - window_start > _C.LOGIN_RATE_LIMIT_WINDOW_SEC:
-            state = {'window_start': now_monotonic, 'failures': 0, 'blocked_until': 0.0}
-        failures = int(state.get('failures') or 0) + 1
-        state['failures'] = failures
+            state = {"window_start": now_monotonic, "failures": 0, "blocked_until": 0.0}
+        failures = int(state.get("failures") or 0) + 1
+        state["failures"] = failures
         if failures >= _C.LOGIN_RATE_LIMIT_MAX_FAILURES:
-            state['blocked_until'] = now_monotonic + _C.LOGIN_RATE_LIMIT_BLOCK_SEC
-            state['window_start'] = now_monotonic
-            state['failures'] = 0
+            state["blocked_until"] = now_monotonic + _C.LOGIN_RATE_LIMIT_BLOCK_SEC
+            state["window_start"] = now_monotonic
+            state["failures"] = 0
         config.login_rate_limit_state[key] = state
+
 
 def login_rate_limit_success(key: str) -> None:
     with config.login_rate_limit_lock:
         config.login_rate_limit_state.pop(key, None)
-
-
-

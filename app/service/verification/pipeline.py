@@ -23,13 +23,12 @@ def wait_build_terminal_status(
     timeout_sec: float,
     poll_sec: float,
 ) -> str:
-    safe_verification_id = str(verification_id or "").strip()
-    if not safe_verification_id:
+    if not verification_id:
         return ""
     deadline = time.monotonic() + max(0.5, float(timeout_sec))
     while time.monotonic() < deadline:
-        row = db.fetch_one("SELECT status FROM verifications WHERE id=?", [safe_verification_id])
-        status = str(row["status"] or "").strip().lower() if row is not None else ""
+        row = db.fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
+        status = row["status"] if row is not None else ""
         if status in {"ok", "failed", "cancelled"}:
             return status
         time.sleep(max(0.01, float(poll_sec)))

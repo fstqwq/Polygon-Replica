@@ -13,7 +13,7 @@
         <a href="#" class="linkish danger" data-submit-form="1">Cancel</a>
       </form>
       {% endif %}
-      {% if rerun_solution_paths %}
+      {% if rerun_solution_paths and not detail_running %}
       <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
         {% for p in rerun_solution_paths %}
         <input type="hidden" name="solution_paths" value="{{ p }}" />
@@ -92,7 +92,7 @@
           <span class="verification-lifecycle-step-title">{{ step.title }}</span>
           <span class="verification-lifecycle-step-status">{{ step.status_label }}</span>
           {% if step.detail %}
-          <span class="verification-lifecycle-step-detail" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ step.detail }}</span>
+          <span class="verification-lifecycle-step-detail">{{ step.detail }}</span>
           {% endif %}
           {% if step.facts %}
           <table class="verification-lifecycle-step-facts">
@@ -109,7 +109,7 @@
           {% if step.notes %}
           <ul class="verification-lifecycle-step-notes">
             {% for note in step.notes %}
-            <li style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ note }}</li>
+            <li>{{ note }}</li>
             {% endfor %}
           </ul>
           {% endif %}
@@ -122,55 +122,11 @@
   {% endif %}
 </section>
 
-{% set verification_logs = detail_verification_logs if detail_verification_logs is defined else {} %}
-{% if verification_logs and verification_logs.available %}
-<section>
-  <h2>Verification Logs</h2>
-  <p class="muted">
-    Verification:
-    <code>{{ verification_logs.verification_id }}</code>
-    {% if verification_logs.status %}({{ verification_logs.status | upper }}){% endif %}
-  </p>
-  {% if verification_logs.error %}
-  <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ verification_logs.error_display or verification_logs.error }}</p>
-  {% endif %}
-  {% if verification_logs.log_rows %}
-  <p>
-    {% for row in verification_logs.log_rows %}
-    <a href="{{ row.href }}" target="_blank" rel="noopener">{{ row.name }}</a>{% if not loop.last %} | {% endif %}
-    {% endfor %}
-  </p>
-  {% endif %}
-  {% if verification_logs.diagnostics %}
-  {% if verification_logs.diagnostics_truncated %}
-  <p class="muted">Showing first {{ verification_logs.diagnostics_limit }} diagnostics ({{ verification_logs.diagnostics_total }} total).</p>
-  {% endif %}
-  <div class="compile-diagnostics-list" role="list">
-    {% for d in verification_logs.diagnostics %}
-    {% set level = (d.level | default('') | lower) %}
-    {% if level not in ['error', 'warning', 'note'] %}
-    {% set level = 'other' %}
-    {% endif %}
-    <div class="compile-diagnostics-row compile-diagnostics-row-{{ level }}" role="listitem">
-      <span class="compile-diagnostics-level">{{ d.level_upper or (d.level | upper) }}</span>
-      <span class="compile-diagnostics-location">{{ d.location_display }}</span>
-      <span class="compile-diagnostics-message">{{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}</span>
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-</section>
-{% endif %}
-
 {% if detail_columns %}
 <section>
-  <div
-    class="verification-detail-wrap{% if not detail_table_compact %} verification-detail-wrap-regular{% endif %}"
-    {% if not detail_table_compact %}style="width:100%;max-width:none;overflow-x:auto;overflow-y:hidden;"{% endif %}
-  >
+  <div class="verification-detail-wrap{% if not detail_table_compact %} verification-detail-wrap-regular{% endif %}">
     <table
       class="verification-detail-table{% if detail_table_compact %} verification-detail-table-compact{% else %} verification-detail-table-regular{% endif %}"
-      {% if not detail_table_compact %}style="width:100%;min-width:0;table-layout:auto;"{% endif %}
       data-run-details-fragment="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details/test-fragment"
       data-verification-id="{{ cancel_verification_id or '' }}"
     >
@@ -184,23 +140,25 @@
         <tr>
           <th>Test</th>
           {% for col in detail_columns %}
-          <th class="{{ 'verification-col-unexpected' if col.expected_mismatch else '' }}">
+          <th class="{{ 'col-bad' if col.expected_mismatch else '' }}">
             {% if col.source_href %}
-            <a href="{{ col.source_href }}" class="verification-col-title-link"><span class="verification-col-title">{{ col.title }}</span></a>
+            <a href="{{ col.source_href }}" class="col-link"><span class="col-title">{{ col.title }}</span></a>
             {% else %}
-            <span class="verification-col-title">{{ col.title }}</span>
+            <span class="col-title">{{ col.title }}</span>
             {% endif %}
           </th>
           {% endfor %}
         </tr>
         <tr class="verification-detail-result-row">
-          <th>Result</th>
+          <th>
+            <span class="stat-line stat-main">Result</span>
+            <span class="stat-line stat-sub">expected</span>
+          </th>
           {% for col in detail_columns %}
-          <th class="{{ 'verification-col-unexpected' if col.expected_mismatch else '' }}">
-            {% set got_status_class = 'ok' if col.expected_is_ac_only and col.got_short == 'AC' and col.matched else 'danger' if col.got_short in ['CE', 'FL'] else 'danger' if col.expected_mismatch else 'muted' %}
-            <span class="verification-result-line"><span class="{{ got_status_class }}">{{ col.got_display or col.got_short }}</span></span>
+          <th class="{{ col.result_tone_class }} {{ 'col-bad' if col.expected_mismatch else '' }}">
+            <span class="stat-line stat-main">{{ col.got_display or col.got_short }}</span>
             {% set expected_token = col.expected_display or '--' %}
-            <span class="verification-result-line muted">expected {{ expected_token }}</span>
+            <span class="stat-line stat-sub">{{ expected_token }}</span>
           </th>
           {% endfor %}
         </tr>
@@ -210,24 +168,24 @@
       {% for row in detail_rows %}
       <tr>
         {% set test_cell = row.test_cell if row.test_cell is defined else {} %}
-        <td class="verification-cell verification-test-cell verification-cell-{{ test_cell.kind or 'neutral' }}" {% if test_cell.detail %}title="{{ test_cell.detail }}"{% elif row.test_name %}title="{{ row.test_name }}"{% endif %}>
+        <td class="vcell tcell tone-{{ test_cell.kind or 'neutral' }}" {% if test_cell.detail %}title="{{ test_cell.detail }}"{% elif row.test_name %}title="{{ row.test_name }}"{% endif %}>
           {% if test_cell.short %}
-          <span class="verification-cell-code">{{ test_cell.short }}</span>
-          {% if test_cell.meta %}<span class="verification-cell-meta">{{ test_cell.meta }}</span>{% endif %}
+          <span class="vcode">{{ test_cell.short }}</span>
+          {% if test_cell.meta %}<span class="vmeta">{{ test_cell.meta }}</span>{% endif %}
           {% elif test_cell.clickable %}
-          <a class="linkish verification-test-toggle" href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}">{{ test_cell.text or row.display_name or row.test_name }}</a>
+          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}">{{ test_cell.text or row.display_name or row.test_name }}</a>
           {% else %}
           {{ test_cell.text or row.display_name or row.test_name }}
           {% endif %}
         </td>
         {% for cell in row.cells %}
         {% set col = detail_columns[loop.index0] %}
-        <td class="verification-cell verification-cell-{{ cell.kind }}">
+        <td class="vcell tone-{{ cell.kind }}">
           {% if row.has_detail %}
-          <a class="linkish verification-cell-toggle verification-cell-link" href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="verification-cell-code">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="verification-cell-meta">{{ cell.metrics }}</span>{% endif %}</a>
+          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}</a>
           {% else %}
-          <span class="verification-cell-code">{{ cell.short }}</span>
-          {% if cell.metrics and cell.metrics != '-' %}<span class="verification-cell-meta">{{ cell.metrics }}</span>{% endif %}
+          <span class="vcode">{{ cell.short }}</span>
+          {% if cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
           {% endif %}
         </td>
         {% endfor %}
@@ -238,9 +196,9 @@
       <tr>
         <td>test {{ idx }}</td>
         {% for _col in detail_columns %}
-        <td class="verification-cell verification-cell-neutral">
-          <span class="verification-cell-code">..</span>
-          <span class="verification-cell-meta">pending</span>
+        <td class="vcell tone-neutral">
+          <span class="vcode">..</span>
+          <span class="vmeta">pending</span>
         </td>
         {% endfor %}
       </tr>
@@ -258,12 +216,14 @@
       </tbody>
       <tfoot>
         <tr class="verification-detail-summary-row">
-          <th>Summary</th>
+          <th>
+            <div class="stat-line stat-main">Summary</div>
+            <div class="stat-line stat-sub">Statistics</div>
+          </th>
           {% for col in detail_columns %}
-          {% set got_status_class = 'ok' if col.expected_is_ac_only and col.got_short == 'AC' and col.matched else 'danger' if col.got_short in ['CE', 'FL'] else 'danger' if col.expected_mismatch else 'muted' %}
-          <td class="{{ 'verification-col-unexpected' if col.expected_mismatch else '' }}">
-            <div class="verification-summary-verdict {{ got_status_class }}">{{ col.got_display or col.got_short or '-' }}</div>
-            <div class="verification-summary-metric">{{ col.max_time_display or '-' }} / {{ col.max_memory_display or '-' }}</div>
+          <td class="{{ col.result_tone_class }} {{ 'col-bad' if col.expected_mismatch else '' }}">
+            <div class="stat-line stat-main">{{ col.got_display or col.got_short or '-' }}</div>
+            <div class="stat-line stat-sub">{{ col.max_time_display or '-' }} / {{ col.max_memory_display or '-' }}</div>
           </td>
           {% endfor %}
         </tr>
@@ -284,7 +244,7 @@
 </div>
 
 <section>
-  <h2>Compile Diagnostics</h2>
+  <h2>Diagnostics</h2>
   {% set ns = namespace(has_diag=false) %}
   {% for col in detail_columns %}
   {% set entries = col.compile_diagnostics if col.compile_diagnostics else [] %}
@@ -331,22 +291,97 @@
   </div>
   {% endif %}
   {% endfor %}
+  {% set verification_entries = detail_verification_logs.diagnostics if detail_verification_logs.diagnostics else [] %}
+  {% set verification_error = (detail_verification_logs.error | default('') | trim) %}
+  {% set verification_has_entries = (verification_entries | length) > 0 %}
+  {% if verification_error or verification_has_entries %}
+  {% set ns.has_diag = true %}
+  <div class="compile-diagnostics-card">
+    <div class="compile-diagnostics-head">
+      <div><strong>{{ detail_verification_logs.title or 'Verification' }}</strong></div>
+    </div>
+    {% if verification_error %}
+    <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
+    {% endif %}
+    {% if verification_has_entries %}
+    {% if detail_verification_logs.diagnostics_truncated %}
+    <p class="muted">Showing first {{ detail_verification_logs.diagnostics_limit }} diagnostics ({{ detail_verification_logs.diagnostics_total }} total).</p>
+    {% endif %}
+    <div class="compile-diagnostics-list" role="list">
+      {% for d in verification_entries %}
+      {% set level = (d.level | default('') | lower) %}
+      {% if level not in ['error', 'warning', 'note'] %}
+      {% set level = 'other' %}
+      {% endif %}
+      <div class="compile-diagnostics-row compile-diagnostics-row-{{ level }}" role="listitem">
+        <span class="compile-diagnostics-level">{{ d.level_upper or (d.level | upper) }}</span>
+        <span class="compile-diagnostics-location">{{ d.location_display }}</span>
+        <span class="compile-diagnostics-message">{{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <details class="compile-diagnostics-raw">
+      <summary>Raw log</summary>
+      <pre class="compile-diagnostics-log">{% for d in verification_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
+{% endfor %}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
   {% if not ns.has_diag %}
-  <p class="muted">No compile diagnostics.</p>
+  <p class="muted">No diagnostics.</p>
   {% endif %}
 </section>
 {% else %}
 <section>
   {% if detail_running or detail_status == "running" %}
   <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
-{% elif verification_logs and verification_logs.available %}
-  <p class="muted">No per-test details available for this verification.</p>
   {% elif verification_id or detail_lifecycle_cards %}
   <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
   {% else %}
   <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Verifications</a> and choose one.</p>
   {% endif %}
 </section>
+{% set verification_entries = detail_verification_logs.diagnostics if detail_verification_logs.diagnostics else [] %}
+{% set verification_error = (detail_verification_logs.error | default('') | trim) %}
+{% set verification_has_entries = (verification_entries | length) > 0 %}
+{% if verification_error or verification_has_entries %}
+<section>
+  <h2>Diagnostics</h2>
+  <div class="compile-diagnostics-card">
+    <div class="compile-diagnostics-head">
+      <div><strong>{{ detail_verification_logs.title or 'Verification' }}</strong></div>
+    </div>
+    {% if verification_error %}
+    <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
+    {% endif %}
+    {% if verification_has_entries %}
+    {% if detail_verification_logs.diagnostics_truncated %}
+    <p class="muted">Showing first {{ detail_verification_logs.diagnostics_limit }} diagnostics ({{ detail_verification_logs.diagnostics_total }} total).</p>
+    {% endif %}
+    <div class="compile-diagnostics-list" role="list">
+      {% for d in verification_entries %}
+      {% set level = (d.level | default('') | lower) %}
+      {% if level not in ['error', 'warning', 'note'] %}
+      {% set level = 'other' %}
+      {% endif %}
+      <div class="compile-diagnostics-row compile-diagnostics-row-{{ level }}" role="listitem">
+        <span class="compile-diagnostics-level">{{ d.level_upper or (d.level | upper) }}</span>
+        <span class="compile-diagnostics-location">{{ d.location_display }}</span>
+        <span class="compile-diagnostics-message">{{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <details class="compile-diagnostics-raw">
+      <summary>Raw log</summary>
+      <pre class="compile-diagnostics-log">{% for d in verification_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
+{% endfor %}</pre>
+    </details>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
 {% endif %}
 </div>
 {% endblock %}
+

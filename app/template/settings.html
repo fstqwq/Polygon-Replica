@@ -188,7 +188,7 @@
             {% endif %}
           </td>
           <td class="muted">{{ "%.2f"|format(row.get('load_5m', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_15m', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_1h', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_5h', 0.0) | float) }}</td>
-          <td><code>{{ row.get('last_judging', '-') or '-' }}</code></td>
+          <td><code>{{ row.get('last_judging') if row.get('last_judging') else '-' }}</code></td>
           <td>
             <form
               class="inline-form settings-judgehost-toggle-form"

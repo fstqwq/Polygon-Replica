@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
+
+from app.service.platform.process import run_cmd
+
 from .ui_support import (
     Path,
     UIBaseSuite,
@@ -27,10 +32,6 @@ from .ui_support import (
     db,
     git_service,
     json,
-    patch,
-    parse_qs,
-    urlparse,
-    run_cmd,
     uuid,
     config,
     workspace_service,
@@ -316,7 +317,7 @@ class TestUIContests(UIBaseSuite):
             )
             return preview_id
 
-        def _fake_run_verification(problem: str, username: str, *, commit: str = "", ref: str = "", force_recompile: bool = False) -> str:
+        def _fake_run_build(problem: str, username: str, *, commit: str = "", ref: str = "", force_recompile: bool = False) -> str:
             _ = bool(force_recompile)
             problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
             self.assertIsNotNone(problem_row)
@@ -336,7 +337,7 @@ class TestUIContests(UIBaseSuite):
                     workspace_id,
                     str(commit or "").strip(),
                     str(ref or "").strip(),
-                    "materialization",
+                    "verification",
                     "ok",
                     json.dumps({"status": "ok"}),
                     str(artifact_root.resolve()),
@@ -356,7 +357,7 @@ class TestUIContests(UIBaseSuite):
 
         with (
             patch.object(config.preview_service, "compile_preview", side_effect=_fake_compile_preview),
-            patch.object(config.verification_service, "run_materialization", side_effect=_fake_run_materialization),
+            patch.object(config.verification_service, "run_verification", side_effect=_fake_run_build),
             patch.object(config.export_service, "create_export", side_effect=_fake_create_export),
         ):
             preview_start = contest_packages_preview_start(contest=contest_slug, user="alice")
@@ -494,5 +495,3 @@ class TestUIContests(UIBaseSuite):
         problems_html = problems_page.body.decode("utf-8", errors="replace")
         self.assertIn(f"<code>{change_job_id}</code> / SUCCESS", problems_html)
         self.assertIn("<td>FAILED</td>", problems_html)
-
-
