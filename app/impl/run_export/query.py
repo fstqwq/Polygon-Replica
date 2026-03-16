@@ -10,7 +10,6 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import dedupe_preserve_order
 from app.impl.workspace.context_verification import normalize_run_id_token
 from app.main_util import normalize_optional_component_source_path_safe
-from app.service.verification.store import load_verification_summary, verification_source_paths
 from app.service.platform.process import is_canonical_artifact_id, run_cmd
 
 
@@ -114,10 +113,7 @@ def _verification_runtime_progress(
     }
     if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return result
-    verification_row = config.db.fetch_one(
-        "SELECT status,summary_json,artifact_path FROM verifications WHERE id=? AND problem_id=?",
-        [verification_id, int(problem_id)],
-    )
+    verification_row = config.verification_service.export_runtime_verification(int(problem_id), verification_id)
     verification_status = ""
     verification_summary: VerificationDetailSummary = {}
     artifact_path = ""
@@ -232,14 +228,7 @@ def _verification_href(
 ) -> str:
     if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return ""
-    row = config.db.fetch_one(
-        "SELECT id,status FROM verifications WHERE id=? AND problem_id=?",
-        [verification_id, int(problem_id)],
-    )
-    if row is None:
-        return ""
-    status_token = row["status"]
-    if status_token not in {"queued", "pending", "running", "ok", "failed"}:
+    if not config.verification_service.has_export_detail_verification(int(problem_id), verification_id):
         return ""
     return f"/problems/{problem_slug}/{username}/run/details?verification_id={quote_plus(verification_id)}"
 
@@ -254,11 +243,11 @@ def _rerun_solution_paths_from_verification(
     verification_id = normalize_run_id_token(verification_id)
     if not verification_id:
         return []
-    verification_summary = load_verification_summary(config.db, verification_id)
+    verification_summary = config.verification_service.verification_summary(verification_id)
     if not verification_summary:
         return []
     out: list[str] = []
-    for source_rel in verification_source_paths(verification_summary):
+    for source_rel in config.verification_service.verification_source_paths(verification_id):
         solution_path = normalize_optional_component_source_path_safe(
             source_rel,
             "solutions",

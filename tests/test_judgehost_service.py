@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_all, db_fetch_one, judgehost_cases_for_run, judgehost_fetch_case, judgehost_fetch_job
+
 import base64
 import hashlib
 import json
@@ -40,7 +42,7 @@ class TestJudgehostService(SmokeBase):
             if not token or token in seen:
                 continue
             seen.add(token)
-            row = config.db.fetch_one(
+            row = db_fetch_one(
                 "SELECT summary_json FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
                 [token, problem_id, workspace_id],
             )
@@ -62,7 +64,7 @@ class TestJudgehostService(SmokeBase):
                 "summary_json": json.dumps(summary_obj),
                 "verification_id": token,
             }
-        rows = config.db.fetch_all(
+        rows = db_fetch_all(
             """
             SELECT id,summary_json
             FROM verifications
@@ -91,7 +93,7 @@ class TestJudgehostService(SmokeBase):
         return None
 
     def _verification_artifact_root(self, verification_id: str) -> Path:
-        row = config.db.fetch_one("SELECT artifact_path FROM verifications WHERE id=?", [str(verification_id or "").strip()])
+        row = db_fetch_one("SELECT artifact_path FROM verifications WHERE id=?", [str(verification_id or "").strip()])
         if row is None:
             raise AssertionError(f"missing verification row: {verification_id}")
         artifact_path = str(row["artifact_path"] or "").strip()
@@ -104,7 +106,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"ver-summary-running-{uuid.uuid4().hex[:8]}"
         artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         artifact_root.mkdir(parents=True, exist_ok=True)
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -130,13 +132,99 @@ class TestJudgehostService(SmokeBase):
             summary={"status": "running", "runs": {}, "runs_order": []},
             finished=False,
         )
-        row = config.db.fetch_one(
+        row = db_fetch_one(
             "SELECT status,finished_at FROM verifications WHERE id=?",
             [verification_id],
         )
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or "").strip().lower(), "running")
         self.assertEqual(str(row["finished_at"] or "").strip(), "")
+
+    def test_save_verification_run_summary_ignores_updates_after_verification_cancelled(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-cancelled-freeze-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-cancelled-freeze-{uuid.uuid4().hex[:8]}"
+        run_root = config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()
+        run_root.mkdir(parents=True, exist_ok=True)
+
+        save_verification_run_summary(
+            config.db,
+            config.fs_manager,
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            kind="verification",
+            mode="pass-fail",
+            verification_source="verification.start",
+            source_paths=["solutions/a.cpp"],
+            run_id=run_id,
+            run_status="running",
+            source_label="solutions/a.cpp",
+            expected_behavior="accepted",
+            run_summary={"mode": "pass-fail", "source": "solutions/a.cpp", "tests": []},
+            artifact_path=str(run_root),
+            task_kind="solve",
+            finished=False,
+        )
+        row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
+        self.assertIsNotNone(row)
+        payload = json.loads(str(row["summary_json"] or "{}"))
+        payload["status"] = "failed"
+        payload["cancelled"] = True
+        payload["cancel_reason"] = "verification cancelled by user"
+        payload["error"] = "verification cancelled by user"
+        payload["finished_at"] = "2026-03-17T00:00:01Z"
+        run_row = dict((payload.get("runs") or {}).get(run_id) or {})
+        run_row["status"] = "failed"
+        run_summary = dict(run_row.get("summary") or {})
+        run_summary["cancelled"] = True
+        run_summary["error"] = "verification cancelled by user"
+        run_row["summary"] = run_summary
+        payload["runs"][run_id] = run_row
+        db_execute(
+            "UPDATE verifications SET status=?, summary_json=?, finished_at=? WHERE id=?",
+            ["failed", json.dumps(payload), "2026-03-17T00:00:01Z", verification_id],
+        )
+
+        save_verification_run_summary(
+            config.db,
+            config.fs_manager,
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            kind="verification",
+            mode="pass-fail",
+            verification_source="verification.start",
+            source_paths=["solutions/a.cpp"],
+            run_id=run_id,
+            run_status="running",
+            source_label="solutions/a.cpp",
+            expected_behavior="accepted",
+            run_summary={
+                "mode": "pass-fail",
+                "source": "solutions/a.cpp",
+                "tests": [{"test": "001.in", "verdict": "OK"}],
+            },
+            artifact_path=str(run_root),
+            task_kind="solve",
+            finished=False,
+        )
+
+        row_after = db_fetch_one(
+            "SELECT status,summary_json,finished_at FROM verifications WHERE id=?",
+            [verification_id],
+        )
+        self.assertIsNotNone(row_after)
+        self.assertEqual(str(row_after["status"] or "").strip().lower(), "failed")
+        self.assertEqual(str(row_after["finished_at"] or "").strip(), "2026-03-17T00:00:01Z")
+        payload_after = json.loads(str(row_after["summary_json"] or "{}"))
+        self.assertTrue(bool(payload_after.get("cancelled")))
+        self.assertEqual(str(payload_after.get("status") or "").strip().lower(), "failed")
+        run_after = verification_run(payload_after, run_id)
+        self.assertEqual(str(run_after.get("status") or "").strip().lower(), "failed")
+        summary_after = dict(run_after.get("summary") or {})
+        self.assertEqual(list(summary_after.get("tests") or []), [])
+        self.assertIn("cancelled by user", str(summary_after.get("error") or ""))
 
     def test_seeded_verification_runs_keep_summary_running_and_merge_source_paths(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -202,7 +290,7 @@ class TestJudgehostService(SmokeBase):
             finished=True,
         )
 
-        row = config.db.fetch_one(
+        row = db_fetch_one(
             "SELECT status,summary_json,finished_at FROM verifications WHERE id=?",
             [verification_id],
         )
@@ -234,7 +322,7 @@ class TestJudgehostService(SmokeBase):
             json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 1}, indent=2) + "\n",
             encoding="utf-8",
         )
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -266,9 +354,7 @@ class TestJudgehostService(SmokeBase):
 
     @staticmethod
     def _reset_task_queue_state(service) -> None:
-        with service._state_lock:
-            service._tasks_by_id.clear()
-            service._task_id_by_run.clear()
+        service.reset_runtime_state()
 
     def test_domjudge_executable_hash_uses_md5_contract(self) -> None:
         files: list[tuple[str, bytes, bool]] = [
@@ -366,7 +452,7 @@ class TestJudgehostService(SmokeBase):
         judgehost_block = summary.get("judgehost") if isinstance(summary, dict) else {}
         self.assertIsInstance(judgehost_block, dict)
         self.assertEqual(str(judgehost_block.get("status") or ""), service.STATUS_COMPLETED)
-        verification_row = config.db.fetch_one(
+        verification_row = db_fetch_one(
             "SELECT kind,status,summary_json FROM verifications WHERE id=?",
             ["inv-jh"],
         )
@@ -752,7 +838,10 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(str(tests[0].get("verdict") or ""), "OK")
         feedback_files = tests[0].get("feedback_files") if isinstance(tests[0], dict) else []
         self.assertIsInstance(feedback_files, list)
-        self.assertTrue(any(str(item or "").startswith("feedback_dir/001/") for item in feedback_files))
+        self.assertTrue(feedback_files)
+        first_feedback_token = str(feedback_files[0] or "")
+        self.assertTrue(first_feedback_token.startswith("cache://") or first_feedback_token.startswith("feedback_dir/001/"))
+        self.assertEqual(service.resolve_artifact_blob(first_feedback_token), b"ok\n")
         passes = tests[0].get("passes") if isinstance(tests[0], dict) else []
         self.assertIsInstance(passes, list)
         self.assertTrue(passes)
@@ -1020,7 +1109,10 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(output_ref)
         self.assertEqual(service.resolve_artifact_blob(output_ref), noisy_output)
         feedback_files = row.get("feedback_files") if isinstance(row, dict) else []
-        self.assertIn("feedback_dir/001/judgemessage.txt", [str(item or "") for item in (feedback_files or [])])
+        self.assertTrue(feedback_files)
+        first_feedback_token = str(feedback_files[0] or "")
+        self.assertTrue(first_feedback_token.endswith("judgemessage.txt"))
+        self.assertEqual(service.resolve_artifact_blob(first_feedback_token), b"ok\n")
 
         run_root = config.fs_manager.resolve_verification_run_root(str(run_row["verification_id"] or ""), run_id)
         self.assertFalse((run_root / "001.out").exists())
@@ -1323,10 +1415,7 @@ class TestJudgehostService(SmokeBase):
         case_id_a = int(rows_a[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_a, 0)
         self.assertEqual(testcase_id_a, case_id_a)
-        row_a = service._db_fetch_one(
-            "SELECT testcase_id FROM judgehost_domjudge_cases WHERE id=?",
-            [case_id_a],
-        )
+        row_a = judgehost_fetch_case(service, case_id_a)
         self.assertIsNotNone(row_a)
         cached_testcase_id_a = int(row_a["testcase_id"] or 0)
         self.assertGreater(cached_testcase_id_a, 0)
@@ -1358,10 +1447,7 @@ class TestJudgehostService(SmokeBase):
         self.assertGreater(case_id_b, 0)
         self.assertEqual(testcase_id_b, case_id_b)
         self.assertNotEqual(case_id_a, case_id_b)
-        row_b = service._db_fetch_one(
-            "SELECT testcase_id FROM judgehost_domjudge_cases WHERE id=?",
-            [case_id_b],
-        )
+        row_b = judgehost_fetch_case(service, case_id_b)
         self.assertIsNotNone(row_b)
         cached_testcase_id_b = int(row_b["testcase_id"] or 0)
         self.assertGreater(cached_testcase_id_b, 0)
@@ -2290,10 +2376,7 @@ class TestJudgehostService(SmokeBase):
         compare_run = next((item for item in compare_files if str(item.get("filename") or "") == "run"), {})
         compare_text = base64.b64decode(str(compare_run.get("content") or "")).decode("utf-8", errors="replace")
         self.assertIn("exit 42", compare_text)
-        db_rows = service._db_fetch_all(
-            "SELECT id,test_name,status FROM judgehost_domjudge_cases WHERE run_id=? ORDER BY ordinal ASC, id ASC",
-            [run_id],
-        )
+        db_rows = judgehost_cases_for_run(service, run_id)
         self.assertEqual(len(db_rows), 1)
         self.assertEqual(int(db_rows[0]["id"] or 0), case_id)
         self.assertEqual(str(db_rows[0]["test_name"] or ""), "compile-only.in")
@@ -3118,10 +3201,7 @@ class TestJudgehostService(SmokeBase):
             )
             self.assertEqual(add_resp.status_code, 200)
 
-        row = service._db_fetch_one(
-            "SELECT status,runresult,output_run_rel,output_diff_rel,metadata_rel FROM judgehost_domjudge_cases WHERE id=?",
-            [case_id],
-        )
+        row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "reported")
         self.assertEqual(str(row["runresult"] or ""), "correct")
@@ -3130,8 +3210,6 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(str(row["metadata_rel"] or "").strip())
 
     def test_domjudge_add_judging_run_persists_incremental_solve_main_case_into_verification_run(self) -> None:
-        from app.main import app
-
         service = config.judgehost_task_service
         old_enabled = service._enabled
         old_token = service._api_token
@@ -3201,32 +3279,30 @@ class TestJudgehostService(SmokeBase):
         self.assertGreater(case_id, 0)
 
         metadata = b"cpu-time: 0.001\nwall-time: 0.001\nmemory-bytes: 4096\n"
-        with TestClient(app) as client:
-            headers = {"Authorization": "Bearer test-token"}
-            update_resp = client.put(
-                f"/api/v4/judgehosts/update-judging/judgehost-progress/{case_id}",
-                data={
-                    "compile_success": "1",
-                    "output_compile": "",
-                    "compile_metadata": "",
-                },
-                headers=headers,
-            )
-            self.assertEqual(update_resp.status_code, 200)
-            add_resp = client.post(
-                f"/api/v4/judgehosts/add-judging-run/judgehost-progress/{case_id}",
-                data={
-                    "runresult": "correct",
-                    "runtime": "0.001",
-                },
-                files={
-                    "output_run": ("program.out", b"ok\n", "application/octet-stream"),
-                    "output_diff": ("judgemessage.txt", b"ok\n", "text/plain"),
-                    "metadata": ("program.meta", metadata, "text/plain"),
-                },
-                headers=headers,
-            )
-            self.assertEqual(add_resp.status_code, 200)
+        service.domjudge_update_judging(
+            "judgehost-progress",
+            case_id,
+            {
+                "compile_success": "1",
+                "output_compile": "",
+                "compile_metadata": "",
+            },
+        )
+        service.domjudge_add_judging_run(
+            "judgehost-progress",
+            case_id,
+            {
+                "runresult": "correct",
+                "runtime": "0.001",
+                "output_run": base64.b64encode(b"ok\n").decode("ascii"),
+                "output_diff": base64.b64encode(b"ok\n").decode("ascii"),
+                "output_error": "",
+                "output_system": "",
+                "metadata": base64.b64encode(metadata).decode("ascii"),
+                "compare_metadata": "",
+                "team_message": "",
+            },
+        )
 
         target_row = self._verification_run_row(target_run_id, verification_id=verification_id)
         self.assertIsNotNone(target_row)
@@ -3239,6 +3315,67 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(len(tests), 1)
         self.assertEqual(str((tests[0] or {}).get("test") or ""), "001.in")
         self.assertEqual(str((tests[0] or {}).get("verdict") or ""), "OK")
+        self.assertEqual(int((tests[0] or {}).get("time_user_ms") or 0), 1)
+        self.assertTrue(str((tests[0] or {}).get("output_ref") or ""))
+        self.assertIsInstance((tests[0] or {}).get("feedback_files"), list)
+        pass_rows = (tests[0] or {}).get("passes")
+        self.assertIsInstance(pass_rows, list)
+        self.assertEqual(str((pass_rows[0] or {}).get("verdict") or ""), "OK")
+        self.assertTrue(str((pass_rows[0] or {}).get("output_ref") or ""))
+
+    def test_domjudge_cancelled_task_is_not_dispatched_again(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service._enabled
+        old_token = service._api_token
+        old_username = service._api_username
+        old_include_build_payload = service._include_build_payload
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        self.addCleanup(setattr, service, "_api_username", old_username)
+        self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
+        service._enabled = True
+        service._api_token = "test-token"
+        service._api_username = "judgehost"
+        service._include_build_payload = True
+
+        verification_id = f"ver-cancel-dispatch-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-cancel-dispatch-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        build_root = self._verification_artifact_root(verification_id)
+        (build_root / "tests" / "002.in").write_text("ok2\n", encoding="utf-8")
+        (build_root / "ans" / "002.ans").write_text("ok2\n", encoding="utf-8")
+
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in", "002.in"],
+            verification_id=f"ver-cancel-dispatch-job-{uuid.uuid4().hex[:8]}",
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        service.domjudge_register_host("judgehost-cancel-dispatch")
+        first_batch = service.domjudge_fetch_work("judgehost-cancel-dispatch", max_batchsize=1)
+        self.assertEqual(len(first_batch), 1)
+
+        affected = service.cancel_tasks_for_runs([run_id], reason="verification cancelled by user")
+        self.assertEqual(affected, 1)
+
+        second_batch = service.domjudge_fetch_work("judgehost-cancel-dispatch", max_batchsize=1)
+        self.assertEqual(second_batch, [])
+
+        job_row = judgehost_fetch_job(service, 1)
+        self.assertIsNotNone(job_row)
+        self.assertEqual(str(job_row["status"] or ""), "failed")
+        case_rows = judgehost_cases_for_run(service, run_id)
+        self.assertEqual(len(case_rows), 2)
+        self.assertEqual([str(row["status"] or "") for row in case_rows], ["reported", "reported"])
 
     def test_domjudge_large_multipart_keeps_starlette_file_spool_threshold(self) -> None:
         from app.main import app
@@ -3650,10 +3787,8 @@ class TestJudgehostService(SmokeBase):
         run_root = config.fs_manager.resolve_verification_run_root(str(run_row["verification_id"] or ""), run_id_exec)
         self.assertFalse((run_root / "001.out").exists())
 
-        case_row = service._db_fetch_one(
-            "SELECT status FROM judgehost_domjudge_cases WHERE run_id=? ORDER BY id ASC LIMIT 1",
-            [run_id_exec],
-        )
+        case_rows = judgehost_cases_for_run(service, run_id_exec)
+        case_row = case_rows[0] if case_rows else None
         self.assertIsNotNone(case_row)
         self.assertEqual(str(case_row["status"] or ""), "reported")
 
@@ -3741,15 +3876,28 @@ class TestJudgehostService(SmokeBase):
             verification_source="run.execute",
         )
 
-        rows = service._db_fetch_all(
-            "SELECT id,test_name,status FROM judgehost_domjudge_cases WHERE run_id=? ORDER BY ordinal ASC, id ASC",
-            [run_id_target],
-        )
+        rows = judgehost_cases_for_run(service, run_id_target)
         self.assertEqual(len(rows), 2)
         self.assertEqual(str(rows[0]["test_name"] or ""), "001.in")
         self.assertEqual(str(rows[0]["status"] or ""), "reported")
         self.assertEqual(str(rows[1]["test_name"] or ""), "002.in")
         self.assertEqual(str(rows[1]["status"] or ""), "pending")
+        run_row = self._verification_run_row(run_id_target, verification_id=verification_id)
+        self.assertIsNotNone(run_row)
+        run_summary = json.loads(str(run_row["summary_json"] or "{}"))
+        self.assertIsInstance(run_summary, dict)
+        tests = run_summary.get("tests") if isinstance(run_summary, dict) else []
+        self.assertIsInstance(tests, list)
+        self.assertEqual(len(tests), 1)
+        cached_test = tests[0] if tests else {}
+        self.assertEqual(str((cached_test or {}).get("test") or ""), "001.in")
+        self.assertEqual(str((cached_test or {}).get("verdict") or ""), "OK")
+        self.assertEqual(int((cached_test or {}).get("time_user_ms") or 0), 3)
+        self.assertTrue(str((cached_test or {}).get("output_ref") or ""))
+        self.assertIsInstance((cached_test or {}).get("feedback_files"), list)
+        pass_rows = (cached_test or {}).get("passes")
+        self.assertIsInstance(pass_rows, list)
+        self.assertEqual(str((pass_rows[0] or {}).get("verdict") or ""), "OK")
         expected_case_id = int(rows[1]["id"])
 
         leased = service.domjudge_fetch_work("judgehost-partial-cache", max_batchsize=8)
@@ -3862,10 +4010,7 @@ class TestJudgehostService(SmokeBase):
                 },
             )
         )
-        job_row = service._db_fetch_one(
-            "SELECT lease_owner,status FROM judgehost_domjudge_jobs WHERE job_id=?",
-            [job_id],
-        )
+        job_row = judgehost_fetch_job(service, job_id)
         self.assertIsNotNone(job_row)
         self.assertEqual(str(job_row["lease_owner"] or ""), "prequeue-cache")
         self.assertEqual(str(job_row["status"] or ""), "leased")
@@ -3926,18 +4071,12 @@ class TestJudgehostService(SmokeBase):
 
         service._domjudge_release_prepared_job_for_queue(job_id)
 
-        case_row = service._db_fetch_one(
-            "SELECT status,lease_owner FROM judgehost_domjudge_cases WHERE id=?",
-            [case_id],
-        )
+        case_row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(case_row)
         self.assertEqual(str(case_row["status"] or ""), "leased")
         self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-prequeue-release")
 
-        job_row = service._db_fetch_one(
-            "SELECT status,lease_owner FROM judgehost_domjudge_jobs WHERE job_id=?",
-            [job_id],
-        )
+        job_row = judgehost_fetch_job(service, job_id)
         self.assertIsNotNone(job_row)
         self.assertEqual(str(job_row["status"] or ""), "leased")
         self.assertEqual(str(job_row["lease_owner"] or ""), "judgehost-prequeue-release")
@@ -4383,10 +4522,7 @@ class TestJudgehostService(SmokeBase):
             },
         )
 
-        case_row = service._db_fetch_one(
-            "SELECT runresult FROM judgehost_domjudge_cases WHERE id=?",
-            [case_id],
-        )
+        case_row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(case_row)
         self.assertEqual(str(case_row["runresult"] or "").strip().lower(), "checker-fail")
 
@@ -4562,10 +4698,7 @@ class TestJudgehostService(SmokeBase):
             },
         )
 
-        case_row = service._db_fetch_one(
-            "SELECT runresult FROM judgehost_domjudge_cases WHERE id=?",
-            [case_id],
-        )
+        case_row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(case_row)
         self.assertEqual(str(case_row["runresult"] or "").strip().lower(), "timelimit")
 
@@ -4816,7 +4949,7 @@ class TestJudgehostService(SmokeBase):
         self.assertGreater(case_ids[0], 0)
         self.assertGreater(case_ids[1], 0)
         target_case = case_ids[1]
-        row = service._db_fetch_one("SELECT job_id FROM judgehost_domjudge_cases WHERE id=?", [target_case])
+        row = judgehost_fetch_case(service, target_case)
         self.assertIsNotNone(row)
         job_id = int(row["job_id"])
 
@@ -5105,6 +5238,3 @@ class TestJudgehostService(SmokeBase):
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_a, case_id_b)
-
-
-

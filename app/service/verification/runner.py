@@ -9,7 +9,6 @@ import shutil
 import uuid
 from typing import Literal, TypedDict, cast
 
-from app.db import now_iso
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
 from app.service.platform.process import run_cmd
 from app.service.platform.testlib_source import workspace_testlib_header
@@ -22,6 +21,10 @@ from app.service.verification.cache import (
 from app.service.verification.judge_solve import solve_result_error, solve_with_judge_backend
 from app.service.verification.pipeline import wait_build_terminal_status
 from app.service.verification.runtime import normalize_problem_mode
+from app.service.verification.test_rows import (
+    build_verification_test_row,
+    canonicalize_verification_test_rows,
+)
 from app.service.verification.store import (
     create_verification_record,
     load_verification_record,
@@ -30,9 +33,9 @@ from app.service.verification.store import (
     verification_update_lock,
 )
 from app.service.verification.types import Kind, Status
-from app.service.verification.diagnostic import compact_single_line, normalize_diagnostics_for_db
+from app.service.verification.diagnostic import compact_single_line
 from app.service.verification.source import resolve_source
-from app.service.verification.summary import summary_for_db
+from app.service.run.summary import summary_for_db
 from app.service.verification.test_spec import tests_spec_answer_source
 from app.service.run.runtime import RUN_TEST_NAME_RE
 
@@ -245,23 +248,6 @@ JudgehostTaskResult = TypedDict(
     },
     total=False,
 )
-
-JudgehostJobRow = TypedDict(
-    "JudgehostJobRow",
-    {
-        "work_root": str,
-    },
-)
-
-JudgehostCaseRow = TypedDict(
-    "JudgehostCaseRow",
-    {
-        "id": int,
-        "output_run_rel": str,
-        "work_root": str,
-    },
-)
-
 
 def _default_accepted_solution_source(snapshot: Path) -> str:
     solutions_root = snapshot / "solutions"
@@ -533,9 +519,10 @@ def run_verification_job(
         if commit:
             source_commit = resolved_commit_override or self.workspace_service.resolve_commit(workspace, commit)
             source_ref = ref or commit
-            self.db.execute(
-                "UPDATE verifications SET source_commit=?, source_ref=? WHERE id=?",
-                [source_commit, source_ref, verification_id],
+            self._verification_store.update_source_identity(
+                verification_id,
+                source_commit=source_commit,
+                source_ref=source_ref,
             )
             snapshot = self.workspace_service.create_snapshot(workspace, source_commit)
         else:
@@ -558,9 +545,10 @@ def run_verification_job(
                         source_commit = f"workspace:{synthetic_digest}"
                 if branch:
                     source_ref = ref or branch
-                self.db.execute(
-                    "UPDATE verifications SET source_commit=?, source_ref=? WHERE id=?",
-                    [source_commit, source_ref, verification_id],
+                self._verification_store.update_source_identity(
+                    verification_id,
+                    source_commit=source_commit,
+                    source_ref=source_ref,
                 )
                 snapshot = self.workspace_service.create_snapshot(
                     workspace,
@@ -686,60 +674,23 @@ def run_verification_job(
                 return ""
             return judgehost.get("task_id", "")
 
-        def _domjudge_fetch_one(sql: str, values: list[object]) -> object | None:
-            fetch_one = getattr(compile_backend, "_db_fetch_one", None)
-            if not callable(fetch_one):
-                return None
-            try:
-                return fetch_one(sql, values)
-            except Exception:
-                return None
-
         def _run_summary_work_root(summary: JudgehostRunSummary) -> Path | None:
             task_id = _run_summary_task_id(summary)
             if not task_id:
                 return None
-            job_row = _domjudge_fetch_one(
-                "SELECT work_root FROM judgehost_domjudge_jobs WHERE task_id=? ORDER BY job_id DESC LIMIT 1",
-                [task_id],
-            )
-            if job_row is not None:
-                work_root = cast(JudgehostJobRow, job_row)["work_root"]
-                if work_root:
-                    try:
-                        return Path(work_root).resolve()
-                    except Exception:
-                        return None
-            return None
+            try:
+                return compile_backend.domjudge_work_root_for_task(task_id)
+            except Exception:
+                return None
 
         def _run_summary_case_output(summary: JudgehostRunSummary, test_name: str) -> tuple[str, Path | None, int]:
             task_id = _run_summary_task_id(summary)
             if (not task_id) or (not test_name):
                 return ("", None, 0)
-            case_row = _domjudge_fetch_one(
-                """
-                SELECT c.id, c.output_run_rel, j.work_root
-                FROM judgehost_domjudge_cases c
-                JOIN judgehost_domjudge_jobs j ON j.job_id = c.job_id
-                WHERE c.task_id=? AND c.test_name=?
-                ORDER BY c.id DESC
-                LIMIT 1
-                """,
-                [task_id, test_name],
-            )
-            if case_row is None:
+            try:
+                return compile_backend.domjudge_case_output_for_task(task_id, test_name)
+            except Exception:
                 return ("", None, 0)
-            case_row = cast(JudgehostCaseRow, case_row)
-            output_ref = case_row["output_run_rel"]
-            case_id = int(case_row["id"])
-            work_root = None
-            work_root_text = case_row["work_root"]
-            if work_root_text:
-                try:
-                    work_root = Path(work_root_text).resolve()
-                except Exception:
-                    work_root = None
-            return (output_ref, work_root, case_id)
 
         def _run_summary_test_result_map(summary: JudgehostRunSummary) -> dict[str, dict[str, str]]:
             tests = summary.get("tests", [])
@@ -1302,23 +1253,25 @@ def run_verification_job(
 
             def _update_solve_stage(status_token: str) -> None:
                 solve_stage_summary = dict(solve_stage_result.get("summary") or {})
-                tests_payload: list[dict[str, object]] = []
-                for test_name, result_row in solve_results.items():
-                    verdict = result_row["verdict"]
-                    if verdict == "AC":
-                        verdict = "OK"
-                    if not verdict:
-                        verdict = "OK" if result_row["rc"] == 0 else "FL"
-                    message = result_row["worker_error"] if result_row["worker_error"] else result_row["stderr"]
-                    tests_payload.append(
-                        {
-                            "test": test_name,
-                            "verdict": verdict,
-                            "message": message,
-                        }
-                    )
+                tests_payload = canonicalize_verification_test_rows(list(solve_stage_summary.get("tests") or []))
+                if not tests_payload:
+                    for test_name, result_row in solve_results.items():
+                        verdict = result_row["verdict"]
+                        if verdict == "AC":
+                            verdict = "OK"
+                        if not verdict:
+                            verdict = "OK" if result_row["rc"] == 0 else "FL"
+                        message = result_row["worker_error"] if result_row["worker_error"] else result_row["stderr"]
+                        tests_payload.append(
+                            build_verification_test_row(
+                                test_name=test_name,
+                                verdict=verdict,
+                                message=message,
+                            )
+                        )
                 solve_artifact_path = solve_stage_result["artifact_path"] if "artifact_path" in solve_stage_result else ""
                 if solve_stage_summary:
+                    solve_stage_summary["tests"] = tests_payload
                     solve_stage_summary["verification_source"] = "verification.solve-main"
                     solve_stage_summary["status"] = status_token
                     solve_stage_summary["source"] = accepted_rel
@@ -1446,8 +1399,10 @@ def run_verification_job(
         }
         persisted_summary = summary_for_db(
             persisted_summary_obj,
-            normalize_diagnostics_for_db=normalize_diagnostics_for_db,
-            diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
+            tests_limit=self.DB_SUMMARY_TESTS_LIMIT,
+            diagnostics_limit=self.DB_SUMMARY_DIAGNOSTICS_LIMIT,
+            feedback_files_limit=self.DB_SUMMARY_FEEDBACK_FILES_LIMIT,
+            diagnostic_message_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
         )
         if persist_into_existing_verification:
             with verification_update_lock(verification_id):
@@ -1464,14 +1419,11 @@ def run_verification_job(
                     finished=False,
                 )
         else:
-            self.db.execute(
-                "UPDATE verifications SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                [
-                    "ok",
-                    persisted_summary,
-                    now_iso(),
-                    verification_id,
-                ],
+            self._verification_store.save_summary_record(
+                verification_id=verification_id,
+                status="ok",
+                summary_json=persisted_summary,
+                finished=True,
             )
         if use_verification_result_cache and self._async_task_cache_service is not None and cache_source_commit:
             self._async_task_cache_service.put(
@@ -1516,8 +1468,10 @@ def run_verification_job(
         }
         persisted_summary = summary_for_db(
             persisted_summary_obj,
-            normalize_diagnostics_for_db=normalize_diagnostics_for_db,
-            diagnostics_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
+            tests_limit=self.DB_SUMMARY_TESTS_LIMIT,
+            diagnostics_limit=self.DB_SUMMARY_DIAGNOSTICS_LIMIT,
+            feedback_files_limit=self.DB_SUMMARY_FEEDBACK_FILES_LIMIT,
+            diagnostic_message_limit=self.DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT,
         )
         if persist_into_existing_verification:
             with verification_update_lock(verification_id):
@@ -1533,22 +1487,16 @@ def run_verification_job(
                     finished=False,
                 )
         else:
-            self.db.execute(
-                "UPDATE verifications SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                [
-                    "failed",
-                    persisted_summary,
-                    now_iso(),
-                    verification_id,
-                ],
+            self._verification_store.save_summary_record(
+                verification_id=verification_id,
+                status="failed",
+                summary_json=persisted_summary,
+                finished=True,
             )
         final_status = "failed"
     finally:
         if final_status != "running":
-            self.db.execute(
-                "UPDATE workspaces SET recent_verification_status=? WHERE id=?",
-                [final_status, workspace_id],
-            )
+            self.workspace_service._store.set_recent_verification_status(int(workspace_id), final_status)
         if snapshot is not None:
             shutil.rmtree(snapshot.parent, ignore_errors=True)
         if inflight_owner and cache_key_hash:

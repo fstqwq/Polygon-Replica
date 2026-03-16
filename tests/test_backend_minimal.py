@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.db import DB
+from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import preview_page, preview_run
@@ -21,9 +22,9 @@ from app.service.verification.judge_solve import solve_with_judge_backend
 
 
 class TestBackendMinimal(SmokeBase):
-    def test_db_init_drops_runs_table(self) -> None:
+    def test_db_init_backs_up_incompatible_schema_and_rebuilds_current_db(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "migration-probe.db"
+            db_path = Path(tmpdir) / "legacy-schema.db"
             with sqlite3.connect(db_path) as conn:
                 conn.execute(
                     """
@@ -147,21 +148,35 @@ class TestBackendMinimal(SmokeBase):
             probe = DB(db_path)
             probe.init()
 
+            backup_candidates = sorted(db_path.parent.glob(f"{db_path.name}.*.backup"))
+            self.assertEqual(len(backup_candidates), 1)
+            backup_path = backup_candidates[0]
+            with sqlite3.connect(backup_path) as conn:
+                backup_runs_row = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
+                ).fetchone()
+                self.assertIsNotNone(backup_runs_row)
+                backup_verification = conn.execute(
+                    "SELECT id FROM verifications WHERE id=?",
+                    ["ver-current"],
+                ).fetchone()
+                self.assertIsNotNone(backup_verification)
+
             with probe.conn() as conn:
                 runs_row = conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
                 ).fetchone()
                 self.assertIsNone(runs_row)
-                kept = conn.execute(
-                    "SELECT kind,summary_json FROM verifications WHERE id=?",
+                current_verification = conn.execute(
+                    "SELECT id FROM verifications WHERE id=?",
                     ["ver-current"],
                 ).fetchone()
-                self.assertIsNotNone(kept)
-                self.assertEqual(str(kept["kind"] or ""), "verification")
-                payload = json.loads(str(kept["summary_json"] or "{}"))
-                self.assertEqual(str(payload.get("kind") or ""), "verification")
-                self.assertIn("runs", payload)
-                self.assertIn("runs_order", payload)
+                self.assertIsNone(current_verification)
+                current_columns = {
+                    str(row[1]) for row in conn.execute("PRAGMA table_info(verifications)").fetchall()
+                }
+                self.assertIn("source_commit", current_columns)
+                self.assertIn("source_ref", current_columns)
 
     def test_judgehost_compile_check_reads_full_diagnostics_from_transient_task_result(self) -> None:
         with (
@@ -201,7 +216,7 @@ class TestBackendMinimal(SmokeBase):
         verification_id = self.random_id("ver-record-dict")
         artifact_path = self._artifact_root(verification_id)
         artifact_path.mkdir(parents=True, exist_ok=True)
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO verifications(
                 id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
@@ -311,16 +326,15 @@ class TestBackendMinimal(SmokeBase):
                         return expected_output
                     return None
 
-                def _db_fetch_one(self, sql: str, values: list[object]) -> dict[str, object] | None:
-                    if "FROM judgehost_domjudge_cases" in sql:
-                        return {
-                            "id": 7,
-                            "output_run_rel": "results/7/program.out",
-                            "work_root": str(expected_work_root),
-                        }
-                    if "FROM judgehost_domjudge_jobs" in sql:
-                        return {"work_root": str(expected_work_root)}
+                def domjudge_work_root_for_task(self, task_id: str) -> Path | None:
+                    if task_id == "jt-recover-output":
+                        return expected_work_root
                     return None
+
+                def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
+                    if task_id == "jt-recover-output" and test_name == "001.in":
+                        return ("results/7/program.out", expected_work_root, 7)
+                    return ("", None, 0)
 
             fake_service = _FakeJudgehost()
             fake_self = SimpleNamespace(judgehost_task_service=fake_service, db=SimpleNamespace())
@@ -346,7 +360,7 @@ class TestBackendMinimal(SmokeBase):
         verification_id = self.random_id("ver-implicit-ready")
         artifact_path = self._artifact_root(verification_id)
         artifact_path.mkdir(parents=True, exist_ok=True)
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO verifications(
                 id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
@@ -411,7 +425,7 @@ class TestBackendMinimal(SmokeBase):
         preview_id = self.random_id("p-preview-sample-sync-failed")
         artifact_path = self._artifact_root(preview_id)
         artifact_path.mkdir(parents=True, exist_ok=True)
-        config.db.execute(
+        db_execute(
             (
                 "INSERT INTO previews("
                 "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,artifact_path,created_at,finished_at"
@@ -452,7 +466,7 @@ class TestBackendMinimal(SmokeBase):
             "sample verification failed (ver-old): validator failed on tests/spec.json entry 1\n",
             encoding="utf-8",
         )
-        config.db.execute(
+        db_execute(
             (
                 "INSERT INTO previews("
                 "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,artifact_path,created_at,finished_at"
@@ -510,14 +524,14 @@ class TestBackendMinimal(SmokeBase):
             )
 
     def test_db_conn_enables_foreign_keys(self) -> None:
-        with config.db.conn() as conn:
+        with db_connection() as conn:
             row = conn.execute("PRAGMA foreign_keys").fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(int(row[0]), 1)
 
     def test_db_execute_retries_on_locked_error(self) -> None:
         state = {"failed_once": False}
-        original_conn = config.db.conn
+        original_conn = type(config.db).conn.__get__(config.db, type(config.db))
 
         @contextmanager
         def flaky_conn():
@@ -528,12 +542,12 @@ class TestBackendMinimal(SmokeBase):
                 yield conn
 
         with patch.object(config.db, "conn", flaky_conn):
-            config.db.execute("CREATE TABLE IF NOT EXISTS __retry_probe(id INTEGER PRIMARY KEY)")
+            db_execute("CREATE TABLE IF NOT EXISTS __retry_probe(id INTEGER PRIMARY KEY)")
         self.assertTrue(state["failed_once"])
 
     def test_db_write_transaction_retries_on_locked_error(self) -> None:
         state = {"failed_once": False}
-        original_conn = config.db.conn
+        original_conn = type(config.db).conn.__get__(config.db, type(config.db))
 
         @contextmanager
         def flaky_conn():
@@ -544,28 +558,28 @@ class TestBackendMinimal(SmokeBase):
                 yield conn
 
         with patch.object(config.db, "conn", flaky_conn):
-            config.db.write_transaction(
+            db_write_transaction(
                 lambda conn: conn.execute("CREATE TABLE IF NOT EXISTS __retry_tx_probe(id INTEGER PRIMARY KEY)")
             )
         self.assertTrue(state["failed_once"])
 
     def test_db_write_transaction_rolls_back_on_exception(self) -> None:
         table_name = "__tx_rollback_probe"
-        config.db.execute(f"DROP TABLE IF EXISTS {table_name}")
-        config.db.execute(f"CREATE TABLE {table_name}(id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+        db_execute(f"DROP TABLE IF EXISTS {table_name}")
+        db_execute(f"CREATE TABLE {table_name}(id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
 
         def _tx(conn):
             conn.execute(f"INSERT INTO {table_name}(id,value) VALUES(?,?)", [1, "x"])
             raise RuntimeError("forced rollback")
 
         with self.assertRaises(RuntimeError):
-            config.db.write_transaction(_tx)
-        row = config.db.fetch_one(f"SELECT COUNT(*) AS c FROM {table_name}")
+            db_write_transaction(_tx)
+        row = db_fetch_one(f"SELECT COUNT(*) AS c FROM {table_name}")
         self.assertIsNotNone(row)
         self.assertEqual(int(row["c"] or 0), 0)
 
     def test_db_schema_has_verifications_kind_status_index(self) -> None:
-        row = config.db.fetch_one(
+        row = db_fetch_one(
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_verifications_kind_status'"
         )
         self.assertIsNotNone(row)

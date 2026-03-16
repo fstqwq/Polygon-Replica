@@ -138,6 +138,7 @@ class SmokeBase(unittest.TestCase):
             _wait_for_export_workers(timeout_sec=10.0)
         except Exception:
             pass
+        config.judgehost_task_service.reset_runtime_state()
         with workspace_service._cache_lock:
             workspace_service._problem_cache.clear()
             workspace_service._user_cache.clear()
@@ -223,4 +224,3 @@ class SmokeBase(unittest.TestCase):
         user = str(getattr(self, "user", "alice"))
         ctx = workspace_service.workspace_context(problem, user, include_recent=False)
         return Path(str(ctx["workspace"]["path"]))
-

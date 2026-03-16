@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import secrets
 import threading
 from pathlib import Path
 from typing import Any, cast
 
 from app.db import DB, now_iso
+from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
 
 from .types import Kind, Status
@@ -83,11 +83,7 @@ def _normalize_verification_status(summary: VerificationSummary) -> str:
 
 
 def allocate_verification_id(db: DB) -> str:
-    for _ in range(8):
-        candidate = f"ver-{secrets.token_hex(6)}"
-        if db.fetch_one("SELECT id FROM verifications WHERE id=?", [candidate]) is None:
-            return candidate
-    return f"ver-{secrets.token_hex(8)}"
+    return VerificationStore(db).allocate_id()
 
 
 def verification_root(fs_manager: FsManager, verification_id: str) -> Path:
@@ -116,68 +112,27 @@ def create_verification_record(
     if not verification_id:
         raise RuntimeError("verification id is required")
     with verification_update_lock(verification_id):
-        existing = db.fetch_one("SELECT id,artifact_path FROM verifications WHERE id=?", [verification_id])
-        if artifact_path is None:
-            if existing is None:
-                root = verification_root(fs_manager, verification_id)
-            else:
-                existing_artifact_path = cast(str | None, existing["artifact_path"])
-                root = verification_root(fs_manager, verification_id) if existing_artifact_path is None or existing_artifact_path == "" else Path(existing_artifact_path).resolve()
-        else:
-            root = Path(artifact_path).resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        now_text = now_iso()
-        encoded = json.dumps(_sanitize_verification_summary(summary or {}))
-        params = [
-            int(problem_id),
-            int(workspace_id) if workspace_id is not None else None,
-            source_commit,
-            source_ref,
-            kind or Kind.VERIFICATION.value,
-            status or Status.RUNNING.value,
-            encoded,
-            str(root),
-        ]
-        if existing is None:
-            db.execute(
-                """
-                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                [verification_id, *params, now_text, None],
-            )
-        else:
-            db.execute(
-                """
-                UPDATE verifications
-                SET problem_id=?,workspace_id=?,source_commit=?,source_ref=?,kind=?,status=?,summary_json=?,artifact_path=?
-                WHERE id=?
-                """,
-                [*params, verification_id],
-            )
-        return str(root)
+        return VerificationStore(db).create_or_update_record(
+            fs_manager,
+            verification_id=verification_id,
+            problem_id=int(problem_id),
+            workspace_id=workspace_id,
+            source_commit=source_commit,
+            source_ref=source_ref,
+            kind=kind,
+            status=status,
+            summary_json=json.dumps(_sanitize_verification_summary(summary or {})),
+            artifact_path=artifact_path,
+        )
 
 
 def load_verification_record(db: DB, verification_id: str) -> dict[str, Any] | None:
-    row = db.fetch_one(
-        """
-        SELECT id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
-        FROM verifications
-        WHERE id=?
-        """,
-        [verification_id],
-    )
+    row = VerificationStore(db).record_row(verification_id)
     return None if row is None else dict(row)
 
 
 def load_verification_summary(db: DB, verification_id: str) -> VerificationSummary:
-    row = load_verification_record(db, verification_id)
-    if row is None:
-        return {}
-    raw = cast(str | None, row["summary_json"]) or ""
-    if not raw:
-        return {}
-    parsed = cast(VerificationSummary, json.loads(raw))
+    parsed = cast(VerificationSummary, VerificationStore(db).runtime_summary(verification_id))
     return _sanitize_verification_summary(parsed)
 
 
@@ -189,18 +144,11 @@ def list_verification_rows(
     limit: int,
     kinds: tuple[str, ...] = (Kind.VERIFICATION.value,),
 ) -> list[dict[str, Any]]:
-    safe_limit = max(1, int(limit))
-    kind_tokens = list(kinds) or [Kind.VERIFICATION.value]
-    placeholders = ",".join(("?" for _ in kind_tokens))
-    rows = db.fetch_all(
-        f"""
-        SELECT id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
-        FROM verifications
-        WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        [int(problem_id), int(workspace_id), *kind_tokens, safe_limit],
+    rows = VerificationStore(db).list_rows(
+        problem_id=int(problem_id),
+        workspace_id=int(workspace_id),
+        limit=max(1, int(limit)),
+        kinds=kinds,
     )
     return [dict(row) for row in rows]
 
@@ -216,18 +164,13 @@ def save_verification_summary(
     if not verification_id:
         raise RuntimeError("verification id is required")
     with verification_update_lock(verification_id):
-        finished_at = now_iso() if finished else None
         sanitized_summary = _sanitize_verification_summary(summary)
-        if finished:
-            db.execute(
-                "UPDATE verifications SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                [status or Status.FAILED.value, json.dumps(sanitized_summary), finished_at, verification_id],
-            )
-        else:
-            db.execute(
-                "UPDATE verifications SET status=?, summary_json=?, finished_at=NULL WHERE id=?",
-                [status or Status.RUNNING.value, json.dumps(sanitized_summary), verification_id],
-            )
+        VerificationStore(db).save_summary_record(
+            verification_id=verification_id,
+            status=status,
+            summary_json=json.dumps(sanitized_summary),
+            finished=bool(finished),
+        )
 
 
 def default_verification_summary(
@@ -519,6 +462,12 @@ def save_verification_run_summary(
             )
         else:
             summary_obj = load_verification_summary(db, verification_id)
+            if bool(summary_obj.get("cancelled")):
+                return summary_obj
+            existing_run = verification_run(summary_obj, run_id)
+            existing_run_summary = _run_summary(existing_run)
+            if bool(existing_run_summary.get("cancelled")):
+                return summary_obj
         if source_paths is not None:
             merged_source_paths = verification_source_paths(summary_obj)
             for token in source_paths:

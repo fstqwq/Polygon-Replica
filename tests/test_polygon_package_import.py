@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_one
+
 import io
 import json
 import shutil
@@ -11,7 +13,7 @@ from unittest.mock import patch
 
 from app.service.importing.polygon import PolygonPackageImportService
 from app.service.statement.render import render_statement_main
-from .common import SmokeBase, config, db
+from .common import SmokeBase, config
 
 
 class TestPolygonPackageImport(SmokeBase):
@@ -264,7 +266,7 @@ class TestPolygonPackageImport(SmokeBase):
                 {"suite": "polygon-package-import", "problem": self.problem, "verification_id": verification_id}
             )
             artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
-            db.execute(
+            db_execute(
                 """
                 INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -287,7 +289,7 @@ class TestPolygonPackageImport(SmokeBase):
 
         with patch("app.service.verification.service.run_verification_job", side_effect=_fake_run_build):
             verification_id = config.verification_service.run_verification(self.problem, self.user)
-        verification_row = db.fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
+        verification_row = db_fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or ""), "ok")
 
@@ -305,7 +307,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8").splitlines()[:1], ["3"])
 
         verification_id = config.verification_service.run_verification(self.problem, self.user)
-        verification_row = db.fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
+        verification_row = db_fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or ""), "failed")
 
@@ -357,7 +359,7 @@ class TestPolygonPackageImport(SmokeBase):
         render_statement_main(ws / "statement", problem_title=str(result.get("title") or ""))
         with patch.object(config.preview_service.sandbox, "run", side_effect=FileNotFoundError("pdflatex missing")):
             preview_id = config.preview_service.compile_preview(problem, user)
-        row = db.fetch_one("SELECT status,summary_json,artifact_path FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,summary_json,artifact_path FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         summary = json.loads(str(row["summary_json"] or "{}"))

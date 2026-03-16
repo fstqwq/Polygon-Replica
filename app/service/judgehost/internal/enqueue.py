@@ -128,14 +128,8 @@ class JudgehostEnqueueMixin:
     ) -> dict[str, object]:
         if not self._include_build_payload:
             return {}
-        verification_row = self._db_fetch_one(
-            "SELECT artifact_path FROM verifications WHERE id=?",
-            [JudgehostEnqueueMixin._normalize_text(artifact_verification_id)],
-        )
-        artifact_path = (
-            JudgehostEnqueueMixin._normalize_text(verification_row["artifact_path"])
-            if verification_row is not None
-            else ""
+        artifact_path = self._verification_store.artifact_path_for_verification(
+            JudgehostEnqueueMixin._normalize_text(artifact_verification_id)
         )
         if not artifact_path:
             return {}
@@ -641,6 +635,10 @@ class JudgehostEnqueueMixin:
             "compile_config": compile_config,
             "run_config": run_config,
             "compare_config": compare_config,
+            "compile_files": compile_files,
+            "run_files": run_files,
+            "compare_files": compare_files,
+            "solve_mode": solve_mode,
         }
 
     def prepare_enqueue_payload(
@@ -784,6 +782,7 @@ class JudgehostEnqueueMixin:
         )
         if prepared_payload is not None:
             payload.update(dict(prepared_payload))
+        payload["domjudge_precomputed"] = self._domjudge_precomputed_fields_from_payload(payload)
         safe_task_kind = self._domjudge_task_kind(payload)
         payload["run_id"] = safe_run_id
         payload["problem"] = problem

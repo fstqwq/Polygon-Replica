@@ -158,37 +158,11 @@ def _finalize_cancelled_verifications(verification_ids: list[str], reason: str) 
                 active_task_count = 0
         if active_task_count > 0:
             continue
-
-        def _tx(conn):
-            verification_row = conn.execute(
-                """
-                SELECT summary_json
-                FROM verifications
-                WHERE id=? AND kind=? AND status IN (?,?,?)
-                """,
-                [verification_id, Kind.VERIFICATION.value, *ACTIVE],
-            ).fetchone()
-            if verification_row is None:
-                return 0
-            summary = _summary_object(verification_row["summary_json"])
-            summary["cancelled"] = True
-            summary["cancel_reason"] = cancel_reason
-            if not summary.get("error"):
-                summary["error"] = cancel_reason
-            cursor = conn.execute(
-                """
-                UPDATE verifications
-                SET status=?, summary_json=?, finished_at=COALESCE(finished_at, ?)
-                WHERE id=? AND kind=? AND status IN (?,?,?)
-                """,
-                [Status.FAILED.value, json.dumps(summary), now_text, verification_id, Kind.VERIFICATION.value, *ACTIVE],
-            )
-            try:
-                return int(cursor.rowcount or 0)
-            except Exception:
-                return 0
-
-        if int(config.db.write_transaction(_tx)) > 0:
+        if config.verification_service.cancel_verification_if_active(
+            verification_id,
+            reason=cancel_reason,
+            now_text=now_text,
+        ):
             cancelled_count += 1
     return cancelled_count
 

@@ -5,7 +5,6 @@ import time
 from datetime import datetime, timezone
 
 from app.db import now_iso
-from app.service.judgehost.progress import domjudge_case_progress_for_runs, domjudge_solve_main_progress
 from app.service.judgehost.runtime import now_iso_after, parse_iso_utc
 from app.service.verification.store import load_verification_run, save_verification_run_summary
 
@@ -20,7 +19,7 @@ class JudgehostQueueMixin:
             self._lease_requeue_next_ts = now_mono + max(0.05, float(interval_sec))
             return True
 
-    def _requeue_expired_leases(self, conn=None, *, force: bool = False) -> None:
+    def _requeue_expired_leases(self, *, force: bool = False) -> None:
         if (not force) and (not self._claim_lease_requeue_slot()):
             return
         now_dt = datetime.now(timezone.utc)
@@ -38,7 +37,6 @@ class JudgehostQueueMixin:
 
     def _record_host_event_conn(
         self,
-        conn=None,
         *,
         hostname: str,
         action: str,
@@ -528,16 +526,20 @@ class JudgehostQueueMixin:
             )
         return rows_out, online_count
 
+
     def set_host_enabled(self, hostname: str, enabled: bool) -> dict[str, int]:
-        hostname = self._normalize_hostname(hostname)
         now_text = now_iso()
         released_tasks = 0
         with self._state_lock:
-            row = self._host_state_row(hostname)
-            row["enabled"] = enabled
-            row["last_seen_at"] = now_text
-            row["last_action"] = "enabled" if enabled else "disabled"
-            row["update_count"] = row["update_count"] + 1
+            self._hosts_state[hostname] = {
+                "enabled": bool(enabled),
+                "first_seen_at": self._hosts_state.get(hostname, {}).get("first_seen_at", now_text),
+                "last_action": "set-enabled" if enabled else "set-disabled",
+                "last_task_id": self._hosts_state.get(hostname, {}).get("last_task_id", ""),
+                "last_run_id": self._hosts_state.get(hostname, {}).get("last_run_id", ""),
+                "lease_expires_at": "",
+                "update_count": int(self._hosts_state.get(hostname, {}).get("update_count", 0)) + 1,
+            }
             if not enabled:
                 for task in self._tasks_by_id.values():
                     if task["lease_owner"] != hostname:
@@ -553,25 +555,10 @@ class JudgehostQueueMixin:
         released_jobs = 0
         released_cases = 0
         if not enabled:
-            with self._domdb_conn() as conn:
-                job_upd = conn.execute(
-                    """
-                    UPDATE judgehost_domjudge_jobs
-                    SET lease_owner=NULL, status='queued', updated_at=?
-                    WHERE lease_owner=? AND status IN ('leased','queued')
-                    """,
-                    [now_text, hostname],
-                )
-                released_jobs = int(job_upd.rowcount or 0)
-                case_upd = conn.execute(
-                    """
-                    UPDATE judgehost_domjudge_cases
-                    SET status='pending', lease_owner=NULL, updated_at=?
-                    WHERE lease_owner=? AND status='leased'
-                    """,
-                    [now_text, hostname],
-                )
-                released_cases = int(case_upd.rowcount or 0)
+            released_jobs, released_cases = self._judgehost_state_store.release_host_leases(
+                hostname,
+                now_text=now_text,
+            )
         return {
             "released_tasks": released_tasks,
             "released_jobs": released_jobs,
@@ -695,133 +682,42 @@ class JudgehostQueueMixin:
                 removed += 1
         return removed
 
+
     def cancel_domjudge_jobs_for_runs(self, run_ids: list[str], *, final_status: str = "failed") -> int:
-        run_ids = [run_id for run_id in run_ids if run_id]
-        if not run_ids:
-            return 0
-        placeholders = ",".join(("?" for _ in run_ids))
-        now_text = now_iso()
-        with self._domdb_conn() as conn:
-            job_rows = conn.execute(
-                f"SELECT job_id FROM judgehost_domjudge_jobs WHERE run_id IN ({placeholders}) AND status IN ('queued','leased')",
-                [*run_ids],
-            ).fetchall()
-            job_ids = [int(row["job_id"]) for row in job_rows if row is not None and row["job_id"] is not None]
-            if not job_ids:
-                return 0
-            jph = ",".join(("?" for _ in job_ids))
-            conn.execute(
-                f"""
-                UPDATE judgehost_domjudge_cases
-                SET status='reported',
-                    lease_owner=NULL,
-                    runresult=CASE WHEN runresult IS NULL OR TRIM(runresult)='' THEN 'internal-error' ELSE runresult END,
-                    runtime_sec=COALESCE(runtime_sec, 0),
-                    cpu_sec=COALESCE(cpu_sec, 0),
-                    wall_sec=COALESCE(wall_sec, 0),
-                    memory_kb=COALESCE(memory_kb, 0),
-                    updated_at=?
-                WHERE job_id IN ({jph}) AND status IN ('pending','leased')
-                """,
-                [now_text, *job_ids],
-            )
-            conn.execute(
-                f"""
-                UPDATE judgehost_domjudge_jobs
-                SET status=?,
-                    lease_owner=NULL,
-                    completed_at=COALESCE(completed_at, ?),
-                    updated_at=?
-                WHERE job_id IN ({jph}) AND status IN ('queued','leased')
-                """,
-                [(final_status or "failed"), now_text, now_text, *job_ids],
-            )
-            return len(job_ids)
+        return self._judgehost_state_store.cancel_jobs_for_runs(
+            run_ids=run_ids,
+            final_status=(final_status or "failed"),
+            now_text=now_iso(),
+        )
+
 
     def cancel_all_domjudge_inflight(self) -> int:
-        now_text = now_iso()
-        with self._domdb_conn() as conn:
-            conn.execute(
-                """
-                UPDATE judgehost_domjudge_jobs
-                SET status='failed',
-                    lease_owner=NULL,
-                    updated_at=?,
-                    completed_at=COALESCE(completed_at, ?)
-                WHERE status IN ('queued','leased')
-                """,
-                [now_text, now_text],
-            )
-            case_upd = conn.execute(
-                """
-                UPDATE judgehost_domjudge_cases
-                SET status='reported',
-                    lease_owner=NULL,
-                    runresult=CASE WHEN runresult IS NULL OR TRIM(runresult)='' THEN 'internal-error' ELSE runresult END,
-                    updated_at=?
-                WHERE status IN ('pending','leased')
-                """,
-                [now_text],
-            )
-            try:
-                return int(case_upd.rowcount or 0)
-            except Exception:
-                return 0
+        return self._judgehost_state_store.cancel_all_inflight(now_text=now_iso())
 
     def domjudge_case_progress_for_runs(self, run_ids: list[str]) -> dict[str, dict[str, int]]:
-        return domjudge_case_progress_for_runs(
-            normalize_run_id=self._normalize_run_id,
-            db_fetch_all=self._db_fetch_all,
-            run_ids=run_ids,
-        )
+        safe_run_ids = [self._normalize_run_id(run_id) for run_id in run_ids if run_id]
+        return self._judgehost_state_store.case_progress_for_runs(safe_run_ids)
 
     def domjudge_case_cells_for_runs(self, run_ids: list[str]) -> list[dict[str, object]]:
-        run_ids = [run_id for run_id in run_ids if run_id]
-        if not run_ids:
-            return []
-        placeholders = ",".join(("?" for _ in run_ids))
-        rows = self._db_fetch_all(
-            f"""
-            SELECT j.run_id AS run_id,
-                   c.test_name AS test_name,
-                   c.status AS status,
-                   c.runresult AS runresult,
-                   c.cpu_sec AS cpu_sec,
-                   c.runtime_sec AS runtime_sec,
-                   c.wall_sec AS wall_sec,
-                   c.memory_kb AS memory_kb
-            FROM judgehost_domjudge_jobs j
-            JOIN judgehost_domjudge_cases c ON c.job_id=j.job_id
-            WHERE j.run_id IN ({placeholders})
-            ORDER BY j.run_id ASC, c.ordinal ASC, c.id ASC
-            """,
-            [*run_ids],
-        )
-        return [dict(row) for row in rows]
+        safe_run_ids = [self._normalize_run_id(run_id) for run_id in run_ids if run_id]
+        return self._judgehost_state_store.case_cells_for_runs(safe_run_ids)
 
     def domjudge_solve_main_progress(self, verification_id: str) -> dict[str, int]:
-        return domjudge_solve_main_progress(
-            state_lock=self._state_lock,
-            tasks_by_id=self._tasks_by_id,
-            db_fetch_one=self._db_fetch_one,
-            artifact_verification_id=verification_id,
-        )
+        if not verification_id:
+            return {"total": 0, "reported": 0}
+        run_ids: list[str] = []
+        with self._state_lock:
+            for row in self._tasks_by_id.values():
+                artifact_verification_id = row["artifact_verification_id"]
+                if artifact_verification_id != verification_id:
+                    continue
+                run_id = row["run_id"]
+                if (not run_id) or (not run_id.startswith("r-solve-main-")):
+                    continue
+                if run_id not in run_ids:
+                    run_ids.append(run_id)
+        return self._judgehost_state_store.aggregate_case_counts(run_ids)
+
 
     def forget_domjudge_runs(self, run_ids: list[str]) -> int:
-        run_ids = [run_id for run_id in run_ids if run_id]
-        if not run_ids:
-            return 0
-        placeholders = ",".join(("?" for _ in run_ids))
-        with self._domdb_conn() as conn:
-            conn.execute(
-                f"DELETE FROM judgehost_domjudge_cases WHERE run_id IN ({placeholders})",
-                [*run_ids],
-            )
-            cur = conn.execute(
-                f"DELETE FROM judgehost_domjudge_jobs WHERE run_id IN ({placeholders})",
-                [*run_ids],
-            )
-            try:
-                return int(cur.rowcount or 0)
-            except Exception:
-                return 0
+        return self._judgehost_state_store.forget_runs(run_ids)

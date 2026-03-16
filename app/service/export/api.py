@@ -7,7 +7,8 @@ import shutil
 import uuid
 from pathlib import Path
 
-from app.db import DB, now_iso
+from app.db import DB
+from app.service.disk.export_store import ExportStore
 from app.service.platform.hashing import sha256_file
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
@@ -34,8 +35,21 @@ class ExportService:
 
     def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path):
         self.db = db
+        self._store = ExportStore(db)
         self.artifacts_root = artifacts_root
         self.workspace_root = workspace_root
+
+    def latest_workspace_source_commit(self, problem_id: int, workspace_id: int) -> str:
+        return self._store.latest_workspace_source_commit(problem_id, workspace_id)
+
+    def download_source_commit(self, problem_id: int, workspace_id: int, verification_id: str, filename: str) -> str:
+        return self._store.download_source_commit(int(problem_id), int(workspace_id), verification_id, filename)
+
+    def workspace_exports(self, problem_id: int, workspace_id: int, *, limit: int) -> list[dict[str, object]]:
+        return self._store.workspace_exports(int(problem_id), int(workspace_id), limit=limit)
+
+    def export_audit_rows(self, problem_id: int, actor_user_id: int, *, limit: int) -> list[dict[str, str]]:
+        return self._store.export_audit_rows(int(problem_id), int(actor_user_id), limit=limit)
 
     def _canonical_verification_root(self, artifact_path: str) -> Path:
         token = str(artifact_path or "").strip()
@@ -446,19 +460,11 @@ class ExportService:
     def _workspace_path_for_export(self, workspace_id: int | None, problem_slug: str) -> Path:
         if workspace_id is None:
             raise ValueError("build workspace metadata missing")
-        ws_row = self.db.fetch_one(
-            """
-            SELECT w.user_id,w.path,u.username
-            FROM workspaces w
-            JOIN users u ON u.id=w.user_id
-            WHERE w.id=?
-            """,
-            [workspace_id],
-        )
+        ws_row = self._store.workspace_export_context(int(workspace_id))
         if ws_row is None:
             raise ValueError(f"workspace metadata not found: {workspace_id}")
-        workspace = Path(str(ws_row["path"] or "")).resolve()
-        expected_workspace = (self.workspace_root / str(ws_row["username"]) / problem_slug).resolve()
+        workspace = Path(ws_row["path"]).resolve()
+        expected_workspace = (self.workspace_root / ws_row["username"] / problem_slug).resolve()
         if workspace != expected_workspace:
             raise ValueError(f"workspace path mismatch for export workspace {workspace_id}")
         if not workspace.exists() or not workspace.is_dir():
@@ -495,20 +501,17 @@ class ExportService:
     ) -> None:
         if workspace_id is None:
             return
-        rows = self.db.fetch_all(
-            """
-            SELECT exports.id,exports.verification_id,exports.filename,verifications.artifact_path
-            FROM exports
-            LEFT JOIN verifications ON verifications.id=exports.verification_id
-            WHERE exports.problem_id=? AND exports.workspace_id=? AND exports.export_type=? AND exports.source_commit=? AND exports.id<>?
-            ORDER BY exports.created_at DESC
-            """,
-            [problem_id, workspace_id, export_type, source_commit, keep_export_id],
+        rows = self._store.duplicate_exports(
+            problem_id=int(problem_id),
+            workspace_id=int(workspace_id),
+            export_type=export_type,
+            source_commit=source_commit,
+            keep_export_id=keep_export_id,
         )
         for row in rows:
-            old_id = str(row["id"] or "").strip()
-            old_filename = str(row["filename"] or "").strip()
-            old_artifact_path = str(row["artifact_path"] or "").strip()
+            old_id = row["id"]
+            old_filename = row["filename"]
+            old_artifact_path = row["artifact_path"]
             if old_artifact_path and old_filename:
                 try:
                     old_verification_root = self._canonical_verification_root(old_artifact_path)
@@ -527,7 +530,7 @@ class ExportService:
                 except Exception:
                     pass
             if old_id:
-                self.db.execute("DELETE FROM exports WHERE id=?", [old_id])
+                self._store.delete_export(old_id)
 
     def _load_problem_config(self, snapshot: Path) -> dict:
         cfg_path = snapshot / "config" / "problem.json"
@@ -668,14 +671,11 @@ class ExportService:
         if resolved_export_type not in self.TYPES:
             raise ValueError("unsupported export type (ICPC only)")
 
-        problem_row = self.db.fetch_one("SELECT id,slug,name FROM problems WHERE slug=?", [problem])
+        problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
 
-        verification_row = self.db.fetch_one(
-            "SELECT problem_id,workspace_id,source_commit,status,artifact_path FROM verifications WHERE id=?",
-            [verification_id],
-        )
+        verification_row = self._store.verification_export_row(verification_id)
         if verification_row is None:
             raise ValueError(f"verification metadata not found: {verification_id}")
         if verification_row["problem_id"] != problem_row["id"]:
@@ -748,20 +748,16 @@ class ExportService:
             out = Path(archive)
             digest = sha256_file(out)
 
-            self.db.execute(
-                "INSERT INTO exports(id,problem_id,verification_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                [
-                    export_id,
-                    problem_row["id"],
-                    verification_id,
-                    verification_row["workspace_id"],
-                    resolved_export_type,
-                    out.name,
-                    digest,
-                    out.stat().st_size,
-                    source_commit,
-                    now_iso(),
-                ],
+            self._store.insert_export_record(
+                export_id=export_id,
+                problem_id=int(problem_row["id"]),
+                verification_id=verification_id,
+                workspace_id=verification_row["workspace_id"],
+                export_type=resolved_export_type,
+                filename=out.name,
+                sha256=digest,
+                size_bytes=int(out.stat().st_size),
+                source_commit=source_commit,
             )
             self._cleanup_previous_revision_exports(
                 problem_id=int(problem_row["id"]),

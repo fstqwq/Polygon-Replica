@@ -9,6 +9,8 @@ from app.main_util import configure_runtime_values
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
 from app.service.platform.async_task_cache import AsyncTaskCacheService
+from app.service.auth.service import AuthService
+from app.service.contest.service import ContestService
 from app.service.platform.fs.layout import FsManager
 from app.service.verification.service import VerificationService
 from app.service.export.api import ExportService
@@ -19,6 +21,9 @@ from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.preview import PreviewService
 from app.service.platform.system_config import SystemConfigService
+from app.service.disk.auth_store import AuthStore
+from app.service.disk.runtime_state_store import RuntimeStateStore
+from app.service.runtime.state_service import RuntimeStateService
 from app.service.problem import test_spec
 from app.service.runtime import toolchain
 from app.service.platform.worker_queue import WorkerFuture, WorkerQueueService
@@ -33,6 +38,8 @@ class RuntimeConfig:
     constants: RuntimeValues = field(init=False)
     db: DB = field(init=False)
     workspace_service: workspace.WorkspaceService = field(init=False)
+    auth_service: AuthService = field(init=False)
+    contest_service: ContestService = field(init=False)
     git_service: GitService = field(init=False)
     fs_manager: FsManager = field(init=False)
     artifact_service: ArtifactService = field(init=False)
@@ -45,6 +52,7 @@ class RuntimeConfig:
     judge_fs_index_service: JudgeFsIndexService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
+    runtime_state_service: RuntimeStateService = field(init=False)
     templates: Jinja2Templates = field(
         default_factory=lambda: Jinja2Templates(directory=str(RuntimeConfig.TEMPLATE_ROOT))
     )
@@ -81,6 +89,7 @@ class RuntimeConfig:
         test_spec.apply_runtime_values(self.constants)
         toolchain.apply_runtime_values(self.constants)
         workspace.apply_runtime_values(self.constants)
+        self.auth_service.apply_runtime_values(self.constants)
         self.verification_service.apply_runtime_values(self.constants)
         self.preview_service.apply_runtime_values(self.constants)
         self.judgehost_task_service.apply_runtime_values(self.constants)
@@ -96,11 +105,14 @@ class RuntimeConfig:
         self.constants = build_runtime_values(runtime_overrides)
         self.db.apply_runtime_values(self.constants)
         configure_runtime_values(self.constants)
+        self.auth_service = AuthService(AuthStore(self.db, constants=self.constants), constants=self.constants)
+        self.runtime_state_service = RuntimeStateService(self.db, RuntimeStateStore(self.db))
         workspace_path.apply_runtime_values(self.constants)
         test_spec.apply_runtime_values(self.constants)
         toolchain.apply_runtime_values(self.constants)
         workspace.apply_runtime_values(self.constants)
         self.workspace_service = workspace.WorkspaceService(self.db, self.settings)
+        self.contest_service = ContestService(self.db, self.settings)
         self.git_service = GitService()
         self.fs_manager = FsManager(self.settings.artifacts_root, self.settings.run_root)
         self.artifact_service = ArtifactService(self.settings.artifacts_root)

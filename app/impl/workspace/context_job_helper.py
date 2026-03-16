@@ -11,11 +11,9 @@ from app.impl.runtime.config import config
 
 from app.main_util import compact_error_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.verification.pipeline import wait_build_terminal_status
 from app.service.verification.store import (
     allocate_verification_id as _store_allocate_verification_id,
     load_verification_run,
-    load_verification_summary,
     save_verification_run_summary,
     verification_stage_results,
     verification_run_root,
@@ -106,18 +104,13 @@ def _ensure_implicit_verification(
         created_verification_id = config.verification_service.run_verification(problem, user)
     if not created_verification_id:
         raise RuntimeError("verification failed: verification id is missing")
-    row = config.db.fetch_one(
-        "SELECT status FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
-        [created_verification_id, problem_id, workspace_id],
-    )
-    status = row["status"] if row is not None else ""
+    row = config.verification_service.workspace_verification_meta(problem_id, workspace_id, created_verification_id)
+    status = "" if row is None else row["status"]
     if status and status not in {"ok", "failed", "cancelled"}:
         try:
-            waited = wait_build_terminal_status(
-                config.db,
-                verification_id=created_verification_id,
+            waited = config.verification_service.wait_for_terminal_status(
+                created_verification_id,
                 timeout_sec=30.0,
-                poll_sec=config.verification_service.VERIFICATION_JOIN_POLL_SEC,
             )
             if waited:
                 status = waited
@@ -126,7 +119,7 @@ def _ensure_implicit_verification(
     if status == "ok":
         return (created_verification_id, True)
     if for_verification:
-        verification_summary = load_verification_summary(config.db, created_verification_id)
+        verification_summary = config.verification_service.verification_summary(created_verification_id)
         if verification_summary:
             stage_results = verification_stage_results(verification_summary)
             generate_stage = stage_results.get("generate_input")
@@ -169,14 +162,15 @@ def allocate_verification_id() -> str:
 def _parse_verification_failure_context(problem_id: int, workspace_id: int, verification_id: str) -> tuple[str, str]:
     if not verification_id:
         return ("", "")
-    row = config.db.fetch_one(
-        "SELECT status FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
-        [verification_id, int(problem_id), int(workspace_id)],
+    row = config.verification_service.workspace_verification_meta(
+        int(problem_id),
+        int(workspace_id),
+        verification_id,
     )
     if row is None:
         return ("", "")
     status = row["status"]
-    summary = load_verification_summary(config.db, verification_id)
+    summary = config.verification_service.verification_summary(verification_id)
     failed_test_raw = summary.get("failed_test", "")
     failed_test = ""
     if failed_test_raw:
@@ -360,7 +354,7 @@ def _update_verification_run_match(
     safe_verification_id = normalize_run_id_token(verification_id) or run_id
     safe_expected = normalize_expected_behavior(expected_behavior)
     resolved_verification_id = _verification_id_for_run(run_id, safe_verification_id)
-    verification_summary = load_verification_summary(config.db, resolved_verification_id)
+    verification_summary = config.verification_service.verification_summary(resolved_verification_id)
     run_row = load_verification_run(
         config.db,
         verification_id=resolved_verification_id,

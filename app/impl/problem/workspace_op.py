@@ -34,21 +34,19 @@ def switch_workspace(
             safe_problem = f"{active_user}/{raw_problem}"
         if not _C.PROBLEM_IDENT_RE.fullmatch(safe_problem):
             raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
-        user_row = config.db.fetch_one('SELECT id FROM users WHERE username=?', [active_user])
-        if user_row is None:
+        user_id = config.workspace_service.known_user_id(active_user)
+        if user_id is None:
             ensured = config.workspace_service.ensure_user(active_user)
-            user_id = int(ensured['id'])
-        else:
-            user_id = int(user_row['id'])
-        problem_row = config.db.fetch_one('SELECT id FROM problems WHERE slug=?', [safe_problem])
-        if problem_row is None:
+            user_id = int(ensured["id"])
+        problem_id = config.workspace_service.known_problem_id(safe_problem)
+        if problem_id is None:
             requested_name = form_text(problem_name).strip()
             if not requested_name:
                 requested_name = f'{safe_problem.title()} Problem'
             config.workspace_service.ensure_problem(safe_problem, requested_name)
             config.workspace_service.grant_repo_access(safe_problem, active_user, 'owner')
         else:
-            access = workspace_access_context(int(problem_row['id']), user_id)
+            access = workspace_access_context(problem_id, user_id)
             if not bool(access.get('can_read')):
                 raise ValueError('you do not have access to this problem; ask an owner to grant access')
         config.workspace_service.ensure_workspace(safe_problem, active_user)

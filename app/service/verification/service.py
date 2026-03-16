@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
+from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_file
 from app.service.problem.test_spec import (
@@ -24,6 +25,20 @@ from app.service.verification.cache import (
     canonical_digest,
 )
 from app.service.verification.pipeline import effective_compile_jobs
+from app.service.verification.pipeline import wait_build_terminal_status
+from app.service.verification.store import (
+    VerificationRunRow,
+    VerificationSummary,
+    create_verification_record,
+    default_verification_run,
+    default_verification_summary,
+    load_verification_run,
+    save_verification_run_summary,
+    save_verification_summary,
+    verification_run_ids,
+    verification_source_paths,
+    verification_stage_results,
+)
 from app.service.verification.runner import run_verification_job
 from app.service.verification.runtime import coerce_int, effective_run_timeout_ms, effective_run_timeout_sec, load_problem_runtime_config
 from app.service.verification.source import resolve_standard_checker_source, select_checker_source, select_source
@@ -45,6 +60,9 @@ TIME_LIMIT_MIN_MS = 100
 TIME_LIMIT_MAX_MS = 30000
 
 class VerificationService:
+    DB_SUMMARY_TESTS_LIMIT = 8192
+    DB_SUMMARY_DIAGNOSTICS_LIMIT = 512
+    DB_SUMMARY_FEEDBACK_FILES_LIMIT = 16
     DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
     VERIFICATION_CACHE_NAMESPACE = "verification.run"
     VERIFICATION_CACHE_SCHEMA = "v3"
@@ -61,6 +79,7 @@ class VerificationService:
         async_task_cache_service: AsyncTaskCacheService | None = None,
     ):
         self.db = db
+        self._verification_store = VerificationStore(db)
         self.workspace_service = workspace_service
         self.artifacts = artifacts
         self.execution_backend_name = "domjudge-judgehost"
@@ -76,6 +95,311 @@ class VerificationService:
         self._verification_inflight: dict[str, str] = {}
         self.fs_manager = FsManager(self.workspace_service.settings.artifacts_root, self.workspace_service.settings.run_root)
         self.apply_runtime_values(constants or build_runtime_values())
+
+    def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, str] | None:
+        row = self._verification_store.get_runtime_row(int(problem_id), verification_id)
+        if row is None:
+            return None
+        return row
+
+    def workspace_runtime_verification(
+        self,
+        problem_id: int,
+        workspace_id: int | None,
+        verification_id: str,
+    ) -> dict[str, str] | None:
+        row = self._verification_store.get_workspace_runtime_row(int(problem_id), int(workspace_id), verification_id)
+        if row is None:
+            return None
+        return row
+
+    def has_export_detail_verification(self, problem_id: int, verification_id: str) -> bool:
+        row = self._verification_store.get_status_row(int(problem_id), verification_id)
+        if row is None:
+            return False
+        return row["status"] in {"queued", "pending", "running", "ok", "failed"}
+
+    def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
+        return self._verification_store.artifact_path_for_problem_artifact(int(problem_id), artifact_id)
+
+    def artifact_path_for_verification(self, verification_id: str) -> str:
+        return self._verification_store.artifact_path_for_verification(verification_id)
+
+    def workspace_verification_id_for_run(self, problem_id: int, workspace_id: int, run_id: str) -> str:
+        token = run_id
+        if not token:
+            return ""
+        for row in self._verification_store.list_rows(
+            problem_id=int(problem_id),
+            workspace_id=int(workspace_id),
+            limit=512,
+            kinds=(Kind.VERIFICATION,),
+        ):
+            text = row["summary_json"]
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            runs = payload.get("runs")
+            if isinstance(runs, dict) and token in runs:
+                return row["id"]
+            order = payload.get("runs_order")
+            if isinstance(order, list) and token in order:
+                return row["id"]
+        return ""
+
+    def workspace_verification_exists(self, problem_id: int, workspace_id: int, verification_id: str) -> bool:
+        return self._verification_store.workspace_verification_exists(int(problem_id), int(workspace_id), verification_id)
+
+    def workspace_artifact_exists(self, problem_id: int, workspace_id: int, artifact_id: str) -> bool:
+        return self._verification_store.workspace_artifact_exists(int(problem_id), int(workspace_id), artifact_id)
+
+    def workspace_verification_meta(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        verification_id: str,
+    ) -> dict[str, str] | None:
+        row = self._verification_store.workspace_verification_meta(int(problem_id), int(workspace_id), verification_id)
+        if row is None:
+            return None
+        return row
+
+    def latest_problem_verification_id_for_source_commit(self, problem_id: int, source_commit: str) -> str:
+        return self._verification_store.latest_problem_verification_id_for_source_commit(int(problem_id), source_commit)
+
+    def verification_summary(self, verification_id: str) -> dict[str, object]:
+        return self._verification_store.runtime_summary(verification_id)
+
+    def verification_stage_summary(self, verification_id: str, stage_key: str) -> VerificationSummary:
+        stage_results = self.verification_stage_results(verification_id)
+        return dict(stage_results.get(stage_key) or {})
+
+    def verification_record(self, verification_id: str) -> dict[str, object] | None:
+        row = self._verification_store.record_row(verification_id)
+        if row is None:
+            return None
+        return dict(row)
+
+    def verification_run(self, verification_id: str, run_id: str) -> VerificationRunRow:
+        return load_verification_run(
+            self.db,
+            verification_id=verification_id,
+            run_id=run_id,
+        )
+
+    def verification_run_ids(self, verification_id: str) -> list[str]:
+        return verification_run_ids(self.verification_summary(verification_id))
+
+    def verification_source_paths(self, verification_id: str) -> list[str]:
+        return verification_source_paths(self.verification_summary(verification_id))
+
+    def verification_stage_results(self, verification_id: str) -> dict[str, VerificationSummary]:
+        return verification_stage_results(self.verification_summary(verification_id))
+
+    def list_workspace_verification_rows(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        limit: int = 40,
+        kinds: tuple[str, ...] = (Kind.VERIFICATION,),
+    ) -> list[dict[str, object]]:
+        rows = self._verification_store.list_rows(
+            problem_id=int(problem_id),
+            workspace_id=int(workspace_id),
+            limit=int(limit),
+            kinds=kinds,
+        )
+        return [dict(row) for row in rows]
+
+    def begin_verification_record(
+        self,
+        *,
+        verification_id: str,
+        problem_id: int,
+        workspace_id: int | None,
+        source_commit: str = "",
+        source_ref: str = "",
+        kind: str,
+        status: str,
+        summary: dict[str, object] | None = None,
+        artifact_path: str | Path | None = None,
+    ) -> str:
+        return create_verification_record(
+            self.db,
+            self.fs_manager,
+            verification_id=verification_id,
+            problem_id=int(problem_id),
+            workspace_id=None if workspace_id is None else int(workspace_id),
+            source_commit=source_commit,
+            source_ref=source_ref,
+            kind=kind,
+            status=status,
+            summary=summary,
+            artifact_path=artifact_path,
+        )
+
+    def persist_verification_summary(
+        self,
+        *,
+        verification_id: str,
+        status: str,
+        summary: VerificationSummary,
+        finished: bool = False,
+    ) -> None:
+        save_verification_summary(
+            self.db,
+            verification_id=verification_id,
+            status=status,
+            summary=summary,
+            finished=bool(finished),
+        )
+
+    def persist_run_summary(
+        self,
+        *,
+        verification_id: str,
+        problem_id: int,
+        workspace_id: int,
+        kind: str,
+        mode: str,
+        verification_source: str,
+        source_paths: list[str],
+        run_id: str,
+        run_status: str,
+        source_label: str,
+        expected_behavior: str,
+        run_summary: dict[str, object],
+        artifact_path: str,
+        task_kind: str = "",
+        error_text: str = "",
+        finished: bool = False,
+    ) -> None:
+        save_verification_run_summary(
+            self.db,
+            self.fs_manager,
+            verification_id=verification_id,
+            problem_id=int(problem_id),
+            workspace_id=None if workspace_id is None else int(workspace_id),
+            kind=kind,
+            mode=mode,
+            verification_source=verification_source,
+            source_paths=source_paths,
+            run_id=run_id,
+            run_status=run_status,
+            source_label=source_label,
+            expected_behavior=expected_behavior,
+            run_summary=run_summary,
+            artifact_path=artifact_path,
+            task_kind=task_kind,
+            error_text=error_text,
+            finished=bool(finished),
+        )
+
+    def new_verification_summary(
+        self,
+        *,
+        kind: str,
+        mode: str,
+        source_commit: str = "",
+        source_ref: str = "",
+        source_paths: list[str] | None = None,
+        verification_source: str = "",
+    ) -> VerificationSummary:
+        return default_verification_summary(
+            kind=kind,
+            mode=mode,
+            source_commit=source_commit,
+            source_ref=source_ref,
+            source_paths=source_paths,
+            verification_source=verification_source,
+        )
+
+    def new_verification_run(
+        self,
+        *,
+        run_id: str,
+        source_label: str,
+        expected_behavior: str,
+        run_status: str = Status.RUNNING.value,
+        artifact_path: str = "",
+        task_kind: str = "",
+    ) -> VerificationRunRow:
+        return default_verification_run(
+            run_id=run_id,
+            source_label=source_label,
+            expected_behavior=expected_behavior,
+            run_status=run_status,
+            artifact_path=artifact_path,
+            task_kind=task_kind,
+        )
+
+    def cancel_verification_if_active(self, verification_id: str, *, reason: str, now_text: str) -> bool:
+        return self._verification_store.cancel_active_verification(
+            verification_id,
+            reason=reason,
+            now_text=now_text,
+        )
+
+    def wait_for_terminal_status(self, verification_id: str, *, timeout_sec: float) -> str:
+        waited = wait_build_terminal_status(
+            self._verification_store,
+            verification_id=verification_id,
+            timeout_sec=float(timeout_sec),
+            poll_sec=self.VERIFICATION_JOIN_POLL_SEC,
+        )
+        return waited or ""
+
+    def latest_workspace_stage_rows(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        limit: int,
+        ok_only: bool = False,
+    ) -> list[dict[str, str]]:
+        return self._verification_store.workspace_stage_rows(
+            int(problem_id),
+            int(workspace_id),
+            limit=max(1, int(limit)),
+            ok_only=bool(ok_only),
+        )
+
+    def latest_workspace_committed_stage_rows(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        source_commit: str,
+        source_ref: str,
+        limit: int,
+        ok_only: bool = False,
+    ) -> list[dict[str, str]]:
+        return self._verification_store.workspace_committed_stage_rows(
+            int(problem_id),
+            int(workspace_id),
+            source_commit=source_commit,
+            source_ref=source_ref,
+            limit=max(1, int(limit)),
+            ok_only=bool(ok_only),
+        )
+
+    def workspace_stage_row(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        verification_id: str,
+    ) -> dict[str, str] | None:
+        return self._verification_store.workspace_stage_row(
+            int(problem_id),
+            int(workspace_id),
+            verification_id,
+        )
 
     def apply_runtime_values(self, values: RuntimeValues) -> None:
         self.default_exec_memory_mb = coerce_int(
@@ -357,13 +681,10 @@ class VerificationService:
         cached_verification_id = value["verification_id"]
         if not cached_verification_id:
             return ""
-        row = self.db.fetch_one(
-            """
-            SELECT status,artifact_path,summary_json
-            FROM verifications
-            WHERE id=? AND problem_id=? AND workspace_id=? AND kind=?
-            """,
-            [cached_verification_id, int(problem_id), int(workspace_id), Kind.VERIFICATION.value],
+        row = self._verification_store.get_workspace_runtime_row(
+            int(problem_id),
+            int(workspace_id),
+            cached_verification_id,
         )
         if row is None:
             service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)

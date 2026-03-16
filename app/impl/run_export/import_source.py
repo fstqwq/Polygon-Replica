@@ -116,7 +116,7 @@ def _next_available_problem_slug(owner: str, base: str) -> str:
     token = _normalize_problem_slug_segment_required(token)
     candidate = token
     idx = 2
-    while config.db.fetch_one("SELECT id FROM problems WHERE slug=?", [_problem_full_slug(owner, candidate)]) is not None:
+    while config.workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None:
         suffix = f"-{idx}"
         prefix_len = max(1, 64 - len(suffix))
         prefix = token[:prefix_len].rstrip("-") or "p"
@@ -143,7 +143,7 @@ def build_import_slug_hint(owner: str, filename: str, requested_slug: str) -> di
                 "message": _C.PROBLEM_ID_RULE_MESSAGE,
             }
         full_requested = _problem_full_slug(owner, normalized)
-        exists = config.db.fetch_one("SELECT id FROM problems WHERE slug=?", [full_requested]) is not None
+        exists = config.workspace_service.known_problem_id(full_requested) is not None
         suggested = _next_available_problem_slug(owner, normalized) if exists else normalized
         message = ""
         if exists:
@@ -176,8 +176,7 @@ def _resolve_import_problem_slug(owner: str, requested_slug: str, package_name: 
     if requested:
         normalized = _normalize_problem_slug_segment_required(requested)
         full_requested = _problem_full_slug(owner, normalized)
-        exists = config.db.fetch_one("SELECT id FROM problems WHERE slug=?", [full_requested])
-        if exists is not None:
+        if config.workspace_service.known_problem_id(full_requested) is not None:
             suggestion = _next_available_problem_slug(owner, normalized)
             raise ValueError(f"problem already exists: {full_requested} (try: {_problem_full_slug(owner, suggestion)})")
         return full_requested
@@ -222,9 +221,11 @@ def _build_polygon_sample_answers(problem: str, user: str, workspace: Path) -> d
         }
 
     verification_id = config.verification_service.run_verification(problem, user)
-    verification_row = config.db.fetch_one(
-        "SELECT status,summary_json,artifact_path FROM verifications WHERE id=?",
-        [verification_id],
+    problem_id = config.workspace_service.known_problem_id(problem)
+    verification_row = (
+        None
+        if problem_id is None
+        else config.verification_service.export_runtime_verification(problem_id, verification_id)
     )
     if verification_row is None:
         raise ValueError(f"sample answer verification missing: {verification_id}")
@@ -372,9 +373,9 @@ def import_package_as_new_problem(
         "components": result.get("components"),
         "solutions": result.get("solutions"),
     }
-    target_problem_row = config.db.fetch_one("SELECT id FROM problems WHERE slug=?", [target_problem])
-    if target_problem_row is not None:
-        audit(actor_user_id, int(target_problem_row["id"]), "export.import", details)
+    target_problem_id = config.workspace_service.known_problem_id(target_problem)
+    if target_problem_id is not None:
+        audit(actor_user_id, int(target_problem_id), "export.import", details)
     tests_info = result.get("tests")
     total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
     return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}

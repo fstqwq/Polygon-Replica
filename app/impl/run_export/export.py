@@ -83,16 +83,7 @@ def _export_recent_events(
     limit: int = 20,
 ) -> list[dict[str, object]]:
     cap = max(1, min(100, int(limit)))
-    rows = config.db.fetch_all(
-        """
-        SELECT created_at,details_json
-        FROM audit_log
-        WHERE problem_id=? AND actor_user_id=? AND action='export.create'
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        [int(problem_id), int(actor_user_id), cap],
-    )
+    rows = config.export_service.export_audit_rows(int(problem_id), int(actor_user_id), limit=cap)
     result: list[dict[str, object]] = []
     resolved_commit_keys: set[tuple[str, str]] = set()
     for row in rows:
@@ -106,18 +97,10 @@ def _export_recent_events(
             continue
         verification_id = details["verification_id"]
         if (not verification_id) and status == "running" and source_commit:
-            verification_row = config.db.fetch_one(
-                """
-                SELECT id
-                FROM verifications
-                WHERE problem_id=? AND source_commit=? AND kind='verification'
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                [int(problem_id), source_commit],
+            verification_id = config.verification_service.latest_problem_verification_id_for_source_commit(
+                int(problem_id),
+                source_commit,
             )
-            if verification_row is not None:
-                verification_id = verification_row["id"]
         filename = details["filename"]
         error_text = details["error"]
         detail = filename if filename else (error_text if error_text else "-")
@@ -239,10 +222,7 @@ def _resolve_export_archive_path(problem: str, verification_id: str, filename: s
     archive_name = Path(filename.strip()).name
     if (not verification_id) or (not archive_name):
         return None
-    row = config.db.fetch_one("SELECT artifact_path FROM verifications WHERE id=?", [verification_id])
-    if row is None:
-        return None
-    artifact_path = row["artifact_path"]
+    artifact_path = config.verification_service.artifact_path_for_verification(verification_id)
     if not artifact_path:
         return None
     try:
@@ -282,7 +262,7 @@ def export_page(request: Request, problem: str, user: str):
         build_note = 'no committed verification for this revision; Generate will build from committed revision'
     else:
         build_note = 'committed revision artifacts are ready for export'
-    exports_rows = config.db.fetch_all('\n        SELECT id,verification_id,export_type,filename,sha256,size_bytes,source_commit,created_at\n        FROM exports\n        WHERE problem_id=? AND workspace_id=?\n        ORDER BY created_at DESC\n        LIMIT 40\n        ', [ctx['problem']['id'], workspace_id])
+    exports_rows = config.export_service.workspace_exports(int(ctx['problem']['id']), int(workspace_id), limit=40)
     revision_cache: dict[str, int | None] = {}
     verification_meta_cache: dict[str, dict[str, object] | None] = {}
     archive_summary_cache: dict[tuple[str, str], dict[str, object]] = {}
@@ -316,11 +296,11 @@ def export_page(request: Request, problem: str, user: str):
             verification_id = ""
         verification_meta = verification_meta_cache.get(verification_id)
         if verification_id and (verification_meta is None) and (verification_id not in verification_meta_cache):
-            row_meta = config.db.fetch_one(
-                "SELECT id,status,summary_json FROM verifications WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'",
-                [verification_id, problem_id, workspace_id],
+            verification_meta = config.verification_service.workspace_verification_meta(
+                int(problem_id),
+                int(workspace_id),
+                verification_id,
             )
-            verification_meta = dict(row_meta) if row_meta is not None else None
             verification_meta_cache[verification_id] = verification_meta
         validation_status = _build_validation_status(verification_meta)
         summary_bits: list[str] = [validation_status]

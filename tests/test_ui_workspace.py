@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_all, db_fetch_one
+
 import asyncio
 import io
 import os
@@ -31,7 +33,6 @@ from .ui_support import (
     contests_root_import_confirm,
     contests_root_import_review,
     contests_root_page,
-    db,
     files_page,
     general_page,
     general_save,
@@ -131,7 +132,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(deleted.status_code, 303)
         self.assertEqual("/problems", deleted.headers.get("location", ""))
         self.assertFalse(ws.exists())
-        ws_row = db.fetch_one(
+        ws_row = db_fetch_one(
             """
             SELECT id,path,branch,head_commit,dirty FROM workspaces
             WHERE problem_id=(SELECT id FROM problems WHERE slug=?)
@@ -152,7 +153,7 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_service.grant_repo_access(problem, username, "owner")
         ws = Path(workspace_service.ensure_workspace(problem, username))
         self.assertTrue(ws.exists())
-        row_before = db.fetch_one("SELECT id,repo_name FROM problems WHERE slug=?", [problem])
+        row_before = db_fetch_one("SELECT id,repo_name FROM problems WHERE slug=?", [problem])
         self.assertIsNotNone(row_before)
         bare_repo = Path(config.settings.bare_root) / str(row_before["repo_name"])
         self.assertTrue(bare_repo.exists())
@@ -192,7 +193,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(f"/problems/{problem}/{username}/workspace", mismatch.headers.get("location", ""))
         mismatch_messages = _flash_messages_from_response(mismatch)
         self.assertTrue(any("confirmation mismatch" in item for item in mismatch_messages))
-        self.assertIsNotNone(db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
+        self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
 
         deleted = problem_delete(
             request=_request_with_cookie(
@@ -207,7 +208,7 @@ class TestUIWorkspace(UIBaseSuite):
         )
         self.assertEqual(deleted.status_code, 303)
         self.assertEqual("/problems", deleted.headers.get("location", ""))
-        self.assertIsNone(db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
+        self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
         self.assertFalse(ws.exists())
         self.assertFalse(bare_repo.exists())
 
@@ -255,7 +256,7 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_service.ensure_problem(problem, "Delete Problem Unsafe Repo")
         workspace_service.grant_repo_access(problem, username, "owner")
         workspace_service.ensure_workspace(problem, username)
-        db.execute("UPDATE problems SET repo_name='' WHERE slug=?", [problem])
+        db_execute("UPDATE problems SET repo_name='' WHERE slug=?", [problem])
 
         sudo_resp = _sudo_with_password_proof(
             auth_cookie,
@@ -282,7 +283,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(f"/problems/{problem}/{username}/workspace", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(any("unsafe" in item.lower() for item in messages))
-        self.assertIsNotNone(db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
+        self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
 
     def test_general_save_persists_problem_config(self) -> None:
         resp = general_save(
@@ -304,7 +305,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(payload.get("memory_limit_mb"), 768)
         self.assertNotIn("interactive", payload)
         self.assertEqual(payload.get("mode"), "interactive")
-        row = db.fetch_one("SELECT name FROM problems WHERE slug=?", ["alice/sample"])
+        row = db_fetch_one("SELECT name FROM problems WHERE slug=?", ["alice/sample"])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["name"]), "Workspace General Title")
         self.assertFalse((ws / "statement" / "rendered").exists())
@@ -363,17 +364,17 @@ class TestUIWorkspace(UIBaseSuite):
         ctx = workspace_service.workspace_context("alice/sample", username, include_recent=False)
         workspace_id = int(ctx["workspace"]["id"])
         sentinel_updated_at = "2026-03-05T00:00:00Z"
-        db.execute(
+        db_execute(
             "UPDATE workspaces SET branch=?, head_commit=?, dirty=?, updated_at=? WHERE id=?",
             ["main", "sentinel-head", 0, sentinel_updated_at, workspace_id],
         )
-        before = db.fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
+        before = db_fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
         self.assertIsNotNone(before)
 
         resp = workspace_page(_request(f"/problems/alice/sample/{username}/workspace"), "alice/sample", username)
         self.assertEqual(resp.status_code, 200)
 
-        after = db.fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
+        after = db_fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
         self.assertIsNotNone(after)
         self.assertEqual(str(after["branch"] or ""), str(before["branch"] or ""))
         self.assertEqual(str(after["head_commit"] or ""), str(before["head_commit"] or ""))
@@ -438,7 +439,7 @@ class TestUIWorkspace(UIBaseSuite):
         preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_id
         (preview_root / "logs").mkdir(parents=True, exist_ok=True)
         (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
-        db.execute(
+        db_execute(
             """
             INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -557,7 +558,7 @@ class TestUIWorkspace(UIBaseSuite):
             role="write",
         )
         self.assertEqual(grant_resp.status_code, 303)
-        member = db.fetch_one(
+        member = db_fetch_one(
             "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
             ["alice/sample", "bob"],
         )
@@ -572,7 +573,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         revoke_resp = workspace_access_revoke(problem="alice/sample", user="alice", target_user="bob")
         self.assertEqual(revoke_resp.status_code, 303)
-        removed = db.fetch_one(
+        removed = db_fetch_one(
             "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
             ["alice/sample", "bob"],
         )
@@ -580,7 +581,7 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_workspace_access_grant_requires_registered_user(self) -> None:
         target = f"user-{uuid.uuid4().hex[:8]}"
-        row = db.fetch_one("SELECT id FROM users WHERE username=?", [target])
+        row = db_fetch_one("SELECT id FROM users WHERE username=?", [target])
         self.assertIsNone(row)
 
         grant_resp = workspace_access_grant(
@@ -595,14 +596,14 @@ class TestUIWorkspace(UIBaseSuite):
         grant_messages = _flash_messages_from_response(grant_resp)
         self.assertTrue(grant_messages)
         self.assertIn("register first", grant_messages[0])
-        member = db.fetch_one(
+        member = db_fetch_one(
             "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
             ["alice/sample", target],
         )
         self.assertIsNone(member)
 
     def test_workspace_access_cannot_remove_last_owner(self) -> None:
-        db.execute("DELETE FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?)", ["alice/sample"])
+        db_execute("DELETE FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?)", ["alice/sample"])
         workspace_service.grant_repo_access("alice/sample", "alice", "owner")
         resp = workspace_access_revoke(problem="alice/sample", user="alice", target_user="alice")
         self.assertEqual(resp.status_code, 303)
@@ -641,7 +642,7 @@ class TestUIWorkspace(UIBaseSuite):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/alice/{slug}/alice/statement", str(resp.headers.get("location", "")))
-        row = db.fetch_one("SELECT name FROM problems WHERE slug=?", [f"alice/{slug}"])
+        row = db_fetch_one("SELECT name FROM problems WHERE slug=?", [f"alice/{slug}"])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["name"] or ""), requested_name)
 
@@ -655,11 +656,11 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_service.grant_repo_access(owner_problem, "alice", "owner")
 
         workspace_service.ensure_problem(read_problem, "Read Problem")
-        alice_row = db.fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
-        read_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", [read_problem])
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
+        read_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [read_problem])
         self.assertIsNotNone(alice_row)
         self.assertIsNotNone(read_row)
-        db.execute(
+        db_execute(
             "INSERT OR IGNORE INTO repo_acl(problem_id,user_id,role,created_at) VALUES(?,?,?,?)",
             [int(read_row["id"]), int(alice_row["id"]), "read", "2026-01-01T00:00:00+00:00"],
         )
@@ -689,7 +690,7 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_service.grant_repo_access(newer_slug, "alice", "owner")
         workspace_service.ensure_workspace(older_slug, "alice")
         workspace_service.ensure_workspace(newer_slug, "alice")
-        db.execute(
+        db_execute(
             """
             UPDATE workspaces
             SET updated_at=?
@@ -698,7 +699,7 @@ class TestUIWorkspace(UIBaseSuite):
             """,
             ["2026-01-01T00:00:00+00:00", older_slug],
         )
-        db.execute(
+        db_execute(
             """
             UPDATE workspaces
             SET updated_at=?
@@ -964,25 +965,25 @@ class TestUIWorkspace(UIBaseSuite):
         newer_create = contests_root_create(_post_request("/contests/create"), user="alice", contest_slug=newer_slug, contest_title="New Contest")
         self.assertEqual(older_create.status_code, 303)
         self.assertEqual(newer_create.status_code, 303)
-        older_row = db.fetch_one("SELECT id FROM contests WHERE slug=?", [older_slug])
-        newer_row = db.fetch_one("SELECT id FROM contests WHERE slug=?", [newer_slug])
-        alice_row = db.fetch_one("SELECT id FROM users WHERE username='alice'")
+        older_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [older_slug])
+        newer_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [newer_slug])
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(older_row)
         self.assertIsNotNone(newer_row)
         self.assertIsNotNone(alice_row)
         older_contest_id = int(older_row["id"])
         newer_contest_id = int(newer_row["id"])
         alice_id = int(alice_row["id"])
-        db.execute("UPDATE contests SET created_at=? WHERE id=?", ["2026-01-01T00:00:00+00:00", older_contest_id])
-        db.execute("UPDATE contests SET created_at=? WHERE id=?", ["2026-01-01T00:00:00+00:00", newer_contest_id])
-        db.execute(
+        db_execute("UPDATE contests SET created_at=? WHERE id=?", ["2026-01-01T00:00:00+00:00", older_contest_id])
+        db_execute("UPDATE contests SET created_at=? WHERE id=?", ["2026-01-01T00:00:00+00:00", newer_contest_id])
+        db_execute(
             """
             INSERT OR REPLACE INTO contest_properties(contest_id,key,value_json,updated_at,updated_by_user_id)
             VALUES(?,?,?,?,?)
             """,
             [newer_contest_id, "sort_probe", json.dumps({"v": 1}), "2026-01-01T00:00:05+00:00", alice_id],
         )
-        db.execute(
+        db_execute(
             """
             INSERT OR REPLACE INTO contest_properties(contest_id,key,value_json,updated_at,updated_by_user_id)
             VALUES(?,?,?,?,?)
@@ -1076,11 +1077,11 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertTrue(confirm_messages)
         self.assertIn(f"contest {target_slug} imported (4 problems)", confirm_messages[0])
 
-        contest_row = db.fetch_one("SELECT id,title FROM contests WHERE slug=?", [target_slug])
+        contest_row = db_fetch_one("SELECT id,title FROM contests WHERE slug=?", [target_slug])
         self.assertIsNotNone(contest_row)
         self.assertIn("The 2025 ICPC Asia East Continent Final Practice Contest", str(contest_row["title"] or ""))
         contest_id = int(contest_row["id"])
-        imported_rows = db.fetch_all(
+        imported_rows = db_fetch_all(
             """
             SELECT cp.idx,p.slug
             FROM contest_problems cp

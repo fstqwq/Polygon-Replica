@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BOUNDARY_PATH = ROOT / "migration-gates" / "import-boundaries.json"
-DEFAULT_FIRST_WAVE_PATH = ROOT / "migration-gates" / "import-policy-first-wave.txt"
-DEFAULT_BASELINE_PATH = ROOT / "migration-gates" / "import-policy-baseline.json"
+DEFAULT_BOUNDARY_PATH = ROOT / "import-policy" / "import-boundaries.json"
+DEFAULT_FIRST_WAVE_PATH = ROOT / "import-policy" / "import-policy-first-wave.txt"
+DEFAULT_BASELINE_PATH = ROOT / "import-policy" / "import-policy-baseline.json"
 DEFAULT_NAMING_RULE_SCOPE_PREFIXES = (
     "app.impl.auth.",
     "app.impl.build_preview.",

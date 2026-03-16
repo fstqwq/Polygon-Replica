@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_one
+
 import asyncio
 import sqlite3
 from unittest.mock import patch
@@ -32,7 +34,6 @@ from .ui_support import (
     auth_middleware,
     auth_password_meta,
     config,
-    db,
     json,
     login_page,
     login_submit,
@@ -98,7 +99,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn(f"{AUTH_COOKIE_NAME}=", reg_set_cookie)
         self.assertIn("Secure", reg_set_cookie)
 
-        user_row = db.fetch_one(
+        user_row = db_fetch_one(
             "SELECT id,password_hash,password_salt,password_iters FROM users WHERE username=?",
             [username],
         )
@@ -206,7 +207,7 @@ class TestUIAuth(UIBaseSuite):
 
         settings_csrf = issue_password_form_csrf_token("settings-password")
         self.assertTrue(settings_csrf)
-        auth_row = db.fetch_one("SELECT password_salt,password_iters FROM users WHERE username=?", [username])
+        auth_row = db_fetch_one("SELECT password_salt,password_iters FROM users WHERE username=?", [username])
         self.assertIsNotNone(auth_row)
         current_salt = str(auth_row["password_salt"] or "").strip().lower()
         current_iters = int(auth_row["password_iters"] or 0)
@@ -297,7 +298,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(any("invalid username" in item.lower() for item in invalid_messages))
 
     def test_setup_page_shows_config_when_no_registered_users(self) -> None:
-        count = db.fetch_one(
+        count = db_fetch_one(
             "SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''",
             [],
         )
@@ -348,7 +349,7 @@ class TestUIAuth(UIBaseSuite):
         set_cookie = _response_set_cookie_blob(resp)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", set_cookie)
 
-        row = db.fetch_one(
+        row = db_fetch_one(
             "SELECT is_system_admin,password_hash,password_salt,password_iters FROM users WHERE username=?",
             [username],
         )
@@ -369,7 +370,7 @@ class TestUIAuth(UIBaseSuite):
     def test_register_does_not_claim_existing_passwordless_user(self) -> None:
         username = f"claim-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_user(username)
-        row_before = db.fetch_one("SELECT password_hash FROM users WHERE username=?", [username])
+        row_before = db_fetch_one("SELECT password_hash FROM users WHERE username=?", [username])
         self.assertIsNotNone(row_before)
         self.assertFalse(str(row_before["password_hash"] or ""))
 
@@ -380,7 +381,7 @@ class TestUIAuth(UIBaseSuite):
         unavailable_messages = _flash_messages_from_response(resp)
         self.assertTrue(any("username is unavailable" in item for item in unavailable_messages))
 
-        row_after = db.fetch_one("SELECT password_hash FROM users WHERE username=?", [username])
+        row_after = db_fetch_one("SELECT password_hash FROM users WHERE username=?", [username])
         self.assertIsNotNone(row_after)
         self.assertFalse(str(row_after["password_hash"] or ""))
 
@@ -388,7 +389,7 @@ class TestUIAuth(UIBaseSuite):
         first = f"first-{uuid.uuid4().hex[:8]}"
         second = f"second-{uuid.uuid4().hex[:8]}"
 
-        before = db.fetch_one(
+        before = db_fetch_one(
             "SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''",
             [],
         )
@@ -397,19 +398,19 @@ class TestUIAuth(UIBaseSuite):
 
         first_reg = _register_with_password_proof(first, "StrongPass123", next_path="/")
         self.assertEqual(first_reg.status_code, 303)
-        first_row = db.fetch_one("SELECT is_system_admin FROM users WHERE username=?", [first])
+        first_row = db_fetch_one("SELECT is_system_admin FROM users WHERE username=?", [first])
         self.assertIsNotNone(first_row)
         self.assertEqual(int(first_row["is_system_admin"] or 0), 1)
 
         second_reg = _register_with_password_proof(second, "StrongPass123", next_path="/")
         self.assertEqual(second_reg.status_code, 303)
-        second_row = db.fetch_one("SELECT is_system_admin FROM users WHERE username=?", [second])
+        second_row = db_fetch_one("SELECT is_system_admin FROM users WHERE username=?", [second])
         self.assertIsNotNone(second_row)
         self.assertEqual(int(second_row["is_system_admin"] or 0), 0)
 
     def test_passwordless_user_does_not_take_system_admin_slot(self) -> None:
         workspace_service.ensure_user("placeholder-user")
-        row = db.fetch_one("SELECT is_system_admin,password_hash FROM users WHERE username=?", ["placeholder-user"])
+        row = db_fetch_one("SELECT is_system_admin,password_hash FROM users WHERE username=?", ["placeholder-user"])
         self.assertIsNotNone(row)
         self.assertEqual(int(row["is_system_admin"] or 0), 0)
         self.assertFalse(str(row["password_hash"] or ""))
@@ -550,8 +551,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("/setup?next=", resp.headers.get("location", ""))
 
     def test_settings_page_shows_system_admin_panel_for_system_admin(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
@@ -567,12 +568,12 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("Judging", html)
 
     def test_settings_page_runtime_runner_hides_auth_fields_when_judgehost_disabled(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
         self.addCleanup(settings_system_config_reset, user="alice")
-        admin = db.fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
+        admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
         config.system_config_service.apply_patch(
             {
@@ -596,12 +597,12 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn('data-judgehost-auth-block="1" hidden', html)
 
     def test_settings_page_runtime_runner_shows_auth_fields_when_judgehost_enabled(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
         self.addCleanup(settings_system_config_reset, user="alice")
-        admin = db.fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
+        admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
         config.system_config_service.apply_patch(
             {
@@ -623,8 +624,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn('data-judgehost-api-token="1"', html)
 
     def test_settings_page_formats_judgehost_last_seen_in_user_timezone(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
@@ -671,8 +672,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(blocked.exception.status_code, 403)
 
     def test_settings_config_category_update_and_reset(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
@@ -698,7 +699,7 @@ class TestUIAuth(UIBaseSuite):
             override_value,
         )
 
-        row = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
+        row = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNotNone(row)
         self.assertEqual(json.loads(str(row["value_json"] or "null")), override_value)
 
@@ -708,12 +709,12 @@ class TestUIAuth(UIBaseSuite):
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]),
         )
-        row_after = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
+        row_after = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNone(row_after)
 
     def test_settings_config_category_update_can_revert_single_override_to_default(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
         self.addCleanup(settings_system_config_reset, user="alice")
@@ -731,7 +732,7 @@ class TestUIAuth(UIBaseSuite):
         )
         self.assertEqual(set_override_resp.status_code, 303)
         self.assertEqual(int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")), override_value)
-        row = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
+        row = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNotNone(row)
 
         revert_resp = asyncio.run(
@@ -752,12 +753,12 @@ class TestUIAuth(UIBaseSuite):
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]),
         )
-        row_after = db.fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
+        row_after = db_fetch_one("SELECT value_json FROM system_config WHERE key=?", ["RUN_TEST_SELECTOR_LIMIT"])
         self.assertIsNone(row_after)
 
     def test_settings_config_category_update_rejects_non_ascii_judgehost_token(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
@@ -781,8 +782,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertNotEqual(str(config.system_config_service.get("JUDGEHOST_API_TOKEN") or ""), bad_token)
 
     def test_settings_config_category_update_allows_printable_ascii_compile_flags(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
@@ -803,8 +804,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(str(config.system_config_service.get("TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS") or ""), flags)
 
     def test_settings_config_category_page_and_hot_reload(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
         self.addCleanup(settings_system_config_reset, user="alice")
@@ -836,8 +837,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(int(config.constants.RUN_EXEC_MEMORY_MB), update_value)
 
     def test_settings_config_category_page_renders_token_generate_button(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
@@ -859,8 +860,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(blocked.exception.status_code, 403)
 
     def test_settings_worker_queue_snapshot_returns_metrics_for_admin(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
         future, queued, reason = config.worker_queue_service.submit(
@@ -886,8 +887,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(blocked.exception.status_code, 403)
 
     def test_settings_judgehost_snapshot_returns_hosts_for_admin(self) -> None:
-        db.execute("UPDATE users SET is_system_admin=0")
-        db.execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
         service = config.judgehost_task_service

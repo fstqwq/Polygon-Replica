@@ -172,30 +172,12 @@ def solve_with_judge_backend(
             return ""
         return judgehost_obj.get("task_id") or ""
 
-    def _domjudge_fetch_one(sql: str, values: list[object]) -> object | None:
-        fetch_one = getattr(service, "_db_fetch_one", None)
-        if not callable(fetch_one):
-            return None
-        try:
-            return fetch_one(sql, values)
-        except Exception:
-            return None
-
     def _summary_work_root(summary_obj: dict[str, Any]) -> Path | None:
         task_id = _summary_task_id(summary_obj)
         if not task_id:
             return None
-        job_row = _domjudge_fetch_one(
-            "SELECT work_root FROM judgehost_domjudge_jobs WHERE task_id=? ORDER BY job_id DESC LIMIT 1",
-            [task_id],
-        )
-        if job_row is None:
-            return None
-        work_root = job_row["work_root"] or ""
-        if not work_root:
-            return None
         try:
-            return Path(work_root).resolve()
+            return service.domjudge_work_root_for_task(task_id)
         except Exception:
             return None
 
@@ -203,29 +185,10 @@ def solve_with_judge_backend(
         task_id = _summary_task_id(summary_obj)
         if (not task_id) or (not test_name):
             return ("", None, 0)
-        case_row = _domjudge_fetch_one(
-            """
-            SELECT c.id, c.output_run_rel, j.work_root
-            FROM judgehost_domjudge_cases c
-            JOIN judgehost_domjudge_jobs j ON j.job_id = c.job_id
-            WHERE c.task_id=? AND c.test_name=?
-            ORDER BY c.id DESC
-            LIMIT 1
-            """,
-            [task_id, test_name],
-        )
-        if case_row is None:
+        try:
+            return service.domjudge_case_output_for_task(task_id, test_name)
+        except Exception:
             return ("", None, 0)
-        output_ref = case_row["output_run_rel"] or ""
-        work_root = None
-        work_root_text = case_row["work_root"] or ""
-        if work_root_text:
-            try:
-                work_root = Path(work_root_text).resolve()
-            except Exception:
-                work_root = None
-        case_id = int(case_row["id"])
-        return (output_ref, work_root, case_id)
 
     def _consume_chunk_result(chunk: list[str], task_result: dict[str, object]) -> tuple[bool, str]:
         run_id = task_result.get("run_id") or ""

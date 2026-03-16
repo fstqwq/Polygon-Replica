@@ -194,8 +194,7 @@ def preview_page(request: Request, problem: str, user: str):
     requested_preview_id = request.query_params.get("preview_id", "")
     preview_id = requested_preview_id
     message = ''
-    preview_rows_sql = 'SELECT id,status,source_commit,source_ref,summary_json,created_at,finished_at FROM previews WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC LIMIT 30'
-    previews = config.db.fetch_all(preview_rows_sql, [problem_id, workspace_id])
+    previews = config.preview_service.list_workspace_previews(problem_id, workspace_id)
 
     def _preview_has_visible_output(candidate_id: str) -> bool:
         if not candidate_id:
@@ -261,10 +260,7 @@ def preview_page(request: Request, problem: str, user: str):
     def _selected_preview_nav_status(candidate_id: str) -> dict[str, object]:
         if not candidate_id:
             return {'text': 'none', 'danger': True, 'warn': False}
-        row = config.db.fetch_one(
-            'SELECT status,source_commit,summary_json FROM previews WHERE id=? AND problem_id=? AND workspace_id=?',
-            [candidate_id, problem_id, workspace_id],
-        )
+        row = config.preview_service.get_workspace_preview(problem_id, workspace_id, candidate_id)
         if row is None:
             return {'text': 'missing', 'danger': True, 'warn': False}
         preview_status = row['status']
@@ -296,7 +292,7 @@ def preview_page(request: Request, problem: str, user: str):
         return {'text': preview_text, 'danger': preview_danger, 'warn': preview_warn}
 
     if preview_id:
-        preview_row = config.db.fetch_one('SELECT id,status,summary_json FROM previews WHERE id=? AND problem_id=? AND workspace_id=?', [preview_id, problem_id, workspace_id])
+        preview_row = config.preview_service.get_workspace_preview(problem_id, workspace_id, preview_id)
         if preview_row is None:
             preview_id = ''
         else:
@@ -433,10 +429,7 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
     try:
         preview_id = config.preview_service.compile_preview(problem, user)
         details['preview_id'] = preview_id
-        row = config.db.fetch_one(
-            'SELECT status,source_commit,source_ref,summary_json FROM previews WHERE id=? AND problem_id=? AND workspace_id=?',
-            [details['preview_id'], problem_id, workspace_id],
-        )
+        row = config.preview_service.get_workspace_preview(problem_id, workspace_id, details['preview_id'])
         if row is None:
             raise RuntimeError('preview metadata missing after compile')
         preview_status = row['status']
@@ -474,10 +467,7 @@ def preview_status(problem: str, user: str):
     workspace_key = f'{problem_id}:{workspace_id}'
     with config.preview_lock:
         running = workspace_key in config.preview_inflight
-    row = config.db.fetch_one(
-        'SELECT id,status,created_at,finished_at FROM previews WHERE problem_id=? AND workspace_id=? ORDER BY created_at DESC,id DESC LIMIT 1',
-        [problem_id, workspace_id],
-    )
+    row = config.preview_service.latest_workspace_preview(problem_id, workspace_id)
     latest_preview_id = ''
     latest_status = 'missing'
     latest_created_at = ''

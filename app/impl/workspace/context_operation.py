@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from urllib.parse import quote_plus
 from fastapi import HTTPException
-from app.db import now_iso
 from app.impl.runtime.config import config
 from .artifact import (
     artifact_root,
@@ -55,7 +54,7 @@ _STANDARD_CHECKER_CACHE_SET: frozenset[str] = frozenset()
 def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
     uid = int(user_id)
     cap = max(1, int(limit))
-    rows = config.db.fetch_all('\n        SELECT p.slug,p.name,a.role AS role,\n               w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,\n               COALESCE(NULLIF(w.updated_at, \'\'), p.created_at) AS last_updated_at\n        FROM repo_acl a\n        JOIN problems p ON p.id=a.problem_id\n        LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?\n        WHERE a.user_id=?\n        ORDER BY last_updated_at DESC, p.slug ASC\n        LIMIT ?\n        ', [uid, uid, cap])
+    rows = config.workspace_service.participating_problem_rows(uid, limit=cap)
     items: list[dict] = []
     for row in rows:
         role = normalize_contest_role(row['role'])
@@ -110,23 +109,15 @@ def normalize_problem_name_required(value: str) -> str:
 def user_contests_overview(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
     uid = int(user_id)
     cap = max(1, int(limit))
-    rows = config.db.fetch_all("\n        SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,m.role,\n               MAX(\n                   c.created_at,\n                   COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),\n                   COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),\n                   COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),\n                   COALESCE((\n                       SELECT MAX(w2.updated_at)\n                       FROM contest_problems cp2\n                       JOIN workspaces w2 ON w2.problem_id=cp2.problem_id AND w2.user_id=?\n                       WHERE cp2.contest_id=c.id\n                   ), '')\n               ) AS last_updated_at,\n               (\n                   SELECT COUNT(*)\n                   FROM contest_problems cp\n                   WHERE cp.contest_id=c.id\n               ) AS problem_count,\n               (\n                   SELECT group_concat(x.slug, ', ')\n                   FROM (\n                       SELECT p.slug AS slug\n                       FROM contest_problems cp\n                       JOIN problems p ON p.id=cp.problem_id\n                       WHERE cp.contest_id=c.id\n                       ORDER BY p.slug ASC\n                       LIMIT 5\n                   ) x\n               ) AS problem_slugs_preview,\n               (\n                   SELECT COUNT(*)\n                   FROM contest_problems cp3\n                   JOIN workspaces w ON w.problem_id=cp3.problem_id AND w.user_id=?\n                   WHERE cp3.contest_id=c.id\n                     AND COALESCE(w.dirty, 0) <> 0\n               ) AS dirty_problem_count\n        FROM contests c\n        JOIN contest_members m ON m.contest_id=c.id\n        WHERE m.user_id=?\n        ORDER BY last_updated_at DESC, c.slug ASC\n        LIMIT ?\n        ", [uid, uid, uid, cap])
-    entries: list[dict] = []
-    for row in rows:
-        try:
-            problem_count = max(0, int(row['problem_count'] or 0))
-        except Exception:
-            problem_count = 0
-        try:
-            dirty_problem_count = max(0, int(row['dirty_problem_count'] or 0))
-        except Exception:
-            dirty_problem_count = 0
-        preview = row['problem_slugs_preview'] or ''
-        entries.append({'id': int(row['id']), 'slug': row['slug'], 'title': row['title'], 'owner_user_id': int(row['owner_user_id']), 'created_at': row['created_at'], 'last_updated_at': row['last_updated_at'], 'role': normalize_contest_role(row['role']), 'problem_count': problem_count, 'problem_slugs_preview': preview, 'problem_preview_truncated': problem_count > 5, 'dirty_problem_count': dirty_problem_count, 'has_dirty': dirty_problem_count > 0})
-    return entries
+    return config.contest_service.user_contests_overview(uid, limit=cap)
 
 def audit(actor_user_id: int, problem_id: int | None, action: str, details: dict) -> None:
-    config.db.execute('INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)', [actor_user_id, problem_id, action, json.dumps(details), now_iso()])
+    config.workspace_service.record_audit_event(
+        actor_user_id=int(actor_user_id),
+        problem_id=problem_id,
+        action=action,
+        details=details,
+    )
 
 def normalize_page_target(page: str) -> str:
     raw = page.strip().lower()

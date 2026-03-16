@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
-import sqlite3
 import threading
+from pathlib import Path
 
 from app.db import DB
+from app.service.disk.verification_store import VerificationStore
 from app.runtime_value import RuntimeValues
+from app.service.memory.judgehost_state_store import JudgehostStateStore
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.platform.fs.layout import FsManager
 from app.service.repository.workspace import WorkspaceService
@@ -78,10 +80,8 @@ class Judgehost(
         self._hosts_state: dict[str, dict[str, object]] = {}
         self._host_judged_case_events: dict[str, list[float]] = {}
         self._host_last_judging: dict[str, dict[str, str]] = {}
-        self._domdb_lock = threading.RLock()
-        self._domdb = sqlite3.connect(":memory:", check_same_thread=False)
-        self._domdb.row_factory = sqlite3.Row
-        self._init_domdb_schema()
+        self._judgehost_state_store = JudgehostStateStore()
+        self._verification_store = VerificationStore(self.db)
         self._judge_fs_index_service = judge_fs_index_service
         self.apply_runtime_values(constants)
 
@@ -193,3 +193,35 @@ class Judgehost(
         )
         return self.wait_for_task_result(task_id, timeout_sec=None)
 
+    def domjudge_work_root_for_task(self, task_id: str) -> Path | None:
+        job_row = self._judgehost_state_store.job_for_task(task_id)
+        if job_row is None:
+            return None
+        work_root = str(job_row["work_root"])
+        if not work_root:
+            return None
+        return Path(work_root).resolve()
+
+    def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
+        row = self._judgehost_state_store.case_output_for_task(task_id, test_name)
+        if row is None:
+            return ("", None, 0)
+        work_root = str(row["work_root"])
+        case_id = int(row["id"])
+        output_ref = str(row["output_run_rel"])
+        if not work_root:
+            return (output_ref, None, case_id)
+        return (output_ref, Path(work_root).resolve(), case_id)
+
+    def reset_runtime_state(self) -> None:
+        with self._state_lock:
+            self._tasks_by_id.clear()
+            self._task_id_by_run.clear()
+            self._hosts_state.clear()
+            self._host_judged_case_events.clear()
+            self._host_last_judging.clear()
+        with self._testcase_registry_lock:
+            self._testcase_registry_next_id = 1
+            self._testcase_registry_by_hash.clear()
+            self._testcase_registry_by_id.clear()
+        self._judgehost_state_store.reset()

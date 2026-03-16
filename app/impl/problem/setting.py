@@ -6,7 +6,6 @@ from urllib.parse import quote_plus
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from app.db import now_iso
 from app.impl.auth.session import create_session_for_user, revoke_sudo_sessions_for_user
 from app.impl.auth.shared import dummy_password_salt_hex, lookup_user_auth, normalize_password_iters, normalize_password_salt_hex, normalize_password_verifier_hex, redirect_response, set_user_password_verifier, template_response
 from app.impl.auth.csrf import issue_password_form_csrf_token, password_proof_from_verifier, verify_password_form_csrf_token
@@ -304,7 +303,7 @@ def settings_password_update(user: str, current_password: str=Form(''), new_pass
         if not secrets.compare_digest(expected_new_proof, new_proof_value):
             raise ValueError('invalid new password proof')
         set_user_password_verifier(int(row['id']), new_verifier, new_salt, new_iters)
-        config.db.execute('UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL', [now_iso(), int(row['id'])])
+        config.auth_service.revoke_auth_sessions_for_user(int(row["id"]))
         revoke_sudo_sessions_for_user(int(row['id']))
         token = create_session_for_user(int(row['id']))
         response = redirect_response(f'/problems/{user}/settings', status_code=303, message=msg)

@@ -7,6 +7,7 @@ from typing import TypedDict
 
 from app.db import DB, now_iso
 from app.runtime_value import build_runtime_values
+from app.service.disk.system_config_store import SystemConfigStore
 
 
 _RUNTIME_DEFAULTS = build_runtime_values()
@@ -88,6 +89,7 @@ class SystemConfigService:
 
     def __init__(self, db: DB):
         self.db = db
+        self._store = SystemConfigStore(db)
         self._lock = threading.Lock()
         self._admin_defaults: dict[str, object] = dict(_ADMIN_CONFIG_DEFAULTS)
         self._admin_specs: dict[str, AdminConfigSpec] = dict(_ADMIN_CONFIG_SPECS)
@@ -209,10 +211,7 @@ class SystemConfigService:
         }
 
     def reset(self) -> dict[str, object]:
-        def _tx(conn) -> None:
-            conn.execute("DELETE FROM system_config")
-
-        self.db.write_transaction(_tx)
+        self._store.clear_overrides()
         return self.refresh()
 
     def _category_for_key(self, key: str, spec: AdminConfigSpec) -> str:
@@ -295,37 +294,16 @@ class SystemConfigService:
         return rows
 
     def _persist_overrides(self, values: dict[str, object], actor_user_id: int) -> None:
-        when = now_iso()
-
-        def _tx(conn) -> None:
-            for key in self._admin_specs:
-                value = values[key]
-                default = self._admin_defaults[key]
-                if value == default:
-                    conn.execute("DELETE FROM system_config WHERE key=?", [key])
-                    continue
-                conn.execute(
-                    """
-                    INSERT INTO system_config(key, value_json, updated_at, updated_by_user_id)
-                    VALUES(?,?,?,?)
-                    ON CONFLICT(key) DO UPDATE SET
-                        value_json=excluded.value_json,
-                        updated_at=excluded.updated_at,
-                        updated_by_user_id=excluded.updated_by_user_id
-                    """,
-                    [key, json.dumps(value, ensure_ascii=False, separators=(",", ":")), when, actor_user_id],
-                )
-            conn.execute(
-                "DELETE FROM system_config WHERE key NOT IN ({})".format(
-                    ",".join("?" for _ in self._admin_specs)
-                ),
-                list(self._admin_specs.keys()),
-            )
-
-        self.db.write_transaction(_tx)
+        self._store.replace_overrides(
+            keys=list(self._admin_specs.keys()),
+            values=values,
+            defaults=self._admin_defaults,
+            actor_user_id=int(actor_user_id),
+            updated_at=now_iso(),
+        )
 
     def _load_overrides_locked(self) -> dict[str, object]:
-        rows = self.db.fetch_all("SELECT key, value_json FROM system_config ORDER BY key ASC")
+        rows = self._store.override_rows()
         overrides: dict[str, object] = {}
         for row in rows:
             key = row["key"]

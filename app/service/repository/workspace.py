@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import errno
 import fcntl
-import json
 import os
 import shutil
 import sqlite3
@@ -12,8 +11,9 @@ from contextlib import contextmanager
 from pathlib import Path
 import re
 
-from app.db import DB, now_iso
+from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
+from app.service.disk.workspace_store import WorkspaceDiskStore
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.setting import Settings
@@ -51,6 +51,7 @@ class WorkspaceService:
     def __init__(self, db: DB, settings: Settings):
         self.db = db
         self.settings = settings
+        self._store = WorkspaceDiskStore(db)
         self._problem_cache: dict[str, dict] = {}
         self._user_cache: dict[str, dict] = {}
         self._cache_lock = threading.Lock()
@@ -109,27 +110,20 @@ class WorkspaceService:
         if not bare.exists():
             ensure_dir(bare.parent)
             run_cmd(["git", "init", "--bare", str(bare)])
-        row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
-        if row is None:
-            self.db.execute(
-                "INSERT OR IGNORE INTO problems(slug, name, repo_name, created_at) VALUES(?,?,?,?)",
-                [slug, name, repo_name, now_iso()],
-            )
-            row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
-        if row is not None:
-            self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
+        row = self._store.ensure_problem_row(slug=slug, name=name, repo_name=repo_name)
+        self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
 
     def set_problem_name(self, slug: str, name: str) -> dict:
         safe_slug = self._validate_identifier(slug, "problem")
         safe_name = str(name or "").strip()
         if not safe_name:
             raise ValueError("problem name is required")
-        row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [safe_slug])
+        row = self._store.problem_row_by_slug(safe_slug)
         if row is None:
             raise ValueError(f"Unknown problem: {safe_slug}")
-        if str(row["name"] or "") != safe_name:
-            self.db.execute("UPDATE problems SET name=? WHERE id=?", [safe_name, int(row["id"])])
-            refreshed = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [safe_slug])
+        if row["name"] != safe_name:
+            self._store.update_problem_name(int(row["id"]), safe_name)
+            refreshed = self._store.problem_row_by_slug(safe_slug)
             if refreshed is not None:
                 row = refreshed
         row_dict = dict(row)
@@ -145,23 +139,36 @@ class WorkspaceService:
             except Exception:
                 cached_id = 0
             if cached_id > 0:
-                row = self.db.fetch_one("SELECT * FROM users WHERE id=? AND username=?", [cached_id, username])
+                row = self._store.user_row_by_id_username(cached_id, username)
                 if row is not None:
-                    row_dict = dict(row)
-                    self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
-                    return row_dict
+                    cached_row = dict(row)
+                    self._cache_put(self._user_cache, username, cached_row, self.USER_CACHE_MAX_ENTRIES)
+                    return cached_row
             self._cache_evict(self._user_cache, username)
-        row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
-        if row is None:
-            self.db.execute(
-                "INSERT OR IGNORE INTO users(username, created_at) VALUES(?,?)",
-                [username, now_iso()],
-            )
-            row = self.db.fetch_one("SELECT * FROM users WHERE username=?", [username])
-        if row is None:
-            raise RuntimeError(f"unable to ensure user row for {username}")
-        row_dict = dict(row)
+        row_dict = dict(self._store.ensure_user_row(username))
         self._cache_put(self._user_cache, username, row_dict, self.USER_CACHE_MAX_ENTRIES)
+        return row_dict
+
+    def known_user(self, username: str) -> dict[str, object]:
+        safe_username = self._validate_identifier(username, "user")
+        cached = self._cache_get(self._user_cache, safe_username)
+        if cached is not None:
+            try:
+                cached_id = int(cached["id"])
+            except Exception:
+                cached_id = 0
+            if cached_id > 0:
+                row = self._store.user_row_by_id_username(cached_id, safe_username)
+                if row is not None:
+                    cached_row = dict(row)
+                    self._cache_put(self._user_cache, safe_username, cached_row, self.USER_CACHE_MAX_ENTRIES)
+                    return cached_row
+            self._cache_evict(self._user_cache, safe_username)
+        row = self._store.user_row_by_username(safe_username)
+        if row is None:
+            raise ValueError(f"user {safe_username} not found; ask them to register first")
+        row_dict = dict(row)
+        self._cache_put(self._user_cache, safe_username, row_dict, self.USER_CACHE_MAX_ENTRIES)
         return row_dict
 
     def _normalize_repo_role(self, role: str) -> str:
@@ -174,14 +181,7 @@ class WorkspaceService:
         p = self._problem_row(problem)
         u = self.ensure_user(username)
         safe_role = self._normalize_repo_role(role)
-        self.db.execute(
-            """
-            INSERT INTO repo_acl(problem_id,user_id,role,created_at)
-            VALUES(?,?,?,?)
-            ON CONFLICT(problem_id,user_id) DO UPDATE SET role=excluded.role
-            """,
-            [p["id"], u["id"], safe_role, now_iso()],
-        )
+        self._store.upsert_repo_access(int(p["id"]), int(u["id"]), safe_role)
 
     def _problem_row(self, slug: str):
         slug = self._validate_identifier(slug, "problem")
@@ -192,22 +192,155 @@ class WorkspaceService:
             except Exception:
                 cached_id = 0
             if cached_id > 0:
-                row = self.db.fetch_one("SELECT * FROM problems WHERE id=? AND slug=?", [cached_id, slug])
+                row = self._store.problem_row_by_id_slug(cached_id, slug)
                 if row is not None:
-                    row_dict = dict(row)
-                    self._cache_put(self._problem_cache, slug, row_dict, self.PROBLEM_CACHE_MAX_ENTRIES)
-                    return row_dict
+                    cached_row = dict(row)
+                    self._cache_put(self._problem_cache, slug, cached_row, self.PROBLEM_CACHE_MAX_ENTRIES)
+                    return cached_row
             self._cache_evict(self._problem_cache, slug)
-        row = self.db.fetch_one("SELECT * FROM problems WHERE slug=?", [slug])
+        row = self._store.problem_row_by_slug(slug)
         if row is None:
             raise ValueError(f"Unknown problem: {slug}")
         row_dict = dict(row)
         self._cache_put(self._problem_cache, slug, row_dict, self.PROBLEM_CACHE_MAX_ENTRIES)
         return row_dict
 
+    def page_identity(self, problem: str, username: str) -> tuple[int, int]:
+        problem_id = self._store.problem_id_by_slug(self._validate_identifier(problem, "problem"))
+        if problem_id is None:
+            raise ValueError(f"Unknown problem: {problem}")
+        user_id = self._store.user_id_by_username(self._validate_identifier(username, "user"))
+        if user_id is None:
+            raise ValueError(f"Unknown user: {username}")
+        return (problem_id, user_id)
+
+    def global_user_context(self, username: str) -> dict[str, object]:
+        ensured = self.ensure_user(self._validate_identifier(username, "user"))
+        return {"id": int(ensured["id"]), "username": str(ensured["username"])}
+
+    def known_user_id(self, username: str) -> int | None:
+        return self._store.user_id_by_username(self._validate_identifier(username, "user"))
+
+    def known_problem_id(self, slug: str) -> int | None:
+        return self._store.problem_id_by_slug(self._validate_identifier(slug, "problem"))
+
+    def default_problem_slug_for_username(self, username: str, *, limit: int = 1) -> str:
+        user_id = self.known_user_id(username)
+        if user_id is None:
+            return ""
+        items = self._store.user_problem_slugs(user_id, limit=max(1, int(limit)))
+        return items[0] if items else ""
+
+    def accessible_problem_slugs(self, user_id: int, *, limit: int = 1) -> list[str]:
+        return self._store.user_problem_slugs(int(user_id), limit=max(1, int(limit)))
+
+    def participating_problem_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
+        return self._store.user_problem_rows(int(user_id), limit=max(1, int(limit)))
+
+    def workspace_path(self, problem_id: int, workspace_id: int) -> str:
+        return self._store.workspace_path(int(problem_id), int(workspace_id))
+
+    def record_audit_event(
+        self,
+        *,
+        actor_user_id: int,
+        problem_id: int | None,
+        action: str,
+        details: dict[str, object],
+    ) -> None:
+        self._store.append_audit_event(
+            actor_user_id=int(actor_user_id),
+            problem_id=problem_id,
+            action=action,
+            details=details,
+        )
+
+    def audit_details(
+        self,
+        *,
+        problem_id: int,
+        actor_user_id: int,
+        action: str,
+        limit: int,
+    ) -> list[str]:
+        return self._store.audit_detail_rows(
+            problem_id=int(problem_id),
+            actor_user_id=int(actor_user_id),
+            action=action,
+            limit=max(1, int(limit)),
+        )
+
+    def access_context(self, problem_id: int, user_id: int) -> dict[str, object]:
+        role = self._store.repo_role(int(problem_id), int(user_id))
+        if role is None:
+            return {
+                "role": "none",
+                "can_read": False,
+                "can_write": False,
+                "can_manage": False,
+                "read_block_reason": "you do not have access to this problem",
+                "write_block_reason": "write access required",
+                "manage_block_reason": "owner access required",
+            }
+        if role not in self.REPO_ROLES:
+            raise RuntimeError("invalid repo role")
+        can_write = role in {"owner", "write"}
+        return {
+            "role": role,
+            "can_read": True,
+            "can_write": can_write,
+            "can_manage": role == "owner",
+            "read_block_reason": "",
+            "write_block_reason": "" if can_write else "read-only access",
+            "manage_block_reason": "" if role == "owner" else "owner access required",
+        }
+
+    def access_entries(self, problem_id: int) -> list[dict[str, str]]:
+        entries = self._store.problem_acl_entries(int(problem_id))
+        for entry in entries:
+            if entry["role"] not in self.REPO_ROLES:
+                raise RuntimeError("invalid repo role")
+        return entries
+
+    def owner_count(self, problem_id: int) -> int:
+        return self._store.problem_owner_count(int(problem_id))
+
+    def set_repo_access_for_problem_id(self, problem_id: int, username: str, role: str) -> dict[str, object]:
+        target_user = self.known_user(username)
+        safe_role = self._normalize_repo_role(role)
+        existing = self._store.repo_access_row(int(problem_id), int(target_user["id"]))
+        existing_role = "" if existing is None else str(existing["role"])
+        if existing_role == "owner" and safe_role != "owner" and self.owner_count(int(problem_id)) <= 1:
+            raise ValueError("cannot demote the last owner")
+        self._store.upsert_repo_access(int(problem_id), int(target_user["id"]), safe_role)
+        return {
+            "target_user_id": int(target_user["id"]),
+            "target_username": str(target_user["username"]),
+            "previous_role": existing_role,
+            "role": safe_role,
+        }
+
+    def revoke_repo_access_for_problem_id(self, problem_id: int, username: str) -> dict[str, object]:
+        target_user = self.known_user(username)
+        existing = self._store.repo_access_row(int(problem_id), int(target_user["id"]))
+        if existing is None:
+            raise ValueError("access entry not found")
+        existing_role = str(existing["role"])
+        if existing_role == "owner" and self.owner_count(int(problem_id)) <= 1:
+            raise ValueError("cannot remove the last owner")
+        self._store.delete_repo_access(int(problem_id), int(target_user["id"]))
+        return {
+            "target_user_id": int(target_user["id"]),
+            "target_username": str(target_user["username"]),
+            "previous_role": existing_role,
+        }
+
+    def user_is_system_admin(self, user_id: int) -> bool:
+        return self._store.is_system_admin(int(user_id))
+
     def _user_row(self, username: str):
         username = self._validate_identifier(username, "user")
-        row = self.ensure_user(username)
+        row = self.known_user(username)
         if row is None:
             raise ValueError(f"Unknown user: {username}")
         return row
@@ -248,10 +381,10 @@ class WorkspaceService:
         username_key = str(u["username"])
         workspace = self.settings.workspace_root / username_key / problem
         bare = self.settings.bare_root / p["repo_name"]
-        ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
+        workspace_id = self._store.workspace_id(int(p["id"]), int(u["id"]))
 
         # Steady-state fast path: avoid provisioning lock when workspace and DB row already exist.
-        if ws_row is not None and workspace.exists() and (workspace / ".git").is_dir():
+        if workspace_id is not None and workspace.exists() and (workspace / ".git").is_dir():
             if refresh_status:
                 with self.workspace_lock(workspace):
                     self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
@@ -273,20 +406,14 @@ class WorkspaceService:
                 self._seed_problem_repo(workspace)
             self._ensure_main_checkout(workspace)
 
-            ws_row = self.db.fetch_one("SELECT id FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
-            if ws_row is None:
+            workspace_id = self._store.workspace_id(int(p["id"]), int(u["id"]))
+            if workspace_id is None:
                 try:
-                    self.db.execute(
-                        "INSERT INTO workspaces(problem_id,user_id,path,updated_at) VALUES(?,?,?,?)",
-                        [p["id"], u["id"], str(workspace), now_iso()],
-                    )
+                    self._store.ensure_workspace_row(int(p["id"]), int(u["id"]), str(workspace))
                 except sqlite3.IntegrityError:
                     pass
             else:
-                self.db.execute(
-                    "UPDATE workspaces SET path=?, updated_at=? WHERE problem_id=? AND user_id=? AND path IS NOT ?",
-                    [str(workspace), now_iso(), p["id"], u["id"], str(workspace)],
-                )
+                self._store.update_workspace_path(int(p["id"]), int(u["id"]), str(workspace))
 
             if refresh_status:
                 self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
@@ -340,15 +467,7 @@ class WorkspaceService:
         branch = branch if isinstance(branch := status.get("branch"), str) and branch else "main"
         head = head if isinstance(head := status.get("head_commit"), str) else ""
         dirty = 1 if bool(status.get("dirty")) else 0
-        self.db.execute(
-            """
-            UPDATE workspaces
-            SET branch=?, head_commit=?, dirty=?, updated_at=?
-            WHERE problem_id=? AND user_id=?
-              AND (branch IS NOT ? OR head_commit IS NOT ? OR dirty IS NOT ?)
-            """,
-            [branch, head, dirty, now_iso(), problem_id, user_id, branch, head, dirty],
-        )
+        self._store.update_workspace_status(problem_id, user_id, branch=branch, head_commit=head, dirty=dirty)
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
     def read_workspace_status(self, workspace: Path) -> dict[str, str | int | None]:
@@ -411,13 +530,13 @@ class WorkspaceService:
     def workspace_context(self, problem: str, username: str, include_recent: bool = True) -> dict:
         p = self._problem_row(problem)
         u = self._user_row(username)
-        ws = self.db.fetch_one("SELECT * FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
+        ws = self._store.workspace_row(int(p["id"]), int(u["id"]))
         if ws is None:
             self.ensure_workspace(problem, username)
-            ws = self.db.fetch_one("SELECT * FROM workspaces WHERE problem_id=? AND user_id=?", [p["id"], u["id"]])
+            ws = self._store.workspace_row(int(p["id"]), int(u["id"]))
         if ws is None:
             raise RuntimeError(f"workspace not available for {problem}/{username}")
-        ws_path = Path(str(ws["path"] or "")).resolve()
+        ws_path = Path(ws["path"]).resolve()
         expected_root = (self.settings.workspace_root / str(u["username"]) / problem).resolve()
         if ws_path != expected_root:
             raise RuntimeError(f"workspace path mismatch for {problem}/{username}")
@@ -429,29 +548,7 @@ class WorkspaceService:
         latest_artifact_verification = None
         latest_preview = None
         if include_recent:
-            recent_rows = self.db.fetch_all(
-                """
-                SELECT kind,id,status,created_at
-                FROM (
-                    SELECT 'verification' AS kind,id,status,created_at
-                    FROM verifications
-                    WHERE workspace_id=?
-                      AND kind='verification'
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                )
-                UNION ALL
-                SELECT kind,id,status,created_at
-                FROM (
-                    SELECT 'preview' AS kind,id,status,created_at
-                    FROM previews
-                    WHERE workspace_id=?
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                )
-                """,
-                [ws["id"], ws["id"]],
-            )
+            recent_rows = self._store.recent_workspace_artifacts(int(ws["id"]))
             for row in recent_rows:
                 entry = {"id": row["id"], "status": row["status"], "created_at": row["created_at"]}
                 if row["kind"] == "verification":
@@ -493,10 +590,7 @@ class WorkspaceService:
         safe_user = self._validate_identifier(username, "user")
         p = self._problem_row(safe_problem)
         u = self._user_row(safe_user)
-        ws_row = self.db.fetch_one(
-            "SELECT id,path FROM workspaces WHERE problem_id=? AND user_id=?",
-            [int(p["id"]), int(u["id"])],
-        )
+        ws_row = self._store.workspace_row(int(p["id"]), int(u["id"]))
         expected = self._workspace_expected_path(str(u["username"]), safe_problem)
         workspace_id = int(ws_row["id"]) if ws_row is not None else 0
         workspace_path = expected
@@ -506,23 +600,14 @@ class WorkspaceService:
                 raise RuntimeError(f"workspace path mismatch for {safe_problem}/{safe_user}")
             workspace_path = row_path
         if workspace_id > 0:
-            active_verification = self.db.fetch_one(
-                "SELECT id,status FROM verifications WHERE workspace_id=? AND kind='verification' ORDER BY created_at DESC LIMIT 1",
-                [workspace_id],
-            )
-            if active_verification is not None and self._is_active_status(active_verification["status"]):
+            active_verification_status = self._store.latest_workspace_job_status(workspace_id, kind="verification")
+            if self._is_active_status(active_verification_status):
                 raise ValueError("workspace has active verifications")
-            active_preview = self.db.fetch_one(
-                "SELECT id,status FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
-                [workspace_id],
-            )
-            if active_preview is not None and self._is_active_status(active_preview["status"]):
+            active_preview_status = self._store.latest_workspace_job_status(workspace_id, kind="preview")
+            if self._is_active_status(active_preview_status):
                 raise ValueError("workspace has active preview jobs")
-            active_verification = self.db.fetch_one(
-                "SELECT id,status FROM verifications WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
-                [workspace_id],
-            )
-            if active_verification is not None and self._is_active_status(active_verification["status"]):
+            active_stage_status = self._store.latest_workspace_job_status(workspace_id, kind="all")
+            if self._is_active_status(active_stage_status):
                 raise ValueError("workspace has active verification jobs")
 
         workspace_path = self._assert_safe_delete_target(
@@ -539,10 +624,7 @@ class WorkspaceService:
                 shutil.rmtree(workspace_path, ignore_errors=False)
                 removed = True
             if workspace_id > 0:
-                self.db.execute(
-                    "UPDATE workspaces SET path=?, branch=NULL, head_commit=NULL, dirty=0, updated_at=? WHERE id=?",
-                    [str(workspace_path), now_iso(), workspace_id],
-                )
+                self._store.reset_workspace_row(workspace_id, str(workspace_path))
         return {
             "problem": safe_problem,
             "username": safe_user,
@@ -566,35 +648,13 @@ class WorkspaceService:
         ):
             raise RuntimeError("problem repository name is unsafe")
 
-        active_rows = self.db.fetch_all(
-            """
-            SELECT kind,id,status FROM (
-                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=? AND kind='verification'
-                UNION ALL
-                SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
-                UNION ALL
-                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=?
-            )
-            ORDER BY created_at DESC
-            LIMIT 64
-            """,
-            [problem_id, problem_id, problem_id],
-        )
+        active_rows = self._store.problem_active_job_rows(problem_id, limit=64)
         for row in active_rows:
             if self._is_active_status(row["status"]):
                 kind = str(row["kind"] or "").strip() or "job"
                 raise ValueError(f"cannot delete problem while {kind} jobs are active")
 
-        workspace_rows = self.db.fetch_all(
-            """
-            SELECT w.id,w.path,u.username
-            FROM workspaces w
-            JOIN users u ON u.id=w.user_id
-            WHERE w.problem_id=?
-            ORDER BY u.username ASC
-            """,
-            [problem_id],
-        )
+        workspace_rows = self._store.workspace_rows_for_problem(problem_id)
         workspace_paths: list[Path] = []
         for row in workspace_rows:
             username = str(row["username"] or "").strip()
@@ -620,40 +680,10 @@ class WorkspaceService:
             label=f"bare repo path for {safe_problem}",
         )
 
-        def _tx(conn: sqlite3.Connection) -> list[str]:
-            verification_rows = conn.execute(
-                "SELECT id,summary_json FROM verifications WHERE problem_id=?",
-                [problem_id],
-            ).fetchall()
-            collected_run_ids: list[str] = []
-            for row in verification_rows:
-                if row is None:
-                    continue
-                raw = str(row["summary_json"] or "").strip()
-                if not raw:
-                    continue
-                try:
-                    parsed = json.loads(raw)
-                except Exception:
-                    parsed = {}
-                if not isinstance(parsed, dict):
-                    continue
-                for token in verification_run_ids(parsed):
-                    safe_token = str(token or "").strip()
-                    if safe_token and safe_token not in collected_run_ids:
-                        collected_run_ids.append(safe_token)
-            conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM exports WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM verifications WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM previews WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM verifications WHERE problem_id=? AND kind='verification'", [problem_id])
-            conn.execute("DELETE FROM workspaces WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM audit_log WHERE problem_id=?", [problem_id])
-            conn.execute("DELETE FROM problems WHERE id=?", [problem_id])
-            return collected_run_ids
-
-        run_ids: list[str] = list(self.db.write_transaction(_tx))
+        run_ids = self._store.delete_problem_metadata(
+            problem_id,
+            collect_run_ids=verification_run_ids,
+        )
         try:
             from app.impl.runtime.config import config
 

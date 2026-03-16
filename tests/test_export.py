@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_all, db_fetch_one
+
 import io
 import json
 import re
@@ -40,7 +42,7 @@ class TestExport(SmokeBase):
         (tests / "001.in").write_text("1\n", encoding="utf-8")
         (ans / "001.ans").write_text("1\n", encoding="utf-8")
 
-        db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -132,7 +134,7 @@ class TestExport(SmokeBase):
         self._insert_exportable_verification(verification_id, head)
         archive = export_service.create_export(self.problem, verification_id, "icpc")
 
-        actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
+        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"imp-icpc-{token}"
         imported = import_package_as_new_problem(
@@ -201,7 +203,7 @@ class TestExport(SmokeBase):
                 "long long x=0; if(!(std::cin>>x)) return 0; std::cout<<x<<\"\\n\"; return 0;}\n",
             )
 
-        actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
+        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"poly-backfill-{uuid.uuid4().hex[:8]}"
         target_problem = f"{self.user}/{target_slug}"
@@ -217,7 +219,7 @@ class TestExport(SmokeBase):
             artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
             (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
             (artifact_root / "ans" / "001.ans").write_text("7\n", encoding="utf-8")
-            db.execute(
+            db_execute(
                 """
                 INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -278,7 +280,7 @@ class TestExport(SmokeBase):
             zf.writestr("problem.xml", xml)
             zf.writestr("tests/01", "1\n")
 
-        actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
+        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"poly-backfail-{uuid.uuid4().hex[:8]}"
         with self.assertRaisesRegex(ValueError, "sample answer verification failed"):
@@ -292,7 +294,7 @@ class TestExport(SmokeBase):
             )
 
     def test_import_refuses_target_with_existing_revision_history(self) -> None:
-        actor_row = db.fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
+        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"stale-import-{uuid.uuid4().hex[:8]}"
         target_problem = f"{self.user}/{target_slug}"
@@ -410,7 +412,7 @@ class TestExport(SmokeBase):
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        rows = db.fetch_all(
+        rows = db_fetch_all(
             """
             SELECT id,verification_id,filename
             FROM exports

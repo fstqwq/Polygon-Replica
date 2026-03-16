@@ -3,10 +3,6 @@ from __future__ import annotations
 from typing import TypedDict, cast
 
 from app.impl.runtime.config import config
-from app.service.verification.store import (
-    load_verification_record,
-    load_verification_summary,
-)
 
 from .run_display import (
     run_memory_mb_text,
@@ -77,10 +73,10 @@ def load_verification_detail_snapshot(problem_id: int, verification_id: str) -> 
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return {}
-    verification_row = load_verification_record(config.db, safe_verification_id)
+    verification_row = config.verification_service.verification_record(safe_verification_id)
     if verification_row is None or int(verification_row['problem_id']) != int(problem_id):
         return {}
-    details = load_verification_summary(config.db, safe_verification_id)
+    details = config.verification_service.verification_summary(safe_verification_id)
     if not details:
         return {}
     snapshot = {

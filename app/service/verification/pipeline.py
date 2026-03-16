@@ -1,9 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
-import time
-
-from app.db import DB
+from app.service.disk.verification_store import VerificationStore
 
 
 def effective_compile_jobs(configured: object, target_count: int) -> int:
@@ -17,21 +15,16 @@ def effective_compile_jobs(configured: object, target_count: int) -> int:
 
 
 def wait_build_terminal_status(
-    db: DB,
+    store: VerificationStore,
     *,
     verification_id: str,
     timeout_sec: float,
     poll_sec: float,
 ) -> str:
-    if not verification_id:
-        return ""
-    deadline = time.monotonic() + max(0.5, float(timeout_sec))
-    while time.monotonic() < deadline:
-        row = db.fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
-        status = row["status"] if row is not None else ""
-        if status in {"ok", "failed", "cancelled"}:
-            return status
-        time.sleep(max(0.01, float(poll_sec)))
-    return ""
+    return store.wait_terminal_status(
+        verification_id,
+        timeout_sec=float(timeout_sec),
+        poll_sec=float(poll_sec),
+    )
 
 

@@ -1,5 +1,4 @@
-﻿from __future__ import annotations
-
+from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
@@ -44,13 +43,8 @@ _C = config.constants
 def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_status: bool=True, include_recent: bool=True, include_workspace_changes: bool=True) -> dict:
     _ = include_branches
     try:
-        problem_row = config.db.fetch_one('SELECT id FROM problems WHERE slug=?', [problem])
-        if problem_row is None:
-            raise ValueError(f'Unknown problem: {problem}')
-        user_row = config.db.fetch_one('SELECT id FROM users WHERE username=?', [user])
-        if user_row is None:
-            raise ValueError(f'Unknown user: {user}')
-        access = workspace_access_context(int(problem_row['id']), int(user_row['id']))
+        problem_id, user_id = config.workspace_service.page_identity(problem, user)
+        access = workspace_access_context(problem_id, user_id)
         require_read_access({'access': access})
         if refresh_status:
             # Refresh context status from git without persisting workspace status into DB.
@@ -230,7 +224,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
             preview_text = 'missing'
             preview_danger = True
         elif preview_id and problem_id > 0 and (workspace_id > 0):
-            preview_row = config.db.fetch_one('SELECT source_commit,summary_json FROM previews WHERE id=? AND problem_id=? AND workspace_id=?', [preview_id, problem_id, workspace_id])
+            preview_row = config.preview_service.get_workspace_preview(problem_id, workspace_id, preview_id)
             if preview_row is None:
                 preview_text = 'missing'
                 preview_danger = True
@@ -371,12 +365,9 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         head_revision = git_commit_count(Path(workspace_path_text), workspace_head)
     export_revision: int | None = None
     if workspace_id > 0 and problem_id > 0 and workspace_path_text:
-        latest_export = config.db.fetch_one('\n            SELECT source_commit\n            FROM exports\n            WHERE problem_id=? AND workspace_id=?\n            ORDER BY created_at DESC\n            LIMIT 1\n            ', [problem_id, workspace_id])
-        if latest_export is not None:
-            export_source_commit_raw = _row_value(latest_export, 'source_commit', '')
-            export_source_commit = cast(str | None, export_source_commit_raw) or ''
-            if export_source_commit:
-                export_revision = git_commit_count(Path(workspace_path_text), export_source_commit)
+        export_source_commit = config.export_service.latest_workspace_source_commit(problem_id, workspace_id)
+        if export_source_commit:
+            export_revision = git_commit_count(Path(workspace_path_text), export_source_commit)
     if export_revision is not None and export_revision > 0:
         export_outdated = head_revision is not None and head_revision > 0 and (export_revision != head_revision)
         nav['export'] = {'text': f'built for v{export_revision}', 'danger': bool(export_outdated)}
@@ -433,3 +424,4 @@ def render_workspace_page(request: Request, problem: str, user: str, *, show_acc
                 kind = 'del'
             selected_diff_lines.append({'text': line, 'kind': kind})
     return template_response(request, 'workspace.html', {'ctx': ctx, 'status': status, 'branches': ctx.get('branches', []), 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})
+

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_one
+
 import json
 import fcntl
 import uuid
@@ -276,7 +278,7 @@ class TestPreview(SmokeBase):
         (artifact_root / "ans" / "002.ans").write_text("build-gen-answer\n", encoding="utf-8")
 
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -378,7 +380,7 @@ class TestPreview(SmokeBase):
 
         self.assertEqual(int(calls["find_cached"]), 0)
         self.assertEqual(int(calls["sync"]), 1)
-        row = config.db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
         self.assertIn("sample_sync", str(row["summary_json"] or ""))
@@ -458,7 +460,7 @@ class TestPreview(SmokeBase):
         self.assertTrue(cmd)
         self.assertFalse(any(token.startswith("-output-directory=") for token in cmd))
 
-        row = config.db.fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
 
@@ -485,7 +487,7 @@ class TestPreview(SmokeBase):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
         self.assertEqual(int(calls["count"]), 2)
-        row = config.db.fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
 
@@ -508,7 +510,7 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = config.db.fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
         summary = json.loads(str(row["summary_json"] or "{}"))
@@ -537,7 +539,7 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = config.db.fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         summary = json.loads(str(row["summary_json"] or "{}"))
@@ -586,7 +588,7 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = config.db.fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         artifact_root = Path(str(row["artifact_path"] or ""))
@@ -619,7 +621,7 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = config.db.fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         artifact_root = Path(str(row["artifact_path"] or ""))
@@ -663,21 +665,21 @@ class TestPreview(SmokeBase):
         keep_root.mkdir(parents=True, exist_ok=True)
         running_root.mkdir(parents=True, exist_ok=True)
         done_root.mkdir(parents=True, exist_ok=True)
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
             VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [keep_id, problem_id, workspace_id, "", "main", "ok", "{}", str(keep_root), "2026-03-05T00:00:00Z"],
         )
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
             VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [running_id, problem_id, workspace_id, "", "main", "running", "{}", str(running_root), "2026-03-05T00:00:00Z"],
         )
-        config.db.execute(
+        db_execute(
             """
             INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
             VALUES(?,?,?,?,?,?,?,?,?)
@@ -687,8 +689,8 @@ class TestPreview(SmokeBase):
 
         preview_service.prune_workspace_preview_history("alice/sample", problem_id, workspace_id, keep_id)
 
-        running_row = config.db.fetch_one("SELECT status FROM previews WHERE id=?", [running_id])
-        done_row = config.db.fetch_one("SELECT status FROM previews WHERE id=?", [done_id])
+        running_row = db_fetch_one("SELECT status FROM previews WHERE id=?", [running_id])
+        done_row = db_fetch_one("SELECT status FROM previews WHERE id=?", [done_id])
         self.assertIsNotNone(running_row)
         self.assertEqual(str(running_row["status"] or ""), "running")
         self.assertIsNone(done_row)
@@ -704,7 +706,7 @@ class TestPreview(SmokeBase):
         (shared_root / "statement_preview").mkdir(parents=True, exist_ok=True)
         (shared_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
         for preview_id, status in ((keep_id, "ok"), (done_id, "failed")):
-            config.db.execute(
+            db_execute(
                 """
                 INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
                 VALUES(?,?,?,?,?,?,?,?,?)
@@ -714,8 +716,8 @@ class TestPreview(SmokeBase):
 
         preview_service.prune_workspace_preview_history("alice/sample", problem_id, workspace_id, keep_id)
 
-        keep_row = config.db.fetch_one("SELECT status FROM previews WHERE id=?", [keep_id])
-        done_row = config.db.fetch_one("SELECT status FROM previews WHERE id=?", [done_id])
+        keep_row = db_fetch_one("SELECT status FROM previews WHERE id=?", [keep_id])
+        done_row = db_fetch_one("SELECT status FROM previews WHERE id=?", [done_id])
         self.assertIsNotNone(keep_row)
         self.assertEqual(str(keep_row["status"] or ""), "ok")
         self.assertIsNone(done_row)

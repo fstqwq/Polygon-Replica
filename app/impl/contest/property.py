@@ -12,17 +12,15 @@ from .shared import (
     _CONTEST_PROPERTY_SOURCE_MODE,
     _CONTEST_SOURCE_MODE_VALUES,
     _contest_ctx,
-    _contest_properties_map,
     _contest_redirect,
-    _upsert_contest_property,
 )
+
+
 def contest_properties_page(request: Request, contest: str, user: str):
     ctx = _contest_ctx(contest, user, "properties")
     contest_id = int(ctx["contest"]["id"])
-    props = _contest_properties_map(contest_id)
-    source_mode = props.get(_CONTEST_PROPERTY_SOURCE_MODE)
-    if source_mode is None:
-        source_mode = "latest_committed"
+    props = config.contest_service.properties_map(contest_id)
+    source_mode = props.get(_CONTEST_PROPERTY_SOURCE_MODE, "latest_committed")
     if source_mode not in _CONTEST_SOURCE_MODE_VALUES:
         source_mode = "latest_committed"
     return template_response(
@@ -35,6 +33,7 @@ def contest_properties_page(request: Request, contest: str, user: str):
             "source_mode": source_mode,
         },
     )
+
 
 def contest_properties_save(
     contest: str,
@@ -59,13 +58,10 @@ def contest_properties_save(
     safe_source_mode = source_mode.strip().lower()
     if safe_source_mode not in _CONTEST_SOURCE_MODE_VALUES:
         safe_source_mode = "latest_committed"
-    config.db.execute(
-        "UPDATE contests SET title=? WHERE id=?",
-        [safe_title, contest_id],
-    )
-    _upsert_contest_property(contest_id, actor_user_id, _CONTEST_PROPERTY_LOCATION, safe_location)
-    _upsert_contest_property(contest_id, actor_user_id, _CONTEST_PROPERTY_DATE, safe_date)
-    _upsert_contest_property(contest_id, actor_user_id, _CONTEST_PROPERTY_SOURCE_MODE, safe_source_mode)
+    config.contest_service.update_title(contest_id, safe_title)
+    config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_LOCATION, safe_location)
+    config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_DATE, safe_date)
+    config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_SOURCE_MODE, safe_source_mode)
     audit(
         actor_user_id,
         None,
@@ -80,5 +76,3 @@ def contest_properties_save(
         },
     )
     return _contest_redirect(ctx["contest"]["slug"], user, "properties", message="contest properties saved")
-
-

@@ -7,9 +7,11 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.db import DB, now_iso
+from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
+from app.service.disk.verification_store import VerificationStore
 from app.service.platform.artifact import ArtifactService
+from app.service.disk.preview_store import PreviewArtifactRow, PreviewRow, PreviewStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_hex_json
 from app.service.sandbox.base import ExecSpec, SandboxBackend
@@ -39,6 +41,8 @@ class PreviewService:
         async_task_cache_service: AsyncTaskCacheService | None = None,
     ):
         self.db = db
+        self._store = PreviewStore(db)
+        self._verification_store = VerificationStore(db)
         self.workspace_service = workspace_service
         self.artifacts = artifacts
         self.verification_service = verification_service
@@ -54,6 +58,26 @@ class PreviewService:
         self.tex_output_kb = 131072
         self.tex_passes = 2
         self.apply_runtime_values(constants or build_runtime_values())
+
+    def list_workspace_previews(self, problem_id: int, workspace_id: int) -> list[PreviewRow]:
+        return self._store.list_workspace_previews(problem_id, workspace_id)
+
+    def get_workspace_preview(self, problem_id: int, workspace_id: int, preview_id: str) -> PreviewRow | None:
+        return self._store.get_workspace_preview(problem_id, workspace_id, preview_id)
+
+    def get_workspace_preview_artifact(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        preview_id: str,
+    ) -> PreviewArtifactRow | None:
+        return self._store.get_workspace_preview_artifact(problem_id, workspace_id, preview_id)
+
+    def latest_workspace_preview(self, problem_id: int, workspace_id: int) -> dict[str, str] | None:
+        row = self._store.get_latest_workspace_preview(problem_id, workspace_id)
+        if row is None:
+            return None
+        return row
 
     def _sample_rows_from_spec(self, workspace: Path) -> list[tuple[int, str, str]]:
         spec_path = workspace / TESTS_SPEC_REL
@@ -113,18 +137,14 @@ class PreviewService:
             username,
             sample_only=True,
         )
-        verification_row = self.db.fetch_one(
-            "SELECT status,summary_json,artifact_path FROM verifications WHERE id=?",
-            [verification_id],
-        )
+        verification_row = self._verification_store.record_row(verification_id)
         if verification_row is None:
             raise RuntimeError(f"sample verification missing: {verification_id}")
         verification_status = str(verification_row["status"]).strip().lower()
         if verification_status != "ok":
             error_text = ""
             try:
-                summary_json_obj = verification_row["summary_json"]
-                payload = json.loads(str(summary_json_obj) if summary_json_obj is not None else "{}")
+                payload = json.loads(str(verification_row["summary_json"]))
                 if isinstance(payload, dict):
                     error_obj = payload.get("error")
                     error_text = str(error_obj).strip() if error_obj is not None else ""
@@ -282,13 +302,10 @@ class PreviewService:
                 return False
             if not self._is_safe_regular_file(root, cached_log, root_resolved=root):
                 return False
-            row = self.db.fetch_one(
-                "SELECT status,summary_json FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
-                [preview_id, int(problem_id), int(workspace_id)],
-            )
+            row = self._store.get_workspace_preview(int(problem_id), int(workspace_id), preview_id)
             if row is None:
                 return False
-            if str(row["status"] or "").strip().lower() != "ok":
+            if row["status"].strip().lower() != "ok":
                 return False
             if signature:
                 cached_signature = self._summary_statement_signature(row["summary_json"])
@@ -307,18 +324,11 @@ class PreviewService:
                     return cached_preview_id
                 if cached_preview_id and allow_cache_mutation:
                     cache_service.delete(self.PREVIEW_CACHE_NAMESPACE, cache_key)
-        sql = (
-            "SELECT id,summary_json FROM previews "
-            "WHERE problem_id=? AND workspace_id=? AND status='ok'"
-        )
-        params: list[object] = [problem_id, workspace_id]
-        if source_commit is not None:
-            sql += " AND source_commit=?"
-            params.append(source)
-        sql += " ORDER BY created_at DESC,id DESC LIMIT 100"
-        rows = self.db.fetch_all(
-            sql,
-            params,
+        rows = self._store.list_cached_ok_previews(
+            int(problem_id),
+            int(workspace_id),
+            source_commit=source_commit,
+            limit=100,
         )
         for row in rows:
             preview_id = str(row["id"] or "").strip()
@@ -374,13 +384,10 @@ class PreviewService:
     ) -> Path | None:
         if not is_canonical_artifact_id(preview_id):
             return None
-        row = self.db.fetch_one(
-            "SELECT artifact_path FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
-            [str(preview_id or "").strip(), int(problem_id), int(workspace_id)],
-        )
+        row = self._store.get_workspace_preview_artifact(int(problem_id), int(workspace_id), str(preview_id or "").strip())
         if row is None:
             return None
-        artifact_path = str(row["artifact_path"] or "").strip()
+        artifact_path = row["artifact_path"].strip()
         if not artifact_path:
             return None
         try:
@@ -402,27 +409,20 @@ class PreviewService:
         keep_id = str(keep_preview_id or "").strip()
         if not keep_id:
             return
-        rows = self.db.fetch_all(
-            "SELECT id,status,artifact_path FROM previews WHERE problem_id=? AND workspace_id=? AND id<>?",
-            [problem_id, workspace_id, keep_id],
-        )
+        rows = self._store.list_other_workspace_previews(problem_id, workspace_id, keep_id)
         if not rows:
             return
         terminal_ids: list[str] = []
         for row in rows:
-            stale_id = str(row["id"] or "").strip()
-            status = str(row["status"] or "").strip().lower()
+            stale_id = row["id"].strip()
+            status = row["status"].strip().lower()
             if status not in {"ok", "failed", "cancelled"}:
                 continue
             terminal_ids.append(stale_id)
-            artifact_path = str(row["artifact_path"] or "").strip()
+            artifact_path = row["artifact_path"].strip()
             has_other_ref = False
             if artifact_path:
-                shared = self.db.fetch_one(
-                    "SELECT 1 FROM previews WHERE artifact_path=? AND id<>? LIMIT 1",
-                    [artifact_path, stale_id],
-                )
-                has_other_ref = shared is not None
+                has_other_ref = self._store.artifact_path_has_other_preview_ref(artifact_path, stale_id)
             if has_other_ref:
                 continue
             root = self._preview_artifact_root(
@@ -434,11 +434,7 @@ class PreviewService:
                 shutil.rmtree(root, ignore_errors=True)
         if not terminal_ids:
             return
-        placeholders = ",".join(["?"] * len(terminal_ids))
-        self.db.execute(
-            f"DELETE FROM previews WHERE problem_id=? AND workspace_id=? AND id IN ({placeholders})",
-            [problem_id, workspace_id, *terminal_ids],
-        )
+        self._store.delete_previews(problem_id, workspace_id, terminal_ids)
 
     def compile_preview(self, problem: str, username: str) -> str:
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
@@ -511,9 +507,13 @@ class PreviewService:
             )
             preview_id = f"p-{uuid.uuid4().hex[:12]}"
             artifacts = self.fs_manager.ensure_artifact_layout(preview_ref)
-            self.db.execute(
-                "INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,artifact_path,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                [preview_id, problem_id, workspace_id, "", source_commit, source_ref, "running", str(artifacts.root), now_iso()],
+            self._store.insert_running_preview(
+                preview_id=preview_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                artifact_path=str(artifacts.root),
+                source_commit=source_commit,
+                source_ref=source_ref,
             )
         if snapshot is None or artifacts is None or (not str(preview_id or "").strip()):
             raise RuntimeError("preview compile setup failed")
@@ -657,9 +657,13 @@ class PreviewService:
                         log.write_text(fallback_error + "\n", encoding="utf-8")
                     except OSError:
                         pass
-            self.db.execute(
-                "UPDATE previews SET verification_id=?, source_commit=?, source_ref=?, status=?, summary_json=?, finished_at=? WHERE id=?",
-                [sample_verification_id, source_commit, source_ref, status, json.dumps(summary), now_iso(), preview_id],
+            self._store.update_preview_result(
+                preview_id=preview_id,
+                verification_id=sample_verification_id,
+                source_commit=source_commit,
+                source_ref=source_ref,
+                status=status,
+                summary_json=json.dumps(summary),
             )
             if status == "ok" and self._async_task_cache_service is not None:
                 self._async_task_cache_service.put(

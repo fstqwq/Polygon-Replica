@@ -36,8 +36,6 @@ python -m vulture app tests --min-confidence 60
 echo "[4/5] Import architecture policy checks"
 bash scripts/check-import-policy.sh
 bash scripts/check-refactor-placeholders.sh
-bash scripts/check-migrated-handler-imports.sh
-bash scripts/check-migrated-service-imports.sh
 
 echo "[5/5] Unit tests"
 : "${POLYGONLIKE_INCLUDE_SLOW_TESTS:=0}"

@@ -1,0 +1,617 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from typing import TypedDict
+
+from app.db import DB, now_iso
+
+
+class ProblemAclEntry(TypedDict):
+    username: str
+    role: str
+    created_at: str
+
+
+class ProblemRow(TypedDict):
+    id: int
+    slug: str
+    name: str
+    repo_name: str
+    created_at: str
+
+
+class UserRow(TypedDict):
+    id: int
+    username: str
+    created_at: str
+    is_system_admin: int
+
+
+class WorkspaceRow(TypedDict):
+    id: int
+    problem_id: int
+    user_id: int
+    path: str
+    branch: str
+    head_commit: str
+    dirty: int
+    updated_at: str
+
+
+class WorkspaceRecentArtifactRow(TypedDict):
+    kind: str
+    id: str
+    status: str
+    created_at: str
+
+
+class UserProblemRow(TypedDict):
+    slug: str
+    name: str
+    role: str
+    workspace_id: int | None
+    path: str
+    branch: str
+    head_commit: str
+    dirty: int
+    updated_at: str
+    last_updated_at: str
+
+
+class UserContestOverviewRow(TypedDict):
+    id: int
+    slug: str
+    title: str
+    owner_user_id: int
+    created_at: str
+    role: str
+    last_updated_at: str
+    problem_count: int
+    problem_slugs_preview: str
+    dirty_problem_count: int
+
+
+class WorkspaceDiskStore:
+    def __init__(self, db: DB):
+        self.db = db
+
+    def problem_id_by_slug(self, slug: str) -> int | None:
+        row = self.db.fetch_one("SELECT id FROM problems WHERE slug=?", [slug])
+        if row is None:
+            return None
+        return int(row["id"])
+
+    def problem_row_by_slug(self, slug: str) -> ProblemRow | None:
+        row = self.db.fetch_one(
+            "SELECT id,slug,name,repo_name,created_at FROM problems WHERE slug=?",
+            [slug],
+        )
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "slug": str(row["slug"] or ""),
+            "name": str(row["name"] or ""),
+            "repo_name": str(row["repo_name"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        }
+
+    def problem_row_by_id_slug(self, problem_id: int, slug: str) -> ProblemRow | None:
+        row = self.db.fetch_one(
+            "SELECT id,slug,name,repo_name,created_at FROM problems WHERE id=? AND slug=?",
+            [int(problem_id), slug],
+        )
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "slug": str(row["slug"] or ""),
+            "name": str(row["name"] or ""),
+            "repo_name": str(row["repo_name"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        }
+
+    def ensure_problem_row(self, *, slug: str, name: str, repo_name: str) -> ProblemRow:
+        self.db.execute(
+            "INSERT OR IGNORE INTO problems(slug, name, repo_name, created_at) VALUES(?,?,?,?)",
+            [slug, name, repo_name, now_iso()],
+        )
+        row = self.problem_row_by_slug(slug)
+        if row is None:
+            raise RuntimeError(f"unable to ensure problem row for {slug}")
+        return row
+
+    def update_problem_name(self, problem_id: int, name: str) -> None:
+        self.db.execute("UPDATE problems SET name=? WHERE id=?", [name, int(problem_id)])
+
+    def user_id_by_username(self, username: str) -> int | None:
+        row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
+        if row is None:
+            return None
+        return int(row["id"])
+
+    def user_row_by_username(self, username: str) -> UserRow | None:
+        row = self.db.fetch_one(
+            "SELECT id,username,created_at,is_system_admin FROM users WHERE username=?",
+            [username],
+        )
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "username": str(row["username"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "is_system_admin": int(row["is_system_admin"] or 0),
+        }
+
+    def user_row_by_id_username(self, user_id: int, username: str) -> UserRow | None:
+        row = self.db.fetch_one(
+            "SELECT id,username,created_at,is_system_admin FROM users WHERE id=? AND username=?",
+            [int(user_id), username],
+        )
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "username": str(row["username"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "is_system_admin": int(row["is_system_admin"] or 0),
+        }
+
+    def ensure_user_row(self, username: str) -> UserRow:
+        self.db.execute(
+            "INSERT OR IGNORE INTO users(username, created_at) VALUES(?,?)",
+            [username, now_iso()],
+        )
+        row = self.user_row_by_username(username)
+        if row is None:
+            raise RuntimeError(f"unable to ensure user row for {username}")
+        return row
+
+    def user_context_by_username(self, username: str) -> dict[str, object] | None:
+        row = self.db.fetch_one("SELECT id,username FROM users WHERE username=?", [username])
+        if row is None:
+            return None
+        return {"id": int(row["id"]), "username": str(row["username"])}
+
+    def repo_role(self, problem_id: int, user_id: int) -> str | None:
+        row = self.db.fetch_one("SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?", [problem_id, user_id])
+        if row is None:
+            return None
+        return str(row["role"])
+
+    def problem_owner_count(self, problem_id: int) -> int:
+        row = self.db.fetch_one(
+            "SELECT COUNT(*) AS c FROM repo_acl WHERE problem_id=? AND role='owner'",
+            [problem_id],
+        )
+        if row is None:
+            return 0
+        return max(0, int(row["c"]))
+
+    def repo_access_row(self, problem_id: int, user_id: int) -> dict[str, object] | None:
+        row = self.db.fetch_one(
+            "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",
+            [int(problem_id), int(user_id)],
+        )
+        if row is None:
+            return None
+        return {"role": str(row["role"])}
+
+    def upsert_repo_access(self, problem_id: int, user_id: int, role: str) -> None:
+        self.db.execute(
+            """
+            INSERT INTO repo_acl(problem_id,user_id,role,created_at)
+            VALUES(?,?,?,?)
+            ON CONFLICT(problem_id,user_id) DO UPDATE SET role=excluded.role
+            """,
+            [int(problem_id), int(user_id), role, now_iso()],
+        )
+
+    def delete_repo_access(self, problem_id: int, user_id: int) -> None:
+        self.db.execute(
+            "DELETE FROM repo_acl WHERE problem_id=? AND user_id=?",
+            [int(problem_id), int(user_id)],
+        )
+
+    def problem_acl_entries(self, problem_id: int) -> list[ProblemAclEntry]:
+        rows = self.db.fetch_all(
+            """
+            SELECT u.username,a.role,a.created_at
+            FROM repo_acl a
+            JOIN users u ON u.id=a.user_id
+            WHERE a.problem_id=?
+            ORDER BY
+                CASE a.role WHEN 'owner' THEN 0 WHEN 'write' THEN 1 ELSE 2 END,
+                u.username ASC
+            """,
+            [problem_id],
+        )
+        entries: list[ProblemAclEntry] = []
+        for row in rows:
+            entries.append(
+                {
+                    "username": str(row["username"]),
+                    "role": str(row["role"]),
+                    "created_at": str(row["created_at"]),
+                }
+            )
+        return entries
+
+    def is_system_admin(self, user_id: int) -> bool:
+        row = self.db.fetch_one("SELECT is_system_admin FROM users WHERE id=?", [user_id])
+        if row is None:
+            return False
+        return int(row["is_system_admin"]) == 1
+
+    def user_problem_slugs(self, user_id: int, *, limit: int) -> list[str]:
+        rows = self.db.fetch_all(
+            """
+            SELECT p.slug
+            FROM repo_acl a
+            JOIN problems p ON p.id=a.problem_id
+            LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
+            WHERE a.user_id=?
+            ORDER BY COALESCE(NULLIF(w.updated_at, ''), p.created_at) DESC, p.slug ASC
+            LIMIT ?
+            """,
+            [user_id, user_id, max(1, int(limit))],
+        )
+        result: list[str] = []
+        for row in rows:
+            slug = str(row["slug"])
+            if slug:
+                result.append(slug)
+        return result
+
+    def user_problem_rows(self, user_id: int, *, limit: int) -> list[UserProblemRow]:
+        rows = self.db.fetch_all(
+            """
+            SELECT p.slug,p.name,a.role AS role,
+                   w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,
+                   COALESCE(NULLIF(w.updated_at, ''), p.created_at) AS last_updated_at
+            FROM repo_acl a
+            JOIN problems p ON p.id=a.problem_id
+            LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
+            WHERE a.user_id=?
+            ORDER BY last_updated_at DESC, p.slug ASC
+            LIMIT ?
+            """,
+            [int(user_id), int(user_id), max(1, int(limit))],
+        )
+        items: list[UserProblemRow] = []
+        for row in rows:
+            workspace_id_raw = row["workspace_id"]
+            items.append(
+                {
+                    "slug": str(row["slug"] or ""),
+                    "name": str(row["name"] or ""),
+                    "role": str(row["role"] or ""),
+                    "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
+                    "path": str(row["path"] or ""),
+                    "branch": str(row["branch"] or ""),
+                    "head_commit": str(row["head_commit"] or ""),
+                    "dirty": int(row["dirty"] or 0),
+                    "updated_at": str(row["updated_at"] or ""),
+                    "last_updated_at": str(row["last_updated_at"] or ""),
+                }
+            )
+        return items
+
+    def user_contest_rows(self, user_id: int, *, limit: int) -> list[UserContestOverviewRow]:
+        rows = self.db.fetch_all(
+            """
+            SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,m.role,
+                   MAX(
+                       c.created_at,
+                       COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),
+                       COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),
+                       COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),
+                       COALESCE((
+                           SELECT MAX(w2.updated_at)
+                           FROM contest_problems cp2
+                           JOIN workspaces w2 ON w2.problem_id=cp2.problem_id AND w2.user_id=?
+                           WHERE cp2.contest_id=c.id
+                       ), '')
+                   ) AS last_updated_at,
+                   (
+                       SELECT COUNT(*)
+                       FROM contest_problems cp
+                       WHERE cp.contest_id=c.id
+                   ) AS problem_count,
+                   (
+                       SELECT group_concat(x.slug, ', ')
+                       FROM (
+                           SELECT p.slug AS slug
+                           FROM contest_problems cp
+                           JOIN problems p ON p.id=cp.problem_id
+                           WHERE cp.contest_id=c.id
+                           ORDER BY p.slug ASC
+                           LIMIT 5
+                       ) x
+                   ) AS problem_slugs_preview,
+                   (
+                       SELECT COUNT(*)
+                       FROM contest_problems cp3
+                       JOIN workspaces w ON w.problem_id=cp3.problem_id AND w.user_id=?
+                       WHERE cp3.contest_id=c.id
+                         AND COALESCE(w.dirty, 0) <> 0
+                   ) AS dirty_problem_count
+            FROM contests c
+            JOIN contest_members m ON m.contest_id=c.id
+            WHERE m.user_id=?
+            ORDER BY last_updated_at DESC, c.slug ASC
+            LIMIT ?
+            """,
+            [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
+        )
+        items: list[UserContestOverviewRow] = []
+        for row in rows:
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "slug": str(row["slug"] or ""),
+                    "title": str(row["title"] or ""),
+                    "owner_user_id": int(row["owner_user_id"]),
+                    "created_at": str(row["created_at"] or ""),
+                    "role": str(row["role"] or ""),
+                    "last_updated_at": str(row["last_updated_at"] or ""),
+                    "problem_count": int(row["problem_count"] or 0),
+                    "problem_slugs_preview": str(row["problem_slugs_preview"] or ""),
+                    "dirty_problem_count": int(row["dirty_problem_count"] or 0),
+                }
+            )
+        return items
+
+    def workspace_path(self, problem_id: int, workspace_id: int) -> str:
+        row = self.db.fetch_one(
+            "SELECT path FROM workspaces WHERE id=? AND problem_id=?",
+            [int(workspace_id), int(problem_id)],
+        )
+        if row is None:
+            return ""
+        return str(row["path"] or "")
+
+    def set_recent_verification_status(self, workspace_id: int, status: str) -> None:
+        self.db.execute(
+            "UPDATE workspaces SET recent_verification_status=? WHERE id=?",
+            [status, int(workspace_id)],
+        )
+
+    def workspace_id(self, problem_id: int, user_id: int) -> int | None:
+        row = self.db.fetch_one(
+            "SELECT id FROM workspaces WHERE problem_id=? AND user_id=?",
+            [int(problem_id), int(user_id)],
+        )
+        if row is None:
+            return None
+        return int(row["id"])
+
+    def workspace_row(self, problem_id: int, user_id: int) -> WorkspaceRow | None:
+        row = self.db.fetch_one(
+            """
+            SELECT id,problem_id,user_id,path,branch,head_commit,dirty,updated_at
+            FROM workspaces
+            WHERE problem_id=? AND user_id=?
+            """,
+            [int(problem_id), int(user_id)],
+        )
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "problem_id": int(row["problem_id"]),
+            "user_id": int(row["user_id"]),
+            "path": str(row["path"] or ""),
+            "branch": str(row["branch"] or ""),
+            "head_commit": str(row["head_commit"] or ""),
+            "dirty": int(row["dirty"] or 0),
+            "updated_at": str(row["updated_at"] or ""),
+        }
+
+    def ensure_workspace_row(self, problem_id: int, user_id: int, path: str) -> None:
+        self.db.execute(
+            "INSERT OR IGNORE INTO workspaces(problem_id,user_id,path,updated_at) VALUES(?,?,?,?)",
+            [int(problem_id), int(user_id), path, now_iso()],
+        )
+
+    def update_workspace_path(self, problem_id: int, user_id: int, path: str) -> None:
+        self.db.execute(
+            "UPDATE workspaces SET path=?, updated_at=? WHERE problem_id=? AND user_id=? AND path IS NOT ?",
+            [path, now_iso(), int(problem_id), int(user_id), path],
+        )
+
+    def update_workspace_status(self, problem_id: int, user_id: int, *, branch: str, head_commit: str, dirty: int) -> None:
+        self.db.execute(
+            """
+            UPDATE workspaces
+            SET branch=?, head_commit=?, dirty=?, updated_at=?
+            WHERE problem_id=? AND user_id=?
+              AND (branch IS NOT ? OR head_commit IS NOT ? OR dirty IS NOT ?)
+            """,
+            [branch, head_commit, int(dirty), now_iso(), int(problem_id), int(user_id), branch, head_commit, int(dirty)],
+        )
+
+    def reset_workspace_row(self, workspace_id: int, path: str) -> None:
+        self.db.execute(
+            "UPDATE workspaces SET path=?, branch=NULL, head_commit=NULL, dirty=0, updated_at=? WHERE id=?",
+            [path, now_iso(), int(workspace_id)],
+        )
+
+    def recent_workspace_artifacts(self, workspace_id: int) -> list[WorkspaceRecentArtifactRow]:
+        rows = self.db.fetch_all(
+            """
+            SELECT kind,id,status,created_at
+            FROM (
+                SELECT 'verification' AS kind,id,status,created_at
+                FROM verifications
+                WHERE workspace_id=?
+                  AND kind='verification'
+                ORDER BY created_at DESC
+                LIMIT 1
+            )
+            UNION ALL
+            SELECT kind,id,status,created_at
+            FROM (
+                SELECT 'preview' AS kind,id,status,created_at
+                FROM previews
+                WHERE workspace_id=?
+                ORDER BY created_at DESC
+                LIMIT 1
+            )
+            """,
+            [int(workspace_id), int(workspace_id)],
+        )
+        items: list[WorkspaceRecentArtifactRow] = []
+        for row in rows:
+            items.append(
+                {
+                    "kind": str(row["kind"] or ""),
+                    "id": str(row["id"] or ""),
+                    "status": str(row["status"] or ""),
+                    "created_at": str(row["created_at"] or ""),
+                }
+            )
+        return items
+
+    def latest_workspace_job_status(self, workspace_id: int, *, kind: str) -> str:
+        if kind == "preview":
+            row = self.db.fetch_one(
+                "SELECT status FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+                [int(workspace_id)],
+            )
+        elif kind == "verification":
+            row = self.db.fetch_one(
+                "SELECT status FROM verifications WHERE workspace_id=? AND kind='verification' ORDER BY created_at DESC LIMIT 1",
+                [int(workspace_id)],
+            )
+        else:
+            row = self.db.fetch_one(
+                "SELECT status FROM verifications WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+                [int(workspace_id)],
+            )
+        if row is None:
+            return ""
+        return str(row["status"] or "")
+
+    def problem_active_job_rows(self, problem_id: int, *, limit: int) -> list[dict[str, str]]:
+        rows = self.db.fetch_all(
+            """
+            SELECT kind,id,status FROM (
+                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=? AND kind='verification'
+                UNION ALL
+                SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
+                UNION ALL
+                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=?
+            )
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            [int(problem_id), int(problem_id), int(problem_id), max(1, int(limit))],
+        )
+        items: list[dict[str, str]] = []
+        for row in rows:
+            items.append(
+                {
+                    "kind": str(row["kind"] or ""),
+                    "id": str(row["id"] or ""),
+                    "status": str(row["status"] or ""),
+                }
+            )
+        return items
+
+    def workspace_rows_for_problem(self, problem_id: int) -> list[dict[str, object]]:
+        rows = self.db.fetch_all(
+            """
+            SELECT w.id,w.path,u.username
+            FROM workspaces w
+            JOIN users u ON u.id=w.user_id
+            WHERE w.problem_id=?
+            ORDER BY u.username ASC
+            """,
+            [int(problem_id)],
+        )
+        items: list[dict[str, object]] = []
+        for row in rows:
+            items.append(
+                {
+                    "id": int(row["id"]),
+                    "path": str(row["path"] or ""),
+                    "username": str(row["username"] or ""),
+                }
+            )
+        return items
+
+    def append_audit_event(
+        self,
+        *,
+        actor_user_id: int,
+        problem_id: int | None,
+        action: str,
+        details: dict[str, object],
+    ) -> None:
+        self.db.execute(
+            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            [int(actor_user_id), problem_id, action, json.dumps(details), now_iso()],
+        )
+
+    def audit_detail_rows(
+        self,
+        *,
+        problem_id: int,
+        actor_user_id: int,
+        action: str,
+        limit: int,
+    ) -> list[str]:
+        rows = self.db.fetch_all(
+            """
+            SELECT details_json
+            FROM audit_log
+            WHERE problem_id=? AND actor_user_id=? AND action=?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            [int(problem_id), int(actor_user_id), action, max(1, int(limit))],
+        )
+        result: list[str] = []
+        for row in rows:
+            result.append(str(row["details_json"] or ""))
+        return result
+
+
+    def delete_problem_metadata(self, problem_id: int, *, collect_run_ids) -> list[str]:
+        def _tx(conn: sqlite3.Connection) -> list[str]:
+            verification_rows = conn.execute(
+                "SELECT id,summary_json FROM verifications WHERE problem_id=?",
+                [int(problem_id)],
+            ).fetchall()
+            collected_run_ids: list[str] = []
+            for row in verification_rows:
+                if row is None:
+                    continue
+                raw = str(row["summary_json"] or "").strip()
+                if not raw:
+                    continue
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    parsed = {}
+                if not isinstance(parsed, dict):
+                    continue
+                for token in collect_run_ids(parsed):
+                    safe_token = str(token or "").strip()
+                    if safe_token and safe_token not in collected_run_ids:
+                        collected_run_ids.append(safe_token)
+            conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM verifications WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM verifications WHERE problem_id=? AND kind='verification'", [int(problem_id)])
+            conn.execute("DELETE FROM workspaces WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM audit_log WHERE problem_id=?", [int(problem_id)])
+            conn.execute("DELETE FROM problems WHERE id=?", [int(problem_id)])
+            return collected_run_ids
+
+        return list(self.db.write_transaction(_tx))

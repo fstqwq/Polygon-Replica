@@ -14,23 +14,8 @@ def count_label(count: int, singular: str, plural: str | None = None) -> str:
 
 
 def _default_user_problem_selector(user_id: int, *, limit: int = 1) -> list[dict[str, object]]:
-    uid = int(user_id)
-    cap = max(1, int(limit))
-    rows = config.db.fetch_all(
-        """
-        SELECT p.slug
-        FROM repo_acl a
-        JOIN problems p ON p.id=a.problem_id
-        LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
-        WHERE a.user_id=?
-        ORDER BY COALESCE(NULLIF(w.updated_at, ''), p.created_at) DESC, p.slug ASC
-        LIMIT ?
-        """,
-        [uid, uid, cap],
-    )
     out: list[dict[str, object]] = []
-    for row in rows:
-        slug = str(row["slug"] or "").strip()
+    for slug in config.workspace_service.accessible_problem_slugs(int(user_id), limit=max(1, int(limit))):
         if slug:
             out.append({"slug": slug})
     return out
@@ -44,15 +29,15 @@ def default_problem_slug_for_user(
 ) -> str:
     if user_ident_re is None:
         user_ident_re = _C.USER_IDENT_RE
-    if user_problem_selector is None:
-        user_problem_selector = _default_user_problem_selector
     safe_user = str(username or "").strip()
     if not user_ident_re.fullmatch(safe_user):
         return ""
-    row = config.db.fetch_one("SELECT id FROM users WHERE username=?", [safe_user])
-    if row is None:
+    if user_problem_selector is None:
+        return config.workspace_service.default_problem_slug_for_username(safe_user)
+    user_id = config.workspace_service.known_user_id(safe_user)
+    if user_id is None:
         return ""
-    items = user_problem_selector(int(row["id"]), limit=1)
+    items = user_problem_selector(int(user_id), limit=1)
     if items:
         return str(items[0]["slug"])
     return ""
@@ -79,13 +64,10 @@ def global_user_ctx(
     safe_user = str(username or "").strip()
     if not user_ident_re.fullmatch(safe_user):
         raise HTTPException(status_code=400, detail=username_rule_message)
-    row = config.db.fetch_one("SELECT id,username FROM users WHERE username=?", [safe_user])
-    if row is None:
-        try:
-            ensured = config.workspace_service.ensure_user(safe_user)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        row = {"id": ensured["id"], "username": ensured["username"]}
+    try:
+        row = config.workspace_service.global_user_context(safe_user)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {
         "user": {"id": int(row["id"]), "username": str(row["username"])},
         "default_problem": selector(safe_user),

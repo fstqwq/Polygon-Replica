@@ -1,43 +1,43 @@
 from __future__ import annotations
 
-import secrets
 from urllib.parse import quote_plus
 
 from fastapi import Form, HTTPException, Request
 
-from app.db import now_iso
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
+from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.problem_config import form_text
-from app.impl.workspace.access import workspace_access_context
 
 from .common import (
-    _contest_idx_label,
     _dedupe_preserve,
     _normalize_contest_problem_idx_required,
 )
 from .shared import (
-    _contest_available_problem_rows,
     _contest_ctx,
     _contest_problem_rows,
     _contest_redirect,
-    _create_contest_job,
-    _load_contest_job,
-    _next_contest_problem_idx,
     _problem_general_payload_map,
     _run_problem_general_update,
 )
 
 _C = config.constants
+
+
 def contest_problems_page(request: Request, contest: str, user: str, q: str = "", job_id: str = ""):
     ctx = _contest_ctx(contest, user, "problems")
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
     rows = _contest_problem_rows(contest_id, str(ctx["user"]["username"]), user_id)
     query = q.strip()
-    available_rows = _contest_available_problem_rows(contest_id, user_id, query)
-    latest_job = _load_contest_job(contest_id, job_id)
+    available_rows = config.contest_service.available_problems(
+        contest_id,
+        user_id,
+        limit=int(_C.API_PROBLEMS_LIST_LIMIT),
+        query=query,
+    )
+    latest_job = config.contest_service.load_job(contest_id, job_id)
     return template_response(
         request,
         "contest_problems.html",
@@ -50,6 +50,7 @@ def contest_problems_page(request: Request, contest: str, user: str, q: str = ""
         },
     )
 
+
 def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = Form([]), q: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
@@ -60,13 +61,19 @@ def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = For
     safe_slugs = _dedupe_preserve([form_text(item) for item in problem_slugs])
     if not safe_slugs:
         safe_query = q.strip()
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query=f"q={quote_plus(safe_query)}" if safe_query else "", message="select at least one problem to add")
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            user,
+            "problems",
+            query=f"q={quote_plus(safe_query)}" if safe_query else "",
+            message="select at least one problem to add",
+        )
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
     added = 0
     failed: list[str] = []
     for slug in safe_slugs:
-        problem_row = config.db.fetch_one("SELECT id,slug FROM problems WHERE slug=?", [slug])
+        problem_row = config.contest_service.problem_by_slug(slug)
         if problem_row is None:
             failed.append(f"{slug}: problem not found")
             continue
@@ -75,22 +82,12 @@ def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = For
         if not bool(problem_access.get("can_read")):
             failed.append(f"{slug}: no access to problem")
             continue
-        existing = config.db.fetch_one(
-            "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
-            [contest_id, problem_id],
-        )
-        if existing is not None:
+        if config.contest_service.contest_has_problem(contest_id, problem_id):
             failed.append(f"{slug}: already in contest")
             continue
         try:
-            idx = _next_contest_problem_idx(contest_id)
-            config.db.execute(
-                """
-                INSERT INTO contest_problems(contest_id,idx,problem_id,added_by_user_id,created_at)
-                VALUES(?,?,?,?,?)
-                """,
-                [contest_id, idx, problem_id, user_id, now_iso()],
-            )
+            idx = config.contest_service.next_problem_index(contest_id)
+            config.contest_service.add_problem(contest_id, idx, problem_id, user_id)
             added += 1
         except Exception as exc:
             failed.append(f"{slug}: {exc}")
@@ -115,6 +112,7 @@ def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = For
         query_parts.append(f"q={quote_plus(safe_query)}")
     return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query="&".join(query_parts), message=msg)
 
+
 def contest_problems_remove(contest: str, user: str, problem_id: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
@@ -122,7 +120,6 @@ def contest_problems_remove(contest: str, user: str, problem_id: str = Form(""))
         if not isinstance(write_block_reason, str) or not write_block_reason.strip():
             raise RuntimeError("missing write_block_reason")
         raise HTTPException(status_code=403, detail=write_block_reason)
-    contest_id = int(ctx["contest"]["id"])
     msg = "problem removed"
     try:
         pid = int(problem_id)
@@ -131,11 +128,9 @@ def contest_problems_remove(contest: str, user: str, problem_id: str = Form(""))
     if pid <= 0:
         msg = "invalid problem id"
     else:
-        config.db.execute(
-            "DELETE FROM contest_problems WHERE contest_id=? AND problem_id=?",
-            [contest_id, pid],
-        )
+        config.contest_service.remove_problem(int(ctx["contest"]["id"]), pid)
     return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message=msg)
+
 
 def contest_problems_remove_selected(contest: str, user: str, selected_problem_ids: list[str] = Form([])):
     ctx = _contest_ctx(contest, user, "problems")
@@ -154,20 +149,9 @@ def contest_problems_remove_selected(contest: str, user: str, selected_problem_i
             ids.append(value)
     if not ids:
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="select at least one problem to remove")
-    contest_id = int(ctx["contest"]["id"])
-    removed = 0
-    for pid in ids:
-        before = config.db.fetch_one(
-            "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
-            [contest_id, pid],
-        )
-        config.db.execute(
-            "DELETE FROM contest_problems WHERE contest_id=? AND problem_id=?",
-            [contest_id, pid],
-        )
-        if before is not None:
-            removed += 1
+    removed = config.contest_service.remove_problems(int(ctx["contest"]["id"]), ids)
     return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message=f"removed {removed} problem(s)")
+
 
 def contest_problems_reorder(
     contest: str,
@@ -188,45 +172,23 @@ def contest_problems_reorder(
     pairs: list[tuple[int, str]] = []
     seen_ids: set[int] = set()
     seen_idx: set[str] = set()
-    for i, raw_id in enumerate(ids_raw):
+    for index, raw_id in enumerate(ids_raw):
         try:
-            cp_id = int(raw_id)
+            contest_problem_id = int(raw_id)
         except Exception:
             return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="invalid contest problem id")
-        if cp_id <= 0 or cp_id in seen_ids:
+        if contest_problem_id <= 0 or contest_problem_id in seen_ids:
             return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="invalid contest problem id")
-        idx = _normalize_contest_problem_idx_required(idx_raw[i])
+        idx = _normalize_contest_problem_idx_required(idx_raw[index])
         if idx in seen_idx:
             return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="duplicate problem index")
-        seen_ids.add(cp_id)
+        seen_ids.add(contest_problem_id)
         seen_idx.add(idx)
-        pairs.append((cp_id, idx))
-    contest_id = int(ctx["contest"]["id"])
-
-    def _tx(conn) -> bool:
-        for cp_id, _idx in pairs:
-            row = conn.execute(
-                "SELECT id FROM contest_problems WHERE id=? AND contest_id=?",
-                [cp_id, contest_id],
-            ).fetchone()
-            if row is None:
-                return False
-        for cp_id, idx in pairs:
-            temp_idx = f"TMP-{cp_id}-{secrets.token_hex(3)}"
-            conn.execute(
-                "UPDATE contest_problems SET idx=? WHERE id=? AND contest_id=?",
-                [temp_idx, cp_id, contest_id],
-            )
-        for cp_id, idx in pairs:
-            conn.execute(
-                "UPDATE contest_problems SET idx=? WHERE id=? AND contest_id=?",
-                [idx, cp_id, contest_id],
-            )
-        return True
-
-    if not bool(config.db.write_transaction(_tx)):
+        pairs.append((contest_problem_id, idx))
+    if not config.contest_service.reorder_problem_indices(int(ctx["contest"]["id"]), pairs):
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="contest problem not found")
     return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="problem order saved")
+
 
 def contest_problems_renumber(contest: str, user: str):
     ctx = _contest_ctx(contest, user, "problems")
@@ -235,23 +197,9 @@ def contest_problems_renumber(contest: str, user: str):
         if not isinstance(write_block_reason, str) or not write_block_reason.strip():
             raise RuntimeError("missing write_block_reason")
         raise HTTPException(status_code=403, detail=write_block_reason)
-    contest_id = int(ctx["contest"]["id"])
-    rows = config.db.fetch_all(
-        "SELECT id FROM contest_problems WHERE contest_id=? ORDER BY idx COLLATE NOCASE ASC, id ASC",
-        [contest_id],
-    )
-
-    def _tx(conn) -> None:
-        seq = 1
-        for row in rows:
-            conn.execute(
-                "UPDATE contest_problems SET idx=? WHERE id=? AND contest_id=?",
-                [_contest_idx_label(seq), int(row["id"]), contest_id],
-            )
-            seq += 1
-
-    config.db.write_transaction(_tx)
+    config.contest_service.renumber_problem_indices(int(ctx["contest"]["id"]))
     return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="problem indices renumbered")
+
 
 def contest_problems_change_general(
     contest: str,
@@ -287,7 +235,7 @@ def contest_problems_change_general(
     )
     safe_retry_job_id = retry_job_id.strip()
     if safe_retry_job_id and not selected_ids:
-        retry_job = _load_contest_job(contest_id, safe_retry_job_id)
+        retry_job = config.contest_service.load_job(contest_id, safe_retry_job_id)
         if retry_job is None:
             return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="retry job not found")
         retry_job_type = retry_job.get("job_type")
@@ -326,25 +274,14 @@ def contest_problems_change_general(
                         selected_ids.append(pid)
     if not selected_ids:
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="select at least one problem to update")
-    placeholders = ",".join(("?" for _ in selected_ids))
-    rows = config.db.fetch_all(
-        f"""
-        SELECT cp.idx,cp.problem_id,p.slug,p.name
-        FROM contest_problems cp
-        JOIN problems p ON p.id=cp.problem_id
-        WHERE cp.contest_id=?
-          AND cp.problem_id IN ({placeholders})
-        ORDER BY cp.idx COLLATE NOCASE ASC, cp.id ASC
-        """,
-        [contest_id, *selected_ids],
-    )
+    rows = config.contest_service.selected_problems(contest_id, selected_ids)
     if not rows:
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="selected problems are not part of this contest")
     results: list[dict[str, object]] = []
     for row in rows:
         pid = int(row["problem_id"])
         defaults = {
-            "name": row["name"],
+            "name": str(row["problem_name"]),
             "time_limit_ms": str(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
             "memory_limit_mb": str(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
         }
@@ -354,7 +291,7 @@ def contest_problems_change_general(
             actor_username=str(ctx["user"]["username"]),
             actor_user_id=actor_user_id,
             problem_id=pid,
-            problem_slug=str(row["slug"]),
+            problem_slug=str(row["problem_slug"]),
             requested_name=requested["name"] if isinstance(requested.get("name"), str) else "",
             requested_time_limit_ms=requested["time_limit_ms"] if isinstance(requested.get("time_limit_ms"), str) else "",
             requested_memory_limit_mb=requested["memory_limit_mb"] if isinstance(requested.get("memory_limit_mb"), str) else "",
@@ -375,7 +312,7 @@ def contest_problems_change_general(
         },
     }
     job_status = "ok" if failed_count == 0 else "failed"
-    job_id = _create_contest_job(contest_id, actor_user_id, "change-general", job_status, summary)
+    job_id = config.contest_service.create_job(contest_id, actor_user_id, "change-general", job_status, summary)
     audit(
         actor_user_id,
         None,
@@ -390,6 +327,10 @@ def contest_problems_change_general(
             "skipped": skipped_count,
         },
     )
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query=f"job_id={quote_plus(job_id)}", message=f"change names/TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped")
-
-
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        user,
+        "problems",
+        query=f"job_id={quote_plus(job_id)}",
+        message=f"change names/TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped",
+    )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_one
+
 import asyncio
 import base64
 import json
@@ -173,7 +175,7 @@ class TestSecurity(SmokeBase):
         registered = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(registered.status_code, 303)
 
-        row = db.fetch_one("SELECT password_salt FROM users WHERE username=?", [username])
+        row = db_fetch_one("SELECT password_salt FROM users WHERE username=?", [username])
         self.assertIsNotNone(row)
         real_salt = str(row["password_salt"] or "").strip().lower()
         self.assertRegex(real_salt, r"^[0-9a-f]{32}$")
@@ -209,7 +211,7 @@ class TestSecurity(SmokeBase):
         )
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
-        db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -247,7 +249,7 @@ class TestSecurity(SmokeBase):
         )
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
-        db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -538,7 +540,7 @@ class TestSecurity(SmokeBase):
     def _insert_invalid_run_root_row(self, run_id: str, root: Path, *, problem: str = "alice/sample", user: str = "alice") -> None:
         ctx = workspace_service.workspace_context(problem, user, include_recent=False)
         verification_id = f"ver-{run_id}"
-        db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)

@@ -2,129 +2,14 @@ from __future__ import annotations
 
 import secrets
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
 from app.db import now_iso
 from app.runtime_value import RuntimeValues
-from app.service.judgehost.domdb import is_domjudge_sql
 from app.service.judgehost.internal.shared import _HOSTNAME_RE, _RUN_ID_RE, task_status_counts
 
 
 class JudgehostCoreMixin:
-    def _init_domdb_schema(self) -> None:
-        with self._domdb_lock:
-            conn = self._domdb
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS judgehost_domjudge_jobs (
-                    job_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id TEXT NOT NULL UNIQUE,
-                    run_id TEXT NOT NULL UNIQUE,
-                    submit_id TEXT NOT NULL UNIQUE,
-                    contest_id TEXT NOT NULL,
-                    mode TEXT NOT NULL,
-                    source_name TEXT NOT NULL,
-                    source_path TEXT NOT NULL,
-                    work_root TEXT NOT NULL,
-                    compile_hash TEXT NOT NULL,
-                    run_hash TEXT NOT NULL,
-                    compare_hash TEXT NOT NULL,
-                    source_hash TEXT NOT NULL DEFAULT '',
-                    compile_config_json TEXT NOT NULL,
-                    run_config_json TEXT NOT NULL,
-                    compare_config_json TEXT NOT NULL,
-                    expected_behavior TEXT NOT NULL DEFAULT 'unknown',
-                    verification_source TEXT NOT NULL DEFAULT 'run.execute',
-                    force_recompile INTEGER NOT NULL DEFAULT 0,
-                    lease_owner TEXT,
-                    compile_success INTEGER,
-                    compile_output_b64 TEXT,
-                    compile_metadata_b64 TEXT,
-                    debug_text TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'leased',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    completed_at TEXT
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS judgehost_domjudge_cases (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id INTEGER NOT NULL,
-                    task_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL,
-                    test_name TEXT NOT NULL,
-                    ordinal INTEGER NOT NULL,
-                    testcase_id INTEGER,
-                    testcase_hash TEXT NOT NULL,
-                    testcase_input_hash TEXT NOT NULL DEFAULT '',
-                    testcase_answer_hash TEXT NOT NULL DEFAULT '',
-                    input_path TEXT NOT NULL,
-                    answer_path TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    lease_owner TEXT,
-                    runresult TEXT,
-                    runtime_sec REAL,
-                    cpu_sec REAL,
-                    wall_sec REAL,
-                    memory_kb INTEGER,
-                    output_run_rel TEXT,
-                    output_error_rel TEXT,
-                    output_system_rel TEXT,
-                    output_diff_rel TEXT,
-                    metadata_rel TEXT,
-                    compare_metadata_rel TEXT,
-                    team_message_rel TEXT,
-                    score_text TEXT,
-                    debug_text TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_jobs_task ON judgehost_domjudge_jobs(task_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_jobs_lease ON judgehost_domjudge_jobs(lease_owner,updated_at DESC)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_job ON judgehost_domjudge_cases(job_id,ordinal ASC)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_status ON judgehost_domjudge_cases(status,job_id,ordinal ASC)")
-            conn.commit()
-
-
-    def _db_fetch_one(self, sql: str, values: list[object] | tuple[object, ...] | None = None):
-        params = [] if values is None else list(values)
-        if is_domjudge_sql(sql):
-            with self._domdb_lock:
-                return self._domdb.execute(sql, params).fetchone()
-        return self.db.fetch_one(sql, params)
-
-    def _db_fetch_all(self, sql: str, values: list[object] | tuple[object, ...] | None = None):
-        params = [] if values is None else list(values)
-        if is_domjudge_sql(sql):
-            with self._domdb_lock:
-                return self._domdb.execute(sql, params).fetchall()
-        return self.db.fetch_all(sql, params)
-
-    def _db_execute(self, sql: str, values: list[object] | tuple[object, ...] | None = None):
-        params = [] if values is None else list(values)
-        if is_domjudge_sql(sql):
-            with self._domdb_lock:
-                cur = self._domdb.execute(sql, params)
-                self._domdb.commit()
-                return cur
-        return self.db.execute(sql, params)
-
-    @contextmanager
-    def _domdb_conn(self):
-        with self._domdb_lock:
-            try:
-                yield self._domdb
-                self._domdb.commit()
-            except Exception:
-                self._domdb.rollback()
-                raise
-
     def apply_runtime_values(self, constants: RuntimeValues) -> None:
         with self._lock:
             self._constants = constants

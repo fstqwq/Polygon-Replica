@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_all, db_fetch_one
+
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
@@ -29,7 +31,6 @@ from .ui_support import (
     contest_properties_page,
     contest_properties_save,
     contests_root_create,
-    db,
     git_service,
     json,
     uuid,
@@ -47,14 +48,14 @@ class TestUIContests(UIBaseSuite):
             contest_title=title,
         )
         self.assertEqual(resp.status_code, 303)
-        row = db.fetch_one("SELECT id FROM contests WHERE slug=?", [slug])
+        row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [slug])
         self.assertIsNotNone(row)
         return int(row["id"])
 
     def test_contest_create_assigns_owner_membership(self) -> None:
         contest_slug = f"ui-contest-owner-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug)
-        owner_row = db.fetch_one(
+        owner_row = db_fetch_one(
             """
             SELECT role
             FROM contest_members
@@ -86,7 +87,7 @@ class TestUIContests(UIBaseSuite):
         self.assertTrue(add_msgs)
         self.assertIn("added 2 problem", add_msgs[0].lower())
 
-        rows = db.fetch_all(
+        rows = db_fetch_all(
             "SELECT id,problem_id,idx FROM contest_problems WHERE contest_id=? ORDER BY idx COLLATE NOCASE ASC, id ASC",
             [contest_id],
         )
@@ -101,7 +102,7 @@ class TestUIContests(UIBaseSuite):
             contest_problem_indices=["B", "A"],
         )
         self.assertEqual(reorder_resp.status_code, 303)
-        reordered = db.fetch_all(
+        reordered = db_fetch_all(
             "SELECT id,idx FROM contest_problems WHERE contest_id=? ORDER BY id ASC",
             [contest_id],
         )
@@ -109,7 +110,7 @@ class TestUIContests(UIBaseSuite):
 
         renumber_resp = contest_problems_renumber(contest=contest_slug, user="alice")
         self.assertEqual(renumber_resp.status_code, 303)
-        renumbered = db.fetch_all(
+        renumbered = db_fetch_all(
             "SELECT idx FROM contest_problems WHERE contest_id=? ORDER BY idx COLLATE NOCASE ASC, id ASC",
             [contest_id],
         )
@@ -121,7 +122,7 @@ class TestUIContests(UIBaseSuite):
             selected_problem_ids=[str(rows[1]["problem_id"])],
         )
         self.assertEqual(remove_resp.status_code, 303)
-        after_remove = db.fetch_all("SELECT problem_id FROM contest_problems WHERE contest_id=?", [contest_id])
+        after_remove = db_fetch_all("SELECT problem_id FROM contest_problems WHERE contest_id=?", [contest_id])
         self.assertEqual(len(after_remove), 1)
 
         overview = contest_overview_page(
@@ -158,7 +159,7 @@ class TestUIContests(UIBaseSuite):
             q="",
         )
         self.assertEqual(add_resp.status_code, 303)
-        problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
+        problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
         self.assertIsNotNone(problem_row)
         pid = int(problem_row["id"])
 
@@ -175,7 +176,7 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(update_resp.status_code, 303)
         self.assertIn(f"/contests/{contest_slug}/alice/problems", update_resp.headers.get("location", ""))
 
-        job_row = db.fetch_one(
+        job_row = db_fetch_one(
             "SELECT id,status,summary_json FROM contest_jobs WHERE contest_id=? ORDER BY created_at DESC LIMIT 1",
             [contest_id],
         )
@@ -189,7 +190,7 @@ class TestUIContests(UIBaseSuite):
         commit_id = str(first.get("commit_id") or "")
         self.assertRegex(commit_id, r"^[0-9a-f]{40}$")
 
-        updated_problem = db.fetch_one("SELECT name FROM problems WHERE id=?", [pid])
+        updated_problem = db_fetch_one("SELECT name FROM problems WHERE id=?", [pid])
         self.assertIsNotNone(updated_problem)
         self.assertEqual(str(updated_problem["name"]), "Bulk After Name")
 
@@ -216,7 +217,7 @@ class TestUIContests(UIBaseSuite):
         )
         self.assertEqual(save_props.status_code, 303)
 
-        contest_row = db.fetch_one("SELECT title FROM contests WHERE id=?", [contest_id])
+        contest_row = db_fetch_one("SELECT title FROM contests WHERE id=?", [contest_id])
         self.assertIsNotNone(contest_row)
         self.assertEqual(str(contest_row["title"]), "Props Contest Updated")
 
@@ -232,7 +233,7 @@ class TestUIContests(UIBaseSuite):
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="write")
         self.assertEqual(grant.status_code, 303)
-        membership = db.fetch_one(
+        membership = db_fetch_one(
             "SELECT role FROM contest_members WHERE contest_id=? AND user_id=(SELECT id FROM users WHERE username='bob')",
             [contest_id],
         )
@@ -251,7 +252,7 @@ class TestUIContests(UIBaseSuite):
 
         revoke = contest_access_revoke(contest=contest_slug, user="alice", target_user="bob")
         self.assertEqual(revoke.status_code, 303)
-        removed = db.fetch_one(
+        removed = db_fetch_one(
             "SELECT role FROM contest_members WHERE contest_id=? AND user_id=(SELECT id FROM users WHERE username='bob')",
             [contest_id],
         )
@@ -288,7 +289,7 @@ class TestUIContests(UIBaseSuite):
 
         def _fake_compile_preview(problem: str, username: str, *, sample_only: bool = False) -> str:
             _ = bool(sample_only)
-            problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
+            problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
             self.assertIsNotNone(problem_row)
             ws_ctx = workspace_service.workspace_context(problem, username, include_recent=False)
             workspace_id = int(ws_ctx["workspace"]["id"])
@@ -297,7 +298,7 @@ class TestUIContests(UIBaseSuite):
             artifact_root = Path(config.settings.artifacts_root) / problem / preview_id
             (artifact_root / "statement_preview").mkdir(parents=True, exist_ok=True)
             (artifact_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%mock preview\n")
-            db.execute(
+            db_execute(
                 """
                 INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -319,14 +320,14 @@ class TestUIContests(UIBaseSuite):
 
         def _fake_run_build(problem: str, username: str, *, commit: str = "", ref: str = "", force_recompile: bool = False) -> str:
             _ = bool(force_recompile)
-            problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
+            problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
             self.assertIsNotNone(problem_row)
             ws_ctx = workspace_service.workspace_context(problem, username, include_recent=False)
             workspace_id = int(ws_ctx["workspace"]["id"])
             verification_id = f"ver-{uuid.uuid4().hex[:12]}"
             artifact_root = Path(config.settings.artifacts_root) / problem / verification_id
             artifact_root.mkdir(parents=True, exist_ok=True)
-            db.execute(
+            db_execute(
                 """
                 INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -390,12 +391,12 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(str(status_payload.get("status") or ""), "ok")
         self.assertFalse(bool(status_payload.get("running")))
 
-        preview_artifact = db.fetch_one(
+        preview_artifact = db_fetch_one(
             "SELECT id FROM contest_artifacts WHERE contest_id=? AND job_id=? AND artifact_type='preview-bundle' ORDER BY created_at DESC LIMIT 1",
             [contest_id, preview_job_id],
         )
         self.assertIsNotNone(preview_artifact)
-        package_artifact = db.fetch_one(
+        package_artifact = db_fetch_one(
             "SELECT id FROM contest_artifacts WHERE contest_id=? AND job_id=? AND artifact_type='package-bundle' ORDER BY created_at DESC LIMIT 1",
             [contest_id, package_job_id],
         )
@@ -413,12 +414,12 @@ class TestUIContests(UIBaseSuite):
     def test_contest_status_labels_render_consistently_in_ui(self) -> None:
         contest_slug = f"ui-contest-status-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Status Contest")
-        alice_row = db.fetch_one("SELECT id FROM users WHERE username='alice'")
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)
         actor_user_id = int(alice_row["id"])
 
         running_job_id = f"cj-{uuid.uuid4().hex[:10]}"
-        db.execute(
+        db_execute(
             """
             INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,summary_json,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?)
@@ -456,7 +457,7 @@ class TestUIContests(UIBaseSuite):
         self.assertIn("<td>RUNNING</td>", packages_html)
 
         change_job_id = f"cj-{uuid.uuid4().hex[:10]}"
-        db.execute(
+        db_execute(
             """
             INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,summary_json,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?)

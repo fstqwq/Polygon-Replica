@@ -3,19 +3,18 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sqlite3
 import time
 from pathlib import Path
 from typing import cast
 from typing import TypedDict
 
 from app.db import now_iso
-from app.service.judgehost.domdb import domjudge_active_job_for_host, domjudge_cases_for_job, domjudge_shared_pending_job
-from app.service.judgehost.domjudge.cache import domjudge_json_hash, domjudge_source_hash
+from app.service.judgehost.domjudge.cache import domjudge_json_hash
 from app.service.judgehost.domjudge.client import domjudge_script_ids
+from app.service.memory.judgehost_state_store import JudgehostCaseRow, JudgehostJobRow
 from app.service.judgehost.internal.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_float, domjudge_parse_int, domjudge_rewrite_untrusted_runresult
-from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_bytes as domjudge_sha256_bytes
+from app.service.platform.hashing import sha256_hex_bytes as domjudge_sha256_bytes
 from app.service.run.runtime import RUN_TEST_NAME_RE
 
 logger = logging.getLogger(__name__)
@@ -40,6 +39,10 @@ _DomjudgePrecomputedBundle = TypedDict(
         "compile_config": dict[str, object],
         "run_config": dict[str, object],
         "compare_config": dict[str, object],
+        "compile_files": list[tuple[str, bytes, bool]],
+        "run_files": list[tuple[str, bytes, bool]],
+        "compare_files": list[tuple[str, bytes, bool]],
+        "solve_mode": bool,
     },
 )
 
@@ -53,7 +56,19 @@ _DomjudgePreparedPayload = TypedDict(
         "run_cfg_obj": dict[str, object],
         "problem_limits_obj": dict[str, object],
         "checker_args": list[str],
+        "contest_id": str,
         "mode": str,
+        "source_hash": str,
+        "compile_hash": str,
+        "run_hash": str,
+        "compare_hash": str,
+        "compile_config": dict[str, object],
+        "run_config": dict[str, object],
+        "compare_config": dict[str, object],
+        "compile_files": list[tuple[str, bytes, bool]],
+        "run_files": list[tuple[str, bytes, bool]],
+        "compare_files": list[tuple[str, bytes, bool]],
+        "solve_mode": bool,
         "verification_source": str,
         "expected_behavior": str,
         "force_recompile": bool,
@@ -65,7 +80,6 @@ _DomjudgePreparedPayload = TypedDict(
         "validator_source_bytes": bytes,
         "interactor_source_bytes": bytes,
         "testlib_header_bytes": bytes,
-        "precomputed": _DomjudgePrecomputedBundle | None,
     },
 )
 
@@ -99,81 +113,35 @@ _DomjudgeCachedCaseResult = TypedDict(
 
 
 class JudgehostDomjudgeDispatchMixin:
+
     def domjudge_register_host(self, hostname: str) -> list[dict[str, object]]:
         safe_host = self._normalize_hostname(hostname)
         now_text = now_iso()
-        with self._domdb_conn() as conn:
-            unfinished: list[dict[str, object]] = []
-            self._requeue_expired_leases(conn, force=True)
-            self._record_host_event_conn(conn, hostname=safe_host, action="register")
-            affected = conn.execute(
-                """
-                SELECT job_id,submit_id
-                FROM judgehost_domjudge_jobs
-                WHERE lease_owner=? AND status IN ('leased','queued')
-                ORDER BY job_id ASC
-                """,
-                [safe_host],
-            ).fetchall()
-            remap_submit_ids: list[tuple[int, str]] = []
-            remap_seed = int(time.time() * 1000)
-            remap_step = 0
-            for row in affected:
-                job_id = int(row["job_id"])
-                # Re-registration after transient disconnect can make judgedaemon retry
-                # unfinished runs in an existing working directory. Allocate a fresh
-                # numeric submitid to force a clean judgedaemon working path.
-                remap_step += 1
-                new_submitid = str(remap_seed + remap_step)
-                remap_submit_ids.append((job_id, new_submitid))
-                unfinished.append({"jobid": job_id, "submitid": new_submitid})
-            for job_id, new_submitid in remap_submit_ids:
-                conn.execute(
-                    "UPDATE judgehost_domjudge_jobs SET submit_id=? WHERE job_id=?",
-                    [new_submitid, job_id],
-                )
-            if unfinished:
-                logger.warning(
-                    "domjudge register_host host=%s unfinished_jobs=%s",
-                    safe_host,
-                    unfinished,
-                )
-            conn.execute(
-                """
-                UPDATE judgehost_domjudge_jobs
-                SET lease_owner=NULL, status='queued', updated_at=?
-                WHERE lease_owner=? AND status IN ('leased','queued')
-                """,
-                [now_text, safe_host],
+        self._requeue_expired_leases(force=True)
+        self._record_host_event_conn(hostname=safe_host, action="register")
+        remap_seed = int(time.time() * 1000)
+        unfinished = self._judgehost_state_store.register_host_requeue(
+            safe_host,
+            now_text=now_text,
+            remap_seed=remap_seed,
+        )
+        if unfinished:
+            logger.warning(
+                "domjudge register_host host=%s unfinished_jobs=%s",
+                safe_host,
+                unfinished,
             )
-            conn.execute(
-                """
-                UPDATE judgehost_domjudge_cases
-                SET status='pending', lease_owner=NULL, updated_at=?
-                WHERE lease_owner=? AND status='leased'
-                """,
-                [now_text, safe_host],
-            )
-            with self._state_lock:
-                for task in self._tasks_by_id.values():
-                    if task.get("lease_owner") != safe_host:
-                        continue
-                    if task.get("status") != self.STATUS_LEASED:
-                        continue
-                    task["status"] = self.STATUS_QUEUED
-                    task["lease_owner"] = ""
-                    task["lease_expires_at"] = ""
-                    task["updated_at"] = now_text
-            return unfinished
-
-    def _domjudge_active_job_for_host(self, hostname: str) -> sqlite3.Row | None:
-        return domjudge_active_job_for_host(hostname, fetch_all=self._db_fetch_all)
-
-    def _domjudge_shared_pending_job(self, hostname: str) -> sqlite3.Row | None:
-        return domjudge_shared_pending_job(hostname, fetch_all=self._db_fetch_all)
-
-    def _domjudge_cases_for_job(self, job_id: int, status: str | None = None) -> list[sqlite3.Row]:
-        return domjudge_cases_for_job(job_id, status=status, fetch_all=self._db_fetch_all)
+        with self._state_lock:
+            for task in self._tasks_by_id.values():
+                if task.get("lease_owner") != safe_host:
+                    continue
+                if task.get("status") != self.STATUS_LEASED:
+                    continue
+                task["status"] = self.STATUS_QUEUED
+                task["lease_owner"] = ""
+                task["lease_expires_at"] = ""
+                task["updated_at"] = now_text
+        return unfinished
 
     def _domjudge_task_payload(self, task: dict[str, object]) -> tuple[str, str, dict[str, object]]:
         task_id = domjudge_text(task.get("task_id"))
@@ -204,6 +172,10 @@ class JudgehostDomjudgeDispatchMixin:
         compile_config = cast(dict[str, object] | None, raw_precomputed.get("compile_config"))
         run_config = cast(dict[str, object] | None, raw_precomputed.get("run_config"))
         compare_config = cast(dict[str, object] | None, raw_precomputed.get("compare_config"))
+        compile_files = cast(list[tuple[str, bytes, bool]] | None, raw_precomputed.get("compile_files"))
+        run_files = cast(list[tuple[str, bytes, bool]] | None, raw_precomputed.get("run_files"))
+        compare_files = cast(list[tuple[str, bytes, bool]] | None, raw_precomputed.get("compare_files"))
+        solve_mode = raw_precomputed.get("solve_mode")
         if re.fullmatch(r"[0-9a-f]{32}", compile_hash) is None:
             return None
         if re.fullmatch(r"[0-9a-f]{32}", run_hash) is None:
@@ -218,6 +190,14 @@ class JudgehostDomjudgeDispatchMixin:
             return None
         if compare_config is None:
             return None
+        if compile_files is None:
+            return None
+        if run_files is None:
+            return None
+        if compare_files is None:
+            return None
+        if not isinstance(solve_mode, bool):
+            return None
         return {
             "source_hash": source_hash,
             "compile_hash": compile_hash,
@@ -226,6 +206,10 @@ class JudgehostDomjudgeDispatchMixin:
             "compile_config": dict(compile_config),
             "run_config": dict(run_config),
             "compare_config": dict(compare_config),
+            "compile_files": list(compile_files),
+            "run_files": list(run_files),
+            "compare_files": list(compare_files),
+            "solve_mode": solve_mode,
         }
 
     def _domjudge_prepare_payload(self, payload: dict[str, object], *, compile_only: bool) -> _DomjudgePreparedPayload:
@@ -284,6 +268,9 @@ class JudgehostDomjudgeDispatchMixin:
         sources_payload = cast(dict[str, object] | None, verification_payload.get("sources_b64"))
         if sources_payload is None:
             sources_payload = {}
+        precomputed = self._domjudge_precomputed_bundle(payload.get("domjudge_precomputed"))
+        if precomputed is None:
+            raise RuntimeError("domjudge precomputed payload is required")
 
         return {
             "source_name": source_name,
@@ -293,7 +280,19 @@ class JudgehostDomjudgeDispatchMixin:
             "run_cfg_obj": run_cfg_obj,
             "problem_limits_obj": problem_limits_obj,
             "checker_args": checker_args,
+            "contest_id": "local",
             "mode": domjudge_lower_text(payload.get("mode"), default="pass-fail"),
+            "source_hash": precomputed["source_hash"],
+            "compile_hash": precomputed["compile_hash"],
+            "run_hash": precomputed["run_hash"],
+            "compare_hash": precomputed["compare_hash"],
+            "compile_config": dict(precomputed["compile_config"]),
+            "run_config": dict(precomputed["run_config"]),
+            "compare_config": dict(precomputed["compare_config"]),
+            "compile_files": list(precomputed["compile_files"]),
+            "run_files": list(precomputed["run_files"]),
+            "compare_files": list(precomputed["compare_files"]),
+            "solve_mode": precomputed["solve_mode"],
             "verification_source": domjudge_lower_text(payload.get("verification_source")),
             "expected_behavior": domjudge_lower_text(payload.get("expected_behavior")),
             "force_recompile": domjudge_bool(payload.get("force_recompile"), default=False),
@@ -305,7 +304,6 @@ class JudgehostDomjudgeDispatchMixin:
             "validator_source_bytes": self._domjudge_b64_decode(sources_payload.get("validator.cpp")),
             "interactor_source_bytes": self._domjudge_b64_decode(sources_payload.get("interactor.cpp")),
             "testlib_header_bytes": self._domjudge_b64_decode(sources_payload.get("testlib.h")),
-            "precomputed": self._domjudge_precomputed_bundle(payload.get("domjudge_precomputed")),
         }
 
     def _domjudge_cache_entry(self, raw_entry: dict[str, object] | None) -> _DomjudgeCacheEntry | None:
@@ -347,244 +345,36 @@ class JudgehostDomjudgeDispatchMixin:
             "score_text": domjudge_text(built.get("score_text")) or None,
         }
 
+
     def _domjudge_prepare_job(self, hostname: str, task: dict[str, object]) -> int:
+        safe_host = self._normalize_hostname(hostname)
         task_id, run_id, payload = self._domjudge_task_payload(task)
-        existing = self._db_fetch_one("SELECT job_id FROM judgehost_domjudge_jobs WHERE task_id=?", [task_id])
-        if existing is not None:
-            job_id = int(existing["job_id"])
-            self._db_execute(
-                "UPDATE judgehost_domjudge_jobs SET lease_owner=?, status='leased', updated_at=? WHERE job_id=?",
-                [hostname, now_iso(), job_id],
-            )
-            return job_id
-
-        compile_only, generate_mode, solve_mode = self._domjudge_execution_modes(payload)
-        prepared = self._domjudge_prepare_payload(payload, compile_only=compile_only)
-
+        prepared = self._domjudge_prepare_payload(
+            payload,
+            compile_only=self._domjudge_task_kind(payload) == self._TASK_KIND_COMPILE_ONLY,
+        )
         source_name = prepared["source_name"]
         source_bytes = prepared["source_bytes"]
         extra_source_items = prepared["extra_source_items"]
-        tests_rows = prepared["tests_rows"]
-        run_cfg_obj = prepared["run_cfg_obj"]
-        problem_limits_obj = prepared["problem_limits_obj"]
-        checker_args = prepared["checker_args"]
+        contest_id = prepared["contest_id"]
         mode = prepared["mode"]
-        verification_source = prepared["verification_source"]
+        compile_hash = prepared["compile_hash"]
+        run_hash = prepared["run_hash"]
+        compare_hash = prepared["compare_hash"]
+        source_hash = prepared["source_hash"]
+        compile_config = prepared["compile_config"]
+        run_config = prepared["run_config"]
+        compare_config = prepared["compare_config"]
+        tests_rows = prepared["tests_rows"]
         expected_behavior = prepared["expected_behavior"]
+        verification_source = prepared["verification_source"]
         force_recompile = prepared["force_recompile"]
-        manual_validate_only = prepared["manual_validate_only"]
-        checker_bytes = prepared["checker_bytes"]
-        validator_bytes = prepared["validator_bytes"]
-        interactor_bytes = prepared["interactor_bytes"]
-        checker_source_bytes = prepared["checker_source_bytes"]
-        validator_source_bytes = prepared["validator_source_bytes"]
-        interactor_source_bytes = prepared["interactor_source_bytes"]
-        testlib_header_bytes = prepared["testlib_header_bytes"]
+        compile_files = prepared["compile_files"]
+        run_files = prepared["run_files"]
+        compare_files = prepared["compare_files"]
+        solve_mode = prepared["solve_mode"]
 
-        contest_id = self._domjudge_contest_id(payload.get("problem"))
-        submit_id = self._domjudge_submit_id_from_run_id(run_id)
-        language_id, language_exts = self._domjudge_language_extensions(source_name)
-        source_hash = domjudge_source_hash(source_name, source_bytes)
-        if extra_source_items:
-            hash_blobs: list[bytes] = [f"{source_name}\0".encode("utf-8") + source_bytes]
-            hash_blobs.extend(f"{name}\0".encode("utf-8") + blob for name, blob in extra_source_items)
-            source_hash = self._domjudge_set_hash_from_blobs(hash_blobs)
-
-        compile_timeout = max(1, int(getattr(self._constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
-        compile_mem_mb = max(64, int(getattr(self._constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
-        compile_output_kb = max(64, int(getattr(self._constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536))
-        run_output_kb = max(64, int(getattr(self._constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536))
-        run_process_limit = max(1, int(getattr(self._constants, "RUN_EXEC_PROCESS_LIMIT", 64) or 64))
-        default_cfg = getattr(self._constants, "GENERAL_CONFIG_DEFAULTS", {}) or {}
-        configured_max_passes = max(
-            1,
-            domjudge_parse_int(
-                run_cfg_obj.get("max_passes"),
-                domjudge_parse_int(problem_limits_obj.get("max_passes"), 16),
-            ),
-        )
-        max_passes = configured_max_passes if mode == "multi-pass" else 1
-        run_tl_ms = domjudge_parse_int(
-            run_cfg_obj.get("time_limit_ms"),
-            domjudge_parse_int(
-                problem_limits_obj.get("time_limit_ms"),
-                domjudge_parse_int(default_cfg.get("time_limit_ms", 2000), 2000),
-            ),
-        )
-        run_mem_mb = domjudge_parse_int(
-            run_cfg_obj.get("memory_limit_mb"),
-            domjudge_parse_int(
-                problem_limits_obj.get("memory_limit_mb"),
-                domjudge_parse_int(default_cfg.get("memory_limit_mb", 1024), 1024),
-            ),
-        )
-        run_tl_ms = max(100, run_tl_ms)
-        run_mem_mb = max(16, run_mem_mb)
-        run_tl_sec = max(0.1, float(run_tl_ms) / 1000.0)
-        # DOMjudge already applies global timelimit_overshoot to derive
-        # hard CPU time. Keep per-task overshoot at zero so all modes use
-        # the same max(TL * 2, TL + 1s) policy.
-        run_overshoot_sec = 0.0
-        run_mem_kb = max(16 * 1024, int(run_mem_mb * 1024))
-
-        if checker_source_bytes:
-            checker_source_bytes = self._domjudge_force_cpp_define(checker_source_bytes)
-        if validator_source_bytes:
-            validator_source_bytes = self._domjudge_force_cpp_define(validator_source_bytes)
-        if interactor_source_bytes:
-            interactor_source_bytes = self._domjudge_force_cpp_define(interactor_source_bytes)
-        # Prefer source payloads over host-built binaries to avoid libc/libstdc++ ABI
-        # mismatch between producer and judgehost runtime.
-        if checker_source_bytes:
-            checker_bytes = b""
-        if validator_source_bytes:
-            validator_bytes = b""
-        if interactor_source_bytes:
-            interactor_bytes = b""
-        has_interactor_payload = bool(interactor_bytes or interactor_source_bytes)
-        interactive = (
-            (not compile_only)
-            and (not generate_mode)
-            and (mode == "interactive" or (mode == "multi-pass" and has_interactor_payload))
-        )
-        if (not compile_only) and (not generate_mode) and mode == "interactive" and not has_interactor_payload:
-            raise RuntimeError("interactive mode requires interactor payload")
-
-        compile_files: list[tuple[str, bytes, bool]] = [
-            (
-                "run",
-                self._domjudge_compile_script(
-                    source_name,
-                    manual_validate_only=manual_validate_only,
-                    compile_only=compile_only,
-                ),
-                True,
-            )
-        ]
-        run_files: list[tuple[str, bytes, bool]] = []
-        compare_files: list[tuple[str, bytes, bool]] = []
-        if interactive:
-            # DOMjudge combined run/compare wraps the provided run executable
-            # itself (renames run->runjury and writes run-interactive.sh).
-            # Therefore we must provide jury program as "run" here.
-            if interactor_bytes:
-                run_files.append(("run", interactor_bytes, True))
-            elif interactor_source_bytes:
-                run_files.append(
-                    ("build", self._domjudge_cpp_executable_build_script("interactor.cpp", role="interactor"), True)
-                )
-                run_files.append(("interactor.cpp", interactor_source_bytes, False))
-                if testlib_header_bytes:
-                    run_files.append(("testlib.h", testlib_header_bytes, False))
-            else:
-                raise RuntimeError("interactive mode requires interactor payload")
-            # combined_run_compare=true means compare executable is not fetched.
-            compare_files.append(("run", self._domjudge_compare_script(solve_mode=solve_mode), True))
-        else:
-            run_files.append(
-                (
-                    "run",
-                    self._domjudge_run_script(
-                        False,
-                        solve_mode=solve_mode,
-                        compile_only=compile_only,
-                        generate_mode=generate_mode,
-                        manual_validate_only=manual_validate_only,
-                    ),
-                    True,
-                )
-            )
-            if compile_only or solve_mode:
-                # compile_only/verification.solve-main must accept without checker/answer semantics.
-                compare_files.append(("run", self._domjudge_compare_script(solve_mode=True), True))
-            elif generate_mode:
-                compare_files.append(("run", self._domjudge_compare_script(generate_mode=True), True))
-                if validator_source_bytes:
-                    compare_files.append(("validator.cpp", validator_source_bytes, False))
-                    if testlib_header_bytes:
-                        compare_files.append(("testlib.h", testlib_header_bytes, False))
-                elif validator_bytes:
-                    compare_files.append(("validator", validator_bytes, True))
-            else:
-                compare_files.append(("run", self._domjudge_compare_script(solve_mode=False), True))
-                if checker_source_bytes:
-                    compare_files.append(("checker.cpp", checker_source_bytes, False))
-                    if testlib_header_bytes:
-                        compare_files.append(("testlib.h", testlib_header_bytes, False))
-                elif checker_bytes:
-                    compare_files.append(("checker", checker_bytes, True))
-
-        precomputed = prepared["precomputed"]
-        if precomputed is not None:
-            source_hash = precomputed["source_hash"]
-            compile_hash = precomputed["compile_hash"]
-            run_hash = precomputed["run_hash"]
-            compare_hash = precomputed["compare_hash"]
-            compile_config = dict(precomputed["compile_config"])
-            run_config = dict(precomputed["run_config"])
-            compare_config = dict(precomputed["compare_config"])
-        else:
-            compile_hash = domjudge_executable_hash(compile_files)
-            run_hash = domjudge_executable_hash(run_files)
-            compare_hash = domjudge_executable_hash(compare_files)
-            toolchain_cmd_digest = self._domjudge_toolchain_cmd_digest(
-                source_name,
-                manual_validate_only=manual_validate_only,
-            )
-            compare_script_timelimit = max(1, int(run_tl_sec))
-            if checker_source_bytes or validator_source_bytes:
-                # compare script may need one-time local checker rebuild when host binary
-                # is ABI-incompatible with judgehost runtime; reserve enough wall time.
-                compare_script_timelimit = max(compare_script_timelimit, min(compile_timeout, 120))
-
-            compile_config = {
-                "hash": compile_hash,
-                "toolchain_cmd_digest": toolchain_cmd_digest,
-                "filter_compiler_files": False,
-                "language_extensions": list(language_exts),
-                "script_timelimit": compile_timeout,
-                "script_memory_limit": int(compile_mem_mb * 1024),
-                "script_filesize_limit": int(compile_output_kb),
-            }
-            run_config = {
-                "hash": run_hash,
-                "time_limit": run_tl_sec,
-                "overshoot": run_overshoot_sec,
-                "memory_limit": run_mem_kb,
-                "output_limit": int(run_output_kb),
-                "process_limit": run_process_limit,
-                "entry_point": None,
-                "pass_limit": max_passes,
-                "language_id": language_id,
-            }
-            compare_config = {
-                "hash": compare_hash,
-                "combined_run_compare": bool(interactive),
-                "compare_args": " ".join(
-                    [*(['--validate-input'] if manual_validate_only else []), *checker_args]
-                ),
-                "script_timelimit": int(compare_script_timelimit),
-                "script_memory_limit": max(run_mem_kb, int(compile_mem_mb * 1024)),
-                "script_filesize_limit": int(run_output_kb),
-            }
-        compile_config_hash = domjudge_json_hash(compile_config)
-        run_config_hash = domjudge_json_hash(run_config)
-        compare_config_hash = domjudge_json_hash(compare_config)
-
-        work_key = domjudge_json_hash(
-            {
-                "schema": "v1",
-                "source_hash": source_hash,
-                "source_name": source_name,
-                "compile_hash": compile_hash,
-                "run_hash": run_hash,
-                "compare_hash": compare_hash,
-                "compile_config_hash": compile_config_hash,
-                "run_config_hash": run_config_hash,
-                "compare_config_hash": compare_config_hash,
-            }
-        )
-        work_root = self._domjudge_work_root(f"job-{work_key[:32]}")
+        work_root = self._domjudge_work_root(task_id)
         source_dir = (work_root / "source").resolve()
         scripts_compile_dir = (work_root / "scripts" / "compile").resolve()
         scripts_run_dir = (work_root / "scripts" / "run").resolve()
@@ -606,106 +396,71 @@ class JudgehostDomjudgeDispatchMixin:
             self._domjudge_ensure_bytes_file(scripts_compare_dir / name, content, executable=is_exec)
 
         now_text = now_iso()
-        with self._domdb_conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO judgehost_domjudge_jobs(
-                    task_id,run_id,submit_id,contest_id,mode,source_name,source_path,work_root,
-                    compile_hash,run_hash,compare_hash,source_hash,compile_config_json,run_config_json,compare_config_json,
-                    expected_behavior,verification_source,force_recompile,
-                    lease_owner,status,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    task_id,
-                    run_id,
-                    submit_id,
-                    contest_id,
-                    mode,
-                    source_name,
-                    str(source_path),
-                    str(work_root),
-                    compile_hash,
-                    run_hash,
-                    compare_hash,
-                    source_hash,
-                    json.dumps(compile_config, ensure_ascii=False, separators=(",", ":")),
-                    json.dumps(run_config, ensure_ascii=False, separators=(",", ":")),
-                    json.dumps(compare_config, ensure_ascii=False, separators=(",", ":")),
-                    expected_behavior,
-                    verification_source,
-                    1 if force_recompile else 0,
-                    hostname,
-                    "leased",
-                    now_text,
-                    now_text,
-                ],
+        case_rows: list[dict[str, object]] = []
+        ordinal = 0
+        for entry in tests_rows:
+            ordinal += 1
+            raw_name = domjudge_text(entry.get("name"))
+            test_name = raw_name if RUN_TEST_NAME_RE.fullmatch(raw_name) else f"{ordinal:03}.in"
+            in_bytes = self._domjudge_b64_decode(entry.get("input_b64"))
+            ans_bytes = self._domjudge_b64_decode(entry.get("answer_b64"))
+            testcase_input_hash = domjudge_sha256_bytes(in_bytes)
+            testcase_answer_hash = domjudge_sha256_bytes(ans_bytes)
+            testcase_hash = (
+                testcase_input_hash
+                if solve_mode
+                else self._domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
             )
-            job_row = conn.execute("SELECT job_id FROM judgehost_domjudge_jobs WHERE task_id=?", [task_id]).fetchone()
-            if job_row is None:
-                raise RuntimeError("failed to allocate DOMjudge compatibility job")
-            job_id = int(job_row["job_id"])
-            # Official judgedaemon validates submitid as integer.
-            submit_id = str(job_id)
-            conn.execute(
-                "UPDATE judgehost_domjudge_jobs SET submit_id=? WHERE job_id=?",
-                [submit_id, job_id],
+            testcase_id, in_path_text, ans_path_text = self._domjudge_register_cached_testcase(
+                testcase_hash=testcase_hash,
+                in_bytes=in_bytes,
+                ans_bytes=ans_bytes,
             )
-            ordinal = 0
-            for entry in tests_rows:
-                ordinal += 1
-                raw_name = domjudge_text(entry.get("name"))
-                test_name = raw_name if RUN_TEST_NAME_RE.fullmatch(raw_name) else f"{ordinal:03}.in"
-                in_bytes = self._domjudge_b64_decode(entry.get("input_b64"))
-                ans_bytes = self._domjudge_b64_decode(entry.get("answer_b64"))
-                testcase_input_hash = domjudge_sha256_bytes(in_bytes)
-                testcase_answer_hash = domjudge_sha256_bytes(ans_bytes)
-                # verification.solve-main must not depend on pre-existing answers:
-                # use input hash as testcase key so cache identity is
-                # (main_correct/source signature + input_hash).
-                testcase_hash = (
-                    testcase_input_hash
-                    if solve_mode
-                    else self._domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
-                )
-                testcase_id, in_path_text, ans_path_text = self._domjudge_register_cached_testcase(
-                    conn,
-                    testcase_hash=testcase_hash,
-                    in_bytes=in_bytes,
-                    ans_bytes=ans_bytes,
-                )
-                conn.execute(
-                    """
-                    INSERT INTO judgehost_domjudge_cases(
-                        job_id,task_id,run_id,test_name,ordinal,testcase_id,testcase_hash,testcase_input_hash,testcase_answer_hash,input_path,answer_path,status,created_at,updated_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    [
-                        job_id,
-                        task_id,
-                        run_id,
-                        test_name,
-                        ordinal,
-                        testcase_id,
-                        testcase_hash,
-                        testcase_input_hash,
-                        testcase_answer_hash,
-                        in_path_text,
-                        ans_path_text,
-                        "pending",
-                        now_text,
-                        now_text,
-                    ],
-                )
-            conn.commit()
-        return job_id
+            case_rows.append(
+                {
+                    "test_name": test_name,
+                    "ordinal": ordinal,
+                    "testcase_id": testcase_id,
+                    "testcase_hash": testcase_hash,
+                    "testcase_input_hash": testcase_input_hash,
+                    "testcase_answer_hash": testcase_answer_hash,
+                    "input_path": in_path_text,
+                    "answer_path": ans_path_text,
+                    "status": "pending",
+                }
+            )
+
+        return self._judgehost_state_store.create_job_with_cases(
+            task_id=task_id,
+            run_id=run_id,
+            submit_id=str(int(time.time() * 1000)),
+            contest_id=contest_id,
+            mode=mode,
+            source_name=source_name,
+            source_path=str(source_path),
+            work_root=str(work_root),
+            compile_hash=compile_hash,
+            run_hash=run_hash,
+            compare_hash=compare_hash,
+            source_hash=source_hash,
+            compile_config_json=json.dumps(compile_config, ensure_ascii=False, separators=(",", ":")),
+            run_config_json=json.dumps(run_config, ensure_ascii=False, separators=(",", ":")),
+            compare_config_json=json.dumps(compare_config, ensure_ascii=False, separators=(",", ":")),
+            expected_behavior=expected_behavior,
+            verification_source=verification_source,
+            force_recompile=1 if force_recompile else 0,
+            lease_owner=safe_host,
+            status="leased",
+            created_at=now_text,
+            case_rows=case_rows,
+        )
 
     def _domjudge_try_cache_shortcut(
         self,
         *,
         hostname: str,
-        job_row: sqlite3.Row,
-        case_row: sqlite3.Row,
+        job_row: JudgehostJobRow,
+        case_row: JudgehostCaseRow,
         compile_config_hash: str,
         run_config_hash: str,
         compare_config_hash: str,
@@ -830,26 +585,17 @@ class JudgehostDomjudgeDispatchMixin:
             return None
         return cached_result
 
+
     def _domjudge_release_prepared_job_for_queue(self, job_id: int) -> None:
         now_text = now_iso()
         prequeue_host = self._normalize_hostname("prequeue-cache")
-        with self._domdb_conn() as conn:
-            conn.execute(
-                """
-                UPDATE judgehost_domjudge_jobs
-                SET lease_owner=NULL, status='queued', updated_at=?
-                WHERE job_id=? AND lease_owner=? AND status IN ('leased','queued')
-                """,
-                [now_text, int(job_id), prequeue_host],
-            )
-            conn.execute(
-                """
-                UPDATE judgehost_domjudge_cases
-                SET status='pending', lease_owner=NULL, updated_at=?
-                WHERE job_id=? AND status='leased' AND lease_owner=?
-                """,
-                [now_text, int(job_id), prequeue_host],
-            )
+        self._judgehost_state_store.release_prepared_job_for_queue(
+            int(job_id),
+            lease_owner=prequeue_host,
+            now_text=now_text,
+        )
+
+
     def _domjudge_try_prequeue_cache_finalize(self, *, task_id: str, run_id: str, payload: dict[str, object]) -> None:
         safe_task_id = domjudge_text(task_id)
         if not safe_task_id:
@@ -873,26 +619,10 @@ class JudgehostDomjudgeDispatchMixin:
                     },
                 )
             )
-            job_row = self._db_fetch_one(
-                """
-                SELECT submit_id,contest_id,task_id,source_name,compile_config_json,run_config_json,compare_config_json,
-                       compile_hash,run_hash,compare_hash,source_hash,expected_behavior,verification_source,force_recompile,work_root,run_id
-                FROM judgehost_domjudge_jobs
-                WHERE job_id=?
-                """,
-                [int(job_id)],
-            )
+            job_row = self._judgehost_state_store.fetch_job(int(job_id))
             if job_row is None:
                 return
-            rows = self._db_fetch_all(
-                """
-                SELECT *
-                FROM judgehost_domjudge_cases
-                WHERE job_id=? AND status='pending'
-                ORDER BY ordinal ASC, id ASC
-                """,
-                [int(job_id)],
-            )
+            rows = self._judgehost_state_store.cases_for_job(int(job_id), status="pending")
             if not rows:
                 self._domjudge_finalize_if_ready(int(job_id))
                 return
@@ -908,7 +638,8 @@ class JudgehostDomjudgeDispatchMixin:
                 toolchain_cmd_digest = self._domjudge_toolchain_cmd_digest(domjudge_text(job_row["source_name"]))
 
             now_text = now_iso()
-            cached_rows: list[tuple[sqlite3.Row, _DomjudgeCachedCaseResult]] = []
+            work_root = Path(domjudge_text(job_row["work_root"])).resolve()
+            cached_case_updates: list[dict[str, object]] = []
             pending_rows = 0
             for row in rows:
                 shortcut = self._domjudge_try_cache_shortcut(
@@ -920,41 +651,58 @@ class JudgehostDomjudgeDispatchMixin:
                     compare_config_hash=compare_config_hash,
                     toolchain_cmd_digest=toolchain_cmd_digest,
                 )
-                if shortcut is not None:
-                    cached_rows.append((row, shortcut))
-                else:
+                if shortcut is None:
                     pending_rows += 1
+                    continue
+                cached_case_updates.append(
+                    {
+                        "case_id": int(row["id"]),
+                        "runresult": cached["runresult"] if (cached := shortcut) else "",
+                        "runtime_sec": cached["runtime_sec"],
+                        "cpu_sec": cached["cpu_sec"],
+                        "wall_sec": cached["wall_sec"],
+                        "memory_kb": cached["memory_kb"],
+                        "output_run_rel": cached["output_run_rel"],
+                        "output_error_rel": cached["output_error_rel"],
+                        "output_system_rel": cached["output_system_rel"],
+                        "output_diff_rel": cached["output_diff_rel"],
+                        "metadata_rel": cached["metadata_rel"],
+                        "compare_metadata_rel": cached["compare_metadata_rel"],
+                        "team_message_rel": cached["team_message_rel"],
+                        "score_text": cached["score_text"],
+                        "test_name": row["test_name"],
+                    }
+                )
 
-            if cached_rows:
-                with self._domdb_conn() as conn:
-                    for row, cached in cached_rows:
-                        case_id = int(row["id"])
-                        conn.execute(
-                            """
-                            UPDATE judgehost_domjudge_cases
-                            SET status='reported', lease_owner=?, runresult=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?,
-                                output_run_rel=?, output_error_rel=?, output_system_rel=?, output_diff_rel=?, metadata_rel=?, compare_metadata_rel=?, team_message_rel=?, score_text=?, updated_at=?
-                            WHERE id=? AND status='pending'
-                            """,
-                            [
-                                cached["lease_owner"],
-                                cached["runresult"],
-                                cached["runtime_sec"],
-                                cached["cpu_sec"],
-                                cached["wall_sec"],
-                                cached["memory_kb"],
-                                cached["output_run_rel"],
-                                cached["output_error_rel"],
-                                cached["output_system_rel"],
-                                cached["output_diff_rel"],
-                                cached["metadata_rel"],
-                                cached["compare_metadata_rel"],
-                                cached["team_message_rel"],
-                                cached["score_text"],
-                                now_text,
-                                int(case_id),
-                            ],
-                        )
+            if cached_case_updates:
+                self._judgehost_state_store.apply_cached_case_results(
+                    cached_rows=cached_case_updates,
+                    lease_owner=prequeue_host,
+                    now_text=now_text,
+                )
+                for cached in cached_case_updates:
+                    feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
+                        work_root=work_root,
+                        runresult=domjudge_text(cached["runresult"]),
+                        output_error_rel=domjudge_text(cached["output_error_rel"]),
+                        output_diff_rel=domjudge_text(cached["output_diff_rel"]),
+                        team_message_rel=domjudge_text(cached["team_message_rel"]),
+                    )
+                    self._domjudge_update_verification_run_case_progress(
+                        task_id=safe_task_id,
+                        source_path=domjudge_text(job_row["source_path"]),
+                        test_name=domjudge_text(cached["test_name"]),
+                        verdict=self._domjudge_verdict_from_runresult(domjudge_text(cached["runresult"])),
+                        runtime_sec=domjudge_parse_float(cached["runtime_sec"], 0.0),
+                        cpu_sec=domjudge_parse_float(cached["cpu_sec"], 0.0),
+                        wall_sec=domjudge_parse_float(cached["wall_sec"], 0.0),
+                        memory_kb=max(0, domjudge_parse_int(cached["memory_kb"], 0)),
+                        feedback_text=feedback_text,
+                        output_ref=domjudge_text(cached["output_run_rel"]),
+                        run_status="running",
+                        runresult=domjudge_text(cached["runresult"]),
+                        feedback_files=feedback_files,
+                    )
             if pending_rows > 0:
                 self._domjudge_release_prepared_job_for_queue(int(job_id))
                 return
@@ -973,28 +721,27 @@ class JudgehostDomjudgeDispatchMixin:
                     pass
             logger.warning("prequeue cache consumption failed task_id=%s: %s", safe_task_id, exc)
 
+
     def _domjudge_lease_cases(self, job_id: int, hostname: str, max_batchsize: int) -> list[dict[str, object]]:
         cap = max(1, min(256, int(max_batchsize)))
         now_text = now_iso()
-        job_row = self._db_fetch_one(
-            """
-            SELECT submit_id,contest_id,task_id,compile_config_json,run_config_json,compare_config_json,compile_hash,run_hash,compare_hash
-            FROM judgehost_domjudge_jobs
-            WHERE job_id=?
-            """,
-            [int(job_id)],
-        )
+        job_row = self._judgehost_state_store.fetch_job(int(job_id))
         if job_row is None:
             return []
-        rows = self._db_fetch_all(
-            """
-            SELECT *
-            FROM judgehost_domjudge_cases
-            WHERE job_id=? AND status='pending'
-            ORDER BY ordinal ASC, id ASC
-            LIMIT ?
-            """,
-            [int(job_id), int(cap)],
+        safe_task_id = domjudge_text(job_row["task_id"])
+        task_row = self._task_by_id(safe_task_id)
+        if task_row is None or task_row.get("status") not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+            self._judgehost_state_store.cancel_jobs_for_runs(
+                run_ids=[domjudge_text(job_row["run_id"])],
+                final_status="failed",
+                now_text=now_text,
+            )
+            return []
+        rows = self._judgehost_state_store.lease_cases(
+            int(job_id),
+            hostname=hostname,
+            limit=int(cap),
+            now_text=now_text,
         )
         if not rows:
             return []
@@ -1020,56 +767,32 @@ class JudgehostDomjudgeDispatchMixin:
         run_id_num = int(domjudge_script_ids(run_provider_job_id)[1])
         compare_id = int(domjudge_script_ids(compare_provider_job_id)[2])
         safe_submit_id = str(int(job_row["submit_id"]))
-        safe_task_id = domjudge_text(job_row["task_id"])
         contest_id = domjudge_text(job_row["contest_id"]) or "local"
         compile_config_json = domjudge_text(job_row["compile_config_json"])
         run_config_json = domjudge_text(job_row["run_config_json"])
         compare_config_json = domjudge_text(job_row["compare_config_json"])
         out: list[dict[str, object]] = []
-        with self._domdb_conn() as conn:
-            conn.execute(
-                """
-                UPDATE judgehost_domjudge_jobs
-                SET lease_owner=?, status='leased', updated_at=?
-                WHERE job_id=?
-                """,
-                [hostname, now_text, int(job_id)],
+        for row in rows:
+            case_id = int(row["id"])
+            testcase_id = case_id
+            out.append(
+                {
+                    "type": "judging_run",
+                    "judgetaskid": case_id,
+                    "jobid": int(job_id),
+                    "uuid": safe_task_id,
+                    "submitid": safe_submit_id,
+                    "contestid": contest_id,
+                    "compile_script_id": str(int(compile_id)),
+                    "run_script_id": str(int(run_id_num)),
+                    "compare_script_id": str(int(compare_id)),
+                    "testcase_id": str(int(testcase_id)),
+                    "testcase_hash": domjudge_text(row["testcase_hash"]),
+                    "compile_config": compile_config_json,
+                    "run_config": run_config_json,
+                    "compare_config": compare_config_json,
+                }
             )
-            for row in rows:
-                case_id = int(row["id"])
-                # DOMjudge working directories are keyed by testcase id. Reusing a
-                # shared testcase id across multiple case rows in one submit can make
-                # judgedaemon treat distinct cases as the same work item. Always
-                # expose the case id as testcase id at API boundary.
-                testcase_id = case_id
-                updated = conn.execute(
-                    """
-                    UPDATE judgehost_domjudge_cases
-                    SET status='leased', lease_owner=?, updated_at=?
-                    WHERE id=? AND status='pending'
-                    """,
-                    [hostname, now_text, case_id],
-                )
-                if int(updated.rowcount or 0) <= 0:
-                    continue
-                out.append(
-                    {
-                        "type": "judging_run",
-                        "judgetaskid": case_id,
-                        "jobid": int(job_id),
-                        "uuid": safe_task_id,
-                        "submitid": safe_submit_id,
-                        "contestid": contest_id,
-                        "compile_script_id": str(int(compile_id)),
-                        "run_script_id": str(int(run_id_num)),
-                        "compare_script_id": str(int(compare_id)),
-                        "testcase_id": str(int(testcase_id)),
-                        "testcase_hash": domjudge_text(row["testcase_hash"]),
-                        "compile_config": compile_config_json,
-                        "run_config": run_config_json,
-                        "compare_config": compare_config_json,
-                    }
-                )
         self.renew_lease(safe_task_id, hostname)
         return out
 
@@ -1082,7 +805,7 @@ class JudgehostDomjudgeDispatchMixin:
         max_attempts = max(1, min(32, cap * 4))
 
         for _ in range(max_attempts):
-            active = self._domjudge_active_job_for_host(safe_host)
+            active = self._judgehost_state_store.active_job_for_host(safe_host)
             if active is not None:
                 active_job_id = int(active["job_id"])
                 leased_cases = self._domjudge_lease_cases(active_job_id, safe_host, cap)
@@ -1090,14 +813,14 @@ class JudgehostDomjudgeDispatchMixin:
                     return leased_cases
                 # No pending cases for the active job; attempt finalization and retry.
                 self._domjudge_finalize_if_ready(active_job_id)
-                refreshed = self._domjudge_active_job_for_host(safe_host)
+                refreshed = self._judgehost_state_store.active_job_for_host(safe_host)
                 if refreshed is not None and int(refreshed["job_id"]) == active_job_id:
                     return []
                 continue
 
             leased = self.fetch_work(safe_host, limit=1)
             if not leased:
-                shared_job = self._domjudge_shared_pending_job(safe_host)
+                shared_job = self._judgehost_state_store.shared_pending_job(safe_host)
                 if shared_job is not None:
                     shared_job_id = int(shared_job["job_id"])
                     leased_cases = self._domjudge_lease_cases(shared_job_id, safe_host, cap)
@@ -1108,7 +831,8 @@ class JudgehostDomjudgeDispatchMixin:
             leased_task = leased[0]
             task_id = domjudge_text(leased_task.get("task_id"))
             try:
-                active_job_id = self._domjudge_prepare_job(safe_host, leased_task)
+                existing_job = self._judgehost_state_store.job_for_task(task_id) if task_id else None
+                active_job_id = int(existing_job["job_id"]) if existing_job is not None else self._domjudge_prepare_job(safe_host, leased_task)
             except Exception as exc:
                 error_text = str(exc)
                 if not error_text:

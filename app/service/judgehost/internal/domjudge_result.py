@@ -25,6 +25,11 @@ from app.service.judgehost.runtime import (
     domjudge_rewrite_untrusted_runresult,
 )
 from app.service.platform.hashing import sha256_hex_bytes as domjudge_sha256_bytes
+from app.service.verification.test_rows import (
+    build_verification_test_pass_row,
+    build_verification_test_row,
+    upsert_verification_test_row,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +37,18 @@ _diag_logger = logging.getLogger("uvicorn.error")
 
 
 class JudgehostDomjudgeResultsMixin:
+    def _domjudge_task_accepts_case_updates(self, task_id: str) -> bool:
+        task_row = self._task_by_id(task_id)
+        if task_row is None:
+            return False
+        task_status = domjudge_lower_text(task_row["status"])
+        return task_status in {
+            self.STATUS_ENQUEUING,
+            self.STATUS_QUEUED,
+            self.STATUS_LEASED,
+            self.STATUS_REPORTING,
+        }
+
     @staticmethod
     def _domjudge_feedback_token_order(
         *,
@@ -90,6 +107,8 @@ class JudgehostDomjudgeResultsMixin:
         feedback_text: str,
         output_ref: str,
         run_status: str = "running",
+        runresult: str = "",
+        feedback_files: list[str] | None = None,
     ) -> None:
         if not task_id:
             return
@@ -102,58 +121,40 @@ class JudgehostDomjudgeResultsMixin:
         if (not verification_id) or (not target_run_id):
             return
         summary = self._load_run_summary(target_run_id, verification_id)
-        existing_tests = summary.get("tests", [])
-        updated_tests: list[dict[str, object]] = []
         verdict_token = verdict.upper() or "FL"
         time_ms = max(0, int(round(runtime_sec * 1000.0)))
         time_user_ms = max(0, int(round((cpu_sec if cpu_sec > 0.0 else runtime_sec) * 1000.0)))
         time_wall_ms = max(0, int(round((wall_sec if wall_sec > 0.0 else (cpu_sec if cpu_sec > 0.0 else runtime_sec)) * 1000.0)))
         memory_kb_int = max(0, memory_kb)
-        pass_row = {
-            "pass": 1,
-            "verdict": verdict_token,
-            "time_ms": time_ms,
-            "time_user_ms": time_user_ms,
-            "time_wall_ms": time_wall_ms,
-            "memory_kb": memory_kb_int,
-            "feedback": feedback_text,
-            "output_ref": output_ref,
-        }
-        test_row = {
-            "test": test_name,
-            "verdict": verdict_token,
-            "time_ms": time_ms,
-            "time_user_ms": time_user_ms,
-            "time_wall_ms": time_wall_ms,
-            "memory_kb": memory_kb_int,
-            "message": feedback_text,
-            "output_ref": output_ref,
-            "passes": [pass_row],
-        }
-        replaced = False
-        for item in existing_tests:
-            if item["test"] == test_name:
-                updated_tests.append(test_row)
-                replaced = True
-            else:
-                updated_tests.append(item)
-        if not replaced:
-            updated_tests.append(test_row)
-        updated_tests.sort(key=lambda item: item["test"])
-        summary["tests"] = updated_tests
-        summary["tests_total"] = max(
-            len(updated_tests),
-            summary.get("tests_total", 0),
-            len(payload.get("selected_tests", [])),
+        test_row = build_verification_test_row(
+            test_name=test_name,
+            verdict=verdict_token,
+            time_ms=time_ms,
+            time_user_ms=time_user_ms,
+            time_wall_ms=time_wall_ms,
+            memory_kb=memory_kb_int,
+            message=feedback_text,
+            output_ref=output_ref,
+            feedback_files=list(feedback_files or []),
+            passes=[
+                build_verification_test_pass_row(
+                    verdict=verdict_token,
+                    time_ms=time_ms,
+                    time_user_ms=time_user_ms,
+                    time_wall_ms=time_wall_ms,
+                    memory_kb=memory_kb_int,
+                    feedback=feedback_text,
+                    output_ref=output_ref,
+                    runresult=runresult,
+                )
+            ],
+            runresult=runresult,
         )
-        usage = summary.get("usage", {})
-        summary["usage"] = {
-            "tests": len(updated_tests),
-            "time_ms_total": max(time_user_ms, usage.get("time_ms_total", 0)),
-            "time_user_ms_total": max(time_user_ms, usage.get("time_user_ms_total", 0)),
-            "time_wall_ms_total": max(time_wall_ms, usage.get("time_wall_ms_total", 0)),
-            "memory_kb_peak": max(memory_kb_int, usage.get("memory_kb_peak", 0)),
-        }
+        upsert_verification_test_row(
+            summary,
+            test_row=test_row,
+            selected_tests_count=len(payload.get("selected_tests", [])),
+        )
         summary["source"] = summary.get("source") or source_path
         summary["verification_source"] = payload.get("verification_source") or summary.get("verification_source") or "verification.start"
         summary["artifact_verification_id"] = verification_id
@@ -169,35 +170,8 @@ class JudgehostDomjudgeResultsMixin:
         safe_submit = domjudge_text(submit_id)
         if not safe_submit:
             raise RuntimeError("source files not found")
-        row = None
-        if safe_submit.isdigit():
-            row = self._db_fetch_one(
-                """
-                SELECT source_name,source_path
-                FROM judgehost_domjudge_jobs
-                WHERE job_id=?
-                """,
-                [int(safe_submit)],
-            )
-        if row is None and contest_id is not None:
-            safe_contest = self._domjudge_contest_id(contest_id)
-            row = self._db_fetch_one(
-                """
-                SELECT source_name,source_path
-                FROM judgehost_domjudge_jobs
-                WHERE submit_id=? AND contest_id=?
-                """,
-                [safe_submit, safe_contest],
-            )
-        if row is None:
-            row = self._db_fetch_one(
-                """
-                SELECT source_name,source_path
-                FROM judgehost_domjudge_jobs
-                WHERE submit_id=?
-                """,
-                [safe_submit],
-            )
+        safe_contest = None if contest_id is None else self._domjudge_contest_id(contest_id)
+        row = self._judgehost_state_store.source_file_job(safe_submit, contest_id=safe_contest)
         if row is None:
             raise RuntimeError("source files not found")
         source_path = Path(domjudge_text(row["source_path"])).resolve()
@@ -232,29 +206,7 @@ class JudgehostDomjudgeResultsMixin:
 
     def domjudge_get_testcase_files(self, testcase_id: int) -> list[dict[str, object]]:
         token = int(testcase_id)
-        resolution_source = "case-id"
-        # judgedaemon receives case id as testcase_id; resolve case row first.
-        row = self._db_fetch_one(
-            """
-            SELECT input_path,answer_path
-            FROM judgehost_domjudge_cases
-            WHERE id=?
-            LIMIT 1
-            """,
-            [token],
-        )
-        if row is None:
-            resolution_source = "stored-testcase-id"
-            row = self._db_fetch_one(
-                """
-                SELECT input_path,answer_path
-                FROM judgehost_domjudge_cases
-                WHERE testcase_id=?
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                [token],
-            )
+        row, resolution_source = self._judgehost_state_store.testcase_paths(token)
         if row is None:
             with self._testcase_registry_lock:
                 record = self._testcase_registry_by_id.get(token)
@@ -298,10 +250,10 @@ class JudgehostDomjudgeResultsMixin:
         token = domjudge_lower_text(kind)
         if token not in expected or expected[token] != offset:
             raise RuntimeError("script id/type mismatch")
-        job_row = self._db_fetch_one("SELECT work_root FROM judgehost_domjudge_jobs WHERE job_id=?", [job_id])
-        if job_row is None:
+        work_root_text = self._judgehost_state_store.work_root_for_job(job_id)
+        if not work_root_text:
             raise RuntimeError("script files not found")
-        base = (Path(domjudge_text(job_row["work_root"])).resolve() / "scripts" / token).resolve()
+        base = (Path(work_root_text).resolve() / "scripts" / token).resolve()
         if not base.exists() or not base.is_dir():
             raise RuntimeError("script files not found")
         rows: list[dict[str, object]] = []
@@ -359,21 +311,13 @@ class JudgehostDomjudgeResultsMixin:
         return domjudge_task_lease_owner(self._task_by_id(task_id), default="judgehost")
 
     def _domjudge_finalize_if_ready(self, job_id: int, *, force_failed: bool = False, error_text: str = "") -> None:
-        job_row = self._db_fetch_one(
-            """
-            SELECT task_id,run_id,status,compile_success,compile_output_b64,compile_metadata_b64,work_root,run_config_json,
-                   compile_hash,run_hash,compare_hash
-            FROM judgehost_domjudge_jobs
-            WHERE job_id=?
-            """,
-            [int(job_id)],
-        )
+        job_row = self._judgehost_state_store.job_finalize_row(int(job_id))
         if job_row is None:
             return
         current_status = domjudge_lower_text(job_row["status"])
         if current_status in {"completed", "failed"}:
             return
-        cases = self._domjudge_cases_for_job(int(job_id))
+        cases = self._judgehost_state_store.cases_for_job(int(job_id))
         if not cases:
             return
         task_id = domjudge_text(job_row["task_id"])
@@ -422,31 +366,32 @@ class JudgehostDomjudgeResultsMixin:
                 output_diff_rel=row["output_diff_rel"],
                 team_message_rel=row["team_message_rel"],
             )
-            final_pass = {
-                "verdict": verdict,
-                "time_ms": cpu_ms,
-                "time_user_ms": cpu_ms,
-                "time_wall_ms": wall_ms,
-                "memory_kb": memory_kb,
-                "runresult": runresult,
-            }
             output_ref = domjudge_text(row["output_run_rel"])
-            if output_ref:
-                final_pass["output_ref"] = output_ref
-            if feedback_text:
-                final_pass["feedback"] = feedback_text
             tests.append(
-                {
-                    "test": test_name,
-                    "passes": [final_pass],
-                    "verdict": verdict,
-                    "time_ms": cpu_ms,
-                    "time_user_ms": cpu_ms,
-                    "time_wall_ms": wall_ms,
-                    "memory_kb": memory_kb,
-                    "feedback_files": feedback_files,
-                    "runresult": runresult,
-                }
+                build_verification_test_row(
+                    test_name=test_name,
+                    verdict=verdict,
+                    time_ms=cpu_ms,
+                    time_user_ms=cpu_ms,
+                    time_wall_ms=wall_ms,
+                    memory_kb=memory_kb,
+                    message=feedback_text,
+                    output_ref=output_ref,
+                    feedback_files=feedback_files,
+                    passes=[
+                        build_verification_test_pass_row(
+                            verdict=verdict,
+                            time_ms=cpu_ms,
+                            time_user_ms=cpu_ms,
+                            time_wall_ms=wall_ms,
+                            memory_kb=memory_kb,
+                            feedback=feedback_text,
+                            output_ref=output_ref,
+                            runresult=runresult,
+                        )
+                    ],
+                    runresult=runresult,
+                )
             )
             if (
                 compile_success != 0
@@ -525,20 +470,33 @@ class JudgehostDomjudgeResultsMixin:
             )
         except RuntimeError as exc:
             logger.warning("failed to finalize DOMjudge job %s via report_result: %s", int(job_id), exc)
-        self._db_execute(
-            "UPDATE judgehost_domjudge_jobs SET status=?, completed_at=?, updated_at=? WHERE job_id=?",
-            ["failed" if force_failed else "completed", now_iso(), now_iso(), int(job_id)],
+        finished_at = now_iso()
+        self._judgehost_state_store.set_job_terminal_status(
+            int(job_id),
+            status="failed" if force_failed else "completed",
+            completed_at=finished_at,
+            updated_at=finished_at,
         )
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
         safe_host = self._normalize_hostname(hostname)
         case_id = int(judgetask_id)
-        case_row = self._db_fetch_one("SELECT id,job_id FROM judgehost_domjudge_cases WHERE id=?", [case_id])
+        case_row = self._judgehost_state_store.case_execution_row(case_id)
         if case_row is None:
             # judgedaemon may still report progress for a case that was already
             # dropped by server-side cancellation/startup cleanup. Treat as
             # idempotent no-op so daemon can continue without fatal retries.
             logger.info("ignoring update for unknown judging run id: %s", case_id)
+            return
+        if domjudge_lower_text(case_row["job_status"]) not in {"queued", "leased"}:
+            logger.info("ignoring update for terminal DOMjudge job case id: %s", case_id)
+            return
+        if domjudge_lower_text(case_row["case_status"]) != "leased":
+            logger.info("ignoring update for non-leased DOMjudge case id: %s", case_id)
+            return
+        safe_task_id = domjudge_text(case_row["task_id"])
+        if not self._domjudge_task_accepts_case_updates(safe_task_id):
+            logger.info("ignoring update for cancelled DOMjudge task case id: %s", case_id)
             return
         job_id = int(case_row["job_id"])
         compile_success = None
@@ -554,48 +512,42 @@ class JudgehostDomjudgeResultsMixin:
         compile_output = _payload_blob_as_b64(payload.get("output_compile"))
         compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
         if compile_success is not None:
-            self._db_execute(
-                """
-                UPDATE judgehost_domjudge_jobs
-                SET compile_success=?, compile_output_b64=?, compile_metadata_b64=?, lease_owner=?, updated_at=?
-                WHERE job_id=?
-                """,
-                [compile_success, compile_output, compile_meta, safe_host, now_iso(), job_id],
+            updated_at = now_iso()
+            updated = self._judgehost_state_store.record_compile_result(
+                job_id,
+                compile_success=compile_success,
+                compile_output_b64=compile_output,
+                compile_metadata_b64=compile_meta,
+                lease_owner=safe_host,
+                updated_at=updated_at,
             )
+            if not updated:
+                logger.info("ignoring compile update for terminal DOMjudge job case id: %s", case_id)
+                return
             if compile_success == 0:
-                self._db_execute(
-                    """
-                    UPDATE judgehost_domjudge_cases
-                    SET status='reported', runresult='compiler-error', runtime_sec=0, cpu_sec=0, wall_sec=0, memory_kb=0, updated_at=?
-                    WHERE job_id=? AND status<>'reported'
-                    """,
-                    [now_iso(), job_id],
-                )
+                self._judgehost_state_store.mark_compile_failed_cases(job_id, updated_at=updated_at)
                 self._domjudge_finalize_if_ready(job_id)
 
     def domjudge_add_judging_run(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> int:
         safe_host = self._normalize_hostname(hostname)
         case_id = int(judgetask_id)
-        row = self._db_fetch_one(
-            """
-            SELECT
-                c.id,c.job_id,c.task_id,c.test_name,c.testcase_hash,c.input_path,c.answer_path,
-                j.run_id,j.work_root,j.mode,j.source_name,j.source_path,
-                j.source_hash,j.compile_hash,j.run_hash,j.compare_hash,
-                j.compile_config_json,j.run_config_json,j.compare_config_json,j.compile_success
-            FROM judgehost_domjudge_cases c
-            JOIN judgehost_domjudge_jobs j ON j.job_id=c.job_id
-            WHERE c.id=?
-            """,
-            [case_id],
-        )
+        row = self._judgehost_state_store.case_execution_row(case_id)
         if row is None:
             # Same stale-callback case as domjudge_update_judging: acknowledge
             # gracefully to avoid hard-failing judgedaemon retries.
             logger.info("ignoring add_judging_run for unknown judging run id: %s", case_id)
             return case_id
+        if domjudge_lower_text(row["job_status"]) not in {"queued", "leased"}:
+            logger.info("ignoring add_judging_run for terminal DOMjudge job id: %s", case_id)
+            return case_id
+        if domjudge_lower_text(row["case_status"]) != "leased":
+            logger.info("ignoring add_judging_run for non-leased DOMjudge case id: %s", case_id)
+            return case_id
         job_id = int(row["job_id"])
         safe_task_id = domjudge_text(row["task_id"])
+        if not self._domjudge_task_accepts_case_updates(safe_task_id):
+            logger.info("ignoring add_judging_run for cancelled DOMjudge task id: %s", case_id)
+            return case_id
         work_root = Path(domjudge_text(row["work_root"])).resolve()
         result_root = (work_root / "results" / f"{case_id}").resolve()
         result_root.mkdir(parents=True, exist_ok=True)
@@ -739,7 +691,7 @@ class JudgehostDomjudgeResultsMixin:
         if runresult in {"compare-error", "run-error"} and compare_exit_code == 3:
             runresult = "checker-fail"
         verdict = self._domjudge_verdict_from_runresult(runresult)
-        feedback_text, _ = self._domjudge_feedback_text_and_files(
+        feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
             work_root=work_root,
             runresult=runresult,
             output_error_rel=output_err_rel,
@@ -857,32 +809,27 @@ class JudgehostDomjudgeResultsMixin:
             )
 
         now_text = now_iso()
-        self._db_execute(
-            """
-            UPDATE judgehost_domjudge_cases
-            SET status='reported', lease_owner=?, runresult=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?,
-                output_run_rel=?, output_error_rel=?, output_system_rel=?, output_diff_rel=?, metadata_rel=?, compare_metadata_rel=?, team_message_rel=?, score_text=?, updated_at=?
-            WHERE id=?
-            """,
-            [
-                safe_host,
-                runresult,
-                runtime_sec,
-                cpu_sec,
-                wall_sec,
-                memory_kb,
-                output_run_token,
-                output_err_token,
-                output_sys_token,
-                output_diff_token,
-                metadata_token,
-                compare_meta_token,
-                team_message_token,
-                score_text,
-                now_text,
-                case_id,
-            ],
+        updated_case = self._judgehost_state_store.report_case_result(
+            case_id,
+            lease_owner=safe_host,
+            runresult=runresult,
+            runtime_sec=runtime_sec,
+            cpu_sec=cpu_sec,
+            wall_sec=wall_sec,
+            memory_kb=memory_kb,
+            output_run_rel=output_run_token,
+            output_error_rel=output_err_token,
+            output_system_rel=output_sys_token,
+            output_diff_rel=output_diff_token,
+            metadata_rel=metadata_token,
+            compare_metadata_rel=compare_meta_token,
+            team_message_rel=team_message_token,
+            score_text=score_text,
+            updated_at=now_text,
         )
+        if not updated_case:
+            logger.info("ignoring stale add_judging_run result for case id: %s", case_id)
+            return case_id
         logger.warning(
             "domjudge add_judging_run host=%s job_id=%s case_id=%s runresult=%s",
             safe_host,
@@ -905,6 +852,8 @@ class JudgehostDomjudgeResultsMixin:
                     feedback_text=feedback_text,
                     output_ref=output_run_token,
                     run_status="running",
+                    runresult=runresult,
+                    feedback_files=feedback_files,
                 )
             except Exception:
                 logger.exception(
@@ -927,15 +876,7 @@ class JudgehostDomjudgeResultsMixin:
         if judgetask_id is None:
             return 0
         case_id = int(judgetask_id)
-        row = self._db_fetch_one(
-            """
-            SELECT c.job_id,c.debug_text AS case_debug_text,j.debug_text AS job_debug_text
-            FROM judgehost_domjudge_cases c
-            JOIN judgehost_domjudge_jobs j ON j.job_id=c.job_id
-            WHERE c.id=?
-            """,
-            [case_id],
-        )
+        row = self._judgehost_state_store.case_debug_context(case_id)
         if row is not None:
             job_id = int(row["job_id"])
             case_debug = domjudge_text(row["case_debug_text"])
@@ -945,7 +886,7 @@ class JudgehostDomjudgeResultsMixin:
                 debug_text = job_debug if not debug_text else f"{debug_text}\n{job_debug}"
             result_id = case_id
         else:
-            job_row = self._db_fetch_one("SELECT job_id,debug_text FROM judgehost_domjudge_jobs WHERE job_id=?", [case_id])
+            job_row = self._judgehost_state_store.job_debug_context(case_id)
             if job_row is None:
                 return 0
             job_id = int(job_row["job_id"])
@@ -1100,17 +1041,12 @@ class JudgehostDomjudgeResultsMixin:
             compact = compact[:4000].rstrip()
         return compact
 
+
     def domjudge_add_debug_info(self, *, hostname: str, judgetask_id: int, payload: dict[str, object] | None = None) -> None:
         safe_host = self._normalize_hostname(hostname)
         case_id = int(judgetask_id)
-        case_row = self._db_fetch_one(
-            "SELECT id,job_id,task_id,run_id FROM judgehost_domjudge_cases WHERE id=?",
-            [case_id],
-        )
-        job_row = self._db_fetch_one(
-            "SELECT job_id,task_id,run_id FROM judgehost_domjudge_jobs WHERE job_id=?",
-            [case_id],
-        )
+        case_row = self._judgehost_state_store.fetch_case(case_id)
+        job_row = self._judgehost_state_store.fetch_job(case_id)
         safe_task_id = ""
         safe_run_id = ""
         target_case_id: int | None = None
@@ -1132,42 +1068,17 @@ class JudgehostDomjudgeResultsMixin:
                 case_id,
                 sorted(debug_payload.keys()),
             )
-        with self._domdb_conn() as conn:
-            debug_text = self._domjudge_debug_payload_text(debug_payload)
-            if debug_text:
-                now_text = now_iso()
-                if target_case_id is not None:
-                    current_row = conn.execute(
-                        "SELECT debug_text FROM judgehost_domjudge_cases WHERE id=?",
-                        [target_case_id],
-                    ).fetchone()
-                    current_text = domjudge_text(current_row["debug_text"]) if current_row is not None else ""
-                    merged_text = debug_text if not current_text else f"{current_text}\n{debug_text}"
-                    if len(merged_text) > 4000:
-                        merged_text = merged_text[-4000:]
-                    conn.execute(
-                        "UPDATE judgehost_domjudge_cases SET debug_text=?, updated_at=? WHERE id=?",
-                        [merged_text, now_text, target_case_id],
-                    )
-                if target_job_id is not None:
-                    current_row = conn.execute(
-                        "SELECT debug_text FROM judgehost_domjudge_jobs WHERE job_id=?",
-                        [target_job_id],
-                    ).fetchone()
-                    current_text = domjudge_text(current_row["debug_text"]) if current_row is not None else ""
-                    merged_text = debug_text if not current_text else f"{current_text}\n{debug_text}"
-                    if len(merged_text) > 4000:
-                        merged_text = merged_text[-4000:]
-                    conn.execute(
-                        "UPDATE judgehost_domjudge_jobs SET debug_text=?, updated_at=? WHERE job_id=?",
-                        [merged_text, now_text, target_job_id],
-                    )
-            self._record_host_event_conn(
-                conn,
-                hostname=safe_host,
-                action="debug",
-                task_id=safe_task_id,
-                run_id=safe_run_id,
+        debug_text = self._domjudge_debug_payload_text(debug_payload)
+        if debug_text:
+            self._judgehost_state_store.append_debug_text(
+                case_id=target_case_id,
+                job_id=target_job_id,
+                debug_text=debug_text,
+                now_text=now_iso(),
             )
-
-
+        self._record_host_event_conn(
+            hostname=safe_host,
+            action="debug",
+            task_id=safe_task_id,
+            run_id=safe_run_id,
+        )

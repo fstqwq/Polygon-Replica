@@ -274,6 +274,97 @@ CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at
 CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC);
 """
 
+CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
+    "problems": ("id", "slug", "name", "repo_name", "created_at"),
+    "users": (
+        "id",
+        "username",
+        "password_hash",
+        "password_salt",
+        "password_iters",
+        "password_updated_at",
+        "is_system_admin",
+        "created_at",
+    ),
+    "auth_sessions": ("id", "user_id", "token_hash", "created_at", "expires_at", "revoked_at"),
+    "sudo_sessions": ("id", "user_id", "scope", "token_hash", "created_at", "expires_at", "revoked_at"),
+    "repo_acl": ("id", "problem_id", "user_id", "role", "created_at"),
+    "workspaces": (
+        "id",
+        "problem_id",
+        "user_id",
+        "path",
+        "branch",
+        "head_commit",
+        "dirty",
+        "recent_verification_status",
+        "updated_at",
+    ),
+    "contests": ("id", "slug", "title", "owner_user_id", "created_at"),
+    "contest_members": ("id", "contest_id", "user_id", "role", "created_at"),
+    "contest_problems": ("id", "contest_id", "idx", "problem_id", "added_by_user_id", "created_at"),
+    "contest_jobs": ("id", "contest_id", "actor_user_id", "job_type", "status", "summary_json", "created_at", "finished_at"),
+    "contest_artifacts": (
+        "id",
+        "contest_id",
+        "job_id",
+        "artifact_type",
+        "filename",
+        "artifact_path",
+        "sha256",
+        "size_bytes",
+        "created_at",
+    ),
+    "contest_properties": ("id", "contest_id", "key", "value_json", "updated_at", "updated_by_user_id"),
+    "contest_attachments": ("id", "contest_id", "key", "rel_path", "created_at", "created_by_user_id"),
+    "previews": (
+        "id",
+        "problem_id",
+        "workspace_id",
+        "verification_id",
+        "source_commit",
+        "source_ref",
+        "status",
+        "summary_json",
+        "artifact_path",
+        "created_at",
+        "finished_at",
+    ),
+    "verifications": (
+        "id",
+        "problem_id",
+        "workspace_id",
+        "source_commit",
+        "source_ref",
+        "kind",
+        "status",
+        "summary_json",
+        "artifact_path",
+        "created_at",
+        "finished_at",
+    ),
+    "exports": (
+        "id",
+        "problem_id",
+        "verification_id",
+        "workspace_id",
+        "export_type",
+        "filename",
+        "sha256",
+        "size_bytes",
+        "source_commit",
+        "created_at",
+    ),
+    "audit_log": ("id", "actor_user_id", "problem_id", "action", "details_json", "created_at"),
+    "system_config": ("key", "value_json", "updated_at", "updated_by_user_id"),
+}
+
+LEGACY_SCHEMA_TABLES = ("runs", "builds")
+
+
+class _IncompatibleSchemaError(RuntimeError):
+    pass
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -378,408 +469,105 @@ class DB:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:
-                with sqlite3.connect(self.path) as conn:
-                    self._install_sql_trace(conn)
-                    conn.row_factory = sqlite3.Row
-                    conn.execute("PRAGMA foreign_keys=ON")
-                    conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
-                    conn.executescript(SCHEMA)
-                    self._migrate(conn)
-                    conn.executescript(SCHEMA_INDEXES)
-                    conn.commit()
-                    return
+                self._init_current_schema()
+                return
             except sqlite3.OperationalError as exc:
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
                 raise
 
-    def _migrate(self, conn: sqlite3.Connection) -> None:
-        self._migrate_users_auth_columns(conn)
-        self._migrate_users_system_admin(conn)
-        self._migrate_auth_sessions(conn)
-        self._migrate_sudo_sessions(conn)
-        self._migrate_system_config(conn)
-        self._migrate_contest_schema(conn)
-        self._migrate_workspaces_recent_verification_status(conn)
-        self._migrate_previews_schema(conn)
-        self._migrate_verifications_schema(conn)
-        self._migrate_exports_schema(conn)
-        self._migrate_drop_runs_table(conn)
-        self._migrate_drop_builds_table(conn)
-
-    def _migrate_users_auth_columns(self, conn: sqlite3.Connection) -> None:
-        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-        if "password_hash" not in cols:
-            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
-        if "password_salt" not in cols:
-            conn.execute("ALTER TABLE users ADD COLUMN password_salt TEXT")
-        if "password_iters" not in cols:
-            conn.execute("ALTER TABLE users ADD COLUMN password_iters INTEGER")
-        if "password_updated_at" not in cols:
-            conn.execute("ALTER TABLE users ADD COLUMN password_updated_at TEXT")
-
-    def _migrate_users_system_admin(self, conn: sqlite3.Connection) -> None:
-        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-        if "is_system_admin" not in cols:
-            conn.execute("ALTER TABLE users ADD COLUMN is_system_admin INTEGER NOT NULL DEFAULT 0")
-        conn.execute("UPDATE users SET is_system_admin=0 WHERE is_system_admin IS NULL")
-        # Placeholder rows created by ensure_user must not hold admin.
-        conn.execute("UPDATE users SET is_system_admin=0 WHERE COALESCE(TRIM(password_hash), '') = ''")
-        admin_rows = conn.execute(
-            "SELECT id FROM users WHERE is_system_admin=1 ORDER BY created_at ASC, id ASC"
-        ).fetchall()
-        if len(admin_rows) > 1:
-            keep_id = int(admin_rows[0][0])
-            conn.execute("UPDATE users SET is_system_admin=0 WHERE is_system_admin=1 AND id<>?", [keep_id])
-            admin_rows = [admin_rows[0]]
-        if not admin_rows:
-            first_registered = conn.execute(
-                """
-                SELECT id FROM users
-                WHERE COALESCE(TRIM(password_hash), '') <> ''
-                ORDER BY created_at ASC, id ASC
-                LIMIT 1
-                """
-            ).fetchone()
-            if first_registered is not None:
-                conn.execute("UPDATE users SET is_system_admin=1 WHERE id=?", [int(first_registered[0])])
-        conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_system_admin
-            ON users(is_system_admin)
-            WHERE is_system_admin=1
-            """
-        )
-
-    def _migrate_auth_sessions(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS auth_sessions (
-                id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                token_hash TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                revoked_at TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_id, created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)")
-
-    def _migrate_sudo_sessions(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sudo_sessions (
-                id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                scope TEXT NOT NULL,
-                token_hash TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                revoked_at TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sudo_sessions_user_created ON sudo_sessions(user_id, created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at)")
-
-    def _migrate_system_config(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS system_config (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                updated_by_user_id INTEGER,
-                FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC)"
-        )
-
-    def _migrate_workspaces_recent_verification_status(self, conn: sqlite3.Connection) -> None:
-        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(workspaces)").fetchall()}
-        if "recent_verification_status" not in cols:
-            conn.execute("ALTER TABLE workspaces ADD COLUMN recent_verification_status TEXT")
-        if "recent_build_status" in cols:
-            conn.execute(
-                """
-                UPDATE workspaces
-                SET recent_verification_status = COALESCE(recent_verification_status, recent_build_status)
-                WHERE COALESCE(TRIM(recent_verification_status), '') = ''
-                """
-            )
-
-    def _migrate_previews_schema(self, conn: sqlite3.Connection) -> None:
-        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(previews)").fetchall()}
-        if "verification_id" not in cols:
-            conn.execute("ALTER TABLE previews ADD COLUMN verification_id TEXT")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_previews_verification_created ON previews(verification_id, created_at DESC)")
-
-    def _migrate_verifications_schema(self, conn: sqlite3.Connection) -> None:
-        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(verifications)").fetchall()}
-        if {"source_commit", "source_ref"}.issubset(cols):
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC)"
-            )
-            return
-        if cols:
-            source_commit_expr = "COALESCE(TRIM(v.source_commit), '')" if "source_commit" in cols else "''"
-            source_ref_expr = "COALESCE(TRIM(v.source_ref), '')" if "source_ref" in cols else "''"
-            conn.execute("ALTER TABLE verifications RENAME TO verifications_old")
-            conn.execute(
-                """
-                CREATE TABLE verifications (
-                    id TEXT PRIMARY KEY,
-                    problem_id INTEGER NOT NULL,
-                    workspace_id INTEGER,
-                    source_commit TEXT,
-                    source_ref TEXT,
-                    kind TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    summary_json TEXT,
-                    artifact_path TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    finished_at TEXT,
-                    FOREIGN KEY(problem_id) REFERENCES problems(id),
-                    FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+    def _init_current_schema(self) -> None:
+        if self._db_file_exists():
+            try:
+                with sqlite3.connect(self.path) as conn:
+                    self._prepare_connection(conn)
+                    self._validate_existing_schema(conn)
+                    conn.executescript(SCHEMA_INDEXES)
+                    conn.commit()
+                    return
+            except _IncompatibleSchemaError as exc:
+                backup_path = self._backup_bad_db()
+                logger.warning(
+                    "db.init replaced incompatible db path=%s backup=%s error=%s",
+                    self.path,
+                    backup_path,
+                    exc,
                 )
-                """
-            )
-            conn.execute(
-                f"""
-                INSERT INTO verifications(
-                    id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
+            except sqlite3.DatabaseError as exc:
+                if self._is_locked_error(exc):
+                    raise
+                backup_path = self._backup_bad_db()
+                logger.warning(
+                    "db.init replaced incompatible db path=%s backup=%s error=%s",
+                    self.path,
+                    backup_path,
+                    exc,
                 )
-                SELECT
-                    v.id,
-                    v.problem_id,
-                    v.workspace_id,
-                    {source_commit_expr},
-                    {source_ref_expr},
-                    v.kind,
-                    v.status,
-                    v.summary_json,
-                    v.artifact_path,
-                    v.created_at,
-                    v.finished_at
-                FROM verifications_old v
-                """
-            )
-            conn.execute("DROP TABLE verifications_old")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_problem_created ON verifications(problem_id, created_at DESC)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_created ON verifications(problem_id, workspace_id, created_at DESC)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC)")
+        with sqlite3.connect(self.path) as conn:
+            self._prepare_connection(conn)
+            conn.executescript(SCHEMA)
+            self._validate_existing_schema(conn)
+            conn.executescript(SCHEMA_INDEXES)
+            conn.commit()
 
-    def _migrate_exports_schema(self, conn: sqlite3.Connection) -> None:
-        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(exports)").fetchall()}
-        if "verification_id" in cols:
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_exports_problem_workspace_created ON exports(problem_id, workspace_id, created_at DESC)"
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC)")
-            return
-        if cols:
-            conn.execute("ALTER TABLE exports RENAME TO exports_old")
-            conn.execute(
-                """
-                CREATE TABLE exports (
-                    id TEXT PRIMARY KEY,
-                    problem_id INTEGER NOT NULL,
-                    verification_id TEXT NOT NULL,
-                    workspace_id INTEGER,
-                    export_type TEXT NOT NULL,
-                    filename TEXT NOT NULL,
-                    sha256 TEXT NOT NULL,
-                    size_bytes INTEGER NOT NULL,
-                    source_commit TEXT,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(problem_id) REFERENCES problems(id)
-                )
-                """
-            )
-            conn.execute(
-                """
-                INSERT INTO exports(
-                    id,problem_id,verification_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at
-                )
-                SELECT
-                    id,
-                    problem_id,
-                    COALESCE(TRIM(verification_id), ''),
-                    workspace_id,
-                    export_type,
-                    filename,
-                    sha256,
-                    size_bytes,
-                    source_commit,
-                    created_at
-                FROM exports_old
-                """
-            )
-            conn.execute("DROP TABLE exports_old")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC)")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_exports_problem_workspace_created ON exports(problem_id, workspace_id, created_at DESC)"
-            )
+    def _db_file_exists(self) -> bool:
+        return self.path.exists() and self.path.stat().st_size > 0
 
-    def _migrate_drop_runs_table(self, conn: sqlite3.Connection) -> None:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
-        ).fetchone()
-        if row is None:
-            return
-        conn.execute("DROP TABLE runs")
+    def _prepare_connection(self, conn: sqlite3.Connection) -> None:
+        self._install_sql_trace(conn)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
 
-    def _migrate_drop_builds_table(self, conn: sqlite3.Connection) -> None:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='builds'"
-        ).fetchone()
-        if row is None:
-            return
-        conn.execute("DROP TABLE builds")
+    def _validate_existing_schema(self, conn: sqlite3.Connection) -> None:
+        table_rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        tables = {str(row[0]) for row in table_rows}
+        legacy_tables = sorted(table for table in LEGACY_SCHEMA_TABLES if table in tables)
+        if legacy_tables:
+            raise _IncompatibleSchemaError(f"legacy tables present: {', '.join(legacy_tables)}")
+        missing_tables: list[str] = []
+        missing_columns: list[str] = []
+        for table_name, expected_columns in CURRENT_SCHEMA_COLUMNS.items():
+            if table_name not in tables:
+                missing_tables.append(table_name)
+                continue
+            actual_columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+            for column_name in expected_columns:
+                if column_name not in actual_columns:
+                    missing_columns.append(f"{table_name}.{column_name}")
+        if missing_tables or missing_columns:
+            parts: list[str] = []
+            if missing_tables:
+                parts.append(f"missing tables: {', '.join(missing_tables)}")
+            if missing_columns:
+                parts.append(f"missing columns: {', '.join(missing_columns)}")
+            raise _IncompatibleSchemaError("; ".join(parts))
+
+    def _backup_bad_db(self) -> Path:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = self._unique_backup_path(self.path, timestamp)
+        self.path.replace(backup_path)
+        for suffix in ("-wal", "-shm"):
+            sidecar_path = Path(f"{self.path}{suffix}")
+            if sidecar_path.exists():
+                sidecar_backup = self._unique_backup_path(sidecar_path, timestamp)
+                sidecar_path.replace(sidecar_backup)
+        return backup_path
 
     @staticmethod
-    def _contest_index_label(seq: int) -> str:
-        value = max(1, int(seq))
-        chars: list[str] = []
-        while value > 0:
-            value -= 1
-            chars.append(chr(ord("A") + (value % 26)))
-            value //= 26
-        return "".join(reversed(chars))
-
-    def _migrate_contest_schema(self, conn: sqlite3.Connection) -> None:
-        contest_problem_cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(contest_problems)").fetchall()}
-        added_idx_column = False
-        if contest_problem_cols and "idx" not in contest_problem_cols:
-            conn.execute("ALTER TABLE contest_problems ADD COLUMN idx TEXT")
-            added_idx_column = True
-
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS contest_jobs (
-                id TEXT PRIMARY KEY,
-                contest_id INTEGER NOT NULL,
-                actor_user_id INTEGER NOT NULL,
-                job_type TEXT NOT NULL,
-                status TEXT NOT NULL,
-                summary_json TEXT,
-                created_at TEXT NOT NULL,
-                finished_at TEXT,
-                FOREIGN KEY(contest_id) REFERENCES contests(id),
-                FOREIGN KEY(actor_user_id) REFERENCES users(id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS contest_artifacts (
-                id TEXT PRIMARY KEY,
-                contest_id INTEGER NOT NULL,
-                job_id TEXT,
-                artifact_type TEXT NOT NULL,
-                filename TEXT NOT NULL,
-                artifact_path TEXT NOT NULL,
-                sha256 TEXT,
-                size_bytes INTEGER,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(contest_id) REFERENCES contests(id),
-                FOREIGN KEY(job_id) REFERENCES contest_jobs(id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS contest_properties (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contest_id INTEGER NOT NULL,
-                key TEXT NOT NULL,
-                value_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                updated_by_user_id INTEGER NOT NULL,
-                UNIQUE(contest_id, key),
-                FOREIGN KEY(contest_id) REFERENCES contests(id),
-                FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS contest_attachments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contest_id INTEGER NOT NULL,
-                key TEXT NOT NULL,
-                rel_path TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                created_by_user_id INTEGER NOT NULL,
-                UNIQUE(contest_id, key),
-                FOREIGN KEY(contest_id) REFERENCES contests(id),
-                FOREIGN KEY(created_by_user_id) REFERENCES users(id)
-            )
-            """
-        )
-
-        needs_idx_rebuild = bool(added_idx_column)
-        if not needs_idx_rebuild:
-            missing_idx_row = conn.execute(
-                "SELECT id FROM contest_problems WHERE idx IS NULL OR TRIM(idx)='' LIMIT 1"
-            ).fetchone()
-            duplicate_idx_row = conn.execute(
-                """
-                SELECT contest_id, idx, COUNT(*) AS c
-                FROM contest_problems
-                GROUP BY contest_id, idx
-                HAVING c > 1
-                LIMIT 1
-                """
-            ).fetchone()
-            needs_idx_rebuild = (missing_idx_row is not None) or (duplicate_idx_row is not None)
-
-        if needs_idx_rebuild:
-            rows = conn.execute(
-                """
-                SELECT id, contest_id
-                FROM contest_problems
-                ORDER BY contest_id ASC, created_at ASC, id ASC
-                """
-            ).fetchall()
-            current_contest = None
-            seq = 0
-            for row in rows:
-                contest_id = int(row[1])
-                if contest_id != current_contest:
-                    current_contest = contest_id
-                    seq = 1
-                else:
-                    seq += 1
-                idx_value = self._contest_index_label(seq)
-                conn.execute("UPDATE contest_problems SET idx=? WHERE id=?", [idx_value, int(row[0])])
-
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_problems_contest_idx ON contest_problems(contest_id, idx)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_jobs_contest_created ON contest_jobs(contest_id, created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_jobs_actor_created ON contest_jobs(actor_user_id, created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_artifacts_contest_created ON contest_artifacts(contest_id, created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_artifacts_job_created ON contest_artifacts(job_id, created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_properties_contest_updated ON contest_properties(contest_id, updated_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_contest_attachments_contest_created ON contest_attachments(contest_id, created_at DESC)")
+    def _unique_backup_path(path: Path, timestamp: str) -> Path:
+        candidate = path.with_name(f"{path.name}.{timestamp}.backup")
+        seq = 1
+        while candidate.exists():
+            candidate = path.with_name(f"{path.name}.{timestamp}.{seq}.backup")
+            seq += 1
+        return candidate
 
     @contextmanager
     def conn(self):
         conn = sqlite3.connect(self.path)
-        self._install_sql_trace(conn)
-        conn.row_factory = sqlite3.Row
-        _ = conn.row_factory
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
+        self._prepare_connection(conn)
         try:
             yield conn
         finally:

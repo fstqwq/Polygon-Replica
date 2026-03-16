@@ -8,12 +8,24 @@ ROOT = Path(__file__).resolve().parents[1]
 STYLE_PATH = ROOT / "app" / "static" / "style.css"
 
 
+def _python_files_under(root: Path) -> list[Path]:
+    return [path for path in root.rglob("*.py") if "__pycache__" not in path.parts]
+
+
+def _test_case_python_files() -> list[Path]:
+    return sorted(path for path in (ROOT / "tests").glob("test_*.py"))
+
+
 def _app_python_files() -> list[Path]:
     return [
         path
         for path in (ROOT / "app").rglob("*.py")
         if "static/vendor" not in path.as_posix()
     ]
+
+
+def _test_case_files() -> list[Path]:
+    return sorted((ROOT / "tests").glob("test_*.py"))
 
 
 def _imported_symbol_set(module_name: str) -> set[str]:
@@ -29,6 +41,17 @@ def _imported_symbol_set(module_name: str) -> set[str]:
                     if alias.name != "*":
                         symbols.add(alias.name)
     return symbols
+
+
+def _is_name_attr(node: ast.AST, *, name: str, attr: str) -> bool:
+    return isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == name and node.attr == attr
+
+
+def _is_db_handle(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Name)
+        and node.id == "db"
+    ) or _is_name_attr(node, name="config", attr="db")
 
 
 class TestPublicContracts(unittest.TestCase):
@@ -187,6 +210,88 @@ class TestPublicContracts(unittest.TestCase):
                 if stmt.value.keywords or params != args:
                     continue
                 offenders.append(f"{path}:{node.lineno}")
+        self.assertEqual(offenders, [])
+
+    def test_impl_modules_do_not_issue_direct_sql(self) -> None:
+        offenders: list[str] = []
+        direct_sql_tokens = ("config" + ".db.", "." + "fetch_one(", "." + "fetch_all(", "." + "execute(", "write_" + "transaction(")
+        for path in _python_files_under(ROOT / "app" / "impl"):
+            source = path.read_text(encoding="utf-8-sig")
+            for token in direct_sql_tokens:
+                if token in source:
+                    offenders.append(f"{path}:{token}")
+        self.assertEqual(offenders, [])
+
+    def test_test_case_modules_do_not_issue_direct_sql(self) -> None:
+        offenders: list[str] = []
+        for path in _test_case_files():
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    if _is_db_handle(node.func.value) and node.func.attr in {"fetch_one", "fetch_all", "execute", "write_transaction"}:
+                        offenders.append(f"{path}:{node.lineno}:{node.func.attr}")
+        self.assertEqual(offenders, [])
+
+    def test_test_modules_do_not_issue_direct_sql(self) -> None:
+        offenders: list[str] = []
+        direct_sql_tokens = (
+            "config" + ".db.",
+            "db" + ".fetch_one(",
+            "db" + ".fetch_all(",
+            "db" + ".execute(",
+            "db" + ".write_transaction(",
+        )
+        for path in _test_case_python_files():
+            source = path.read_text(encoding="utf-8-sig")
+            for token in direct_sql_tokens:
+                if token in source:
+                    offenders.append(f"{path}:{token}")
+        self.assertEqual(offenders, [])
+
+    def test_only_allowed_modules_import_private_persistence(self) -> None:
+        allowed = {
+            ROOT / "app" / "impl" / "runtime" / "config.py",
+            ROOT / "app" / "service" / "auth" / "service.py",
+            ROOT / "app" / "service" / "contest" / "service.py",
+            ROOT / "app" / "service" / "export" / "api.py",
+            ROOT / "app" / "service" / "judgehost" / "api.py",
+            ROOT / "app" / "service" / "judgehost" / "internal" / "domjudge_dispatch.py",
+            ROOT / "app" / "service" / "repository" / "workspace.py",
+            ROOT / "app" / "service" / "runtime" / "state_service.py",
+            ROOT / "app" / "service" / "statement" / "preview.py",
+            ROOT / "app" / "service" / "verification" / "pipeline.py",
+            ROOT / "app" / "service" / "verification" / "service.py",
+            ROOT / "app" / "service" / "verification" / "store.py",
+            ROOT / "app" / "service" / "platform" / "system_config.py",
+        }
+        offenders: list[str] = []
+        for path in _python_files_under(ROOT / "app"):
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    module_name = str(node.module or "")
+                    if module_name.startswith("app.service.disk.") or module_name.startswith("app.service.memory."):
+                        if path not in allowed:
+                            offenders.append(f"{path}:{node.lineno}:{module_name}")
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module_name = alias.name
+                        if module_name.startswith("app.service.disk.") or module_name.startswith("app.service.memory."):
+                            if path not in allowed:
+                                offenders.append(f"{path}:{node.lineno}:{module_name}")
+        self.assertEqual(offenders, [])
+
+    def test_sqlite_row_does_not_leak_outside_private_persistence(self) -> None:
+        allowed = {
+            ROOT / "app" / "db.py",
+        }
+        offenders: list[str] = []
+        for path in _python_files_under(ROOT / "app"):
+            if "/service/memory/" in path.as_posix():
+                continue
+            source = path.read_text(encoding="utf-8-sig")
+            if "sqlite3.Row" in source and path not in allowed:
+                offenders.append(str(path))
         self.assertEqual(offenders, [])
 
 

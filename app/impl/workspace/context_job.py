@@ -70,22 +70,15 @@ def _verification_marked_cancelled(problem_id: int, actor_user_id: int, verifica
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return False
-    rows = config.db.fetch_all(
-        """
-        SELECT details_json
-        FROM audit_log
-        WHERE problem_id=? AND actor_user_id=? AND action='run.cancel'
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        [int(problem_id), int(actor_user_id), max(40, int(limit))],
+    rows = config.workspace_service.audit_details(
+        problem_id=int(problem_id),
+        actor_user_id=int(actor_user_id),
+        action="run.cancel",
+        limit=max(40, int(limit)),
     )
-    for row in rows:
+    for payload_text in rows:
         details: dict = {}
         try:
-            payload_text = row["details_json"]
-            if payload_text is None:
-                payload_text = "{}"
             details = cast(dict[str, object], json.loads(payload_text))
         except Exception:
             details = {}
@@ -131,11 +124,11 @@ def _find_solve_main_run(
     safe_verification_id = normalize_run_id_token(artifact_verification_id)
     if not safe_verification_id:
         return (None, None)
-    row_raw = config.db.fetch_one(
-        "SELECT id,status,summary_json,artifact_path,created_at,finished_at FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_verification_id, int(problem_id), int(workspace_id)],
+    row = config.verification_service.workspace_stage_row(
+        int(problem_id),
+        int(workspace_id),
+        safe_verification_id,
     )
-    row = dict(row_raw) if row_raw is not None else None
     if row is None:
         return (None, None)
     verification_summary = parse_summary_json(row.get("summary_json"), f"solve-main/{safe_verification_id}")
@@ -183,9 +176,10 @@ def _merge_verification_stage_context(
     if not safe_verification_id:
         verification_details.pop("stage_results", None)
         return
-    verification_row = config.db.fetch_one(
-        "SELECT status,summary_json FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
-        [safe_verification_id, int(problem_id), int(workspace_id)],
+    verification_row = config.verification_service.workspace_stage_row(
+        int(problem_id),
+        int(workspace_id),
+        safe_verification_id,
     )
     verification_summary = parse_summary_json(verification_row["summary_json"], f"verification/{safe_verification_id}") if verification_row is not None else {}
     if verification_row is not None:
@@ -650,10 +644,10 @@ def _run_verification_start_worker(
     run_ids: list[str] = list(planned_run_ids)
     artifact_verification_id = _C.RUN_PLACEHOLDER_VERIFICATION_ID
     verification_mode = _C.GENERAL_CONFIG_DEFAULTS.get('mode') or "pass-fail"
-    ws_row = config.db.fetch_one('SELECT path FROM workspaces WHERE id=? AND problem_id=?', [int(workspace_id), int(problem_id)])
-    if ws_row is not None:
+    workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
+    if workspace_path_text:
         try:
-            workspace_path = Path(ws_row['path']).resolve()
+            workspace_path = Path(workspace_path_text).resolve()
             _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
             verification_mode = normalize_problem_mode(general_cfg.get('mode'), _C.GENERAL_CONFIG_DEFAULTS.get('mode') or "pass-fail")
         except Exception:
@@ -790,9 +784,9 @@ def _run_verification_start_worker(
     buildsolve_summary: dict | None = None
     accepted_source_path = ''
     try:
-        if ws_row is None:
+        if not workspace_path_text:
             raise RuntimeError('workspace metadata missing')
-        workspace_path = Path(ws_row['path']).resolve()
+        workspace_path = Path(workspace_path_text).resolve()
         if (not workspace_path.exists()) or (not workspace_path.is_dir()) or workspace_path.is_symlink():
             raise RuntimeError('workspace path is unavailable')
         local_ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -1467,15 +1461,16 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
                 resolved_verification_id = active_verification.get('id') or ''
         if not resolved_verification_id:
             raise RuntimeError('failed to resolve verification for export')
-        materialization_row = config.db.fetch_one(
-            "SELECT status,source_commit,source_ref FROM verifications WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'",
-            [resolved_verification_id, int(problem_id), int(workspace_id)],
+        materialization_row = config.verification_service.workspace_stage_row(
+            int(problem_id),
+            int(workspace_id),
+            resolved_verification_id,
         )
         if materialization_row is None:
             raise ValueError(f'verification not found: {resolved_verification_id}')
-        artifact_verification_status = materialization_row.get("status") or "missing"
-        source_commit = materialization_row.get("source_commit") or ""
-        source_ref = materialization_row.get("source_ref") or ""
+        artifact_verification_status = materialization_row["status"] or "missing"
+        source_commit = materialization_row["source_commit"] or ""
+        source_ref = materialization_row["source_ref"] or ""
         details['artifact_verification_id'] = resolved_verification_id
         details['artifact_verification_status'] = artifact_verification_status
         details['source_commit'] = source_commit

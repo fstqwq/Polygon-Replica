@@ -4,7 +4,6 @@ import base64
 import logging
 import re
 import shlex
-import sqlite3
 import uuid
 from pathlib import Path
 
@@ -504,13 +503,11 @@ class JudgehostDomjudgeUtilsMixin:
 
     def _domjudge_register_cached_testcase(
         self,
-        conn: sqlite3.Connection,
         *,
         testcase_hash: str,
         in_bytes: bytes,
         ans_bytes: bytes,
     ) -> tuple[int, str, str]:
-        _ = conn
         safe_hash = domjudge_lower_text(testcase_hash)
         if not re.fullmatch(r"[0-9a-f]{64}", safe_hash):
             safe_hash = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
@@ -800,15 +797,9 @@ class JudgehostDomjudgeUtilsMixin:
             kind=kind,
             script_hash=script_hash,
             default_job_id=default_job_id,
-            fetch_rows=lambda field, safe_hash: self._db_fetch_all(
-                f"""
-                SELECT job_id,work_root
-                FROM judgehost_domjudge_jobs
-                WHERE {field}=?
-                ORDER BY job_id ASC
-                LIMIT 256
-                """,
-                [safe_hash],
+            fetch_rows=lambda field, safe_hash: self._judgehost_state_store.jobs_for_script_hash(
+                kind=field.replace("_hash", ""),
+                script_hash=safe_hash,
             ),
         )
 

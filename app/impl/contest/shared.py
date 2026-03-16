@@ -1,27 +1,21 @@
 from __future__ import annotations
 
 import json
-import secrets
 import shutil
 from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.db import now_iso
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
-from .common import (
-    _contest_idx_label,
-    _contest_problem_slug_file_token,
-)
-from app.impl.workspace.context_operation import audit, normalize_contest_role, normalize_contest_slug_required, normalize_problem_name_required
+from .common import _contest_problem_slug_file_token
+from app.impl.workspace.context_operation import audit, normalize_contest_slug_required, normalize_problem_name_required
 from app.impl.workspace.problem_config import coerce_int, normalize_problem_mode, read_problem_config
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_job import latest_workspace_committed_stage_verification
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.revision import workspace_revision_info
-from app.service.platform.hashing import sha256_file
-from app.service.platform.process import is_canonical_artifact_id, run_cmd
+from app.service.platform.process import run_cmd
 
 _C = config.constants
 
@@ -31,85 +25,7 @@ _CONTEST_PROPERTY_DATE = "date"
 _CONTEST_SOURCE_MODE_VALUES = {"latest_committed", "built_packages"}
 _CONTEST_JOB_TYPE_PREVIEW = "preview"
 _CONTEST_JOB_TYPE_PACKAGE = "package"
-_CONTEST_ARTIFACTS_BUCKET = "__contests__"
 
-def _contest_access_context(contest_id: int, user_id: int) -> dict:
-    row = config.db.fetch_one(
-        "SELECT role FROM contest_members WHERE contest_id=? AND user_id=?",
-        [int(contest_id), int(user_id)],
-    )
-    if row is None:
-        return {
-            "role": "none",
-            "can_read": False,
-            "can_write": False,
-            "can_manage": False,
-            "read_block_reason": "you do not have access to this contest",
-            "write_block_reason": "write access required",
-            "manage_block_reason": "owner access required",
-        }
-    role = normalize_contest_role(row["role"])
-    can_write = role in {"owner", "write"}
-    return {
-        "role": role,
-        "can_read": True,
-        "can_write": can_write,
-        "can_manage": role == "owner",
-        "read_block_reason": "",
-        "write_block_reason": "" if can_write else "read-only access",
-        "manage_block_reason": "" if role == "owner" else "owner access required",
-    }
-
-def _contest_owner_count(contest_id: int) -> int:
-    row = config.db.fetch_one(
-        "SELECT COUNT(*) AS c FROM contest_members WHERE contest_id=? AND role='owner'",
-        [int(contest_id)],
-    )
-    if row is None:
-        return 0
-    try:
-        return max(0, int(row["c"] or 0))
-    except Exception:
-        return 0
-
-def _contest_properties_map(contest_id: int) -> dict[str, str]:
-    rows = config.db.fetch_all(
-        "SELECT key,value_json FROM contest_properties WHERE contest_id=?",
-        [int(contest_id)],
-    )
-    result: dict[str, str] = {}
-    for row in rows:
-        key = str(row["key"] or "").strip()
-        if not key:
-            continue
-        raw_json = str(row["value_json"] or "").strip()
-        value_text = ""
-        if raw_json:
-            try:
-                parsed = json.loads(raw_json)
-                if parsed is None:
-                    value_text = ""
-                elif isinstance(parsed, str):
-                    value_text = parsed
-                else:
-                    value_text = str(parsed)
-            except Exception:
-                value_text = raw_json
-        result[key] = value_text
-    return result
-
-def _upsert_contest_property(contest_id: int, actor_user_id: int, key: str, value: str) -> None:
-    config.db.execute(
-        """
-        INSERT INTO contest_properties(contest_id,key,value_json,updated_at,updated_by_user_id)
-        VALUES(?,?,?,?,?)
-        ON CONFLICT(contest_id,key) DO UPDATE SET
-            value_json=excluded.value_json,
-            updated_at=excluded.updated_at,
-            updated_by_user_id=excluded.updated_by_user_id
-        """,
-        [int(contest_id), str(key), json.dumps(str(value or "")), now_iso(), int(actor_user_id)],
-    )
 
 def _contest_nav(contest_slug: str, user: str, active: str) -> list[dict[str, str]]:
     base = f"/contests/{contest_slug}/{user}"
@@ -121,18 +37,19 @@ def _contest_nav(contest_slug: str, user: str, active: str) -> list[dict[str, st
         {"key": "packages", "label": "Packages", "href": f"{base}/packages", "active": "1" if active == "packages" else "0"},
     ]
 
+
 def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
     gctx = global_user_ctx(user)
     safe_slug = normalize_contest_slug_required(contest_slug)
-    contest_row = config.db.fetch_one(
-        "SELECT id,slug,title,owner_user_id,created_at FROM contests WHERE slug=?",
-        [safe_slug],
-    )
+    contest_row = config.contest_service.contest_context(safe_slug)
     if contest_row is None:
         raise HTTPException(status_code=404, detail="contest not found")
-    access = _contest_access_context(int(contest_row["id"]), int(gctx["user"]["id"]))
+    access = config.contest_service.access_context(int(contest_row["id"]), int(gctx["user"]["id"]))
     if not access.get("can_read"):
-        raise HTTPException(status_code=403, detail=str(reason_obj) if (reason_obj := access.get("read_block_reason")) is not None else "contest access required")
+        raise HTTPException(
+            status_code=403,
+            detail=str(reason_obj) if (reason_obj := access.get("read_block_reason")) is not None else "contest access required",
+        )
     return {
         "user": gctx["user"],
         "contest": {
@@ -147,17 +64,9 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
         "contest_nav": _contest_nav(str(contest_row["slug"]), str(gctx["user"]["username"]), active_page),
     }
 
-def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[dict]:
-    rows = config.db.fetch_all(
-        """
-        SELECT cp.id AS contest_problem_id,cp.idx,cp.problem_id,cp.created_at,p.slug AS problem_slug,p.name AS problem_name
-        FROM contest_problems cp
-        JOIN problems p ON p.id=cp.problem_id
-        WHERE cp.contest_id=?
-        ORDER BY cp.idx COLLATE NOCASE ASC, cp.id ASC
-        """,
-        [int(contest_id)],
-    )
+
+def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[dict[str, object]]:
+    rows = config.contest_service.contest_problems(int(contest_id))
     result: list[dict] = []
     for row in rows:
         problem_id = int(row["problem_id"])
@@ -222,235 +131,6 @@ def _contest_problem_rows(contest_id: int, username: str, user_id: int) -> list[
         )
     return result
 
-def _contest_available_problem_rows(contest_id: int, user_id: int, query: str) -> list[dict]:
-    cap = max(1, min(500, int(_C.API_PROBLEMS_LIST_LIMIT)))
-    rows = config.db.fetch_all(
-        """
-        SELECT p.id,p.slug,p.name,a.role
-        FROM repo_acl a
-        JOIN problems p ON p.id=a.problem_id
-        WHERE a.user_id=?
-          AND p.id NOT IN (
-              SELECT cp.problem_id
-              FROM contest_problems cp
-              WHERE cp.contest_id=?
-          )
-        ORDER BY p.slug ASC
-        LIMIT ?
-        """,
-        [int(user_id), int(contest_id), cap],
-    )
-    q = str(query or "").strip().lower()
-    result: list[dict] = []
-    for row in rows:
-        slug = str(row["slug"])
-        name = str(row["name"])
-        if q and q not in f"{slug} {name}".lower():
-            continue
-        result.append(
-            {
-                "problem_id": int(row["id"]),
-                "problem_slug": slug,
-                "problem_name": name,
-                "role": normalize_contest_role(row["role"]),
-            }
-        )
-    return result
-
-def _next_contest_problem_idx(contest_id: int) -> str:
-    rows = config.db.fetch_all(
-        "SELECT idx FROM contest_problems WHERE contest_id=?",
-        [int(contest_id)],
-    )
-    used = {str(row["idx"] or "").strip().upper() for row in rows if str(row["idx"] or "").strip()}
-    seq = 1
-    while seq < 100000:
-        token = _contest_idx_label(seq)
-        if token not in used:
-            return token
-        seq += 1
-    raise RuntimeError("unable to allocate contest problem index")
-
-def _create_contest_job(
-    contest_id: int,
-    actor_user_id: int,
-    job_type: str,
-    status: str,
-    summary: dict,
-    *,
-    finished_at: str | None = None,
-) -> str:
-    job_id = f"cj-{secrets.token_hex(6)}"
-    now = now_iso()
-    safe_status = str(status or "").strip().lower() or "failed"
-    safe_finished_at = finished_at
-    if safe_finished_at is None and safe_status not in {"running", "queued"}:
-        safe_finished_at = now
-    config.db.execute(
-        """
-        INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,summary_json,created_at,finished_at)
-        VALUES(?,?,?,?,?,?,?,?)
-        """,
-        [
-            job_id,
-            int(contest_id),
-            int(actor_user_id),
-            str(job_type or "").strip(),
-            safe_status,
-            json.dumps(summary, ensure_ascii=False),
-            now,
-            safe_finished_at,
-        ],
-    )
-    return job_id
-
-def _update_contest_job(
-    contest_id: int,
-    job_id: str,
-    status: str,
-    summary: dict,
-    *,
-    finished: bool = True,
-) -> None:
-    safe_job_id = str(job_id or "").strip()
-    if not safe_job_id:
-        return
-    config.db.execute(
-        """
-        UPDATE contest_jobs
-        SET status=?,summary_json=?,finished_at=?
-        WHERE id=? AND contest_id=?
-        """,
-        [
-            str(status or "").strip().lower() or "failed",
-            json.dumps(summary, ensure_ascii=False),
-            now_iso() if bool(finished) else None,
-            safe_job_id,
-            int(contest_id),
-        ],
-    )
-
-def _load_contest_job(contest_id: int, job_id: str) -> dict | None:
-    safe_job_id = str(job_id or "").strip()
-    if not safe_job_id:
-        return None
-    row = config.db.fetch_one(
-        """
-        SELECT id,job_type,status,summary_json,created_at,finished_at
-        FROM contest_jobs
-        WHERE id=? AND contest_id=?
-        """,
-        [safe_job_id, int(contest_id)],
-    )
-    if row is None:
-        return None
-    summary: dict = {}
-    raw = str(row["summary_json"] or "").strip()
-    if raw:
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                summary = parsed
-        except Exception:
-            summary = {}
-    return {
-        "id": str(row["id"]),
-        "job_type": str(row["job_type"] or ""),
-        "status": str(row["status"] or ""),
-        "summary": summary,
-        "created_at": row["created_at"],
-        "finished_at": row["finished_at"],
-    }
-
-def _contest_running_job(contest_id: int, job_type: str) -> str:
-    row = config.db.fetch_one(
-        """
-        SELECT id
-        FROM contest_jobs
-        WHERE contest_id=? AND job_type=? AND status='running'
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        [int(contest_id), str(job_type or "").strip()],
-    )
-    if row is None:
-        return ""
-    return str(row["id"] or "").strip()
-
-def _contest_artifacts_base() -> Path:
-    base = (config.settings.artifacts_root / _CONTEST_ARTIFACTS_BUCKET).resolve()
-    base.mkdir(parents=True, exist_ok=True)
-    return base
-
-def _contest_job_root(contest_slug: str, job_id: str) -> Path:
-    safe_slug = normalize_contest_slug_required(contest_slug)
-    safe_job_id = str(job_id or "").strip()
-    if not is_canonical_artifact_id(safe_job_id):
-        raise ValueError("invalid contest job id")
-    base = _contest_artifacts_base()
-    root = (base / safe_slug / safe_job_id).resolve()
-    if base not in root.parents and base != root:
-        raise ValueError("invalid contest artifact path")
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-def _record_contest_artifact(
-    *,
-    contest_id: int,
-    job_id: str,
-    artifact_type: str,
-    filename: str,
-    artifact_path: Path,
-) -> str:
-    safe_filename = Path(str(filename or "").strip() or artifact_path.name).name
-    resolved = artifact_path.resolve()
-    base = _contest_artifacts_base()
-    if base not in resolved.parents:
-        raise ValueError("invalid contest artifact path")
-    if not resolved.exists() or not resolved.is_file() or resolved.is_symlink():
-        raise ValueError("contest artifact file not found")
-    artifact_id = f"ca-{secrets.token_hex(6)}"
-    config.db.execute(
-        """
-        INSERT INTO contest_artifacts(id,contest_id,job_id,artifact_type,filename,artifact_path,sha256,size_bytes,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?)
-        """,
-        [
-            artifact_id,
-            int(contest_id),
-            str(job_id or "").strip(),
-            str(artifact_type or "").strip(),
-            safe_filename,
-            str(resolved),
-            sha256_file(resolved),
-            int(resolved.stat().st_size),
-            now_iso(),
-        ],
-    )
-    return artifact_id
-
-def _contest_problem_entries(contest_id: int) -> list[dict[str, object]]:
-    rows = config.db.fetch_all(
-        """
-        SELECT cp.idx,cp.problem_id,p.slug AS problem_slug,p.name AS problem_name
-        FROM contest_problems cp
-        JOIN problems p ON p.id=cp.problem_id
-        WHERE cp.contest_id=?
-        ORDER BY cp.idx COLLATE NOCASE ASC, cp.id ASC
-        """,
-        [int(contest_id)],
-    )
-    result: list[dict[str, object]] = []
-    for row in rows:
-        result.append(
-            {
-                "idx": str(row["idx"] or ""),
-                "problem_id": int(row["problem_id"]),
-                "problem_slug": str(row["problem_slug"] or ""),
-                "problem_name": str(row["problem_name"] or ""),
-            }
-        )
-    return result
 
 def _ensure_zip_bundle(job_root: Path, bundle_name: str, source_dir: Path) -> Path:
     safe_name = Path(str(bundle_name or "").strip() or "contest-bundle").stem
@@ -459,6 +139,7 @@ def _ensure_zip_bundle(job_root: Path, bundle_name: str, source_dir: Path) -> Pa
     target_base = job_root / safe_name
     out = Path(shutil.make_archive(str(target_base), "zip", root_dir=source_dir, base_dir="."))
     return out.resolve()
+
 
 def _contest_redirect(contest_slug: str, user: str, page: str, *, query: str = "", message: str = ""):
     target = f"/contests/{contest_slug}/{user}/{page}"
@@ -585,16 +266,10 @@ def _finalize_contest_job_failure_if_running(
     job_type: str,
     error_text: str,
 ) -> None:
-    row = config.db.fetch_one(
-        "SELECT status FROM contest_jobs WHERE id=? AND contest_id=?",
-        [str(job_id or "").strip(), int(contest_id)],
-    )
-    if row is None:
-        return
-    current_status = str(row["status"] or "").strip().lower()
+    current_status = config.contest_service.job_status(contest_id, str(job_id or "").strip())
     if current_status != "running":
         return
-    _update_contest_job(
+    config.contest_service.update_job(
         contest_id,
         str(job_id or "").strip(),
         "failed",
@@ -613,10 +288,10 @@ def _run_contest_preview_job_worker(
     actor_username: str,
     job_id: str,
 ) -> None:
-    job_root = _contest_job_root(contest_slug, job_id)
+    job_root = config.contest_service.job_root(contest_slug, job_id)
     preview_dir = job_root / "preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
-    entries = _contest_problem_entries(contest_id)
+    entries = config.contest_service.contest_problem_entries(contest_id)
     results: list[dict[str, object]] = []
     for entry in entries:
         problem_id = int(entry["problem_id"])
@@ -640,33 +315,22 @@ def _run_contest_preview_job_worker(
             preview_id = str(config.preview_service.compile_preview(problem_slug, actor_username) or "").strip()
             if not preview_id:
                 raise RuntimeError("preview id missing")
-            row = config.db.fetch_one(
-                """
-                SELECT status,summary_json
-                FROM previews
-                WHERE id=? AND problem_id=?
-                """,
-                [preview_id, problem_id],
-            )
-            if row is None:
+            preview_result = config.contest_service.preview_result(preview_id)
+            if preview_result is None:
                 raise RuntimeError("preview metadata missing")
-            preview_status = str(row["status"] or "").strip().lower()
+            preview_status = str(preview_result["status"] or "").strip().lower()
             item["preview_id"] = preview_id
             if preview_status != "ok":
-                error_text = "preview failed"
-                raw_summary = str(row["summary_json"] or "").strip()
-                if raw_summary:
-                    try:
-                        summary = json.loads(raw_summary)
-                    except Exception:
-                        summary = {}
-                    if isinstance(summary, dict):
-                        summary_error_obj = summary.get("error")
-                        if summary_error_obj is not None:
-                            error_text = str(summary_error_obj)
+                error_text = str(preview_result["summary"].get("error") or "preview failed")
                 raise RuntimeError(error_text)
-            source_pdf = (config.settings.artifacts_root / problem_slug / preview_id / "statement_preview" / "statement.pdf").resolve()
+            preview_root_text = str(preview_result["artifact_path"] or "").strip()
+            if not preview_root_text:
+                raise RuntimeError("preview artifact root missing")
+            preview_root = Path(preview_root_text).resolve()
             problem_artifacts_root = (config.settings.artifacts_root / problem_slug).resolve()
+            if problem_artifacts_root not in preview_root.parents and problem_artifacts_root != preview_root:
+                raise RuntimeError("invalid preview artifact path")
+            source_pdf = (preview_root / "statement_preview" / "statement.pdf").resolve()
             if problem_artifacts_root not in source_pdf.parents:
                 raise RuntimeError("invalid preview artifact path")
             if not source_pdf.exists() or not source_pdf.is_file() or source_pdf.is_symlink():
@@ -708,7 +372,7 @@ def _run_contest_preview_job_worker(
     if success_count > 0:
         archive_path = _ensure_zip_bundle(job_root, f"{contest_slug}-preview-{job_id}", bundle_root)
         artifact_filename = archive_path.name
-        artifact_id = _record_contest_artifact(
+        artifact_id = config.contest_service.record_artifact(
             contest_id=contest_id,
             job_id=job_id,
             artifact_type="preview-bundle",
@@ -717,7 +381,13 @@ def _run_contest_preview_job_worker(
         )
     summary["artifact_id"] = artifact_id
     summary["filename"] = artifact_filename
-    _update_contest_job(contest_id, job_id, "ok" if failed_count == 0 and success_count > 0 else "failed", summary, finished=True)
+    config.contest_service.update_job(
+        contest_id,
+        job_id,
+        "ok" if failed_count == 0 and success_count > 0 else "failed",
+        summary,
+        finished=True,
+    )
     audit(
         actor_user_id,
         None,
@@ -741,10 +411,10 @@ def _run_contest_package_job_worker(
     actor_username: str,
     job_id: str,
 ) -> None:
-    job_root = _contest_job_root(contest_slug, job_id)
+    job_root = config.contest_service.job_root(contest_slug, job_id)
     packages_dir = job_root / "packages"
     packages_dir.mkdir(parents=True, exist_ok=True)
-    entries = _contest_problem_entries(contest_id)
+    entries = config.contest_service.contest_problem_entries(contest_id)
     results: list[dict[str, object]] = []
     for entry in entries:
         problem_id = int(entry["problem_id"])
@@ -797,14 +467,7 @@ def _run_contest_package_job_worker(
                 ).strip()
             if not verification_id:
                 raise RuntimeError("failed to resolve verification")
-            verification_row = config.db.fetch_one(
-                """
-                SELECT status,source_commit,source_ref
-                FROM verifications
-                WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'
-                """,
-                [verification_id, problem_id, workspace_id],
-            )
+            verification_row = config.contest_service.verification_stage(problem_id, workspace_id, verification_id)
             if verification_row is None:
                 raise RuntimeError(f"verification metadata not found: {verification_id}")
             verification_status = str(verification_row["status"] or "").strip().lower()
@@ -860,7 +523,7 @@ def _run_contest_package_job_worker(
     if success_count > 0:
         archive_path = _ensure_zip_bundle(job_root, f"{contest_slug}-packages-{job_id}", bundle_root)
         artifact_filename = archive_path.name
-        artifact_id = _record_contest_artifact(
+        artifact_id = config.contest_service.record_artifact(
             contest_id=contest_id,
             job_id=job_id,
             artifact_type="package-bundle",
@@ -869,7 +532,13 @@ def _run_contest_package_job_worker(
         )
     summary["artifact_id"] = artifact_id
     summary["filename"] = artifact_filename
-    _update_contest_job(contest_id, job_id, "ok" if failed_count == 0 and success_count > 0 else "failed", summary, finished=True)
+    config.contest_service.update_job(
+        contest_id,
+        job_id,
+        "ok" if failed_count == 0 and success_count > 0 else "failed",
+        summary,
+        finished=True,
+    )
     audit(
         actor_user_id,
         None,
@@ -893,7 +562,7 @@ def _queue_contest_job(
     actor_username: str,
     job_type: str,
 ) -> tuple[str, bool, str]:
-    active_id = _contest_running_job(contest_id, job_type)
+    active_id = config.contest_service.running_job_id(contest_id, job_type)
     if active_id:
         return (active_id, False, "already_running")
     initial_summary = {
@@ -902,7 +571,7 @@ def _queue_contest_job(
         "status": "running",
         "results": [],
     }
-    job_id = _create_contest_job(
+    job_id = config.contest_service.create_job(
         contest_id,
         actor_user_id,
         str(job_type or "").strip(),
@@ -950,7 +619,7 @@ def _queue_contest_job(
         job_type=f"contest-{job_type}",
     )
     if not queued:
-        _update_contest_job(
+        config.contest_service.update_job(
             contest_id,
             job_id,
             "failed",
@@ -962,7 +631,3 @@ def _queue_contest_job(
             finished=True,
         )
     return (job_id, bool(queued), str(submit_reason or "").strip())
-
-
-
-

@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-import sqlite3
 import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
@@ -11,7 +10,6 @@ from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from app.db import now_iso
 from app.impl.auth.internal import runtime
 from app.impl.runtime.config import config
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
@@ -361,20 +359,11 @@ def lookup_user_auth(username: str):
     safe = str(username or "").strip()
     if not _C.USER_IDENT_RE.fullmatch(safe):
         return None
-    return config.db.fetch_one(
-        "SELECT id,username,password_hash,password_salt,password_iters FROM users WHERE username=?",
-        [safe],
-    )
+    return config.auth_service.lookup_user_auth(safe)
 
 
 def _registered_user_count() -> int:
-    row = config.db.fetch_one("SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''", [])
-    if row is None:
-        return 0
-    try:
-        return max(0, int(row["c"] or 0))
-    except Exception:
-        return 0
+    return (1 if config.auth_service.has_registered_users() else 0)
 
 
 def has_registered_users() -> bool:
@@ -392,9 +381,11 @@ def set_user_password_verifier(user_id: int, verifier_hex: str, salt_hex: str, i
     safe_verifier = normalize_password_verifier_hex(verifier_hex)
     safe_salt = normalize_password_salt_hex(salt_hex)
     safe_iters = normalize_password_iters(iterations)
-    config.db.execute(
-        "UPDATE users SET password_hash=?,password_salt=?,password_iters=?,password_updated_at=? WHERE id=?",
-        [safe_verifier, safe_salt, safe_iters, now_iso(), int(user_id)],
+    config.auth_service.set_user_password_verifier(
+        user_id=int(user_id),
+        verifier_hex=safe_verifier,
+        salt_hex=safe_salt,
+        iterations=safe_iters,
     )
 
 
@@ -403,42 +394,12 @@ def create_user_with_password_verifier(username: str, verifier_hex: str, salt_he
     safe_verifier = normalize_password_verifier_hex(verifier_hex)
     safe_salt = normalize_password_salt_hex(salt_hex)
     safe_iters = normalize_password_iters(iterations)
-    now = now_iso()
-
-    def _tx(conn: sqlite3.Connection) -> int:
-        has_registered_user = conn.execute(
-            "SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1"
-        ).fetchone() is not None
-        admin_candidates = [0] if has_registered_user else [1, 0]
-        inserted = False
-        for is_admin in admin_candidates:
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO users(
-                        username,password_hash,password_salt,password_iters,password_updated_at,created_at,is_system_admin
-                    )
-                    VALUES(?,?,?,?,?,?,?)
-                    """,
-                    [safe_user, safe_verifier, safe_salt, safe_iters, now, now, int(is_admin)],
-                )
-                inserted = True
-                break
-            except sqlite3.IntegrityError as exc:
-                msg = str(exc or "").strip().lower()
-                if "users.username" in msg:
-                    raise ValueError("user already exists") from exc
-                if int(is_admin) == 1:
-                    continue
-                raise
-        if not inserted:
-            raise RuntimeError("failed to create user")
-        row = conn.execute("SELECT id FROM users WHERE username=?", [safe_user]).fetchone()
-        if row is None:
-            raise RuntimeError("failed to create user")
-        return int(row["id"])
-
-    return int(config.db.write_transaction(_tx))
+    return config.auth_service.create_user_with_password_verifier(
+        username=safe_user,
+        verifier_hex=safe_verifier,
+        salt_hex=safe_salt,
+        iterations=safe_iters,
+    )
 
 
 def bootstrap_super_admin_with_password_verifier(
@@ -451,51 +412,12 @@ def bootstrap_super_admin_with_password_verifier(
     safe_verifier = normalize_password_verifier_hex(verifier_hex)
     safe_salt = normalize_password_salt_hex(salt_hex)
     safe_iters = normalize_password_iters(iterations)
-    now = now_iso()
-
-    def _tx(conn: sqlite3.Connection) -> int:
-        has_registered_user = conn.execute(
-            "SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1"
-        ).fetchone() is not None
-        if has_registered_user:
-            raise ValueError("setup already completed")
-        existing = conn.execute("SELECT id,password_hash FROM users WHERE username=?", [safe_user]).fetchone()
-        if existing is None:
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO users(
-                        username,password_hash,password_salt,password_iters,password_updated_at,created_at,is_system_admin
-                    )
-                    VALUES(?,?,?,?,?,?,1)
-                    """,
-                    [safe_user, safe_verifier, safe_salt, safe_iters, now, now],
-                )
-            except sqlite3.IntegrityError as exc:
-                msg = str(exc or "").strip().lower()
-                if "users.username" in msg:
-                    raise ValueError("setup failed; username is unavailable") from exc
-                raise
-            existing = conn.execute("SELECT id,password_hash FROM users WHERE username=?", [safe_user]).fetchone()
-            if existing is None:
-                raise RuntimeError("failed to create super admin")
-        else:
-            current_hash = str(existing["password_hash"] or "").strip()
-            if current_hash:
-                raise ValueError("setup failed; username is unavailable")
-            conn.execute(
-                """
-                UPDATE users
-                SET password_hash=?,password_salt=?,password_iters=?,password_updated_at=?,is_system_admin=1
-                WHERE id=?
-                """,
-                [safe_verifier, safe_salt, safe_iters, now, int(existing["id"])],
-            )
-        user_id = int(existing["id"])
-        conn.execute("UPDATE users SET is_system_admin=0 WHERE id<>?", [user_id])
-        return user_id
-
-    return int(config.db.write_transaction(_tx))
+    return config.auth_service.bootstrap_super_admin_with_password_verifier(
+        username=safe_user,
+        verifier_hex=safe_verifier,
+        salt_hex=safe_salt,
+        iterations=safe_iters,
+    )
 
 
 def safe_next_path(raw: str | None, fallback: str = "/") -> str:

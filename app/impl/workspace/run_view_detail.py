@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from pathlib import Path
 from urllib.parse import quote_plus
 from fastapi import HTTPException
@@ -59,12 +60,9 @@ from app.impl.workspace.context_verification import (
     _status_rule_expected_display,
     _verification_solution_match,
 )
-from app.service.verification.store import (
-    load_verification_record,
-    load_verification_summary,
+from app.service.verification.summary import (
     verification_run,
     verification_run_ids,
-    verification_stage_summary,
     verification_source_paths,
 )
 from app.impl.workspace.run_view_list import (
@@ -120,9 +118,9 @@ def build_run_detail_context(
     verification_run_rows: dict[str, dict[str, object]] = {}
     verification_id_hint = normalize_run_id_token(requested_verification_id)
     verification_details: dict[str, object] = {}
-    verification_record = load_verification_record(config.db, verification_id_hint) if verification_id_hint else None
+    verification_record = config.verification_service.verification_record(verification_id_hint) if verification_id_hint else None
     if verification_record is not None and verification_record['workspace_id'] == workspace_id:
-        verification_details = load_verification_summary(config.db, verification_id_hint)
+        verification_details = config.verification_service.verification_summary(verification_id_hint)
         verification_details['verification_id'] = verification_id_hint
         verification_details['status'] = verification_record['status']
         verification_details['created_at'] = verification_record['created_at']
@@ -198,14 +196,54 @@ def build_run_detail_context(
             return expected_token
         return ''
 
+    def _artifact_test_names(artifact_id: str) -> list[str]:
+        safe_artifact_id = artifact_id if is_canonical_artifact_id(artifact_id) else ''
+        if not safe_artifact_id:
+            return []
+        artifact_path = config.verification_service.artifact_path_for_verification(safe_artifact_id)
+        if not artifact_path:
+            return []
+        root = Path(artifact_path).resolve()
+        names_by_index: dict[int, str] = {}
+        tests_meta_path = root / 'logs' / 'tests_meta.json'
+        try:
+            if tests_meta_path.exists() and tests_meta_path.is_file() and (not tests_meta_path.is_symlink()):
+                payload = json.loads(tests_meta_path.read_text(encoding='utf-8'))
+                for item in payload:
+                    index = int(item.get('index') or 0)
+                    if index <= 0:
+                        continue
+                    names_by_index[index] = f'{index:03d}.in'
+        except Exception:
+            names_by_index = {}
+        tests_dir = root / 'tests'
+        try:
+            if tests_dir.exists() and tests_dir.is_dir() and (not tests_dir.is_symlink()):
+                for entry in tests_dir.iterdir():
+                    name = normalize_run_test_name_token(entry.name)
+                    if not name:
+                        continue
+                    try:
+                        if (not entry.is_file()) or entry.is_symlink():
+                            continue
+                    except OSError:
+                        continue
+                    try:
+                        names_by_index[int(Path(name).stem)] = name
+                    except Exception:
+                        continue
+        except OSError:
+            pass
+        return [names_by_index[index] for index in sorted(names_by_index.keys())]
+
     def _collect_build_stage_markers() -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], str]:
         if not verification_details:
             return ({}, {}, '')
         stage_summaries: list[dict[str, object]] = []
-        generate_stage = verification_stage_summary(verification_details, 'generate_input')
+        generate_stage = config.verification_service.verification_stage_summary(verification_id_hint, 'generate_input') if verification_id_hint else {}
         if generate_stage:
             stage_summaries.append(generate_stage)
-        solve_stage = verification_stage_summary(verification_details, 'solve_main')
+        solve_stage = config.verification_service.verification_stage_summary(verification_id_hint, 'solve_main') if verification_id_hint else {}
         if solve_stage:
             stage_summaries.append(solve_stage)
         generate_markers: dict[str, dict[str, str]] = {}
@@ -401,6 +439,15 @@ def build_run_detail_context(
         tone = (primary_note.get('tone') or '')
         note_text = (primary_note.get('text') or '')
         note_detail = (primary_note.get('detail') or '')
+        if is_placeholder and (not actual_test_name):
+            return {
+                'kind': 'neutral',
+                'text': '',
+                'short': '..',
+                'meta': 'generating',
+                'detail': note_detail,
+                'clickable': False,
+            }
         if tone in {'running', 'pending'}:
             short = note_text
             meta = ''
@@ -821,6 +868,7 @@ def build_run_detail_context(
             if is_canonical_artifact_id(candidate_build):
                 artifact_verification_id = candidate_build
                 break
+    artifact_test_names = _artifact_test_names(artifact_verification_id)
     generate_stage_map: dict[str, dict[str, str]] = {}
     if artifact_verification_id:
         generate_stage_map, _main_stage_map, _main_stage_source = _collect_build_stage_markers()
@@ -835,6 +883,7 @@ def build_run_detail_context(
             detail=(marker.get('detail') or ''),
             source_label='',
         )
+    all_tests.update(artifact_test_names)
     all_tests.update(generate_stage_map.keys())
     ordered_tests = sorted(all_tests, key=_run_test_sort_key)
     known_tests_by_index: dict[int, str] = {}
@@ -847,10 +896,16 @@ def build_run_detail_context(
             known_tests_by_index[test_index] = test_name
     tests_meta_stats = _verification_tests_meta_stats(verification_details)
     try:
-        tests_meta_total = max(0, int(tests_meta_stats.get('total') or 0))
+        tests_meta_total = max(len(artifact_test_names), max(0, int(tests_meta_stats.get('total') or 0)))
     except Exception:
-        tests_meta_total = 0
-    display_test_total = max(max(known_tests_by_index.keys(), default=0), tests_meta_total)
+        tests_meta_total = len(artifact_test_names)
+    column_tests_total = 0
+    for col in columns:
+        try:
+            column_tests_total = max(column_tests_total, int(col.get('tests_total') or 0))
+        except Exception:
+            continue
+    display_test_total = max(max(known_tests_by_index.keys(), default=0), tests_meta_total, column_tests_total)
     row_index_by_test = {name: idx for idx, name in enumerate(ordered_tests, start=1)}
     detail_rows: list[dict] = []
     if not include_row_details:
@@ -858,7 +913,7 @@ def build_run_detail_context(
         if bool(status_summary['has_running']) and display_test_total > 0:
             for idx in range(1, display_test_total + 1):
                 actual_name = (known_tests_by_index.get(idx) or '')
-                row_entries.append((idx, actual_name, actual_name or f'test {idx}', not bool(actual_name)))
+                row_entries.append((idx, actual_name, actual_name, not bool(actual_name)))
         else:
             row_entries = [(idx, test_name, test_name, False) for idx, test_name in enumerate(ordered_tests, start=1)]
         for idx, actual_test_name, display_name, is_placeholder in row_entries:
@@ -1166,9 +1221,9 @@ def build_run_detail_context(
     artifact_verification_id = verification_details.get('artifact_verification_id') or verification_id_hint or ''
     source_verification_id = artifact_verification_id if is_canonical_artifact_id(artifact_verification_id) else ''
     if source_verification_id and problem_slug and username:
-        source_verification_row = config.db.fetch_one(
-            "SELECT status,summary_json FROM verifications WHERE id=? AND problem_id=?",
-            [source_verification_id, problem_id],
+        source_verification_row = config.verification_service.export_runtime_verification(
+            int(problem_id),
+            source_verification_id,
         )
         source_verification_summary = parse_summary_json(source_verification_row['summary_json'], f'verification/{source_verification_id}') if source_verification_row is not None else {}
         artifact_verification_status = source_verification_row['status'] if source_verification_row is not None else (verification_details.get('artifact_verification_status') or '')

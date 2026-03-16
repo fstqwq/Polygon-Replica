@@ -7,7 +7,7 @@ from app.impl.runtime.config import config
 from app.main_util import preserve_error_text
 from app.service.platform.hashing import quick_fp_digest
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.verification.store import load_verification_summary, verification_run_ids
+from app.service.verification.summary import verification_run_ids
 from .run_display import run_actual_failed_codes, run_actual_short
 _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     # Each expected behavior is evaluated by:
@@ -51,28 +51,23 @@ def _source_basename_label(path: str) -> str:
 def _verification_has_stage_results(verification_id: str) -> bool:
     if not verification_id:
         return False
-    stage_results = cast(dict[str, object] | None, load_verification_summary(config.db, verification_id).get("stage_results"))
+    stage_results = cast(dict[str, object] | None, config.verification_service.verification_summary(verification_id).get("stage_results"))
     return bool(stage_results)
 
 
 def latest_workspace_stage_verification(problem_id: int, workspace_id: int, *, ok_only: bool=False):
-    sql = """
-        SELECT id,status,source_commit,source_ref,kind,summary_json,created_at,finished_at
-        FROM verifications
-        WHERE problem_id=? AND workspace_id=? AND kind!='sample'
-    """
-    params: list[object] = [problem_id, workspace_id]
-    if ok_only:
-        sql += " AND status='ok'"
-    sql += " ORDER BY created_at DESC LIMIT 40"
-    rows = config.db.fetch_all(sql, params)
+    rows = config.verification_service.latest_workspace_stage_rows(
+        int(problem_id),
+        int(workspace_id),
+        limit=40,
+        ok_only=bool(ok_only),
+    )
     fallback: dict | None = None
     for row in rows:
-        row_dict = dict(row)
         if fallback is None:
-            fallback = row_dict
-        if _verification_has_stage_results(row_dict["id"]):
-            return row_dict
+            fallback = row
+        if _verification_has_stage_results(row["id"]):
+            return row
     return fallback
 
 
@@ -80,23 +75,20 @@ def latest_workspace_committed_stage_verification(problem_id: int, workspace_id:
     commit = head_commit
     if not commit:
         return None
-    sql = """
-        SELECT id,status,source_commit,source_ref,kind,summary_json,created_at,finished_at
-        FROM verifications
-        WHERE problem_id=? AND workspace_id=? AND source_commit=? AND source_ref=? AND kind!='sample'
-    """
-    params: list[object] = [problem_id, workspace_id, commit, commit]
-    if ok_only:
-        sql += " AND status='ok'"
-    sql += " ORDER BY created_at DESC LIMIT 40"
-    rows = config.db.fetch_all(sql, params)
+    rows = config.verification_service.latest_workspace_committed_stage_rows(
+        int(problem_id),
+        int(workspace_id),
+        source_commit=commit,
+        source_ref=commit,
+        limit=40,
+        ok_only=bool(ok_only),
+    )
     fallback: dict | None = None
     for row in rows:
-        row_dict = dict(row)
         if fallback is None:
-            fallback = row_dict
-        if _verification_has_stage_results(row_dict["id"]):
-            return row_dict
+            fallback = row
+        if _verification_has_stage_results(row["id"]):
+            return row
     return fallback
 
 _VERIFICATION_SIGNATURE_FILE_TARGETS: tuple[str, ...] = (
@@ -405,20 +397,16 @@ def _verification_status_context(
     workspace_path: Path | str | None=None,
 ) -> dict[str, object]:
     _ = actor_user_id
-    row = config.db.fetch_one(
-        """
-        SELECT id,status,summary_json,created_at,finished_at
-        FROM verifications
-        WHERE problem_id=? AND workspace_id=? AND kind='verification'
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        [int(problem_id), int(workspace_id)],
+    rows = config.verification_service.latest_workspace_stage_rows(
+        int(problem_id),
+        int(workspace_id),
+        limit=1,
     )
+    row = rows[0] if rows else None
     if row is None:
         return {'mode': 'none', 'display': 'none', 'last_status': 'none', 'run_id': '', 'run_ids': '', 'verification_id': '', 'error': '', 'created_at': '', 'stale': False, 'stale_reason': ''}
     verification_id = row['id']
-    details = load_verification_summary(config.db, verification_id)
+    details = config.verification_service.verification_summary(verification_id)
     status_token = row['status']
     if status_token == 'ok':
         last_status = 'pass'

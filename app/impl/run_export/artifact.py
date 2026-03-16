@@ -41,13 +41,7 @@ def _browser_blob_response(blob: bytes, filename: str) -> Response:
 def _verification_artifact_root(problem_id: int, verification_id: str) -> Path | None:
     if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
         return None
-    row = config.db.fetch_one(
-        "SELECT artifact_path FROM verifications WHERE id=? AND problem_id=?",
-        [verification_id, int(problem_id)],
-    )
-    if row is None:
-        return None
-    artifact_path = row["artifact_path"]
+    artifact_path = config.verification_service.artifact_path_for_problem_artifact(int(problem_id), verification_id)
     if not artifact_path:
         return None
     try:

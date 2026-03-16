@@ -1,5 +1,4 @@
 from __future__ import annotations
-import sqlite3
 import secrets
 from urllib.parse import quote_plus
 from fastapi import File, Form, HTTPException, Request, UploadFile
@@ -23,7 +22,6 @@ from app.impl.run_export.import_source import (
     import_package_as_new_problem,
     import_statement_language_warning,
 )
-from app.db import now_iso
 from app.service.importing.contest import PolygonContestImportService
 
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required, normalize_contest_title_required, user_contests_overview, user_participating_problems
@@ -420,46 +418,34 @@ def contests_root_page(request: Request, user: str = ""):
     entries = user_contests_overview(int(gctx['user']['id']), limit=_C.API_PROBLEMS_LIST_LIMIT)
     return template_response(request, 'root_contests.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': _C.API_PROBLEMS_LIST_LIMIT, 'active_main': 'contests'})
 
-def contests_root_create(request: Request, user: str = "", contest_slug: str=Form(...), contest_title: str=Form(...)):
+def contests_root_create(request: Request, user: str = "", contest_slug: str = Form(...), contest_title: str = Form(...)):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
-    msg = 'contest created'
+    msg = "contest created"
     try:
         slug = normalize_contest_slug_required(contest_slug)
         title = normalize_contest_title_required(contest_title)
         actor_user_id = int(gctx["user"]["id"])
-        created_at = now_iso()
-
-        def _tx(conn: sqlite3.Connection) -> int:
-            exists = conn.execute("SELECT id FROM contests WHERE slug=?", [slug]).fetchone()
-            if exists is not None:
-                raise ValueError("contest slug already exists")
-            conn.execute(
-                "INSERT INTO contests(slug,title,owner_user_id,created_at) VALUES(?,?,?,?)",
-                [slug, title, actor_user_id, created_at],
-            )
-            contest_row = conn.execute("SELECT id FROM contests WHERE slug=?", [slug]).fetchone()
-            if contest_row is None:
-                raise RuntimeError("failed to create contest")
-            contest_id = int(contest_row["id"])
-            conn.execute(
-                "INSERT INTO contest_members(contest_id,user_id,role,created_at) VALUES(?,?,?,?)",
-                [contest_id, actor_user_id, "owner", created_at],
-            )
-            return contest_id
-
-        try:
-            contest_id = int(config.db.write_transaction(_tx))
-        except sqlite3.IntegrityError as exc:
-            msg_text = str(exc or "").strip().lower()
-            if "contests.slug" in msg_text:
-                raise ValueError("contest slug already exists") from exc
-            raise
-        audit(int(gctx['user']['id']), None, 'contest.create', {'contest_id': contest_id, 'contest_slug': slug, 'contest_title': title, 'linked_current_problem': False})
-        msg = f'contest {slug} created'
+        contest_id = config.contest_service.create_contest_with_owner(
+            slug=slug,
+            title=title,
+            owner_user_id=actor_user_id,
+        )
+        audit(
+            int(gctx["user"]["id"]),
+            None,
+            "contest.create",
+            {
+                "contest_id": contest_id,
+                "contest_slug": slug,
+                "contest_title": title,
+                "linked_current_problem": False,
+            },
+        )
+        msg = f"contest {slug} created"
     except (ValueError, RuntimeError) as exc:
         msg = str(exc)
-    return redirect_response('/contests', status_code=303, message=msg)
+    return redirect_response("/contests", status_code=303, message=msg)
 
 
 def contests_root_import(
@@ -605,20 +591,12 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             form_text(contest_title_input).strip() or parsed_title or target_contest_slug
         )
 
-        now = now_iso()
-        config.db.execute(
-            "INSERT INTO contests(slug,title,owner_user_id,created_at) VALUES(?,?,?,?)",
-            [target_contest_slug, target_contest_title, actor_user_id, now],
+        contest_id = config.contest_service.create_contest_with_owner(
+            slug=target_contest_slug,
+            title=target_contest_title,
+            owner_user_id=actor_user_id,
         )
-        contest_row = config.db.fetch_one("SELECT id FROM contests WHERE slug=?", [target_contest_slug])
-        if contest_row is None:
-            raise RuntimeError("failed to create contest")
-        contest_id = int(contest_row["id"])
         created_contest_slug = target_contest_slug
-        config.db.execute(
-            "INSERT OR IGNORE INTO contest_members(contest_id,user_id,role,created_at) VALUES(?,?,?,?)",
-            [contest_id, actor_user_id, "owner", now],
-        )
 
         imported_problem_slugs: list[str] = []
         import_warnings: list[str] = []
@@ -651,16 +629,15 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             language_warning = import_statement_language_warning(imported)
             if language_warning:
                 import_warnings.append(f"{imported_problem_slug}: {language_warning}")
-            problem_row = config.db.fetch_one("SELECT id FROM problems WHERE slug=?", [imported_problem_slug])
-            if problem_row is None:
+            problem_id = config.workspace_service.known_problem_id(imported_problem_slug)
+            if problem_id is None:
                 raise RuntimeError(f"imported problem missing: {imported_problem_slug}")
             contest_problem_idx = _normalize_import_contest_idx(row.get("index"), idx, used_indices)
-            config.db.execute(
-                """
-                INSERT INTO contest_problems(contest_id,idx,problem_id,added_by_user_id,created_at)
-                VALUES(?,?,?,?,?)
-                """,
-                [contest_id, contest_problem_idx, int(problem_row["id"]), actor_user_id, now_iso()],
+            config.contest_service.add_problem(
+                contest_id=contest_id,
+                idx=contest_problem_idx,
+                problem_id=problem_id,
+                added_by_user_id=actor_user_id,
             )
             imported_problem_slugs.append(imported_problem_slug)
 

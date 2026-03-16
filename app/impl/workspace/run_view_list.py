@@ -29,8 +29,7 @@ from app.service.problem.solution_metadata import (
     normalize_expected_behavior,
 )
 from .run_view_lifecycle_card import _run_test_count_from_summary
-from app.service.verification.store import (
-    list_verification_rows,
+from app.service.verification.summary import (
     verification_run,
     verification_run_ids,
     verification_source_paths,
@@ -483,11 +482,11 @@ def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: in
     limit_cap = max(1, int(limit))
     result: list[dict[str, object]] = []
     seen_ids: set[str] = set()
-    verification_rows = list_verification_rows(
-        config.db,
-        problem_id=int(problem_id),
-        workspace_id=int(workspace_id),
+    verification_rows = config.verification_service.list_workspace_verification_rows(
+        int(problem_id),
+        int(workspace_id),
         limit=max(limit_cap * 4, 80),
+        kinds=("verification",),
     )
     for row in verification_rows:
         item = _verification_row_to_list_item(int(problem_id), workspace, row)

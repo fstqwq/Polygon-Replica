@@ -1,5 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+from .db_helpers import db_execute, db_fetch_one
+
+import base64
 import asyncio
 import io
 import os
@@ -27,7 +30,6 @@ from .ui_support import (
     tests_spec_payload_upload as upload_payload_call,
     tests_spec_reindex as reindex_spec_call,
     config,
-    db,
     general_page,
     json,
     preview_page,
@@ -70,7 +72,7 @@ class TestUIRun(UIBaseSuite):
     ) -> None:
         verification_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
-        existing_row = db.fetch_one(
+        existing_row = db_fetch_one(
             "SELECT summary_json,created_at,finished_at,source_commit,source_ref FROM verifications WHERE id=?",
             [verification_id],
         )
@@ -165,7 +167,7 @@ class TestUIRun(UIBaseSuite):
         final_created_at = existing_created_at or created_at
         final_finished_at = finished_at or existing_finished_at
         if existing_row is None:
-            db.execute(
+            db_execute(
                 """
                 INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -185,7 +187,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             )
         else:
-            db.execute(
+            db_execute(
                 """
                 UPDATE verifications
                 SET problem_id=?, workspace_id=?, source_commit=?, source_ref=?, kind=?, status=?, summary_json=?, artifact_path=?, created_at=?, finished_at=?
@@ -236,7 +238,7 @@ class TestUIRun(UIBaseSuite):
             else config.fs_manager.prepare_verification_root(verification_id).resolve()
         )
         root.mkdir(parents=True, exist_ok=True)
-        db.execute(
+        db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -634,7 +636,7 @@ class TestUIRun(UIBaseSuite):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        db.execute("DELETE FROM verifications WHERE workspace_id=?", [workspace_id])
+        db_execute("DELETE FROM verifications WHERE workspace_id=?", [workspace_id])
         artifact_verification_id = self.random_id("ver-run-execute-artifact")
         artifact_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / artifact_verification_id
         artifact_root.mkdir(parents=True, exist_ok=True)
@@ -687,7 +689,7 @@ class TestUIRun(UIBaseSuite):
         deadline = time.monotonic() + 12.0
         resolved_artifact_verification_id = ""
         while time.monotonic() < deadline:
-            row = db.fetch_one(
+            row = db_fetch_one(
                 "SELECT summary_json FROM verifications WHERE workspace_id=? AND id=? LIMIT 1",
                 [workspace_id, verification_id],
             )
@@ -697,7 +699,7 @@ class TestUIRun(UIBaseSuite):
                 break
             time.sleep(0.05)
         self.assertEqual(resolved_artifact_verification_id, artifact_verification_id)
-        artifact_row = db.fetch_one("SELECT id FROM verifications WHERE id=? LIMIT 1", [resolved_artifact_verification_id])
+        artifact_row = db_fetch_one("SELECT id FROM verifications WHERE id=? LIMIT 1", [resolved_artifact_verification_id])
         self.assertIsNotNone(artifact_row)
 
     def test_run_execute_uses_problem_mode_from_general_config(self) -> None:
@@ -742,7 +744,7 @@ class TestUIRun(UIBaseSuite):
         def _fake_start_batch(*args, **kwargs) -> bool:
             verification_id = str(kwargs.get("verification_id") or "")
             verification_run_ids = [str(item or "") for item in (kwargs.get("verification_run_ids") or []) if str(item or "")]
-            audit_row = db.fetch_one(
+            audit_row = db_fetch_one(
                 """
                 SELECT details_json
                 FROM audit_log
@@ -776,7 +778,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("/problems/alice/sample/alice/run/details?verification_id=", loc)
         verification_id = (parse_qs(urlparse(loc).query).get("verification_id") or [""])[0]
         self.assertTrue(verification_id)
-        mapped_row = db.fetch_one(
+        mapped_row = db_fetch_one(
             """
             SELECT details_json
             FROM audit_log
@@ -836,7 +838,7 @@ class TestUIRun(UIBaseSuite):
         self.assertTrue(messages)
         self.assertIn("verification failed: main correct solution is required", messages[0])
 
-        row = db.fetch_one(
+        row = db_fetch_one(
             """
             SELECT a.details_json
             FROM audit_log a
@@ -915,7 +917,7 @@ class TestUIRun(UIBaseSuite):
             "tests_total": 2,
             "error": "",
         }
-        db.execute(
+        db_execute(
             "UPDATE verifications SET summary_json=? WHERE id=?",
             [
                 json.dumps(
@@ -946,7 +948,7 @@ class TestUIRun(UIBaseSuite):
             source_path = str(kwargs.get("submission_path") or "")
             submitted_paths.append(source_path)
             submitted_tests.append(list(kwargs.get("selected_tests") or []))
-            snapshot_row = db.fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
+            snapshot_row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
             snapshot_summary = json.loads(str(snapshot_row["summary_json"] or "{}")) if snapshot_row is not None else {}
             queued_snapshot["summary"] = snapshot_summary
             run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
@@ -1012,7 +1014,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIsInstance(queued_runs, dict)
         self.assertEqual(str(((queued_runs.get(accepted_run_id) or {}).get("status") or "")), "ok")
         self.assertEqual(str(((queued_runs.get(wa_run_id) or {}).get("status") or "")), "queued")
-        verification_row = db.fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
+        verification_row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         verification_summary = json.loads(str(verification_row["summary_json"] or "{}"))
         runs = verification_summary.get("runs") if isinstance(verification_summary, dict) else {}
@@ -1064,7 +1066,7 @@ class TestUIRun(UIBaseSuite):
         captured_summary: dict[str, object] = {}
 
         def _capture_then_fail(*args, **kwargs):
-            row = db.fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
+            row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
             self.assertIsNotNone(row)
             payload = json.loads(str(row["summary_json"] or "{}"))
             self.assertIsInstance(payload, dict)
@@ -1320,7 +1322,7 @@ class TestUIRun(UIBaseSuite):
                     verification_id=verification_id,
                 )
 
-        verification_row = db.fetch_one("SELECT status,summary_json,finished_at FROM verifications WHERE id=?", [verification_id])
+        verification_row = db_fetch_one("SELECT status,summary_json,finished_at FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or ""), "running")
         self.assertEqual(str(verification_row["finished_at"] or ""), "")
@@ -1568,7 +1570,7 @@ class TestUIRun(UIBaseSuite):
             "tests": [{"test": "001.in", "verdict": "OK", "blob": oversized_blob}],
         }
 
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -1631,7 +1633,7 @@ class TestUIRun(UIBaseSuite):
         run_a = f"r-verify-map-a-{uuid.uuid4().hex[:8]}"
         run_b = f"r-verify-map-b-{uuid.uuid4().hex[:8]}"
 
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -1690,7 +1692,7 @@ class TestUIRun(UIBaseSuite):
         run_a = f"r-audit-pending-a-{uuid.uuid4().hex[:8]}"
         run_b = f"r-audit-pending-b-{uuid.uuid4().hex[:8]}"
 
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -2511,7 +2513,7 @@ class TestUIRun(UIBaseSuite):
         self.assertTrue(cancel_messages)
         self.assertIn("cancel requested", cancel_messages[0])
 
-        verification_row = db.fetch_one("SELECT summary_json,status FROM verifications WHERE id=?", [verification_id])
+        verification_row = db_fetch_one("SELECT summary_json,status FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         verification_summary = json.loads(str(verification_row["summary_json"] or "{}"))
         runs = verification_summary.get("runs") if isinstance(verification_summary, dict) else {}
@@ -2536,6 +2538,102 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("Verification status:", after_html)
         self.assertIn("FAILED", after_html)
         self.assertNotIn(">Cancel</a>", after_html)
+
+    def test_run_cancel_ignores_late_leased_case_callback(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-cancel-late-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-cancel-late-{uuid.uuid4().hex[:8]}"
+        build_id = self.random_id("b-cancel-late")
+        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        (build_root / "tests").mkdir(parents=True, exist_ok=True)
+        (build_root / "ans").mkdir(parents=True, exist_ok=True)
+        (build_root / "tests" / "001.in").write_text("1\n", encoding="utf-8")
+        (build_root / "ans" / "001.ans").write_text("1\n", encoding="utf-8")
+        self._insert_stage_verification(
+            verification_id=build_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            status="running",
+            summary={},
+            artifact_path=str(build_root),
+            created_at="2026-03-17T00:00:00Z",
+            finished_at=None,
+        )
+
+        service = config.judgehost_task_service
+        old_enabled = service._enabled
+        old_token = service._api_token
+        old_username = service._api_username
+        old_include_build_payload = service._include_build_payload
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        self.addCleanup(setattr, service, "_api_username", old_username)
+        self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
+        service._enabled = True
+        service._api_token = "test-token"
+        service._api_username = "judgehost"
+        service._include_build_payload = True
+        service.domjudge_register_host("judgehost-cancel-late")
+        service.enqueue_task(
+            problem="alice/sample",
+            username="alice",
+            artifact_verification_id=build_id,
+            mode="pass-fail",
+            submission_path="solutions/accepted.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id=verification_id,
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        leased = service.domjudge_fetch_work("judgehost-cancel-late", max_batchsize=8)
+        self.assertEqual(len(leased), 1)
+        case_id = int(leased[0].get("judgetaskid") or 0)
+        self.assertGreater(case_id, 0)
+
+        cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
+        self.assertEqual(cancel_resp.status_code, 303)
+        cancel_messages = _flash_messages_from_response(cancel_resp)
+        self.assertTrue(cancel_messages)
+        self.assertIn("cancel requested", cancel_messages[0])
+
+        meta_text = "cpu-time: 0.004\nwall-time: 0.004\nmemory-bytes: 4096\n"
+        service.domjudge_add_judging_run(
+            "judgehost-cancel-late",
+            case_id,
+            {
+                "runresult": "correct",
+                "runtime": "0.004",
+                "output_run": base64.b64encode(b"1\n").decode("ascii"),
+                "output_diff": "",
+                "output_error": "",
+                "output_system": "",
+                "metadata": base64.b64encode(meta_text.encode("utf-8")).decode("ascii"),
+                "compare_metadata": "",
+            },
+        )
+
+        verification_row = db_fetch_one("SELECT status, summary_json FROM verifications WHERE id=?", [verification_id])
+        self.assertIsNotNone(verification_row)
+        self.assertEqual(str(verification_row["status"] or "").lower(), "failed")
+        verification_summary = json.loads(str(verification_row["summary_json"] or "{}"))
+        runs = verification_summary.get("runs") if isinstance(verification_summary, dict) else {}
+        self.assertIsInstance(runs, dict)
+        run_payload = runs.get(run_id) if isinstance(runs, dict) else None
+        self.assertIsInstance(run_payload, dict)
+        self.assertEqual(str(run_payload.get("status") or "").lower(), "failed")
+        run_summary = run_payload.get("summary") if isinstance(run_payload, dict) else {}
+        self.assertIsInstance(run_summary, dict)
+        self.assertTrue(bool(run_summary.get("cancelled")))
+        self.assertEqual(run_summary.get("tests") or [], [])
 
     def test_finalize_cancelled_verifications_marks_verification_failed_without_active_runs(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -2574,7 +2672,7 @@ class TestUIRun(UIBaseSuite):
 
         cancelled = run_export_impl._finalize_cancelled_verifications([build_id], "verification cancelled by user")
         self.assertEqual(cancelled, 1)
-        build_row = db.fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [build_id])
+        build_row = db_fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [build_id])
         self.assertIsNotNone(build_row)
         self.assertEqual(str(build_row["status"] or "").strip().lower(), "failed")
         summary = json.loads(str(build_row["summary_json"] or "{}"))
@@ -2634,7 +2732,7 @@ class TestUIRun(UIBaseSuite):
         with patch.object(config.judgehost_task_service, "active_task_count_for_verification", return_value=1):
             cancelled = run_export_impl._finalize_cancelled_verifications([build_id], "verification cancelled by user")
         self.assertEqual(cancelled, 0)
-        build_row = db.fetch_one("SELECT status FROM verifications WHERE id=?", [build_id])
+        build_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [build_id])
         self.assertIsNotNone(build_row)
         self.assertEqual(str(build_row["status"] or "").strip().lower(), "running")
 
@@ -3150,7 +3248,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=verification_id,
             kind=Kind.VERIFICATION,
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -3182,6 +3280,173 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("Validated inputs", html)
         self.assertIn("Generate Outputs", html)
         self.assertIn("Run Solutions", html)
+
+    def test_run_details_uses_tests_meta_names_for_sparse_running_rows_without_test_index_fallback(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-running-tests-meta-{uuid.uuid4().hex[:8]}"
+        build_id = self.random_id("b-running-tests-meta")
+        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        (build_root / "logs").mkdir(parents=True, exist_ok=True)
+        (build_root / "logs" / "tests_meta.json").write_text(
+            json.dumps(
+                [{"index": idx, "kind": "gen", "id": f"g{idx:03d}"} for idx in range(1, 10)]
+            ),
+            encoding="utf-8",
+        )
+        self._insert_stage_verification(
+            verification_id=build_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            source_commit="deadbeef",
+            source_ref="main",
+            status="ok",
+            summary={},
+            artifact_path=str(build_root),
+            created_at="2026-03-17T00:00:00Z",
+            finished_at="2026-03-17T00:00:01Z",
+        )
+        run_id = f"r-running-tests-meta-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=build_id,
+            kind=Kind.VERIFICATION,
+            status="running",
+            created_at="2026-03-17T00:00:02Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "running",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "verification_source": "verification.solve-main",
+                        "tests_total": 9,
+                        "tests": [],
+                        "error": "",
+                    },
+                }
+            ],
+            summary_extra={
+                "mode": "pass-fail",
+                "status": "running",
+                "verification_source": "verification.start",
+                "artifact_verification_id": build_id,
+            },
+        )
+        fake_case_rows = [
+            {
+                "run_id": run_id,
+                "test_name": "005.in",
+                "status": "reported",
+                "runresult": "timelimit",
+                "cpu_sec": 4.44,
+                "runtime_sec": 4.44,
+                "wall_sec": 4.44,
+                "memory_kb": 1024,
+            },
+            {
+                "run_id": run_id,
+                "test_name": "008.in",
+                "status": "leased",
+                "runresult": "",
+                "cpu_sec": 0.0,
+                "runtime_sec": 0.0,
+                "wall_sec": 0.0,
+                "memory_kb": 0,
+            },
+        ]
+        with patch.object(config.judgehost_task_service, "domjudge_case_cells_for_runs", return_value=fake_case_rows):
+            page = run_details_page(
+                _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+                "alice/sample",
+                "alice",
+            )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("001.in", html)
+        self.assertIn("005.in", html)
+        self.assertIn("009.in", html)
+        self.assertNotIn("test 1", html)
+        self.assertNotIn("test 2", html)
+        self.assertNotIn("test 6", html)
+
+    def test_run_details_keeps_generating_placeholders_when_artifact_tests_are_partial(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-partial-artifact-tests-{uuid.uuid4().hex[:8]}"
+        build_id = self.random_id("b-partial-artifact-tests")
+        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        (build_root / "tests").mkdir(parents=True, exist_ok=True)
+        (build_root / "tests" / "001.in").write_text("1\n", encoding="utf-8")
+        run_id = f"r-partial-artifact-tests-{uuid.uuid4().hex[:8]}"
+        self._insert_stage_verification(
+            verification_id=build_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            source_commit="deadbeef",
+            source_ref="main",
+            status="running",
+            summary={},
+            artifact_path=str(build_root),
+            created_at="2026-03-17T00:00:00Z",
+            finished_at=None,
+        )
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=build_id,
+            kind=Kind.VERIFICATION,
+            status="running",
+            created_at="2026-03-17T00:00:02Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "running",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "verification_source": "verification.solve-main",
+                        "tests_total": 9,
+                        "tests": [],
+                        "error": "",
+                    },
+                }
+            ],
+            summary_extra={
+                "mode": "pass-fail",
+                "status": "running",
+                "verification_source": "verification.start",
+                "artifact_verification_id": build_id,
+            },
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("001.in", html)
+        self.assertGreater(html.count('<span class="vmeta">generating</span>'), 0)
+        self.assertNotIn("test 1", html)
 
     def test_run_details_shows_generated_count_while_build_running(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -3325,7 +3590,7 @@ class TestUIRun(UIBaseSuite):
                 "build_status": "running",
             },
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -3618,7 +3883,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=verification_id,
             kind=Kind.VERIFICATION,
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -4185,7 +4450,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=verification_id,
             kind=Kind.VERIFICATION,
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -4279,7 +4544,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=verification_id,
             kind=Kind.VERIFICATION,
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -4301,7 +4566,7 @@ class TestUIRun(UIBaseSuite):
                 "2026-02-23T00:00:04Z",
             ],
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -4515,7 +4780,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=verification_id,
             kind=Kind.VERIFICATION,
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -4693,7 +4958,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=verification_id,
             kind=Kind.VERIFICATION,
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -5208,7 +5473,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=verification_id,
             kind=Kind.VERIFICATION,
         )
-        db.execute(
+        db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [
                 actor_user_id,
@@ -5629,7 +5894,7 @@ class TestUIRun(UIBaseSuite):
         preview_root = self._artifact_root(preview_id)
         (preview_root / "logs").mkdir(parents=True, exist_ok=True)
         (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
-        db.execute(
+        db_execute(
             """
             INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
             VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -5889,5 +6154,4 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(">Verification</span>", html)
         self.assertIn(">failed</strong>", html)
-
 
