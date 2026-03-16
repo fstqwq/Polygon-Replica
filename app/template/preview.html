@@ -227,7 +227,7 @@
         <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/attachments/delete" data-confirm-message="Delete attachment {{ row.path }}? This cannot be undone; uncommitted changes will be lost.">
           <input type="hidden" name="path" value="{{ row.path }}" />
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
-          <a href="#" class="linkish" data-submit-form="1">Delete</a>
+          <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
         </form>
       </td>
     </tr>

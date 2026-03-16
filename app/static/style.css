@@ -9,6 +9,11 @@
   --link: #1d4ed8;
   --ok: #166534;
   --danger: #b91c1c;
+  --danger-link-color: var(--danger);
+  --danger-link-hover-color: #991b1b;
+  --danger-link-hover-bg: #fff1f2;
+  --danger-link-focus: #fecaca;
+  --danger-link-weight: 700;
   --warn: #a16207;
   --warn-bg: #fff7ed;
   --warn-line: #fed7aa;
@@ -905,12 +910,25 @@ section {
 }
 
 .danger-link {
-  border-color: var(--danger);
-  color: var(--danger);
+  color: var(--danger-link-color);
+  font-weight: var(--danger-link-weight);
 }
 
 .danger-link:hover {
-  background: #fff3f3;
+  color: var(--danger-link-hover-color);
+}
+
+.button-link.danger-link {
+  border-color: var(--danger-link-color);
+}
+
+.button-link.danger-link:hover:not([aria-disabled="true"]) {
+  background: var(--danger-link-hover-bg);
+}
+
+.danger-link:focus-visible {
+  outline: 2px solid var(--danger-link-focus);
+  outline-offset: 1px;
 }
 
 #judgehost_gen_script_output {
@@ -2664,16 +2682,6 @@ section.verification-header-section {
 .solutions-delete-form {
   display: inline-flex;
   margin: 0;
-}
-
-.tests-editor-action-link {
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.tests-editor-action-danger {
-  color: var(--danger);
 }
 
 .tests-editor-table .tests-col-test {

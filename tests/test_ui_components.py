@@ -578,6 +578,8 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn(f'name="new_path" value="{Path(source_rel).name}"', html)
         self.assertIn("Delete", html)
         self.assertIn(source_rel, html)
+        self.assertIn('class="linkish" data-submit-form="1">Rename</a>', html)
+        self.assertIn('class="linkish danger-link" data-submit-form="1">Delete</a>', html)
 
     def test_solutions_set_tag_main_correct_updates_main_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

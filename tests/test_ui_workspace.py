@@ -1155,6 +1155,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(marker, html)
         self.assertIn("View Diff", html)
         self.assertIn("Restore To Working Copy", html)
+        self.assertIn('class="linkish danger-link"', html)
 
     def test_revision_history_page_can_view_selected_revision_diff(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")

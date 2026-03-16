@@ -26,7 +26,7 @@
           <input type="hidden" name="page" value="history" />
           <a
             href="#"
-            class="linkish danger"
+            class="linkish danger-link"
             data-submit-form="1"
             {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}
           >Restore To Working Copy</a>

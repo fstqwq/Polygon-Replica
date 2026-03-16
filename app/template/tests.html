@@ -58,7 +58,7 @@
         <a class="linkish" href="#tests-reindex-popup-{{ row.index }}" data-popup-open="tests-reindex-popup-{{ row.index }}">Reindex</a>
         <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/delete" data-confirm-message="Delete test #{{ row.index }} ({{ row.id }})? This cannot be undone; uncommitted changes will be lost.">
           <input type="hidden" name="index" value="{{ row.index }}" />
-          <a href="#" class="linkish tests-editor-action-link tests-editor-action-danger" data-submit-form="1">Delete</a>
+          <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
         </form>
       </td>
     </tr>

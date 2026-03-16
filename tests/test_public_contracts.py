@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+STYLE_PATH = ROOT / "app" / "static" / "style.css"
 
 
 def _app_python_files() -> list[Path]:
@@ -31,6 +32,63 @@ def _imported_symbol_set(module_name: str) -> set[str]:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_danger_link_templates_use_canonical_class(self) -> None:
+        expected_patterns = {
+            ROOT / "app" / "template" / "run.html": [
+                r'class="linkish danger-link" data-submit-form="1">Cancel</a>',
+            ],
+            ROOT / "app" / "template" / "run_details.html": [
+                r'class="linkish danger-link" data-submit-form="1">Cancel</a>',
+            ],
+            ROOT / "app" / "template" / "history.html": [
+                r'class="linkish danger-link"\s+data-submit-form="1"',
+            ],
+            ROOT / "app" / "template" / "preview.html": [
+                r'class="linkish danger-link" data-submit-form="1">Delete</a>',
+            ],
+            ROOT / "app" / "template" / "solutions.html": [
+                r'class="linkish danger-link" data-submit-form="1">Delete</a>',
+            ],
+            ROOT / "app" / "template" / "tests.html": [
+                r'class="linkish danger-link" data-submit-form="1">Delete</a>',
+            ],
+        }
+        for path, patterns in expected_patterns.items():
+            source = path.read_text(encoding="utf-8-sig")
+            for pattern in patterns:
+                self.assertRegex(source, pattern, msg=str(path))
+
+    def test_danger_link_styles_use_shared_tokens(self) -> None:
+        source = STYLE_PATH.read_text(encoding="utf-8-sig")
+        for token in [
+            "--danger-link-color:",
+            "--danger-link-hover-color:",
+            "--danger-link-hover-bg:",
+            "--danger-link-focus:",
+            "--danger-link-weight:",
+        ]:
+            self.assertIn(token, source)
+        self.assertIn("color: var(--danger-link-color);", source)
+        self.assertIn("font-weight: var(--danger-link-weight);", source)
+        self.assertIn("color: var(--danger-link-hover-color);", source)
+        self.assertIn("background: var(--danger-link-hover-bg);", source)
+        self.assertIn("outline: 2px solid var(--danger-link-focus);", source)
+
+    def test_legacy_danger_link_variants_removed_from_templates_and_styles(self) -> None:
+        offenders: list[str] = []
+        banned_snippets = [
+            'class="linkish danger"',
+            "solutions-submit-link",
+            "tests-editor-action-link",
+            "tests-editor-action-danger",
+        ]
+        for path in list((ROOT / "app" / "template").rglob("*.html")) + [STYLE_PATH]:
+            source = path.read_text(encoding="utf-8-sig")
+            for snippet in banned_snippets:
+                if snippet in source:
+                    offenders.append(f"{path}:{snippet}")
+        self.assertEqual(offenders, [])
+
     def test_workspace_public_wrapper_removed(self) -> None:
         self.assertFalse((ROOT / "app" / "impl" / "workspace" / "public.py").exists())
 

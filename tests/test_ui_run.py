@@ -418,6 +418,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("tests/spec.json", html)
         self.assertIn("tests/generator/002.in", html)
         self.assertIn("gen 99", html)
+        self.assertIn('class="linkish danger-link" data-submit-form="1">Delete</a>', html)
 
     def test_tests_spec_gen_script_save_adds_and_removes_gen_entries(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -2497,6 +2498,7 @@ class TestUIRun(UIBaseSuite):
         )
         before_html = details_before.body.decode("utf-8", errors="replace")
         self.assertIn(">Cancel</a>", before_html)
+        self.assertIn('class="linkish danger-link" data-submit-form="1">Cancel</a>', before_html)
         self.assertIn("Verification Progress", before_html)
 
         cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
@@ -2714,6 +2716,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("/problems/alice/sample/alice/run/cancel", html)
         self.assertIn(f'name="verification_id" value="{verification_id}"', html)
         self.assertIn(">Cancel</a>", html)
+        self.assertIn('class="linkish danger-link" data-submit-form="1">Cancel</a>', html)
 
     def test_run_details_show_progress_placeholders_while_running(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

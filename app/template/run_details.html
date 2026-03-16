@@ -10,7 +10,7 @@
       {% if cancel_available %}
       <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/cancel">
         <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
-        <a href="#" class="linkish danger" data-submit-form="1">Cancel</a>
+        <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
       </form>
       {% endif %}
       {% if rerun_solution_paths and not detail_running %}

@@ -60,11 +60,11 @@
           <form class="inline-form solutions-rename-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/rename">
             <input type="hidden" name="old_path" value="{{ row.source_path }}" />
             <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
-            <a href="#" class="linkish solutions-submit-link" data-submit-form="1">Rename</a>
+            <a href="#" class="linkish" data-submit-form="1">Rename</a>
           </form>
           <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}? This cannot be undone; uncommitted changes will be lost.">
             <input type="hidden" name="source_path" value="{{ row.source_path }}" />
-            <a href="#" class="linkish solutions-submit-link" data-submit-form="1">Delete</a>
+            <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
           </form>
         </td>
       </tr>
