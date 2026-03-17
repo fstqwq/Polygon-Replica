@@ -502,6 +502,30 @@ class TestJudgehostService(SmokeBase):
         self.assertIsNotNone(row)
         self.assertEqual(str(row.get("status") or ""), service.STATUS_QUEUED)
 
+    def test_set_host_enabled_preserves_host_status_shape(self) -> None:
+        service = config.judgehost_task_service
+        self._reset_task_queue_state(service)
+        old_enabled = bool(service._enabled)
+        old_token = str(service._api_token or "")
+        self.addCleanup(setattr, service, "_enabled", old_enabled)
+        self.addCleanup(setattr, service, "_api_token", old_token)
+        service._enabled = True
+        service._api_token = "host-shape-token"
+
+        service.fetch_work("judgehost-shape-check", limit=1)
+        before = service.status()
+        before_hosts = before.get("hosts") if isinstance(before, dict) else []
+        self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-shape-check" for item in before_hosts))
+
+        release = service.set_host_enabled("judgehost-shape-check", False)
+        self.assertIsInstance(release, dict)
+
+        after = service.status()
+        after_hosts = after.get("hosts") if isinstance(after, dict) else []
+        host = next((item for item in after_hosts if str(item.get("hostname") or "") == "judgehost-shape-check"), None)
+        self.assertIsNotNone(host)
+        self.assertFalse(bool(host.get("enabled")))
+
     def test_fetch_work_calls_requeue_without_state_lock(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
@@ -3635,7 +3659,7 @@ class TestJudgehostService(SmokeBase):
         (ws / "config").mkdir(parents=True, exist_ok=True)
         (ws / "interactors").mkdir(parents=True, exist_ok=True)
         (ws / "config" / "problem.json").write_text(
-            json.dumps({"time_limit_ms": 2000, "memory_limit_mb": 1024, "mode": "multi-pass"}, indent=2) + "\n",
+            json.dumps({"time_limit_ms": 2000, "memory_limit_mb": 1024, "mode": "interactive", "pass_limit": 3}, indent=2) + "\n",
             encoding="utf-8",
         )
         (ws / "interactors" / "interactor.cpp").write_text(
@@ -3654,7 +3678,7 @@ class TestJudgehostService(SmokeBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="multi-pass",
+            mode="interactive",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -3671,7 +3695,7 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(len(tasks), 1)
         run_config_raw = str(tasks[0].get("run_config") or "{}")
         run_config = json.loads(run_config_raw)
-        self.assertEqual(int(run_config.get("pass_limit") or 0), 16)
+        self.assertEqual(int(run_config.get("pass_limit") or 0), 3)
 
     def test_domjudge_build_solve_output_cache_hits_expected_accepted_runs(self) -> None:
         service = config.judgehost_task_service

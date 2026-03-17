@@ -512,7 +512,7 @@
     if (dismissible) {
       var dismissBtn = document.createElement("button");
       dismissBtn.type = "button";
-      dismissBtn.className = "top-event-dismiss";
+      dismissBtn.className = "linkish-button top-event-dismiss";
       dismissBtn.setAttribute("aria-label", "Dismiss notification");
       dismissBtn.textContent = "Dismiss";
       dismissBtn.addEventListener("click", function () {

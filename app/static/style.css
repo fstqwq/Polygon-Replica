@@ -263,7 +263,14 @@ pre {
 }
 
 .top-event-dismiss:hover {
+  background: transparent;
+  color: inherit;
   text-decoration: underline;
+}
+
+.top-event-dismiss:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 1px;
 }
 
 .top-event-payload {
@@ -1562,7 +1569,7 @@ textarea.textarea-md {
   min-height: 220px;
 }
 
-button,
+button:not(.linkish-button),
 .button-link {
   font: inherit;
   border: 1px solid var(--btn-border);
@@ -1580,19 +1587,19 @@ button,
   text-decoration: none;
 }
 
-button:hover:not(:disabled),
+button:not(.linkish-button):hover:not(:disabled),
 .button-link:hover:not([aria-disabled="true"]) {
   background: var(--btn-bg-hover);
   text-decoration: none;
 }
 
-button:focus-visible,
+button:not(.linkish-button):focus-visible,
 .button-link:focus-visible {
   outline: 2px solid #93c5fd;
   outline-offset: 1px;
 }
 
-button:disabled,
+button:not(.linkish-button):disabled,
 .button-link[aria-disabled="true"] {
   opacity: 0.55;
   cursor: not-allowed;
@@ -1612,18 +1619,22 @@ button:disabled,
   text-decoration: none;
 }
 
-.linkish {
+.linkish,
+.linkish-button {
   border: 0;
   background: transparent;
   color: var(--link);
   padding: 0;
 }
 
-.linkish:hover {
+.linkish:hover,
+.linkish-button:hover:not(:disabled) {
+  background: transparent;
   text-decoration: underline;
 }
 
-.linkish[aria-disabled="true"] {
+.linkish[aria-disabled="true"],
+.linkish-button:disabled {
   color: var(--muted);
   cursor: not-allowed;
   text-decoration: none;

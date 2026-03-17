@@ -35,6 +35,7 @@ from .context_verification import _verification_status_context
 from .problem_config import (
     coerce_int,
     normalize_problem_mode,
+    normalize_pass_limit,
     read_problem_config,
 )
 from .revision import git_commit_count, workspace_revision_info
@@ -81,10 +82,10 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
         _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
         safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
         ctx['problem_mode'] = safe_mode
-        ctx['general_cfg'] = {'time_limit_ms': coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS), 'memory_limit_mb': coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB), 'mode': safe_mode}
+        ctx['general_cfg'] = {'time_limit_ms': coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS), 'memory_limit_mb': coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB), 'mode': safe_mode, 'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))}
     except Exception:
         ctx['problem_mode'] = str(_C.GENERAL_CONFIG_DEFAULTS['mode'])
-        ctx['general_cfg'] = {'time_limit_ms': int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), 'memory_limit_mb': int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), 'mode': str(_C.GENERAL_CONFIG_DEFAULTS['mode'])}
+        ctx['general_cfg'] = {'time_limit_ms': int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), 'memory_limit_mb': int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), 'mode': str(_C.GENERAL_CONFIG_DEFAULTS['mode']), 'pass_limit': int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit'])}
     ctx['workspace_revision'] = workspace_revision_info(
         workspace_path,
         workspace_branch,
@@ -199,9 +200,14 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     time_limit_ms = _to_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']))
     memory_limit_mb = _to_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']))
     mode_text = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
+    pass_limit = normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))
     time_text = _compact_time_limit_label(time_limit_ms)
     memory_text = _compact_memory_limit_label(memory_limit_mb)
-    nav['general'] = {'text': f'{time_text}, {memory_text}, {mode_text}', 'danger': False}
+    general_parts = [time_text, memory_text]
+    if pass_limit > 1:
+        general_parts.append(f'{pass_limit} passes')
+    general_parts.append(mode_text)
+    nav['general'] = {'text': ', '.join(general_parts), 'danger': False}
     latest_preview = ctx.get('latest_preview')
     preview_status = str(_row_value(latest_preview, 'status', 'none') or 'none')
     preview_text = preview_status

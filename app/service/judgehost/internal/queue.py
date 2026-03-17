@@ -471,17 +471,20 @@ class JudgehostQueueMixin:
             last_judging_by_host = {k: dict(v) for k, v in self._host_last_judging.items()}
             host_rows = sorted(
                 (dict(row) for row in self._hosts_state.values()),
-                key=lambda item: (item["last_seen_at"], item["hostname"]),
+                key=lambda item: (
+                    str(item.get("last_seen_at") or ""),
+                    str(item.get("hostname") or ""),
+                ),
                 reverse=True,
             )
         rows_out: list[dict[str, object]] = []
         online_count = 0
         for row in host_rows:
-            hostname = row["hostname"]
+            hostname = str(row.get("hostname") or "")
             if not hostname:
                 continue
-            enabled_flag = bool(row["enabled"])
-            last_seen = row["last_seen_at"]
+            enabled_flag = bool(row.get("enabled"))
+            last_seen = str(row.get("last_seen_at") or "")
             last_seen_dt = parse_iso_utc(last_seen)
             age_sec: int | None = None
             is_online = False
@@ -505,13 +508,13 @@ class JudgehostQueueMixin:
                     "online": is_online,
                     "age_sec": age_sec,
                     "last_seen_at": last_seen,
-                    "first_seen_at": row["first_seen_at"],
-                    "last_action": row["last_action"],
-                    "last_task_id": row["last_task_id"],
-                    "last_run_id": row["last_run_id"],
-                    "lease_expires_at": row["lease_expires_at"],
+                    "first_seen_at": str(row.get("first_seen_at") or ""),
+                    "last_action": str(row.get("last_action") or ""),
+                    "last_task_id": str(row.get("last_task_id") or ""),
+                    "last_run_id": str(row.get("last_run_id") or ""),
+                    "lease_expires_at": str(row.get("lease_expires_at") or ""),
                     "active_leases": int(active_by_host.get(hostname, 0)),
-                    "update_count": row["update_count"],
+                    "update_count": int(row.get("update_count") or 0),
                     "load_5m": float(count_5m / 300.0),
                     "load_15m": float(count_15m / 900.0),
                     "load_1h": float(count_1h / 3600.0),
@@ -531,14 +534,17 @@ class JudgehostQueueMixin:
         now_text = now_iso()
         released_tasks = 0
         with self._state_lock:
+            current_row = dict(self._hosts_state.get(hostname, {}))
             self._hosts_state[hostname] = {
+                "hostname": hostname,
                 "enabled": bool(enabled),
-                "first_seen_at": self._hosts_state.get(hostname, {}).get("first_seen_at", now_text),
+                "first_seen_at": str(current_row.get("first_seen_at") or now_text),
+                "last_seen_at": str(current_row.get("last_seen_at") or now_text),
                 "last_action": "set-enabled" if enabled else "set-disabled",
-                "last_task_id": self._hosts_state.get(hostname, {}).get("last_task_id", ""),
-                "last_run_id": self._hosts_state.get(hostname, {}).get("last_run_id", ""),
-                "lease_expires_at": "",
-                "update_count": int(self._hosts_state.get(hostname, {}).get("update_count", 0)) + 1,
+                "last_task_id": str(current_row.get("last_task_id") or ""),
+                "last_run_id": str(current_row.get("last_run_id") or ""),
+                "lease_expires_at": str(current_row.get("lease_expires_at") or ""),
+                "update_count": int(current_row.get("update_count") or 0) + 1,
             }
             if not enabled:
                 for task in self._tasks_by_id.values():

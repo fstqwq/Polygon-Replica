@@ -24,6 +24,9 @@
         <div class="statement-summary-values">
           <span class="statement-summary-chip">{{ ctx.general_cfg.time_limit_ms }}ms</span>
           <span class="statement-summary-chip">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
+          {% if ctx.general_cfg.pass_limit > 1 %}
+          <span class="statement-summary-chip">{{ ctx.general_cfg.pass_limit }} passes</span>
+          {% endif %}
           <span class="statement-summary-chip">{{ ctx.general_cfg.mode }}</span>
         </div>
         <a class="linkish statement-summary-edit" href="#statement-settings-popup" data-popup-open="statement-settings-popup">Edit metadata</a>
@@ -70,7 +73,7 @@
       {% endif %}
       {% endfor %}
       {% if not interaction_section_enabled %}
-      <p class="muted">Interaction Protocol section is disabled because current mode is <code>{{ statement_mode }}</code>. Switch mode to <code>interactive</code> or <code>multi-pass</code> to edit it.</p>
+      <p class="muted">Interaction Protocol section is disabled because current mode is <code>{{ statement_mode }}</code>. Switch mode to <code>interactive</code> to edit it.</p>
       {% endif %}
       <button type="submit">Save Statement</button>
     </form>
@@ -199,6 +202,10 @@
               <option value="{{ mode_value }}" {% if mode_value == ctx.general_cfg.mode %}selected{% endif %}>{{ mode_value }}</option>
               {% endfor %}
             </select>
+          </div>
+          <div class="form-field-stack">
+            <label for="pass-limit">Pass Limit</label>
+            <input id="pass-limit" type="text" inputmode="numeric" name="pass_limit" value="{{ ctx.general_cfg.pass_limit }}" />
           </div>
           <button type="submit">Save</button>
         </div>
