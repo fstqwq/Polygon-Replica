@@ -12,8 +12,8 @@
       {% endfor %}
     </select>
     <div class="form-row-actions">
-      <button type="submit">Set Checker</button>
-      <button type="submit" formaction="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/view-standard" formmethod="get">View Checker</button>
+      <button class="btn" type="submit">Set Checker</button>
+      <button class="btn" type="submit" formaction="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/view-standard" formmethod="get">View Checker</button>
     </div>
   </form>
   {% else %}

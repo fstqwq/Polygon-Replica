@@ -33,7 +33,7 @@
     {% set verification_stale_reason = ctx.verification_status.stale_reason if ctx.verification_status is defined else "" %}
     {% set verification_tooltip = verification_error if verification_mode == 'failed' else verification_stale_reason if verification_mode == 'stale' else '' %}
     {% if verification_mode == 'failed' and (not verification_tooltip) %}
-    {% set verification_tooltip = 'verification failed; open Verifications for details' %}
+    {% set verification_tooltip = 'verification failed; open Verification for details' %}
     {% elif verification_mode == 'stale' and (not verification_tooltip) %}
     {% set verification_tooltip = 'changed: verification inputs' %}
     {% endif %}
@@ -52,57 +52,67 @@
     <nav class="problem-submenu">
       <div class="problem-submenu-item">
         <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement">
-          <span class="submenu-title">Statement</span>
-          <span class="submenu-status submenu-status-stack">
-            <span class="submenu-status-line {{ general_line_class }}">{{ general_nav.get("text", "-") }}</span>
-            <span class="submenu-status-line {{ statement_line_class }}">statement: {{ preview_nav.get("text", "-") }}</span>
+          <span class="submenu-head-line {{ statement_line_class }}">
+              <strong class="submenu-status-heading">Statement</strong>
+              <span class="submenu-status-state{{ ' danger' if preview_nav.get('danger') else ' warn' if preview_nav.get('warn') else '' }}">{{ preview_nav.get("text", "-") }}</span>
           </span>
+          <span class="submenu-detail-line {{ general_line_class }}">{{ general_nav.get("text", "-") }}</span>
         </a>
       </div>
       {% set checker_nav = nav_status.get('checker', {}) %}
       <div class="problem-submenu-item">
         <a data-page="checker" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker">
-          <span class="submenu-title">Checker</span>
-          <span class="submenu-status-row">
-            <span
-              class="submenu-status {{ 'submenu-status-danger' if checker_nav.get('danger') else '' }}"
-              {% if checker_nav.get('hint') %}data-tooltip="{{ checker_nav.get('hint') }}" aria-label="checker details"{% endif %}
-            >{{ checker_nav.get("text", "-") }}</span>
+          <span class="submenu-head-line">
+            <span class="submenu-title">Checker</span>
           </span>
+          <span
+            class="submenu-detail-line {{ 'submenu-status-danger' if checker_nav.get('danger') else '' }}"
+            {% if checker_nav.get('hint') %}data-tooltip="{{ checker_nav.get('hint') }}" aria-label="checker details"{% endif %}
+          >{{ checker_nav.get("text", "-") }}</span>
         </a>
       </div>
       {% if (ctx.problem_mode if ctx.problem_mode is defined else "pass-fail") != "pass-fail" %}
       <div class="problem-submenu-item">
         <a data-page="interactor" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/interactor">
-          <span class="submenu-title">Interactor</span>
-          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('interactor', {}).get('danger') else '' }}">{{ nav_status.get("interactor", {}).get("text", "-") }}</span>
+          <span class="submenu-head-line">
+            <span class="submenu-title">Interactor</span>
+          </span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('interactor', {}).get('danger') else '' }}">{{ nav_status.get("interactor", {}).get("text", "-") }}</span>
         </a>
       </div>
       {% endif %}
       <div class="problem-submenu-item">
         <a data-page="validator" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/validator">
-          <span class="submenu-title">Validator</span>
-          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('validator', {}).get('danger') else '' }}">{{ nav_status.get("validator", {}).get("text", "-") }}</span>
+          <span class="submenu-head-line">
+            <span class="submenu-title">Validator</span>
+          </span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('validator', {}).get('danger') else '' }}">{{ nav_status.get("validator", {}).get("text", "-") }}</span>
         </a>
       </div>
       <div class="problem-submenu-item">
         <a data-page="generators" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators">
-          <span class="submenu-title">Generators</span>
-          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('generators', {}).get('danger') else '' }}">{{ nav_status.get("generators", {}).get("text", "-") }}</span>
+          <span class="submenu-head-line">
+            <span class="submenu-title">Generators</span>
+          </span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('generators', {}).get('danger') else '' }}">{{ nav_status.get("generators", {}).get("text", "-") }}</span>
         </a>
       </div>
       <div class="problem-submenu-item">
         <a data-page="solutions" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions">
-          <span class="submenu-title">Solution files</span>
-          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('solutions', {}).get('danger') else '' }}">
+          <span class="submenu-head-line">
+            <span class="submenu-title">Solutions</span>
+          </span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('solutions', {}).get('danger') else '' }}">
             {{ nav_status.get("solutions", {}).get("text", "-") }}
           </span>
         </a>
       </div>
       <div class="problem-submenu-item">
         <a data-page="tests" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests">
-          <span class="submenu-title">Tests</span>
-          <span class="submenu-status {{ 'submenu-status-danger' if tests_nav.get('danger') else '' }}">
+          <span class="submenu-head-line">
+            <span class="submenu-title">Tests</span>
+          </span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if tests_nav.get('danger') else '' }}">
             {% if tests_nav.get('has_counts') %}
             {{ tests_nav.get('total', 0) }} ({% set sample_count = tests_nav.get('sample', 0) | int %}{% if tests_nav.get('sample_zero') %}<span class="submenu-status-danger">no sample</span>{% elif sample_count == 1 %}1 sample{% else %}{{ sample_count }} samples{% endif %})
             {% else %}
@@ -112,39 +122,38 @@
         </a>
       </div>
       <div class="problem-submenu-item problem-submenu-item-run">
-        <div class="problem-submenu-run-head">
-          <a data-page="run" class="problem-submenu-run-title" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">
-            <span class="submenu-title">Verifications</span>
-          </a>
-        </div>
-        <span class="problem-submenu-run-status">
-          <span class="submenu-status {{ 'submenu-status-warn' if verification_mode == 'stale' else '' }}">
-            <span class="status-row-inline">
-              <span class="status-title {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else '' }}">Verification</span>
-              <strong
-                class="status-value {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else '' }}"
+        <div class="problem-submenu-run-block">
+          <span class="submenu-head-line {{ 'submenu-status-warn' if verification_mode == 'stale' else '' }}">
+            <a data-page="run" class="submenu-head-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">
+              <strong class="submenu-status-heading">Verification</strong>
+              <span
+                class="submenu-status-state {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else '' }}"
                 {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}
-              >{{ verification_status }}</strong>
-            </span>
-            <span class="submenu-status-line verification-start-line">
-              <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/verification/start">
-                <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
-                <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start verification)</a>
-              </form>
-            </span>
+              >{{ verification_status }}</span>
+            </a>
           </span>
-        </span>
+          <span class="submenu-detail-line verification-start-line">
+            <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/verification/start">
+              <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
+              <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start verification)</a>
+            </form>
+          </span>
+        </div>
       </div>
       <div class="problem-submenu-item">
         <a data-page="export" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export">
-          <span class="submenu-title">Packages</span>
-          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('export', {}).get('danger') else '' }}">{{ nav_status.get("export", {}).get("text", "-") }}</span>
+          <span class="submenu-head-line">
+            <span class="submenu-title">Packages</span>
+          </span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('export', {}).get('danger') else '' }}">{{ nav_status.get("export", {}).get("text", "-") }}</span>
         </a>
       </div>
       <div class="problem-submenu-item">
         <a data-page="access" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access">
-          <span class="submenu-title">Manage access</span>
-          <span class="submenu-status {{ 'submenu-status-danger' if nav_status.get('access', nav_status.get('workspace', {})).get('danger') else '' }}">{{ nav_status.get("access", nav_status.get("workspace", {})).get("text", "-") }}</span>
+          <span class="submenu-head-line">
+            <span class="submenu-title">Manage access</span>
+          </span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if nav_status.get('access', nav_status.get('workspace', {})).get('danger') else '' }}">{{ nav_status.get("access", nav_status.get("workspace", {})).get("text", "-") }}</span>
         </a>
       </div>
     </nav>
@@ -177,7 +186,7 @@
         {% if ctx.workspace_needs_update %}
         <div class="workspace-update-row">
           <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull">
-            <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
+            <button class="btn button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
           </form>
         </div>
         {% endif %}

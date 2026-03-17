@@ -75,7 +75,7 @@
       {% if not interaction_section_enabled %}
       <p class="muted">Interaction Protocol section is disabled because current mode is <code>{{ statement_mode }}</code>. Switch mode to <code>interactive</code> to edit it.</p>
       {% endif %}
-      <button type="submit">Save Statement</button>
+      <button class="btn" type="submit">Save Statement</button>
     </form>
   </section>
   <section>
@@ -87,7 +87,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <button class="primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
+      <button class="btn btn-primary primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
     </form>
     {% endif %}
     {% if preview_compile_failed %}
@@ -121,7 +121,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <button class="primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
+      <button class="btn btn-primary primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
     </form>
     {% else %}
     <p class="muted">Latest preview has no PDF output.</p>
@@ -207,7 +207,7 @@
             <label for="pass-limit">Pass Limit</label>
             <input id="pass-limit" type="text" inputmode="numeric" name="pass_limit" value="{{ ctx.general_cfg.pass_limit }}" />
           </div>
-          <button type="submit">Save</button>
+          <button class="btn" type="submit">Save</button>
         </div>
       </form>
     </div>

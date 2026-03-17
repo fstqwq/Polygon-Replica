@@ -7,7 +7,7 @@
 
 <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/set-standard">
   <input type="hidden" name="checker_name" value="{{ checker_name }}" />
-  <button type="submit">Use This Standard Checker</button>
+  <button class="btn" type="submit">Use This Standard Checker</button>
 </form>
 
 <pre class="line-context">{{ checker_source }}</pre>

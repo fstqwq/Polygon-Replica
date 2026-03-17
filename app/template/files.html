@@ -54,7 +54,7 @@
       <input type="hidden" name="dir" value="{{ browse_dir }}" />
       <input type="hidden" name="src" value="{{ source_page }}" />
       <input type="hidden" name="sid" value="{{ source_id }}" />
-      <button type="submit">Create {{ selected_template_kind }} template</button>
+      <button class="btn" type="submit">Create {{ selected_template_kind }} template</button>
     </form>
     {% endif %}
     {% elif selected_is_dir %}
@@ -90,7 +90,7 @@
           data-code-height="520"
           {% if content_truncated %}readonly{% endif %}
         >{{ content }}</textarea>
-        <button class="primary-action" type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
+        <button class="btn btn-primary primary-action" type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
       </form>
     {% endif %}
   </section>
@@ -105,7 +105,7 @@
           <div class="form-row">
             <label for="create-file-path">Path</label>
             <input id="create-file-path" name="path" value="{{ (browse_dir ~ '/' if browse_dir else (selected_parent ~ '/' if selected_parent else '')) ~ 'new-file.txt' }}" />
-            <button type="submit">Create</button>
+            <button class="btn" type="submit">Create</button>
           </div>
           <input type="hidden" name="dir" value="{{ browse_dir }}" />
           <input type="hidden" name="src" value="{{ source_page }}" />
@@ -118,7 +118,7 @@
           <div class="form-row">
             <label for="upload-target-path">Target path</label>
             <input id="upload-target-path" name="path" value="{{ selected }}" />
-            <button type="submit">Upload</button>
+            <button class="btn" type="submit">Upload</button>
           </div>
           <input type="hidden" name="dir" value="{{ browse_dir }}" />
           <input type="hidden" name="src" value="{{ source_page }}" />
@@ -142,7 +142,7 @@
               <div class="form-row">
                 <label for="rename-new-path">New path</label>
                 <input id="rename-new-path" name="new_path" value="{{ selected }}" />
-                <button type="submit">Rename</button>
+                <button class="btn" type="submit">Rename</button>
               </div>
               <input type="hidden" name="dir" value="{{ browse_dir }}" />
               <input type="hidden" name="src" value="{{ source_page }}" />
@@ -155,7 +155,7 @@
               <div class="form-row">
                 <label for="delete-path">Target path</label>
                 <input id="delete-path" name="path" value="{{ selected }}" />
-                <button type="submit">Delete</button>
+                <button class="btn" type="submit">Delete</button>
               </div>
               <input type="hidden" name="dir" value="{{ browse_dir }}" />
               <input type="hidden" name="src" value="{{ source_page }}" />

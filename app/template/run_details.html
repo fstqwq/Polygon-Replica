@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Verification Details</h1>
+<div class="page-title-inline page-title-inline-status">
+  <h1 class="page-title">Verification</h1>
+  {% if detail_status %}
+  <div class="page-title-status muted">
+    {% if detail_status == "ok" %}
+    <span class="ok">{{ detail_status_upper }}</span>
+    {% elif detail_status == "failed" %}
+    <span class="danger">{{ detail_status_upper }}</span>
+    {% else %}
+    <span>{{ detail_status_upper }}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
 {% include "_flash_message.html" %}
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 
@@ -23,18 +36,6 @@
       </form>
       {% endif %}
     </div>
-    {% if detail_status %}
-    <div class="muted verification-detail-meta">
-      Verification status:
-      {% if detail_status == "ok" %}
-      <span class="ok">{{ detail_status_upper }}</span>
-      {% elif detail_status == "failed" %}
-      <span class="danger">{{ detail_status_upper }}</span>
-      {% else %}
-      <span>{{ detail_status_upper }}</span>
-      {% endif %}
-    </div>
-    {% endif %}
     {% if detail_last_updated %}
     <div class="muted verification-detail-meta">Last updated: {{ detail_last_updated | local_time }}</div>
     {% endif %}
@@ -152,7 +153,7 @@
         <tr class="verification-detail-result-row">
           <th>
             <span class="stat-line stat-main">Result</span>
-            <span class="stat-line stat-sub">expected</span>
+            <span class="stat-line stat-sub">Expected</span>
           </th>
           {% for col in detail_columns %}
           <th class="{{ col.result_tone_class }} {{ 'col-bad' if col.expected_mismatch else '' }}">
@@ -339,7 +340,7 @@
   {% elif verification_id or detail_lifecycle_cards %}
   <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
   {% else %}
-  <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Verifications</a> and choose one.</p>
+  <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Verification</a> and choose one.</p>
   {% endif %}
 </section>
 {% set verification_entries = detail_verification_logs.diagnostics if detail_verification_logs.diagnostics else [] %}

@@ -75,7 +75,7 @@
               {% elif 'token' in row.key|lower %}
               <div class="form-input-with-action">
                 <input id="{{ row.input_name }}" type="text" name="{{ row.input_name }}" value="{{ row.current_value }}" autocomplete="off" spellcheck="false" />
-                <button type="button" data-token-generate="1" data-token-target="{{ row.input_name }}">Generate</button>
+                <button class="btn" type="button" data-token-generate="1" data-token-target="{{ row.input_name }}">Generate</button>
               </div>
               {% else %}
               <input type="text" name="{{ row.input_name }}" value="{{ row.current_value }}" />
@@ -116,7 +116,7 @@
           {% endfor %}
         </tbody>
       </table>
-      <button type="submit">Save {{ selected_section.category }} Changes</button>
+      <button class="btn" type="submit">Save {{ selected_section.category }} Changes</button>
     </form>
     {% else %}
     <p class="muted">Config category not found.</p>

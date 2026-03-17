@@ -50,7 +50,7 @@
         <label for="problem-name">Problem Name (for create)</label>
         <input id="problem-name" name="problem_name" value="" placeholder="used only when problem id is new" />
         <input type="hidden" name="page" value="statement" />
-        <button class="primary-action" type="submit">Open</button>
+        <button class="btn btn-primary primary-action" type="submit">Open</button>
         <datalist id="problem-list">
           {% for row in entries %}
           <option value="{{ row.slug }}">{{ row.name }}</option>
@@ -82,7 +82,7 @@
         <p id="polygon-import-slug-hint" class="muted form-row-hint-offset">Stored as &lt;your-user&gt;/&lt;slug&gt;. Selecting a package will auto-suggest an available slug.</p>
         <label for="polygon-import-package">Package (.zip)</label>
         <input id="polygon-import-package" type="file" name="package_upload" accept=".zip,application/zip" required />
-        <button type="submit">Import As New Problem</button>
+        <button class="btn" type="submit">Import As New Problem</button>
       </form>
     </div>
   </div>

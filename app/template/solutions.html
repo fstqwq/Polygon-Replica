@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Solution Files</h1>
+<h1 class="page-title">Solutions</h1>
 {% include "_flash_message.html" %}
 <section>
     <h2>Solutions</h2>
@@ -10,7 +10,7 @@
     <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/create-template">
       <label for="solution-create-path">New file</label>
       <input id="solution-create-path" name="path" placeholder="{{ solution_create_default_path }}" />
-      <button type="submit">Add Solution</button>
+      <button class="btn" type="submit">Add Solution</button>
     </form>
     {% if entries_truncated %}
     <p class="muted">Showing first {{ entries_limit }} {% if entries_limit == 1 %}solution{% else %}solutions{% endif %}.</p>
@@ -53,7 +53,7 @@
               <option value="{{ option.value }}" {% if row.expected_behavior_effective == option.value %}selected{% endif %}>{{ option.label }}</option>
               {% endfor %}
             </select>
-            <noscript><button type="submit">Set</button></noscript>
+            <noscript><button class="btn" type="submit">Set</button></noscript>
           </form>
         </td>
         <td class="solutions-actions-cell">

@@ -89,7 +89,7 @@
           <input type="hidden" name="index" value="{{ row.index }}" />
           <label class="sr-only" for="payload-upload-popup-{{ row.index }}">Upload payload</label>
           <input id="payload-upload-popup-{{ row.index }}" type="file" name="payload_upload" required />
-          <button type="submit">Upload payload</button>
+          <button class="btn" type="submit">Upload payload</button>
         </form>
       </div>
       {% endif %}
@@ -115,7 +115,7 @@
         <label for="edit-test-payload-{{ row.index }}">Data (<code>{{ row.payload_path }}</code>)</label>
         <textarea id="edit-test-payload-{{ row.index }}" class="textarea-sm" name="payload">{{ row.payload }}</textarea>
         {% endif %}
-        <button type="submit">Save Test</button>
+        <button class="btn" type="submit">Save Test</button>
       </form>
     </div>
   </div>
@@ -133,7 +133,7 @@
         <label for="tests-reindex-target-popup-{{ row.index }}">Target position</label>
         <input id="tests-reindex-target-popup-{{ row.index }}" type="number" name="target_index" min="1" max="{{ tests_editor.summary.total if tests_editor.summary.total else 1 }}" value="{{ row.index }}" />
         <p class="muted">Move this test to a new position. Other tests keep relative order.</p>
-        <button type="submit">Reindex</button>
+        <button class="btn" type="submit">Reindex</button>
       </form>
     </div>
   </div>
@@ -160,7 +160,7 @@
         <label for="add-manual-input-popup">Data (<code>manual input</code>)</label>
         <textarea id="add-manual-input-popup" class="textarea-md" name="manual_input" placeholder="3&#10;1 2 3"></textarea>
         <p class="muted">Template: each submission input as plain text.</p>
-        <button type="submit">Add Manual</button>
+        <button class="btn" type="submit">Add Manual</button>
       </form>
     </div>
   </div>
@@ -185,7 +185,7 @@
         <label><input type="checkbox" name="sample_output_validate" value="1" checked /> Validate custom output (checker, default on)</label>
         <label for="add-manual-upload-file-popup">Manual input file (UTF-8 text)</label>
         <input id="add-manual-upload-file-popup" type="file" name="manual_upload" required />
-        <button type="submit">Upload Manual</button>
+        <button class="btn" type="submit">Upload Manual</button>
       </form>
     </div>
   </div>
@@ -207,7 +207,7 @@
         data-code-wrap="1"
       >{{ tests_gen_script.text if tests_gen_script else "" }}</textarea>
       <p class="muted">One command per line. Save to add/remove generator tests while keeping manual tests unchanged.</p>
-      <button type="submit">Save Gen Script</button>
+      <button class="btn" type="submit">Save Gen Script</button>
     </form>
   </section>
 </div>

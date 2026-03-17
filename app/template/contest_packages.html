@@ -14,10 +14,10 @@
   {% else %}
   <div class="form-row">
     <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages/preview/start">
-      <button type="submit">Build Contest Preview Bundle</button>
+      <button class="btn" type="submit">Build Contest Preview Bundle</button>
     </form>
     <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages/build/start">
-      <button class="primary-action" type="submit">Build Contest Package Bundle</button>
+      <button class="btn btn-primary primary-action" type="submit">Build Contest Package Bundle</button>
     </form>
   </div>
   {% endif %}

@@ -4996,7 +4996,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("zyc.py", html)
         self.assertIn("zyc-2.py", html)
         self.assertIn('stat-main">Result</span>', html)
-        self.assertIn('stat-sub">expected</span>', html)
+        self.assertIn('stat-sub">Expected</span>', html)
         self.assertGreaterEqual(html.count('stat-sub'), 3)
         self.assertGreaterEqual(html.count('class="vcode">WA</span>'), 2)
 

@@ -24,7 +24,7 @@
         {% if row.username != ctx.user.username or owner_count > 1 %}
         <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/access/revoke" class="inline-form">
           <input type="hidden" name="target_user" value="{{ row.username }}" />
-          <button type="submit" onclick="return confirm('Revoke access for {{ row.username }}? uncommitted changes will be lost.');">Revoke</button>
+          <button class="btn" type="submit" onclick="return confirm('Revoke access for {{ row.username }}? uncommitted changes will be lost.');">Revoke</button>
         </form>
         {% else %}
         <span class="muted">last owner</span>
@@ -51,7 +51,7 @@
       <option value="write">write</option>
       <option value="owner">owner</option>
     </select>
-    <button type="submit">Grant / Update</button>
+    <button class="btn" type="submit">Grant / Update</button>
   </form>
 </section>
 {% else %}

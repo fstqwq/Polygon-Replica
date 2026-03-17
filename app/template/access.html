@@ -33,11 +33,11 @@
               <option value="{{ opt }}" {% if opt == row.role %}selected{% endif %}>{{ opt }}</option>
               {% endfor %}
             </select>
-            <button type="submit">Save Role</button>
+            <button class="btn" type="submit">Save Role</button>
           </form>
           <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access/revoke" data-confirm-message="Revoke access for {{ row.username }}? Any uncommitted workspace changes under this account may be discarded; uncommitted changes will be lost.">
             <input type="hidden" name="target_user" value="{{ row.username }}" />
-            <button type="submit">Revoke</button>
+            <button class="btn" type="submit">Revoke</button>
           </form>
           {% else %}
           <span class="muted">owner only</span>
@@ -59,7 +59,7 @@
         <option value="{{ opt }}">{{ opt }}</option>
         {% endfor %}
       </select>
-      <button type="submit">Grant / Update</button>
+      <button class="btn" type="submit">Grant / Update</button>
     </form>
     {% else %}
     <p class="muted">Only owner can manage problem access.</p>

@@ -9,7 +9,7 @@
   <form class="form-row" method="get" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems">
     <label for="contest-problem-search">Search</label>
     <input id="contest-problem-search" name="q" value="{{ query }}" placeholder="slug or title" />
-    <button type="submit">Filter</button>
+    <button class="btn" type="submit">Filter</button>
   </form>
   <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/add">
     <input type="hidden" name="q" value="{{ query }}" />
@@ -28,7 +28,7 @@
       </tr>
       {% endfor %}
     </table>
-    <button type="submit">Add Selected</button>
+    <button class="btn" type="submit">Add Selected</button>
     {% else %}
     <p class="muted">No available problems matched the current filter.</p>
     {% endif %}
@@ -61,9 +61,9 @@
       {% endfor %}
     </table>
     <div class="form-row">
-      <button type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">Save Index Order</button>
-      <button type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/renumber">Renumber A,B,C...</button>
-      <button type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
+      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">Save Index Order</button>
+      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/renumber">Renumber A,B,C...</button>
+      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
     </div>
   </form>
   {% else %}
@@ -100,9 +100,9 @@
       {% endfor %}
     </table>
     <div class="form-row">
-      <button class="primary-action" type="submit">Apply To Selected</button>
+      <button class="btn btn-primary primary-action" type="submit">Apply To Selected</button>
       {% if latest_job and latest_job.job_type == "change-general" %}
-      <button type="submit" name="retry_job_id" value="{{ latest_job.id }}">Retry Failed From Last Job</button>
+      <button class="btn" type="submit" name="retry_job_id" value="{{ latest_job.id }}">Retry Failed From Last Job</button>
       {% endif %}
     </div>
   </form>

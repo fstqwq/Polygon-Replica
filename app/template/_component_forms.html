@@ -6,9 +6,9 @@
   <p class="muted">Showing first {{ content_char_limit }} characters.</p>
   {% endif %}
   <div class="form-row component-editor-actions">
-    <button type="submit">{{ save_label }}</button>
+    <button class="btn" type="submit">{{ save_label }}</button>
     {% if extra_action and extra_label %}
-    <button type="submit" formaction="{{ extra_action }}" formmethod="post" formnovalidate>{{ extra_label }}</button>
+    <button class="btn" type="submit" formaction="{{ extra_action }}" formmethod="post" formnovalidate>{{ extra_label }}</button>
     {% endif %}
   </div>
   {% if inline_error %}
@@ -22,6 +22,6 @@
   {% if path %}
   <input type="hidden" name="path" value="{{ path }}" />
   {% endif %}
-  <button type="submit">{{ button_label }}</button>
+  <button class="btn" type="submit">{{ button_label }}</button>
 </form>
 {%- endmacro %}

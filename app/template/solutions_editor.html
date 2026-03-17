@@ -37,7 +37,7 @@
     <p class="muted">Showing first {{ content_char_limit }} characters.</p>
     {% endif %}
     <div class="form-row">
-      <button id="solution-save-submit" type="submit">Save Source</button>
+      <button class="btn" id="solution-save-submit" type="submit">Save Source</button>
       <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions?path={{ selected }}">Back to Solution Files</a>
     </div>
     <p id="solution-save-error" class="danger component-editor-error"{% if not editor_error %} hidden{% endif %}>{{ editor_error }}</p>

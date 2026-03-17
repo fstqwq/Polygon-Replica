@@ -221,8 +221,8 @@ def files_back_target(problem: str, user: str, source: str, source_id: str) -> t
         return (f'{base}/statement', 'Statement')
     if source == 'run':
         if source_id:
-            return (f'{base}/run/details?verification_id={quote_plus(source_id)}', 'Verifications')
-        return (f'{base}/run', 'Verifications')
+            return (f'{base}/run/details?verification_id={quote_plus(source_id)}', 'Verification')
+        return (f'{base}/run', 'Verification')
     if source == 'export':
         return (f'{base}/export', 'Packages')
     if source == 'workspace':
@@ -236,7 +236,7 @@ def files_back_target(problem: str, user: str, source: str, source_id: str) -> t
     if source == 'interactor':
         return (f'{base}/interactor', 'Interactor')
     if source == 'solutions':
-        return (f'{base}/solutions', 'Solution files')
+        return (f'{base}/solutions', 'Solutions')
     if source == 'generators':
         return (f'{base}/generators', 'Generators')
     return ('', '')
