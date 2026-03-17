@@ -155,7 +155,8 @@ class TestExport(SmokeBase):
         self.assertEqual((imported_ws / "tests" / "answers" / "001.ans").read_bytes(), b"1\n")
         self.assertTrue((imported_ws / "statement" / "statements.ftl").is_file())
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
-        self.assertIn(str(imported_problem_cfg.get("mode") or ""), {"pass-fail", "interactive", "multi-pass"})
+        self.assertIn(str(imported_problem_cfg.get("mode") or ""), {"pass-fail", "interactive"})
+        self.assertGreaterEqual(int(imported_problem_cfg.get("pass_limit") or 0), 1)
 
     def test_polygon_import_builds_missing_sample_answers_via_verification(self) -> None:
         payload = io.BytesIO()

@@ -71,7 +71,7 @@ def solve_with_judge_backend(
     if not selected_tests:
         return {}
     solve_mode = mode
-    if solve_mode not in {"pass-fail", "interactive", "multi-pass"}:
+    if solve_mode not in {"pass-fail", "interactive"}:
         solve_mode = "pass-fail"
     requested_parallelism = max(1, int(solve_jobs))
     effective_parallelism = max(1, min(requested_parallelism, len(selected_tests)))

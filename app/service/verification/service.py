@@ -427,7 +427,7 @@ class VerificationService:
             max_value=300,
         )
         self.wall_time_slack_multi_pass_sec = coerce_int(
-            values.get("RUN_WALL_TIME_SLACK_MULTI_PASS_SEC", 15),
+            values.get("RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC", 15),
             default=15,
             min_value=0,
             max_value=300,
@@ -496,7 +496,6 @@ class VerificationService:
             "validator_args": [],
             "checker_args": [],
             "checker_standard": "",
-            "max_passes": 16,
         }
         path = snapshot / "config" / "build.json"
         if path.exists():
@@ -525,16 +524,13 @@ class VerificationService:
             cfg["run_timeout_sec"] = max(1, min(300, int(cfg.get("run_timeout_sec", 30))))
         except Exception:
             cfg["run_timeout_sec"] = 30
-        try:
-            cfg["max_passes"] = max(1, int(cfg.get("max_passes", 16)))
-        except Exception:
-            cfg["max_passes"] = 16
         return cfg
 
-    def _effective_run_timeout_ms(self, time_limit_ms: int, *, mode: object = "pass-fail") -> int:
+    def _effective_run_timeout_ms(self, time_limit_ms: int, *, mode: object = "pass-fail", pass_limit: object = 1) -> int:
         return effective_run_timeout_ms(
             time_limit_ms,
             mode=mode,
+            pass_limit=pass_limit,
             default_ms=DEFAULT_TIME_LIMIT_MS,
             min_ms=TIME_LIMIT_MIN_MS,
             max_ms=TIME_LIMIT_MAX_MS,

@@ -49,6 +49,7 @@ ProblemMeta = TypedDict(
     {
         "title": str,
         "mode": str,
+        "pass_limit": int,
         "time_limit_ms": int | None,
         "memory_limit_mb": int | None,
     },
@@ -396,9 +397,10 @@ class ICPCPackageImportService:
         type_tokens = [item.lower().replace("_", "-") for item in _yaml_parse_inline_list(top.get("type", ""))]
         mode = "pass-fail"
         if any(token in {"multi-pass", "multipass"} for token in type_tokens):
-            mode = "multi-pass"
-        elif any(token == "interactive" for token in type_tokens):
+            raise ValueError("legacy multi-pass type is not accepted")
+        if any(token == "interactive" for token in type_tokens):
             mode = "interactive"
+        pass_limit = _coerce_int(_yaml_unquote(top.get("pass_limit", "1")), 1, min_value=1)
 
         time_raw = limits.get("time_limit")
         if time_raw is None:
@@ -412,6 +414,7 @@ class ICPCPackageImportService:
         return {
             "title": title,
             "mode": mode,
+            "pass_limit": pass_limit,
             "time_limit_ms": int(time_limit_ms) if time_limit_ms is not None else None,
             "memory_limit_mb": int(memory_limit_mb) if memory_limit_mb is not None else None,
         }
@@ -710,12 +713,14 @@ class ICPCPackageImportService:
         if not output_file:
             output_file = "stdout"
         mode = meta["mode"]
+        pass_limit = int(meta["pass_limit"])
 
         cfg["input_file"] = input_file
         cfg["output_file"] = output_file
         cfg["time_limit_ms"] = _coerce_int(time_limit_ms, 2000, min_value=1)
         cfg["memory_limit_mb"] = _coerce_int(memory_limit_mb, 1024, min_value=1)
         cfg["mode"] = mode
+        cfg["pass_limit"] = pass_limit
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "problem.json").write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return cfg

@@ -144,6 +144,7 @@ def default_verification_summary(
     *,
     kind: str,
     mode: str,
+    pass_limit: int = 1,
     source_commit: str = "",
     source_ref: str = "",
     source_paths: list[str] | None = None,
@@ -152,6 +153,7 @@ def default_verification_summary(
     return {
         "kind": kind or Kind.VERIFICATION.value,
         "mode": mode or "pass-fail",
+        "pass_limit": max(1, int(pass_limit)),
         "source_commit": source_commit,
         "source_ref": source_ref,
         "status": Status.RUNNING.value,

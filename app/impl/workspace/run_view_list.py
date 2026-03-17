@@ -71,11 +71,12 @@ def _run_timeout_ms_from_summary(summary: dict | None) -> int:
         return effective_run_timeout_ms(
             time_limit_ms,
             mode=mode,
+            pass_limit=run_cfg.get("pass_limit"),
             default_ms=int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
             min_ms=int(_C.GENERAL_TIME_LIMIT_MIN_MS),
             max_ms=int(_C.GENERAL_TIME_LIMIT_MAX_MS),
             pass_fail_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC),
-            multi_pass_slack_sec=int(_C.RUN_WALL_TIME_SLACK_MULTI_PASS_SEC),
+            multi_pass_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC),
             interactive_slack_sec=int(_C.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC),
         )
     run_timeout_ms = coerce_int(run_cfg.get("run_timeout_ms"), 0, 0, 10**9)

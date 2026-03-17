@@ -560,9 +560,10 @@ def run_verification_job(
         build_cfg = self._load_build_config(snapshot)
         runtime_cfg = self._load_problem_runtime_config(snapshot)
         problem_mode = normalize_problem_mode(runtime_cfg.get("mode"), "pass-fail")
+        problem_pass_limit = int(runtime_cfg.get("pass_limit", 1))
         interactive_mode = problem_mode == "interactive"
         time_limit_ms = int(runtime_cfg.get("time_limit_ms", DEFAULT_TIME_LIMIT_MS))
-        run_timeout_ms = self._effective_run_timeout_ms(time_limit_ms, mode=problem_mode)
+        run_timeout_ms = self._effective_run_timeout_ms(time_limit_ms, mode=problem_mode, pass_limit=problem_pass_limit)
         run_timeout_sec = self._effective_run_timeout_sec(run_timeout_ms)
         build_solve_timeout_sec = max(1, (max(1, int(time_limit_ms)) + 999) // 1000)
         try:
@@ -780,7 +781,7 @@ def run_verification_job(
                         {
                             "checker_mode": "testlib",
                             "checker_args": checker_args,
-                            "max_passes": 1,
+                            "pass_limit": int(runtime_cfg.get("pass_limit", 1)),
                             "time_limit_ms": 30000,
                             "memory_limit_mb": int(runtime_cfg.get("memory_limit_mb", 1024)),
                         },
@@ -790,6 +791,7 @@ def run_verification_job(
                     "problem_limits": {
                         "time_limit_ms": 30000,
                         "memory_limit_mb": int(runtime_cfg.get("memory_limit_mb", 1024)),
+                        "pass_limit": int(runtime_cfg.get("pass_limit", 1)),
                     },
                     "binaries_b64": binaries_payload,
                     "sources_b64": sources_payload,
@@ -1369,7 +1371,7 @@ def run_verification_job(
             "validator_args": cast(list[str], build_cfg.get("validator_args", [])),
             "checker_args": cast(list[str], build_cfg.get("checker_args", [])),
             "checker_standard": cast(str, build_cfg.get("checker_standard", "")),
-            "max_passes": int(build_cfg.get("max_passes", 16)),
+            "pass_limit": problem_pass_limit,
             "sandbox_backend": self.execution_backend_name,
             "sandbox_memory_mb": self.default_exec_memory_mb,
             "sandbox_process_limit": self.default_exec_process_limit,

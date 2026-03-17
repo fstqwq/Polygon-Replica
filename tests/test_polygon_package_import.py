@@ -17,7 +17,7 @@ from .common import SmokeBase, config
 
 
 class TestPolygonPackageImport(SmokeBase):
-    def test_import_multipass_property_overrides_interactor_mode(self) -> None:
+    def test_import_multipass_property_without_explicit_pass_limit_fails(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()
         xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -51,9 +51,8 @@ class TestPolygonPackageImport(SmokeBase):
             zf.writestr("files/interactor.cpp", "int main(){return 0;}\n")
 
         service = PolygonPackageImportService()
-        service.import_package(ws, "mp-override.zip", payload.getvalue())
-        problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
-        self.assertEqual(str(problem_cfg.get("mode") or ""), "multi-pass")
+        with self.assertRaisesRegex(ValueError, "missing explicit pass limit"):
+            service.import_package(ws, "mp-override.zip", payload.getvalue())
 
     def test_import_can_normalize_windows_newlines_for_test_data(self) -> None:
         ws = self._workspace_path()
@@ -236,7 +235,8 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertFalse((ws / "statement-sections" / "english" / "example.01.a").exists())
 
         problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
-        self.assertEqual(str(problem_cfg.get("mode") or ""), "multi-pass")
+        self.assertEqual(str(problem_cfg.get("mode") or ""), "interactive")
+        self.assertEqual(int(problem_cfg.get("pass_limit") or 0), 2)
         self.assertEqual(int(problem_cfg.get("time_limit_ms") or 0), 2000)
 
         build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
@@ -244,7 +244,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue(str(build_cfg.get("accepted_solution_source") or "").startswith("solutions/"))
         self.assertEqual(str(build_cfg.get("validator_source") or ""), "validators/validator.cpp")
         self.assertEqual(list(build_cfg.get("generator_sources") or []), [])
-        self.assertEqual(int(build_cfg.get("max_passes") or 0), 2)
+        self.assertIsNone(build_cfg.get("max_passes"))
 
         imported_testlib = (ws / "third_party" / "testlib" / "testlib.h").read_bytes()
         upstream_testlib = Path("third_party/upstream/testlib/testlib.h").read_bytes()
@@ -305,11 +305,36 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue((ws / "tests" / "answers" / "001.ans").is_file())
         self.assertTrue((ws / "tests" / "answers" / "027.ans").is_file())
         self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8").splitlines()[:1], ["3"])
+        problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
+        self.assertEqual(str(problem_cfg.get("mode") or ""), "interactive")
+        self.assertEqual(int(problem_cfg.get("pass_limit") or 0), 1)
 
         verification_id = config.verification_service.run_verification(self.problem, self.user)
         verification_row = db_fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or ""), "failed")
+
+    def test_import_real_packages_use_canonical_mode_and_pass_limit(self) -> None:
+        service = PolygonPackageImportService()
+        package_dir = Path("third_party/polygon-package-examples")
+        cases = [
+            ("2024hangzhou-rank-list-interactive-35$linux.zip", "interactive", 1),
+            ("2024yunnan-matrix-15$linux.zip", "pass-fail", 1),
+            ("run-twice-guess-the-number-46$linux.zip", "interactive", 2),
+            ("taxi-26$linux.zip", "pass-fail", 1),
+        ]
+        for package_name, expected_mode, expected_pass_limit in cases:
+            ws = Path(tempfile.mkdtemp(prefix=f"polygon-mode-pass-{Path(package_name).stem}-"))
+            try:
+                package = package_dir / package_name
+                self.assertTrue(package.exists(), f"missing package fixture: {package}")
+                service.import_package(ws, package.name, package.read_bytes())
+                problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
+                self.assertEqual(str(problem_cfg.get("mode") or ""), expected_mode)
+                self.assertEqual(int(problem_cfg.get("pass_limit") or 0), expected_pass_limit)
+                self.assertNotIn("max_passes", problem_cfg)
+            finally:
+                shutil.rmtree(ws, ignore_errors=True)
 
     def test_import_taxi_maps_time_limit_exceeded_or_accepted_tag_to_tle_or_correct(self) -> None:
         ws = self._workspace_path()

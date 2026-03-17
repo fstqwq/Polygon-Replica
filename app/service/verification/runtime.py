@@ -11,9 +11,21 @@ def coerce_int(raw: object, default: int, min_value: int, max_value: int) -> int
 
 def normalize_problem_mode(raw: object, default: str = "pass-fail") -> str:
     token = str(raw or "").strip().lower()
-    if token in {"pass-fail", "interactive", "multi-pass"}:
+    if not token:
+        return default
+    if token in {"pass-fail", "interactive"}:
         return token
-    return default
+    raise ValueError(f"invalid problem mode: {token}")
+
+
+def normalize_pass_limit(raw: object, default: int = 1) -> int:
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except Exception as exc:
+        raise ValueError("pass limit must be an integer") from exc
+    return max(1, value)
 
 
 def normalize_time_limit_ms(raw: object, *, default_ms: int, min_ms: int, max_ms: int) -> int:
@@ -27,6 +39,7 @@ def normalize_time_limit_ms(raw: object, *, default_ms: int, min_ms: int, max_ms
 def wall_time_slack_sec_for_mode(
     mode: object,
     *,
+    pass_limit: object,
     pass_fail_sec: int,
     multi_pass_sec: int,
     interactive_sec: int,
@@ -34,7 +47,7 @@ def wall_time_slack_sec_for_mode(
     token = normalize_problem_mode(mode)
     if token == "interactive":
         return max(0, int(interactive_sec))
-    if token == "multi-pass":
+    if normalize_pass_limit(pass_limit) > 1:
         return max(0, int(multi_pass_sec))
     return max(0, int(pass_fail_sec))
 
@@ -43,6 +56,7 @@ def effective_run_timeout_ms(
     time_limit_ms: int,
     *,
     mode: object,
+    pass_limit: object,
     default_ms: int,
     min_ms: int,
     max_ms: int,
@@ -53,6 +67,7 @@ def effective_run_timeout_ms(
     tl = normalize_time_limit_ms(time_limit_ms, default_ms=default_ms, min_ms=min_ms, max_ms=max_ms)
     slack_ms = wall_time_slack_sec_for_mode(
         mode,
+        pass_limit=pass_limit,
         pass_fail_sec=pass_fail_slack_sec,
         multi_pass_sec=multi_pass_slack_sec,
         interactive_sec=interactive_slack_sec,
@@ -79,6 +94,7 @@ def load_problem_runtime_config(
     cfg = {
         "time_limit_ms": int(default_time_limit_ms),
         "mode": str(default_mode or "pass-fail"),
+        "pass_limit": 1,
     }
     path = Path(snapshot) / "config" / "problem.json"
     if path.exists():
@@ -94,4 +110,5 @@ def load_problem_runtime_config(
         max_ms=max_time_limit_ms,
     )
     cfg["mode"] = normalize_problem_mode(cfg.get("mode"), default_mode)
+    cfg["pass_limit"] = normalize_pass_limit(cfg.get("pass_limit"), 1)
     return cfg

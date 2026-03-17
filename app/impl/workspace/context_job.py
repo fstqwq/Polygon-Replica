@@ -34,7 +34,7 @@ from .context_verification import (
     _verification_sources_signature,
     _verification_sources_signature_details,
 )
-from .problem_config import normalize_problem_mode, read_problem_config
+from .problem_config import normalize_pass_limit, normalize_problem_mode, read_problem_config
 from .context_job_helper import (
     VerificationFailureError,
     allocate_run_id,
@@ -45,6 +45,23 @@ from .context_job_helper import (
 
 _C = config.constants
 _BACKEND_NAME = config.judgehost_task_service.backend_name()
+
+
+def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
+    default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
+    default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
+    workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
+    if not workspace_path_text:
+        return (default_mode, default_pass_limit)
+    try:
+        workspace_path = Path(workspace_path_text).resolve()
+        _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
+        return (
+            normalize_problem_mode(general_cfg.get("mode"), default_mode),
+            normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
+        )
+    except Exception:
+        return (default_mode, default_pass_limit)
 
 
 def _run_marked_cancelled(problem_id: int, workspace_id: int, run_id: str) -> bool:
@@ -262,7 +279,8 @@ def _seed_verification_runs(
     if not safe_verification_id:
         return
     safe_artifact_verification_id = artifact_verification_id or _C.RUN_PLACEHOLDER_VERIFICATION_ID
-    safe_mode = mode or "pass-fail"
+    config_mode, config_pass_limit = _workspace_mode_and_pass_limit(problem_id, workspace_id)
+    safe_mode = mode or config_mode or "pass-fail"
     safe_source = verification_source or "run.execute"
     for target in targets:
         run_id = normalize_run_id_token(target.get("run_id"))
@@ -298,6 +316,7 @@ def _seed_verification_runs(
             run_summary={
                 "artifact_verification_id": safe_artifact_verification_id,
                 "mode": safe_mode,
+                "pass_limit": config_pass_limit,
                 "source": source_label,
                 "tests": [],
                 "compile_diagnostics": [],
@@ -409,11 +428,13 @@ def _run_execute_batch_worker(
                 execution_skipped=True,
             )
         return
+    summary_mode, summary_pass_limit = _workspace_mode_and_pass_limit(problem_id, workspace_id)
     existing_summary = load_verification_summary(config.db, verification_id)
     if not existing_summary:
         existing_summary = default_verification_summary(
             kind=Kind.VERIFICATION.value,
-            mode=run_mode,
+            mode=summary_mode,
+            pass_limit=summary_pass_limit,
             source_paths=[
                 source_label
                 for target in targets
@@ -426,7 +447,8 @@ def _run_execute_batch_worker(
     existing_summary["artifact_verification_id"] = resolved_verification_id
     existing_summary["artifact_verification_status"] = "ok"
     existing_summary["verification_source"] = "run.execute"
-    existing_summary["mode"] = run_mode or existing_summary.get("mode") or "pass-fail"
+    existing_summary["mode"] = summary_mode
+    existing_summary["pass_limit"] = summary_pass_limit
     existing_summary["status"] = existing_summary.get("status") or "running"
     create_verification_record(
         config.db,
@@ -643,17 +665,11 @@ def _run_verification_start_worker(
             planned_run_ids.append(token)
     run_ids: list[str] = list(planned_run_ids)
     artifact_verification_id = _C.RUN_PLACEHOLDER_VERIFICATION_ID
-    verification_mode = _C.GENERAL_CONFIG_DEFAULTS.get('mode') or "pass-fail"
+    verification_mode, verification_pass_limit = _workspace_mode_and_pass_limit(problem_id, workspace_id)
     workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
-    if workspace_path_text:
-        try:
-            workspace_path = Path(workspace_path_text).resolve()
-            _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
-            verification_mode = normalize_problem_mode(general_cfg.get('mode'), _C.GENERAL_CONFIG_DEFAULTS.get('mode') or "pass-fail")
-        except Exception:
-            verification_mode = _C.GENERAL_CONFIG_DEFAULTS.get('mode') or "pass-fail"
     verification_details: dict[str, object] = {'status': 'failed', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'submission_paths': [item.get('path') or '' for item in targets], 'solution_count': len(targets), 'verification_id': verification_id, 'verification_backend': _BACKEND_NAME, 'error': ''}
     verification_details['mode'] = verification_mode
+    verification_details['pass_limit'] = verification_pass_limit
     verification_details['source_paths'] = [source_path for item in targets if (source_path := (item.get('path') or ''))]
     initial_runs: dict[str, dict[str, object]] = {}
     initial_runs_order: list[str] = []
@@ -676,6 +692,7 @@ def _run_verification_start_worker(
         run_row['summary'] = {
             'artifact_verification_id': _C.RUN_PLACEHOLDER_VERIFICATION_ID,
             'mode': verification_mode,
+            'pass_limit': verification_pass_limit,
             'source': source_path,
             'tests': [],
             'compile_diagnostics': [],

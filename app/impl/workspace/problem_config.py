@@ -32,11 +32,30 @@ def normalize_problem_mode(raw: str | None, default: str = "pass-fail") -> str:
         token = ""
     else:
         token = raw.strip().lower().replace("_", "-").replace(" ", "-")
+    if not token:
+        if default in _C.GENERAL_MODE_VALUES:
+            return default
+        return "pass-fail"
     if token in _C.GENERAL_MODE_VALUES:
         return token
-    if default in _C.GENERAL_MODE_VALUES:
-        return default
-    return "pass-fail"
+    raise ValueError(f"invalid problem mode: {token}")
+
+
+def normalize_pass_limit(raw: object, default: int = 1) -> int:
+    if raw is None:
+        return coerce_int(default, default, _C.GENERAL_PASS_LIMIT_MIN, _C.GENERAL_PASS_LIMIT_MAX)
+    text = str(raw).strip()
+    if not text:
+        return coerce_int(default, default, _C.GENERAL_PASS_LIMIT_MIN, _C.GENERAL_PASS_LIMIT_MAX)
+    try:
+        value = int(text)
+    except Exception as exc:
+        raise ValueError("pass limit must be an integer") from exc
+    if value < _C.GENERAL_PASS_LIMIT_MIN or value > _C.GENERAL_PASS_LIMIT_MAX:
+        raise ValueError(
+            f"pass limit must be between {_C.GENERAL_PASS_LIMIT_MIN} and {_C.GENERAL_PASS_LIMIT_MAX}"
+        )
+    return value
 
 
 def sanitize_stdio_name(raw: str, fallback: str, label: str) -> str:
@@ -93,6 +112,10 @@ def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, o
             _C.GENERAL_MEMORY_LIMIT_MAX_MB,
         ),
         "mode": mode,
+        "pass_limit": normalize_pass_limit(
+            payload.get("pass_limit"),
+            int(_C.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
+        ),
     }
     return (payload, ui_cfg, cfg_path)
 

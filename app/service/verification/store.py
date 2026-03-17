@@ -177,6 +177,7 @@ def default_verification_summary(
     *,
     kind: str,
     mode: str,
+    pass_limit: int = 1,
     source_commit: str = "",
     source_ref: str = "",
     source_paths: list[str] | None = None,
@@ -185,6 +186,7 @@ def default_verification_summary(
     return {
         "kind": kind or Kind.VERIFICATION.value,
         "mode": mode or "pass-fail",
+        "pass_limit": max(1, int(pass_limit)),
         "source_commit": source_commit,
         "source_ref": source_ref,
         "status": Status.RUNNING.value,
@@ -442,6 +444,7 @@ def save_verification_run_summary(
             summary_obj = default_verification_summary(
                 kind=kind,
                 mode=mode,
+                pass_limit=max(1, int(run_summary.get("pass_limit", 1) or 1)),
                 source_commit=source_commit,
                 source_ref=source_ref,
                 source_paths=list(source_paths or []),
@@ -478,6 +481,10 @@ def save_verification_run_summary(
             summary_obj["verification_source"] = verification_source
         if mode:
             summary_obj["mode"] = mode
+        if "pass_limit" in run_summary:
+            run_pass_limit = max(1, int(run_summary.get("pass_limit", 1) or 1))
+            current_pass_limit = max(1, int(summary_obj.get("pass_limit", 1) or 1))
+            summary_obj["pass_limit"] = max(current_pass_limit, run_pass_limit)
         if source_commit:
             summary_obj["source_commit"] = source_commit
         if source_ref:

@@ -319,7 +319,7 @@ class TestJudgehostService(SmokeBase):
         (artifact_root / "tests" / "001.in").write_text("ok\n", encoding="utf-8")
         (artifact_root / "ans" / "001.ans").write_text("ok\n", encoding="utf-8")
         (artifact_root / "logs" / "run_config.json").write_text(
-            json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 1}, indent=2) + "\n",
+            json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 1}, indent=2) + "\n",
             encoding="utf-8",
         )
         db_execute(
@@ -1038,7 +1038,7 @@ class TestJudgehostService(SmokeBase):
         self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "logs" / "run_config.json").write_text(
-            json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 2}, indent=2) + "\n",
+            json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 2}, indent=2) + "\n",
             encoding="utf-8",
         )
 
@@ -1046,7 +1046,7 @@ class TestJudgehostService(SmokeBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="multi-pass",
+            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1638,7 +1638,7 @@ class TestJudgehostService(SmokeBase):
             )
             self.assertEqual(result.returncode, 42)
 
-    def test_domjudge_interactive_pass_limit_is_forced_to_one(self) -> None:
+    def test_domjudge_interactive_uses_configured_pass_limit(self) -> None:
         service = config.judgehost_task_service
         old_include_build_payload = service._include_build_payload
         self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
@@ -1649,7 +1649,7 @@ class TestJudgehostService(SmokeBase):
         self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "logs" / "run_config.json").write_text(
-            json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 7}, indent=2) + "\n",
+            json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 7}, indent=2) + "\n",
             encoding="utf-8",
         )
         interactor_bin = artifact_root / "bin" / "interactor"
@@ -1675,9 +1675,9 @@ class TestJudgehostService(SmokeBase):
         precomputed = payload.get("domjudge_precomputed") if isinstance(payload, dict) else {}
         run_cfg = precomputed.get("run_config") if isinstance(precomputed, dict) else {}
         self.assertIsInstance(run_cfg, dict)
-        self.assertEqual(int(run_cfg.get("pass_limit") or 0), 1)
+        self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
 
-    def test_domjudge_multi_pass_uses_configured_pass_limit(self) -> None:
+    def test_domjudge_pass_fail_multi_pass_uses_configured_pass_limit(self) -> None:
         service = config.judgehost_task_service
         old_include_build_payload = service._include_build_payload
         self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
@@ -1688,25 +1688,21 @@ class TestJudgehostService(SmokeBase):
         self._seed_build_verification(verification_id)
         artifact_root = self._verification_artifact_root(verification_id)
         (artifact_root / "logs" / "run_config.json").write_text(
-            json.dumps({"checker_mode": "testlib", "checker_args": [], "max_passes": 7}, indent=2) + "\n",
+            json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 7}, indent=2) + "\n",
             encoding="utf-8",
         )
-        interactor_bin = artifact_root / "bin" / "interactor"
-        interactor_bin.parent.mkdir(parents=True, exist_ok=True)
-        interactor_bin.write_bytes(b"#!/bin/sh\nexit 0\n")
-        os.chmod(interactor_bin, 0o755)
 
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="multi-pass",
+            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id="inv-passlimit-multipass",
+            verification_id="inv-passlimit-pass-fail",
             verification_run_ids=[run_id],
             expected_behavior="accepted",
             verification_source="run.execute",
@@ -1751,7 +1747,7 @@ class TestJudgehostService(SmokeBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="multi-pass",
+            mode="interactive",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2433,7 +2429,7 @@ class TestJudgehostService(SmokeBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="multi-pass",
+            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="checker.cpp",
@@ -3053,14 +3049,14 @@ class TestJudgehostService(SmokeBase):
                         {
                             "checker_mode": "testlib",
                             "checker_args": [],
-                            "max_passes": 1,
+                            "pass_limit": 1,
                             "time_limit_ms": 30000,
                             "memory_limit_mb": 1024,
                         },
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
-                    "problem_limits": {"time_limit_ms": 30000, "memory_limit_mb": 1024},
+                    "problem_limits": {"time_limit_ms": 30000, "memory_limit_mb": 1024, "pass_limit": 1},
                     "binaries_b64": {},
                     "sources_b64": {},
                 },
@@ -3574,7 +3570,7 @@ class TestJudgehostService(SmokeBase):
                 {
                     "checker_mode": "testlib",
                     "checker_args": [],
-                    "max_passes": 1,
+                    "pass_limit": 1,
                     "memory_limit_mb": run_mem_mb,
                 },
                 indent=2,
@@ -3620,7 +3616,7 @@ class TestJudgehostService(SmokeBase):
             max(int(run_config.get("memory_limit") or 0), compile_mem_mb * 1024),
         )
 
-    def test_domjudge_build_solve_multi_pass_defaults_pass_limit_when_run_config_missing(self) -> None:
+    def test_domjudge_build_solve_defaults_pass_limit_from_problem_config(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service._enabled
         old_token = service._api_token

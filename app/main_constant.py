@@ -69,13 +69,16 @@ GENERAL_TIME_LIMIT_MIN_MS = 100
 GENERAL_TIME_LIMIT_MAX_MS = 30000
 GENERAL_MEMORY_LIMIT_MIN_MB = 8
 GENERAL_MEMORY_LIMIT_MAX_MB = 2048
-GENERAL_MODE_VALUES = ("pass-fail", "interactive", "multi-pass")
+GENERAL_MODE_VALUES = ("pass-fail", "interactive")
+GENERAL_PASS_LIMIT_MIN = 1
+GENERAL_PASS_LIMIT_MAX = 64
 GENERAL_CONFIG_DEFAULTS = {
     "input_file": "stdin",
     "output_file": "stdout",
     "time_limit_ms": 2000,
     "memory_limit_mb": 1024,
     "mode": "pass-fail",
+    "pass_limit": 1,
 }
 TESTS_SPEC_ROWS_LIMIT = 256
 TESTS_SPEC_PREVIEW_CHARS = 200
@@ -121,7 +124,7 @@ RUN_EXEC_MEMORY_MB = 1024
 RUN_EXEC_PROCESS_LIMIT = 64
 RUN_EXEC_OUTPUT_KB = 65536
 RUN_WALL_TIME_SLACK_PASS_FAIL_SEC = 1
-RUN_WALL_TIME_SLACK_MULTI_PASS_SEC = 15
+RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC = 15
 RUN_WALL_TIME_SLACK_INTERACTIVE_SEC = 15
 PREVIEW_TEX_TIMEOUT_SEC = 120
 PREVIEW_TEX_MEMORY_MB = 1024
@@ -273,6 +276,8 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "GENERAL_TIME_LIMIT_MAX_MS": {"type": "int", "min": 1, "max": 300000, "description": "Upper bound for problem TL (ms)."},
     "GENERAL_MEMORY_LIMIT_MIN_MB": {"type": "int", "min": 1, "max": 65536, "description": "Lower bound for memory limit (MB)."},
     "GENERAL_MEMORY_LIMIT_MAX_MB": {"type": "int", "min": 1, "max": 262144, "description": "Upper bound for memory limit (MB)."},
+    "GENERAL_PASS_LIMIT_MIN": {"type": "int", "min": 1, "max": 1024, "description": "Lower bound for pass limit."},
+    "GENERAL_PASS_LIMIT_MAX": {"type": "int", "min": 1, "max": 1024, "description": "Upper bound for pass limit."},
     "TESTS_SPEC_ROWS_LIMIT": {"type": "int", "min": 1, "max": 10000, "description": "Max tests rows loaded from tests/spec.json."},
     "TESTS_SPEC_PREVIEW_CHARS": {"type": "int", "min": 16, "max": 65536, "description": "Chars shown in tests/spec previews."},
     "TESTS_SPEC_PREVIEW_LINES": {"type": "int", "min": 1, "max": 1024, "description": "Lines shown in tests/spec previews."},
@@ -298,7 +303,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "RUN_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Run-time sandbox process limit.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Run-time sandbox output cap in KB.", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_PASS_FAIL_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for pass-fail runs (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
-    "RUN_WALL_TIME_SLACK_MULTI_PASS_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for multi-pass runs (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
+    "RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for pass-limit runs with pass_limit > 1 (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_INTERACTIVE_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for interactive runs (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
     "PREVIEW_TEX_TIMEOUT_SEC": {"type": "int", "min": 5, "max": 1800, "description": "TeX compile timeout in seconds.", "restart_required": False, "impact": "runtime"},
     "PREVIEW_TEX_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "TeX compile memory limit in MB.", "restart_required": False, "impact": "runtime"},

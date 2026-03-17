@@ -389,35 +389,24 @@ class ExportService:
             return False
         return False
 
-    def _problem_mode(self, snapshot: Path | None) -> str:
-        allowed = {"pass-fail", "interactive", "multi-pass"}
+    def _problem_mode_and_pass_limit(self, snapshot: Path | None) -> tuple[str, int]:
         if snapshot is None:
-            return "pass-fail"
-
-        for rel in ["config/problem.json", "config/build.json"]:
-            cfg_path = snapshot / rel
-            if not cfg_path.exists():
-                continue
-            try:
-                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            for key in ["mode", "run_mode", "problem_type", "type"]:
-                raw = cfg.get(key)
-                values = [str(raw)] if isinstance(raw, str) else [str(x) for x in raw] if isinstance(raw, list) else []
-                for v in values:
-                    if v in allowed:
-                        return v
-        interactor_src = self._find_first_source(snapshot / "interactors")
-        if interactor_src is not None:
-            return "interactive"
+            return ("pass-fail", 1)
+        cfg_path = snapshot / "config" / "problem.json"
+        if not cfg_path.exists():
+            return ("pass-fail", 1)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        mode = str(cfg.get("mode") or "").strip()
+        if mode not in {"pass-fail", "interactive"}:
+            raise ValueError("export requires canonical problem.json mode")
+        pass_limit_raw = cfg.get("pass_limit")
         try:
-            checker_src = self._effective_checker_source(snapshot, strict=False)
-        except ValueError:
-            checker_src = None
-        if checker_src is not None and self._file_contains_token(checker_src, "nextpass.in"):
-            return "multi-pass"
-        return "pass-fail"
+            pass_limit = int(pass_limit_raw)
+        except Exception as exc:
+            raise ValueError("export requires canonical problem.json pass_limit") from exc
+        if pass_limit < 1:
+            raise ValueError("export requires canonical positive pass_limit")
+        return (mode, pass_limit)
 
     def _snapshot_source(
         self,
@@ -546,16 +535,15 @@ class ExportService:
         token = str(mode or "pass-fail").strip().lower() or "pass-fail"
         if token == "interactive":
             return "[pass-fail, interactive]"
-        if token == "multi-pass":
-            return "[pass-fail, multi-pass]"
         return "pass-fail"
 
-    def _build_problem_yaml(self, *, problem_name: str, mode: str, snapshot: Path) -> str:
+    def _build_problem_yaml(self, *, problem_name: str, mode: str, pass_limit: int, snapshot: Path) -> str:
         cfg = self._load_problem_config(snapshot)
         lines = [
             "problem_format_version: 2025-09",
             f"name: {self._yaml_quote(str(problem_name or '').strip() or 'Problem')}",
             f"type: {self._problem_yaml_type(mode)}",
+            f"pass_limit: {max(1, int(pass_limit))}",
         ]
         time_limit_ms = cfg.get("time_limit_ms")
         memory_limit_mb = cfg.get("memory_limit_mb")
@@ -649,10 +637,11 @@ class ExportService:
         snapshot: Path,
         problem_name: str,
         mode: str,
+        pass_limit: int,
     ) -> None:
         package_root.mkdir(parents=True, exist_ok=True)
         (package_root / "problem.yaml").write_text(
-            self._build_problem_yaml(problem_name=problem_name, mode=mode, snapshot=snapshot),
+            self._build_problem_yaml(problem_name=problem_name, mode=mode, pass_limit=pass_limit, snapshot=snapshot),
             encoding="utf-8",
         )
         self._copy_secret_and_sample_data(build_root, package_root)
@@ -720,6 +709,7 @@ class ExportService:
         snapshot: Path | None = None
         try:
             mode = "pass-fail"
+            pass_limit = 1
             if resolved_export_type == "icpc":
                 snapshot = self._snapshot_source(
                     verification_row["workspace_id"],
@@ -727,13 +717,14 @@ class ExportService:
                     source_commit,
                     tmp_root,
                 )
-                mode = self._problem_mode(snapshot)
+                mode, pass_limit = self._problem_mode_and_pass_limit(snapshot)
                 self._build_kattis(
                     package_root=package_root,
                     build_root=verification_root,
                     snapshot=snapshot,
                     problem_name=problem_row["name"],
                     mode=mode,
+                    pass_limit=pass_limit,
                 )
 
             preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"

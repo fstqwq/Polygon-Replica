@@ -708,7 +708,7 @@ class TestUIRun(UIBaseSuite):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         problem_cfg = ws / "config" / "problem.json"
         problem_cfg.parent.mkdir(parents=True, exist_ok=True)
-        problem_cfg.write_text(json.dumps({"mode": "multi-pass"}, indent=2) + "\n", encoding="utf-8")
+        problem_cfg.write_text(json.dumps({"mode": "interactive", "pass_limit": 2}, indent=2) + "\n", encoding="utf-8")
 
         resp = run_execute(
             problem="alice/sample",
@@ -729,7 +729,7 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertIsNotNone(row)
         summary = json.loads(str(row["summary_json"] or "{}"))
-        self.assertEqual(str(summary.get("mode") or ""), "multi-pass")
+        self.assertEqual(str(summary.get("mode") or ""), "interactive")
 
     def test_run_execute_records_verification_audit_before_queue_start(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -2850,8 +2850,8 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Verification Progress", html)
         self.assertIn("0/5 tests finished", html)
-        self.assertIn("test 1", html)
-        self.assertIn("pending", html)
+        self.assertIn("generating</span>", html)
+        self.assertNotIn("test 1", html)
 
     def test_run_list_treats_failed_verification_as_terminal_even_with_queued_runs(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -5108,8 +5108,8 @@ class TestUIRun(UIBaseSuite):
             status="ok",
             created_at="2026-03-11T00:00:00Z",
             finished_at="2026-03-11T00:00:01Z",
-            runs=[{"id": run_id, "status": "ok", "summary": {"mode": "multi-pass"}}],
-            summary_extra={"mode": "multi-pass"},
+            runs=[{"id": run_id, "status": "ok", "summary": {"mode": "pass-fail", "pass_limit": 2}}],
+            summary_extra={"mode": "pass-fail", "pass_limit": 2},
         )
         service = config.judgehost_task_service
         key_hash = uuid.uuid4().hex + uuid.uuid4().hex
@@ -5521,7 +5521,8 @@ class TestUIRun(UIBaseSuite):
         run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
-            "mode": "multi-pass",
+            "mode": "pass-fail",
+            "pass_limit": 2,
             "source": "solutions/multipass.cpp",
             "tests": [
                 {
@@ -5541,7 +5542,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=workspace_id,
             build_id=build_id,
-            mode="multi-pass",
+            mode="pass-fail",
             status="ok",
             summary=summary,
             artifact_path=str(run_root),

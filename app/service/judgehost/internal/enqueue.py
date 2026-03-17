@@ -291,7 +291,7 @@ class JudgehostEnqueueMixin:
         if validator_source is None:
             validator_source = _first_cpp_under("validators")
 
-        interactive_mode = JudgehostEnqueueMixin._normalize_status(mode) in {"interactive", "multi-pass"}
+        interactive_mode = JudgehostEnqueueMixin._normalize_status(mode) == "interactive"
         interactor_source: Path | None = None
         if interactive_mode:
             interactor_source_token = cast(str | None, build_cfg_obj.get("interactor_source"))
@@ -330,6 +330,7 @@ class JudgehostEnqueueMixin:
             "problem_limits": {
                 "time_limit_ms": int(problem_time_limit_ms),
                 "memory_limit_mb": int(problem_memory_limit_mb),
+                "pass_limit": domjudge_parse_int(problem_cfg_obj.get("pass_limit"), 1),
             },
             "binaries_b64": binaries,
             "sources_b64": sources_payload,
@@ -450,14 +451,14 @@ class JudgehostEnqueueMixin:
         mode = domjudge_lower_text(payload.get("mode"), default="pass-fail")
         compile_only, generate_mode, solve_mode = self._domjudge_execution_modes(payload)
         manual_validate_only = domjudge_bool(payload.get("manual_validate_only"), default=False)
-        configured_max_passes = max(
+        configured_pass_limit = max(
             1,
             domjudge_parse_int(
-                run_cfg_obj.get("max_passes"),
-                domjudge_parse_int(problem_limits_obj.get("max_passes"), 16),
+                run_cfg_obj.get("pass_limit"),
+                domjudge_parse_int(problem_limits_obj.get("pass_limit"), 1),
             ),
         )
-        max_passes = configured_max_passes if mode == "multi-pass" else 1
+        pass_limit = configured_pass_limit
         compile_timeout = max(1, int(getattr(self._constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
         compile_mem_mb = max(64, int(getattr(self._constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
         compile_output_kb = max(64, int(getattr(self._constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536))
@@ -514,7 +515,7 @@ class JudgehostEnqueueMixin:
         interactive = (
             (not compile_only)
             and (not generate_mode)
-            and (mode == "interactive" or (mode == "multi-pass" and has_interactor_payload))
+            and mode == "interactive"
         )
         if (not compile_only) and (not generate_mode) and mode == "interactive" and not has_interactor_payload:
             raise RuntimeError("interactive mode requires interactor payload")
@@ -613,7 +614,7 @@ class JudgehostEnqueueMixin:
             "output_limit": int(run_output_kb),
             "process_limit": run_process_limit,
             "entry_point": None,
-            "pass_limit": max_passes,
+            "pass_limit": pass_limit,
             "language_id": self._domjudge_language_extensions(source_name)[0],
         }
         compare_config = {
@@ -691,6 +692,7 @@ class JudgehostEnqueueMixin:
         run_id: str,
         task_id: str,
         mode: str,
+        pass_limit: int,
         source_label: str,
         selected_tests: list[str],
         verification_id: str,
@@ -709,6 +711,7 @@ class JudgehostEnqueueMixin:
         )
         summary: dict[str, object] = {
             "mode": mode,
+            "pass_limit": max(1, int(pass_limit)),
             "source": source_label,
             "selected_tests": list(selected_tests),
             "selected_tests_count": len(selected_tests),
@@ -838,6 +841,16 @@ class JudgehostEnqueueMixin:
                         run_id=safe_run_id,
                         task_id=task_id,
                         mode=mode,
+                        pass_limit=max(
+                            1,
+                            int(
+                                cast(dict[str, object], cast(dict[str, object], payload["domjudge_precomputed"])["run_config"]).get(
+                                    "pass_limit",
+                                    1,
+                                )
+                                or 1
+                            ),
+                        ),
                         source_label=source_label,
                         selected_tests=selected,
                         verification_id=safe_verification_id,

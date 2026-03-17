@@ -62,6 +62,7 @@ class TestICPCPackageImport(SmokeBase):
 
         problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(str(problem_cfg.get("mode") or ""), "pass-fail")
+        self.assertEqual(int(problem_cfg.get("pass_limit") or 0), 1)
         self.assertEqual(int(problem_cfg.get("time_limit_ms") or 0), 2000)
         self.assertEqual(int(problem_cfg.get("memory_limit_mb") or 0), 1024)
 
@@ -97,6 +98,7 @@ class TestICPCPackageImport(SmokeBase):
 
         problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(str(problem_cfg.get("mode") or ""), "interactive")
+        self.assertEqual(int(problem_cfg.get("pass_limit") or 0), 1)
 
         build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
         self.assertEqual(str(build_cfg.get("interactor_source") or ""), "interactors/interactor.cpp")

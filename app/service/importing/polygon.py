@@ -77,7 +77,9 @@ PolygonMeta = TypedDict(
         "title": str,
         "time_limit_ms": int,
         "memory_limit_bytes": int,
-        "run_count": int,
+        "run_count_raw": str,
+        "pass_limit": int,
+        "has_multipass_property": bool,
         "is_multipass": bool,
         "tests": list[PolygonTestRow],
         "input_pattern": str,
@@ -303,7 +305,8 @@ class PolygonPackageImportService:
             problem_title = names[0]["value"]
 
         judging_node = root.find("./judging")
-        run_count = max(1, _coerce_int(_xml_attr(judging_node, "run-count"), 1))
+        run_count_raw = _xml_attr(judging_node, "run-count")
+        pass_limit = max(1, _coerce_int(run_count_raw, 1))
         multipass_property = False
         for node in root.findall("./properties/property"):
             name = _xml_attr(node, "name").lower().replace("_", "-")
@@ -386,8 +389,10 @@ class PolygonPackageImportService:
             "title": problem_title,
             "time_limit_ms": time_limit_ms,
             "memory_limit_bytes": memory_limit_bytes,
-            "run_count": run_count,
-            "is_multipass": multipass_property or (run_count > 1),
+            "run_count_raw": run_count_raw,
+            "pass_limit": pass_limit,
+            "has_multipass_property": multipass_property,
+            "is_multipass": multipass_property or (pass_limit > 1),
             "tests": tests,
             "input_pattern": input_pattern,
             "answer_pattern": answer_pattern,
@@ -834,18 +839,17 @@ class PolygonPackageImportService:
         components: ComponentImportSummary,
     ) -> dict[str, object]:
         cfg = _safe_read_json(workspace / "config" / "problem.json")
-        run_count = meta["run_count"]
-        is_multipass = meta["is_multipass"] or (run_count > 1)
-        mode = "pass-fail"
-        if is_multipass:
-            mode = "multi-pass"
-        elif components["interactor_source"]:
-            mode = "interactive"
+        pass_limit = int(meta["pass_limit"])
+        explicit_run_count = str(meta.get("run_count_raw") or "").strip()
+        if bool(meta.get("has_multipass_property")) and explicit_run_count in {"", "1"}:
+            raise ValueError("multipass Polygon package is missing explicit pass limit")
+        mode = "interactive" if components["interactor_source"] else "pass-fail"
         cfg["input_file"] = "stdin"
         cfg["output_file"] = "stdout"
         cfg["time_limit_ms"] = meta["time_limit_ms"]
         cfg["memory_limit_mb"] = max(1, meta["memory_limit_bytes"] // (1024 * 1024))
         cfg["mode"] = mode
+        cfg["pass_limit"] = pass_limit
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "problem.json").write_text(
             json.dumps(cfg, indent=2, sort_keys=True) + "\n",
@@ -887,10 +891,6 @@ class PolygonPackageImportService:
             build_cfg_changed = False
             if solutions_summary["accepted_source"]:
                 build_cfg["accepted_solution_source"] = solutions_summary["accepted_source"]
-                build_cfg_changed = True
-            run_count = meta["run_count"]
-            if meta["is_multipass"] or (run_count > 1):
-                build_cfg["max_passes"] = run_count
                 build_cfg_changed = True
             if build_cfg_changed:
                 (workspace / "config" / "build.json").write_text(

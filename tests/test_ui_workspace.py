@@ -326,18 +326,20 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(payload.get("time_limit_ms"), 100)
         self.assertEqual(payload.get("memory_limit_mb"), 2048)
 
-    def test_general_save_accepts_multi_pass_mode(self) -> None:
+    def test_general_save_persists_pass_limit(self) -> None:
         resp = general_save(
             problem="alice/sample",
             user="alice",
             time_limit_ms="2000",
             memory_limit_mb="1024",
-            mode="multi-pass",
+            mode="interactive",
+            pass_limit="2",
         )
         self.assertEqual(resp.status_code, 303)
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         payload = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
-        self.assertEqual(payload.get("mode"), "multi-pass")
+        self.assertEqual(payload.get("mode"), "interactive")
+        self.assertEqual(payload.get("pass_limit"), 2)
         self.assertNotIn("interactive", payload)
 
     def test_workspace_page_main_only_controls(self) -> None:
@@ -1273,6 +1275,5 @@ class TestUIWorkspace(UIBaseSuite):
 
         status_after = git_service.status(bob)
         self.assertFalse(bool(status_after.get("rebase_active")))
-
 
 

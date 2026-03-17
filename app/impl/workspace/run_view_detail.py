@@ -105,11 +105,12 @@ def build_run_detail_context(
         fallback_timeout_ms = effective_run_timeout_ms(
             int(general_cfg.get('time_limit_ms') or _C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
             mode=general_cfg.get('mode'),
+            pass_limit=general_cfg.get('pass_limit'),
             default_ms=int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
             min_ms=int(_C.GENERAL_TIME_LIMIT_MIN_MS),
             max_ms=int(_C.GENERAL_TIME_LIMIT_MAX_MS),
             pass_fail_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC),
-            multi_pass_slack_sec=int(_C.RUN_WALL_TIME_SLACK_MULTI_PASS_SEC),
+            multi_pass_slack_sec=int(_C.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC),
             interactive_slack_sec=int(_C.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC),
         )
     except Exception:
@@ -1117,7 +1118,7 @@ def build_run_detail_context(
                         feedback_token = '-'
                     final_row_payload['feedback_display'] = feedback_token
                     output_preview = final_row_payload.get('output_preview')
-                    interactive_mode = (col.get('mode') or '') in {'interactive', 'multi-pass'}
+                    interactive_mode = (col.get('mode') or '') == 'interactive'
                     if interactive_mode and output_preview is not None:
                         final_row_payload['interactive_transcript'] = _interactive_transcript_preview(output_preview)
                     detail_payload['final_row'] = final_row_payload
