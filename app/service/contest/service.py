@@ -286,6 +286,8 @@ class ContestService:
         return result
 
     def grant_member_role(self, contest_id: int, username: str, role: str) -> bool:
+        if role == "owner":
+            raise ValueError("owner access is fixed and cannot be transferred")
         user_id = self._store.user_id_by_username(username)
         if user_id is None:
             return False

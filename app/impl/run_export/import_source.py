@@ -23,6 +23,7 @@ from app.impl.run_export.query import (
     _workspace_problem_mode,
 )
 from app.service.importing.icpc import ICPCPackageImportService
+from app.service.importing.native import NATIVE_MARKER, NativePackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec
 from app.service.platform.process import run_cmd
@@ -30,6 +31,7 @@ from app.service.platform.process import run_cmd
 _C = config.constants
 _POLYGON_IMPORTER = PolygonPackageImportService()
 _ICPC_IMPORTER = ICPCPackageImportService()
+_NATIVE_IMPORTER = NativePackageImportService()
 _POLYGON_LINUX_PACKAGE_SUFFIX_RE = re.compile(r"-\d+\$linux$", re.IGNORECASE)
 _PROBLEM_SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -74,6 +76,8 @@ def _select_importer(package_format: str):
         return _POLYGON_IMPORTER
     if token == "icpc":
         return _ICPC_IMPORTER
+    if token == "native":
+        return _NATIVE_IMPORTER
     raise ValueError(f"unsupported package format: {package_format}")
 def _slugify_problem_id(raw: str) -> str:
     token = raw.strip().lower()
@@ -296,11 +300,21 @@ def _detect_problem_package_format(package_payload: bytes) -> str:
         raise ValueError(f"invalid zip package: {exc}") from exc
     has_problem_xml = _is_package_marker(names, "problem.xml")
     has_problem_yaml = _is_package_marker(names, "problem.yaml")
+    has_native_marker = _is_package_marker(names, NATIVE_MARKER)
+    if has_native_marker:
+        return "native"
     if has_problem_xml:
         return "polygon"
     if has_problem_yaml:
         return "icpc"
-    raise ValueError("unsupported package format: expected problem.xml (Polygon) or problem.yaml (ICPC)")
+    raise ValueError(f"unsupported package format: expected problem.xml (Polygon), problem.yaml (ICPC), or {NATIVE_MARKER} (native)")
+
+
+def _finalize_imported_problem(problem: str, actor_user: str, workspace: Path, package_format: str) -> str:
+    commit_message = f"import {package_format} package"
+    commit_head = config.git_service.commit(workspace, commit_message, actor_user, f"{actor_user}@polygonlike.local")
+    config.git_service.push(workspace, "main")
+    return commit_head
 
 def import_package_as_new_problem(
     actor_user_id: int,
@@ -328,57 +342,72 @@ def import_package_as_new_problem(
     if existing_bare_head:
         raise ValueError(f"import target already has revision history: {target_problem}")
     target_segment = target_problem.split("/", 1)[1] if "/" in target_problem else target_problem
-    config.workspace_service.ensure_problem(target_problem, f"{target_segment.title()} Problem")
-    config.workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
-    target_workspace = Path(config.workspace_service.ensure_workspace(target_problem, safe_actor_user))
-    workspace_head = run_cmd(["git", "-C", str(target_workspace), "rev-parse", "--verify", "HEAD"])
-    if workspace_head.returncode == 0 and workspace_head.stdout.strip():
-        raise ValueError(f"import target already has revision history: {target_problem}")
-    sample_answer_summary: dict[str, object] = {}
-    with config.workspace_service.workspace_lock(target_workspace):
-        importer = _select_importer(package_format)
-        result = cast(
-            ImportedPackageResult,
-            importer.import_package(
-                target_workspace,
-                safe_package_name,
-                payload,
-                normalize_test_data_newlines=bool(normalize_test_data_newlines),
-            ),
-        )
-        imported_title = cast(str | None, result.get("title"))
-        if imported_title is None:
-            imported_title = ""
-        if imported_title:
-            config.workspace_service.set_problem_name(target_problem, imported_title)
-    if package_format == "polygon":
-        sample_answer_summary = _build_polygon_sample_answers(target_problem, safe_actor_user, target_workspace)
-        tests_summary = result.get("tests")
-        if tests_summary is not None:
-            tests_summary = cast(dict[str, object], tests_summary)
-            tests_summary["sample_answers_built"] = int(sample_answer_summary.get("sample_answers_built", 0))
-            tests_summary["sample_answers_missing"] = int(sample_answer_summary.get("sample_answers_missing", 0))
-            tests_summary["sample_manual_total"] = int(sample_answer_summary.get("sample_manual_total", 0))
-            current_answers = int(tests_summary.get("answers", 0))
-            tests_summary["answers"] = current_answers + int(sample_answer_summary.get("sample_answers_built", 0))
-    if sample_answer_summary:
-        result["sample_answers"] = sample_answer_summary
-    details = {
-        "package": safe_package_name,
-        "package_format": package_format,
-        "source_problem": source_problem.strip(),
-        "target_problem": target_problem,
-        "statement": result.get("statement"),
-        "tests": result.get("tests"),
-        "components": result.get("components"),
-        "solutions": result.get("solutions"),
-    }
-    target_problem_id = config.workspace_service.known_problem_id(target_problem)
-    if target_problem_id is not None:
-        audit(actor_user_id, int(target_problem_id), "export.import", details)
-    tests_info = result.get("tests")
-    total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
-    return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}
+    created_problem = False
+    try:
+        config.workspace_service.ensure_problem(target_problem, f"{target_segment.title()} Problem")
+        created_problem = True
+        config.workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
+        target_workspace = Path(config.workspace_service.ensure_workspace(target_problem, safe_actor_user))
+        workspace_head = run_cmd(["git", "-C", str(target_workspace), "rev-parse", "--verify", "HEAD"])
+        if workspace_head.returncode == 0 and workspace_head.stdout.strip():
+            raise ValueError(f"import target already has revision history: {target_problem}")
+        sample_answer_summary: dict[str, object] = {}
+        with config.workspace_service.workspace_lock(target_workspace):
+            importer = _select_importer(package_format)
+            result = cast(
+                ImportedPackageResult,
+                importer.import_package(
+                    target_workspace,
+                    safe_package_name,
+                    payload,
+                    normalize_test_data_newlines=bool(normalize_test_data_newlines),
+                ),
+            )
+            imported_title = cast(str | None, result.get("title"))
+            if imported_title is None:
+                imported_title = ""
+            if imported_title:
+                config.workspace_service.set_problem_name(target_problem, imported_title)
+        if package_format == "polygon":
+            sample_answer_summary = _build_polygon_sample_answers(target_problem, safe_actor_user, target_workspace)
+            tests_summary = result.get("tests")
+            if tests_summary is not None:
+                tests_summary = cast(dict[str, object], tests_summary)
+                tests_summary["sample_answers_built"] = int(sample_answer_summary.get("sample_answers_built", 0))
+                tests_summary["sample_answers_missing"] = int(sample_answer_summary.get("sample_answers_missing", 0))
+                tests_summary["sample_manual_total"] = int(sample_answer_summary.get("sample_manual_total", 0))
+                current_answers = int(tests_summary.get("answers", 0))
+                tests_summary["answers"] = current_answers + int(sample_answer_summary.get("sample_answers_built", 0))
+        if sample_answer_summary:
+            result["sample_answers"] = sample_answer_summary
+        with config.workspace_service.workspace_lock(target_workspace):
+            imported_commit = _finalize_imported_problem(target_problem, safe_actor_user, target_workspace, package_format)
+        config.workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
+        result["commit"] = imported_commit
+        details = {
+            "package": safe_package_name,
+            "package_format": package_format,
+            "source_problem": source_problem.strip(),
+            "target_problem": target_problem,
+            "import_commit": imported_commit,
+            "statement": result.get("statement"),
+            "tests": result.get("tests"),
+            "components": result.get("components"),
+            "solutions": result.get("solutions"),
+        }
+        target_problem_id = config.workspace_service.known_problem_id(target_problem)
+        if target_problem_id is not None:
+            audit(actor_user_id, int(target_problem_id), "export.import", details)
+        tests_info = result.get("tests")
+        total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
+        return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}
+    except Exception:
+        if created_problem:
+            try:
+                config.workspace_service.delete_problem(target_problem)
+            except Exception:
+                pass
+        raise
 
 def import_statement_language_warning(import_result: dict[str, object] | None) -> str:
     if import_result is None:

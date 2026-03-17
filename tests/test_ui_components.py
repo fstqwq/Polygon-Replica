@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from app.impl.workspace.problem_config import read_problem_config
+
 from .ui_support import (
     Path,
     UIBaseSuite,
@@ -40,19 +42,28 @@ from .ui_support import (
 
 
 class TestUIComponents(UIBaseSuite):
+    def test_read_problem_config_rejects_persisted_shape_without_pass_limit(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        cfg_path = ws / "config/problem.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps({"mode": "interactive"}, indent=2) + "\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "missing pass_limit"):
+            read_problem_config(ws)
+
     def test_interactor_tab_visible_only_for_non_pass_fail_mode(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         cfg_path = ws / "config/problem.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
-        cfg_path.write_text(json.dumps({"mode": "pass-fail"}, indent=2) + "\n", encoding="utf-8")
+        cfg_path.write_text(json.dumps({"mode": "pass-fail", "pass_limit": 1}, indent=2) + "\n", encoding="utf-8")
         pass_fail_resp = general_page(_request("/problems/alice/sample/alice/general"), "alice/sample", "alice")
         self.assertEqual(pass_fail_resp.status_code, 200)
         pass_fail_html = pass_fail_resp.body.decode("utf-8", errors="replace")
         self.assertIn("/problems/alice/sample/alice/preview", pass_fail_html)
         self.assertNotIn(">Interactor</span>", pass_fail_html)
 
-        cfg_path.write_text(json.dumps({"mode": "interactive"}, indent=2) + "\n", encoding="utf-8")
+        cfg_path.write_text(json.dumps({"mode": "interactive", "pass_limit": 1}, indent=2) + "\n", encoding="utf-8")
         interactive_resp = general_page(_request("/problems/alice/sample/alice/general"), "alice/sample", "alice")
         self.assertEqual(interactive_resp.status_code, 200)
         interactive_html = interactive_resp.body.decode("utf-8", errors="replace")
@@ -64,7 +75,7 @@ class TestUIComponents(UIBaseSuite):
         validator_rel = "validators/validator.cpp"
         cfg_path = ws / "config/problem.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(json.dumps({"mode": "interactive"}, indent=2) + "\n", encoding="utf-8")
+        cfg_path.write_text(json.dumps({"mode": "interactive", "pass_limit": 1}, indent=2) + "\n", encoding="utf-8")
         (ws / interactor_rel).parent.mkdir(parents=True, exist_ok=True)
         (ws / validator_rel).parent.mkdir(parents=True, exist_ok=True)
         (ws / interactor_rel).write_text("int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n", encoding="utf-8")
@@ -75,11 +86,11 @@ class TestUIComponents(UIBaseSuite):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'data-page="interactor"[\s\S]*?<span class="submenu-status[^"]*">\s*interactor\.cpp\s*</span>',
+            r'data-page="interactor"[\s\S]*?<span class="submenu-detail-line[^"]*">\s*interactor\.cpp\s*</span>',
         )
         self.assertRegex(
             html,
-            r'data-page="validator"[\s\S]*?<span class="submenu-status[^"]*">\s*validator\.cpp\s*</span>',
+            r'data-page="validator"[\s\S]*?<span class="submenu-detail-line[^"]*">\s*validator\.cpp\s*</span>',
         )
 
     def test_solutions_nav_status_shows_no_main_correct_hint_when_missing_main(self) -> None:
@@ -105,7 +116,7 @@ class TestUIComponents(UIBaseSuite):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'data-page="solutions"[^>]*>\s*<span class="submenu-title">Solution files</span>\s*<span class="submenu-status submenu-status-danger">\s*2 files \(no main correct\)\s*</span>',
+            r'data-page="solutions"[\s\S]*?<span class="submenu-title">Solutions</span>[\s\S]*?<span class="submenu-detail-line submenu-status-danger">\s*2 files \(no main correct\)\s*</span>',
         )
 
     def test_checker_page_sets_standard_checker_metadata(self) -> None:
@@ -444,7 +455,7 @@ class TestUIComponents(UIBaseSuite):
         general_html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
             general_html,
-            r'data-page="generators"[\s\S]*?<span class="submenu-status[^"]*">\s*1 file, 0 used\s*</span>',
+            r'data-page="generators"[\s\S]*?<span class="submenu-detail-line[^"]*">\s*1 file, 0 used\s*</span>',
         )
 
     def test_generators_nav_status_uses_singular_file_word_for_one_configured_source(self) -> None:
@@ -471,7 +482,7 @@ class TestUIComponents(UIBaseSuite):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'data-page="generators"[\s\S]*?<span class="submenu-status[^"]*">\s*1 file, \d+ used\s*</span>',
+            r'data-page="generators"[\s\S]*?<span class="submenu-detail-line[^"]*">\s*1 file, \d+ used\s*</span>',
         )
 
     def test_solutions_page_uses_desc_metadata_for_expected_behavior(self) -> None:
@@ -486,7 +497,7 @@ class TestUIComponents(UIBaseSuite):
         page = solutions_page(_request("/problems/alice/sample/alice/solutions"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Solution Files", html)
+        self.assertIn("Solutions", html)
         self.assertIn("solutions/std.cpp", html)
         self.assertIn("wrong_answer (WA)", html)
         self.assertIn("solutions/std.cpp.desc", html)
@@ -517,7 +528,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn("/solutions", after_html)
         self.assertIn(">Checker</span>", after_html)
         self.assertIn(">Validator</span>", after_html)
-        self.assertIn(">Solution files</span>", after_html)
+        self.assertIn(">Solutions</span>", after_html)
 
     def test_solutions_page_supports_template_action(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

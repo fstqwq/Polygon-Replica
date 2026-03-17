@@ -55,6 +55,16 @@ ProblemMeta = TypedDict(
     },
 )
 
+
+DomjudgeMeta = TypedDict(
+    "DomjudgeMeta",
+    {
+        "time_limit_ms": int | None,
+        "external_id": str,
+        "short_name": str,
+    },
+)
+
 StatementSummary = TypedDict(
     "StatementSummary",
     {
@@ -263,6 +273,34 @@ def _yaml_parse_inline_list(raw: str) -> list[str]:
     return items
 
 
+def _parse_domjudge_ini(text: str) -> DomjudgeMeta:
+    time_limit_ms: int | None = None
+    external_id = ""
+    short_name = ""
+    for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key_norm = key.strip().lower().replace("-", "_")
+        token = value.strip()
+        if key_norm == "timelimit":
+            time_limit_ms = _time_limit_ms_from_text(token)
+            continue
+        if key_norm == "externalid":
+            external_id = token
+            continue
+        if key_norm == "short_name":
+            short_name = token
+    return {
+        "time_limit_ms": time_limit_ms,
+        "external_id": external_id,
+        "short_name": short_name,
+    }
+
+
 def _coerce_int(raw: object, default: int, *, min_value: int = 1) -> int:
     try:
         value = int(str(raw).strip())
@@ -375,7 +413,7 @@ class ICPCPackageImportService:
                     continue
                 key, value = nested.split(":", 1)
                 key_norm = key.strip().lower().replace("-", "_")
-                if key_norm in {"time_limit", "memory_limit"}:
+                if key_norm in {"time_limit", "memory_limit", "validation_passes"}:
                     limits[key_norm] = value.strip()
                 continue
             in_limits = False
@@ -388,19 +426,20 @@ class ICPCPackageImportService:
             if key_norm == "limits" and not value_text:
                 in_limits = True
 
-        if "problem_format_version" not in top:
-            raise ValueError("problem.yaml is missing problem_format_version")
-
         title = _yaml_unquote(top.get("name", ""))
         if not title:
             title = DEFAULT_PROBLEM_TITLE
-        type_tokens = [item.lower().replace("_", "-") for item in _yaml_parse_inline_list(top.get("type", ""))]
-        mode = "pass-fail"
-        if any(token in {"multi-pass", "multipass"} for token in type_tokens):
-            raise ValueError("legacy multi-pass type is not accepted")
-        if any(token == "interactive" for token in type_tokens):
-            mode = "interactive"
-        pass_limit = _coerce_int(_yaml_unquote(top.get("pass_limit", "1")), 1, min_value=1)
+        validation_tokens = [item for item in _yaml_unquote(top.get("validation", "")).strip().lower().split() if item]
+        mode = "interactive" if "interactive" in validation_tokens else "pass-fail"
+        if any(token in {"multi-pass", "multipass"} for token in validation_tokens):
+            validation_passes_raw = limits.get("validation_passes")
+            if validation_passes_raw is None:
+                validation_passes_raw = top.get("validation_passes")
+            pass_limit = _coerce_int(_yaml_unquote(validation_passes_raw or "0"), 0, min_value=1)
+            if pass_limit < 2:
+                raise ValueError("interactive multi-pass ICPC package requires limits.validation_passes >= 2")
+        else:
+            pass_limit = 1
 
         time_raw = limits.get("time_limit")
         if time_raw is None:
@@ -666,6 +705,15 @@ class ICPCPackageImportService:
             workspace,
             "interactors" if mode == "interactive" else "checkers",
         )
+        output_files.extend(
+            self._copy_component_tree(
+                zf,
+                entries,
+                "output_validators",
+                workspace,
+                "interactors" if mode == "interactive" else "checkers",
+            )
+        )
         if mode == "interactive":
             interactor_source = self._select_source_file(output_files, ["interactor", "checker"])
         else:
@@ -794,6 +842,12 @@ class ICPCPackageImportService:
             if yaml_info is None:
                 raise ValueError("problem.yaml not found in package")
             meta = self._parse_problem_yaml(_read_text_from_zip(zf, yaml_info))
+            domjudge_meta: DomjudgeMeta = {"time_limit_ms": None, "external_id": "", "short_name": ""}
+            domjudge_info = entry_map.get("domjudge-problem.ini")
+            if domjudge_info is not None:
+                domjudge_meta = _parse_domjudge_ini(_read_text_from_zip(zf, domjudge_info))
+                if meta["time_limit_ms"] is None:
+                    meta["time_limit_ms"] = domjudge_meta["time_limit_ms"]
             statement_summary = self._import_statement(zf, entry_map, workspace, meta)
             tests_summary = self._import_tests(
                 zf,
@@ -814,4 +868,5 @@ class ICPCPackageImportService:
                 "components": components_summary,
                 "problem_cfg": problem_cfg,
                 "build_cfg": build_cfg,
+                "domjudge": domjudge_meta,
             }

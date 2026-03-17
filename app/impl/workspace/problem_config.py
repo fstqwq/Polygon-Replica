@@ -78,10 +78,17 @@ def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, o
     payload: dict[str, object] = {}
     if cfg_path.exists() and cfg_path.is_file():
         try:
-            payload = cast(dict[str, object], json.loads(cfg_path.read_text(encoding="utf-8")))
-        except Exception:
-            payload = {}
-    mode = normalize_problem_mode(payload.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
+            loaded = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError("invalid problem.json") from exc
+        if not isinstance(loaded, dict):
+            raise ValueError("problem.json must be an object")
+        payload = cast(dict[str, object], loaded)
+        if "mode" not in payload:
+            raise ValueError("problem.json missing mode")
+        if "pass_limit" not in payload:
+            raise ValueError("problem.json missing pass_limit")
+    mode = normalize_problem_mode(cast(str | None, payload.get("mode")), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
     input_file = cast(str | None, payload.get("input_file"))
     if input_file is None:
         input_file = str(_C.GENERAL_CONFIG_DEFAULTS["input_file"])

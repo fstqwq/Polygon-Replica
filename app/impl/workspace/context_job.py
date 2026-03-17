@@ -28,7 +28,6 @@ from .context_operation import list_solution_entries, resolve_build_accepted_sol
 from .context_run_detail import normalize_run_id_token, normalize_run_test_name_token
 from .context_ui import page_ctx
 from .context_verification import (
-    latest_workspace_committed_stage_verification,
     _verification_solution_failure_hint,
     _verification_solution_match,
     _verification_sources_signature,
@@ -53,15 +52,12 @@ def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[
     workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
     if not workspace_path_text:
         return (default_mode, default_pass_limit)
-    try:
-        workspace_path = Path(workspace_path_text).resolve()
-        _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
-        return (
-            normalize_problem_mode(general_cfg.get("mode"), default_mode),
-            normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
-        )
-    except Exception:
-        return (default_mode, default_pass_limit)
+    workspace_path = Path(workspace_path_text).resolve()
+    _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
+    return (
+        normalize_problem_mode(general_cfg.get("mode"), default_mode),
+        normalize_pass_limit(general_cfg.get("pass_limit"), default_pass_limit),
+    )
 
 
 def _run_marked_cancelled(problem_id: int, workspace_id: int, run_id: str) -> bool:
@@ -1465,38 +1461,17 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
     details: dict[str, object] = {'status': 'failed', 'artifact_verification_id': safe_requested_verification_id, 'export_type': safe_export_type, 'source_commit': head_commit, 'filename': '', 'error': ''}
     worker_error: Exception | None = None
     try:
-        if safe_export_type != 'icpc':
-            raise ValueError('unsupported package type (ICPC only)')
+        if safe_export_type not in {'icpc', 'native'}:
+            raise ValueError('unsupported package type')
         if not head_commit:
             raise ValueError('no committed revision; commit changes first')
-        resolved_verification_id = safe_requested_verification_id
-        if not resolved_verification_id:
-            active_verification = latest_workspace_committed_stage_verification(int(problem_id), int(workspace_id), head_commit, ok_only=True)
-            if active_verification is None:
-                resolved_verification_id = config.verification_service.run_verification(problem, user, commit=head_commit, ref=head_commit)
-            else:
-                resolved_verification_id = active_verification.get('id') or ''
-        if not resolved_verification_id:
-            raise RuntimeError('failed to resolve verification for export')
-        materialization_row = config.verification_service.workspace_stage_row(
-            int(problem_id),
-            int(workspace_id),
-            resolved_verification_id,
+        out = config.export_service.create_export(
+            problem,
+            "",
+            safe_export_type,
+            workspace_id=int(workspace_id),
+            source_commit=head_commit,
         )
-        if materialization_row is None:
-            raise ValueError(f'verification not found: {resolved_verification_id}')
-        artifact_verification_status = materialization_row["status"] or "missing"
-        source_commit = materialization_row["source_commit"] or ""
-        source_ref = materialization_row["source_ref"] or ""
-        details['artifact_verification_id'] = resolved_verification_id
-        details['artifact_verification_status'] = artifact_verification_status
-        details['source_commit'] = source_commit
-        details['source_ref'] = source_ref
-        if source_commit != head_commit or source_ref != head_commit:
-            raise ValueError('package must be generated from current committed revision')
-        if artifact_verification_status != 'ok':
-            raise ValueError(f'verification status is {artifact_verification_status}')
-        out = config.export_service.create_export(problem, resolved_verification_id, safe_export_type)
         details['status'] = 'ok'
         details['filename'] = out.name
     except Exception as exc:

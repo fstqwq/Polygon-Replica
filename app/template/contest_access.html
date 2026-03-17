@@ -21,13 +21,13 @@
       <td>{{ row.created_at | local_time }}</td>
       {% if ctx.access.can_manage %}
       <td>
-        {% if row.username != ctx.user.username or owner_count > 1 %}
+        {% if row.role != "owner" %}
         <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/access/revoke" class="inline-form">
           <input type="hidden" name="target_user" value="{{ row.username }}" />
           <button class="btn" type="submit" onclick="return confirm('Revoke access for {{ row.username }}? uncommitted changes will be lost.');">Revoke</button>
         </form>
         {% else %}
-        <span class="muted">last owner</span>
+        <span class="muted">fixed owner</span>
         {% endif %}
       </td>
       {% endif %}
@@ -49,7 +49,6 @@
     <select id="contest-target-role" name="role">
       <option value="read">read</option>
       <option value="write">write</option>
-      <option value="owner">owner</option>
     </select>
     <button class="btn" type="submit">Grant / Update</button>
   </form>

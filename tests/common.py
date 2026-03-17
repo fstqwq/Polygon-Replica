@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import shutil
 import time
@@ -207,6 +208,31 @@ class SmokeBase(unittest.TestCase):
             path = ws / rel
             if not path.exists():
                 path.write_text(content, encoding="utf-8")
+        problem_cfg = ws / "config/problem.json"
+        problem_cfg_payload: dict[str, object] = {}
+        if problem_cfg.exists():
+            try:
+                loaded = json.loads(problem_cfg.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    problem_cfg_payload = dict(loaded)
+            except Exception:
+                problem_cfg_payload = {}
+        if "mode" not in problem_cfg_payload:
+            problem_cfg_payload["mode"] = "pass-fail"
+        if "pass_limit" not in problem_cfg_payload:
+            problem_cfg_payload["pass_limit"] = 1
+        if "time_limit_ms" not in problem_cfg_payload:
+            problem_cfg_payload["time_limit_ms"] = 2000
+        if "memory_limit_mb" not in problem_cfg_payload:
+            problem_cfg_payload["memory_limit_mb"] = 1024
+        if "input_file" not in problem_cfg_payload:
+            problem_cfg_payload["input_file"] = "stdin"
+        if "output_file" not in problem_cfg_payload:
+            problem_cfg_payload["output_file"] = "stdout"
+        problem_cfg.write_text(
+            json.dumps(problem_cfg_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         testlib = ws / "third_party/testlib/testlib.h"
         if not testlib.exists():
             testlib.write_bytes(maintained_testlib_header(repo_root=Path(__file__).resolve().parents[1]).read_bytes())

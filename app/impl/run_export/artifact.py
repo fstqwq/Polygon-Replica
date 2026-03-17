@@ -84,6 +84,23 @@ def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
             return FileResponse(file_path, filename=download_name)
     return browser_file_response(file_path)
 
+
+def export_file(problem: str, user: str, export_id: str, filename: str):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    problem_id = int(ctx["problem"]["id"])
+    workspace_id = int(ctx["workspace"]["id"])
+    file_path = config.export_service.export_archive_path(
+        problem_id,
+        workspace_id,
+        export_id,
+        problem,
+        filename,
+    )
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="artifact file not found")
+    download_name = Path(filename).name or "package.zip"
+    return FileResponse(file_path, filename=download_name)
+
 def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     rel_norm = rel_path.lstrip('/')

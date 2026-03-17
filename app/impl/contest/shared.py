@@ -12,7 +12,7 @@ from .common import _contest_problem_slug_file_token
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required, normalize_problem_name_required
 from app.impl.workspace.problem_config import coerce_int, normalize_problem_mode, read_problem_config
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_job import latest_workspace_committed_stage_verification
+from app.impl.workspace.context_verification import latest_workspace_committed_stage_verification
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.revision import workspace_revision_info
 from app.service.platform.process import run_cmd
@@ -224,6 +224,7 @@ def _run_problem_general_update(
                     "time_limit_ms": safe_tl,
                     "memory_limit_mb": safe_ml,
                     "mode": safe_mode,
+                    "pass_limit": int(general_cfg.get("pass_limit") or _C.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
                 }
             )
             cfg_path.parent.mkdir(parents=True, exist_ok=True)

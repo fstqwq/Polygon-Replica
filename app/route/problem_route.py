@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from app.impl.workspace.context_ui import render_workspace_page
@@ -19,6 +19,9 @@ from app.impl.problem.workspace_op import problem_delete, switch_workspace, work
 from app.impl.preview.preview import preview_page
 
 router = APIRouter()
+
+def access_admin_page(request: Request, problem: str, user: str):
+    return render_workspace_page(request, problem, user, show_access_admin=True)
 
 router.add_api_route(
     "/problems/{problem:path}/{user}/statement",
@@ -254,7 +257,7 @@ router.add_api_route(
 )
 router.add_api_route(
     "/problems/{problem:path}/{user}/access",
-    lambda request, problem, user: render_workspace_page(request, problem, user, show_access_admin=True),
+    access_admin_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
@@ -304,5 +307,7 @@ router.add_api_route(
     git_rebase_abort,
     methods=["POST"],
 )
+
+
 
 

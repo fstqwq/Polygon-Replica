@@ -10,6 +10,8 @@ import zipfile
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+from fastapi.testclient import TestClient
+
 from fastapi import HTTPException
 
 from app.service.platform.process import run_cmd
@@ -572,6 +574,10 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("Problem Access", html)
         self.assertIn("Grant / Update", html)
         self.assertIn("bob", html)
+        self.assertIn('option value="write"', html)
+        self.assertIn('option value="read"', html)
+        self.assertNotIn('option value="owner"', html)
+        self.assertIn("fixed owner", html)
 
         revoke_resp = workspace_access_revoke(problem="alice/sample", user="alice", target_user="bob")
         self.assertEqual(revoke_resp.status_code, 303)
@@ -580,6 +586,23 @@ class TestUIWorkspace(UIBaseSuite):
             ["alice/sample", "bob"],
         )
         self.assertIsNone(removed)
+
+    def test_access_route_renders_with_request_injection(self) -> None:
+        username = f"access-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        workspace_service.grant_repo_access("alice/sample", username, "owner")
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            resp = client.get(
+                f"/problems/alice/sample/{username}/access",
+                headers={"cookie": auth_cookie},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("Problem Access", resp.text)
+        self.assertNotIn('"loc":["query","request"]', resp.text)
 
     def test_workspace_access_grant_requires_registered_user(self) -> None:
         target = f"user-{uuid.uuid4().hex[:8]}"
@@ -604,7 +627,26 @@ class TestUIWorkspace(UIBaseSuite):
         )
         self.assertIsNone(member)
 
-    def test_workspace_access_cannot_remove_last_owner(self) -> None:
+    def test_workspace_access_cannot_transfer_owner_role(self) -> None:
+        register_bob = _register_with_password_proof("bob", "StrongPass123", next_path="/")
+        self.assertEqual(register_bob.status_code, 303)
+        resp = workspace_access_grant(
+            problem="alice/sample",
+            user="alice",
+            target_user="bob",
+            role="owner",
+        )
+        self.assertEqual(resp.status_code, 303)
+        grant_messages = _flash_messages_from_response(resp)
+        self.assertTrue(grant_messages)
+        self.assertIn("owner access is fixed and cannot be transferred", grant_messages[0])
+        member = db_fetch_one(
+            "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
+            ["alice/sample", "bob"],
+        )
+        self.assertIsNone(member)
+
+    def test_workspace_access_cannot_revoke_owner(self) -> None:
         db_execute("DELETE FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?)", ["alice/sample"])
         workspace_service.grant_repo_access("alice/sample", "alice", "owner")
         resp = workspace_access_revoke(problem="alice/sample", user="alice", target_user="alice")
@@ -613,7 +655,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("/problems/alice/sample/alice/access", loc)
         revoke_messages = _flash_messages_from_response(resp)
         self.assertTrue(revoke_messages)
-        self.assertIn("cannot remove the last owner", revoke_messages[0])
+        self.assertIn("owner access is fixed and cannot be transferred", revoke_messages[0])
 
     def test_switch_workspace_denies_existing_problem_without_acl(self) -> None:
         private_problem = f"alice/ui-switch-private-{uuid.uuid4().hex[:8]}"
@@ -790,6 +832,10 @@ class TestUIWorkspace(UIBaseSuite):
         ws = Path(workspace_service.ensure_workspace(f"alice/{target_slug}", "alice"))
         self.assertTrue((ws / "statement" / "statements.ftl").is_file())
         self.assertTrue((ws / "statement-sections" / "english" / "legend.tex").is_file())
+        head = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"])
+        self.assertEqual(head.returncode, 0, head.stderr)
+        self.assertRegex(head.stdout.strip(), r"^[0-9a-f]{40}$")
+        self.assertEqual(run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), "")
 
     def test_problems_root_import_recovers_from_stale_user_cache(self) -> None:
         class _Upload:
@@ -830,7 +876,7 @@ class TestUIWorkspace(UIBaseSuite):
                     [
                         "problem_format_version: 2025-09",
                         "name: Root Import ICPC",
-                        "type: pass-fail",
+                        "validation: custom",
                     ]
                 )
                 + "\n",
@@ -1275,5 +1321,4 @@ class TestUIWorkspace(UIBaseSuite):
 
         status_after = git_service.status(bob)
         self.assertFalse(bool(status_after.get("rebase_active")))
-
 

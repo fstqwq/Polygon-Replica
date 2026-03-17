@@ -58,6 +58,15 @@ def normalize_repo_role(raw: str) -> str:
     raise ValueError("invalid role")
 
 
+def normalize_transferable_repo_role(raw: str) -> str:
+    role = raw.strip().lower()
+    if role in {"write", "read"}:
+        return role
+    if role == "owner":
+        raise ValueError("owner access is fixed and cannot be transferred")
+    raise ValueError("invalid role")
+
+
 def problem_owner_count(problem_id: int) -> int:
     return config.workspace_service.owner_count(problem_id)
 

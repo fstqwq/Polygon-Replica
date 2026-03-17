@@ -11,6 +11,7 @@ from .ui_support import (
     Path,
     UIBaseSuite,
     _flash_messages_from_response,
+    _register_with_password_proof,
     _request,
     _wait_for_row,
     contest_access_grant,
@@ -249,6 +250,10 @@ class TestUIContests(UIBaseSuite):
         access_html = access_page_resp.body.decode("utf-8", errors="replace")
         self.assertIn("Contest Access", access_html)
         self.assertIn("bob", access_html)
+        self.assertIn('option value="write"', access_html)
+        self.assertIn('option value="read"', access_html)
+        self.assertNotIn('option value="owner"', access_html)
+        self.assertIn("fixed owner", access_html)
 
         revoke = contest_access_revoke(contest=contest_slug, user="alice", target_user="bob")
         self.assertEqual(revoke.status_code, 303)
@@ -266,6 +271,28 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(packages_page.status_code, 200)
         packages_html = packages_page.body.decode("utf-8", errors="replace")
         self.assertIn("Contest Packages", packages_html)
+
+    def test_contest_access_cannot_transfer_owner_role(self) -> None:
+        contest_slug = f"ui-contest-owner-transfer-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug, "Owner Transfer Contest")
+        _register_with_password_proof("bob", "StrongPass123", next_path="/")
+
+        grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="owner")
+        self.assertEqual(grant.status_code, 303)
+        grant_messages = _flash_messages_from_response(grant)
+        self.assertTrue(grant_messages)
+        self.assertIn("owner access is fixed and cannot be transferred", grant_messages[0])
+        membership = db_fetch_one(
+            "SELECT role FROM contest_members WHERE contest_id=? AND user_id=(SELECT id FROM users WHERE username='bob')",
+            [contest_id],
+        )
+        self.assertIsNone(membership)
+
+        revoke = contest_access_revoke(contest=contest_slug, user="alice", target_user="alice")
+        self.assertEqual(revoke.status_code, 303)
+        revoke_messages = _flash_messages_from_response(revoke)
+        self.assertTrue(revoke_messages)
+        self.assertIn("owner access is fixed and cannot be transferred", revoke_messages[0])
 
     def test_contest_preview_and_package_jobs_create_artifacts(self) -> None:
         problem_slug = f"alice/ui-contest-pack-{uuid.uuid4().hex[:8]}"

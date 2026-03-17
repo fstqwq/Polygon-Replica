@@ -310,8 +310,8 @@ class WorkspaceService:
         safe_role = self._normalize_repo_role(role)
         existing = self._store.repo_access_row(int(problem_id), int(target_user["id"]))
         existing_role = "" if existing is None else str(existing["role"])
-        if existing_role == "owner" and safe_role != "owner" and self.owner_count(int(problem_id)) <= 1:
-            raise ValueError("cannot demote the last owner")
+        if safe_role == "owner" or existing_role == "owner":
+            raise ValueError("owner access is fixed and cannot be transferred")
         self._store.upsert_repo_access(int(problem_id), int(target_user["id"]), safe_role)
         return {
             "target_user_id": int(target_user["id"]),
@@ -326,8 +326,8 @@ class WorkspaceService:
         if existing is None:
             raise ValueError("access entry not found")
         existing_role = str(existing["role"])
-        if existing_role == "owner" and self.owner_count(int(problem_id)) <= 1:
-            raise ValueError("cannot remove the last owner")
+        if existing_role == "owner":
+            raise ValueError("owner access is fixed and cannot be transferred")
         self._store.delete_repo_access(int(problem_id), int(target_user["id"]))
         return {
             "target_user_id": int(target_user["id"]),
@@ -373,6 +373,10 @@ class WorkspaceService:
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def ensure_workspace(self, problem: str, username: str, refresh_status: bool = True) -> Path:
         u = self.ensure_user(username)

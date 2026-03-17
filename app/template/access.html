@@ -15,7 +15,7 @@
 
   <section>
     <h2>Problem Access</h2>
-    <p class="muted">Owners can grant/revoke <code>owner/write/read</code> roles. Target user must register first.</p>
+    <p class="muted">Owners can grant/revoke <code>write/read</code> roles. Owner access is fixed and cannot be transferred. Target user must register first.</p>
     {% if acl_entries %}
     <table>
       <tr><th>User</th><th>Role</th><th>Granted</th><th>Actions</th></tr>
@@ -26,6 +26,9 @@
         <td>{{ row.created_at | local_time }}</td>
         <td>
           {% if ctx.access.can_manage %}
+          {% if row.role == "owner" %}
+          <span class="muted">fixed owner</span>
+          {% else %}
           <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access/grant">
             <input type="hidden" name="target_user" value="{{ row.username }}" />
             <select name="role">
@@ -39,6 +42,7 @@
             <input type="hidden" name="target_user" value="{{ row.username }}" />
             <button class="btn" type="submit">Revoke</button>
           </form>
+          {% endif %}
           {% else %}
           <span class="muted">owner only</span>
           {% endif %}

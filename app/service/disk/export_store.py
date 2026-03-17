@@ -32,18 +32,14 @@ class ProblemExportRow(TypedDict):
     name: str
 
 
-class VerificationExportRow(TypedDict):
-    problem_id: int
-    workspace_id: int | None
-    source_commit: str
-    status: str
-    artifact_path: str
-
-
 class DuplicateExportRow(TypedDict):
     id: str
     filename: str
-    artifact_path: str
+
+
+class ExportArchiveRow(TypedDict):
+    filename: str
+    export_type: str
 
 
 class ExportStore:
@@ -162,9 +158,8 @@ class ExportStore:
     ) -> list[DuplicateExportRow]:
         rows = self.db.fetch_all(
             """
-            SELECT exports.id,exports.filename,verifications.artifact_path
+            SELECT exports.id,exports.filename
             FROM exports
-            LEFT JOIN verifications ON verifications.id=exports.verification_id
             WHERE exports.problem_id=? AND exports.workspace_id=? AND exports.export_type=? AND exports.source_commit=? AND exports.id<>?
             ORDER BY exports.created_at DESC
             """,
@@ -176,13 +171,28 @@ class ExportStore:
                 {
                     "id": str(row["id"] or ""),
                     "filename": str(row["filename"] or ""),
-                    "artifact_path": str(row["artifact_path"] or ""),
                 }
             )
         return items
 
     def delete_export(self, export_id: str) -> None:
         self.db.execute("DELETE FROM exports WHERE id=?", [export_id])
+
+    def export_archive_row(self, problem_id: int, workspace_id: int, export_id: str) -> ExportArchiveRow | None:
+        row = self.db.fetch_one(
+            """
+            SELECT filename,export_type
+            FROM exports
+            WHERE id=? AND problem_id=? AND workspace_id=?
+            """,
+            [export_id, int(problem_id), int(workspace_id)],
+        )
+        if row is None:
+            return None
+        return {
+            "filename": str(row["filename"] or ""),
+            "export_type": str(row["export_type"] or ""),
+        }
 
     def problem_export_row(self, slug: str) -> ProblemExportRow | None:
         row = self.db.fetch_one("SELECT id,slug,name FROM problems WHERE slug=?", [slug])
@@ -194,25 +204,21 @@ class ExportStore:
             "name": str(row["name"] or ""),
         }
 
-    def verification_export_row(self, verification_id: str) -> VerificationExportRow | None:
+    def problem_workspace_id_by_slug(self, slug: str) -> int | None:
         row = self.db.fetch_one(
             """
-            SELECT problem_id,workspace_id,source_commit,status,artifact_path
-            FROM verifications
-            WHERE id=?
+            SELECT w.id
+            FROM problems p
+            JOIN workspaces w ON w.problem_id=p.id
+            JOIN users u ON u.id=w.user_id
+            WHERE p.slug=? AND u.username=substr(p.slug, 1, instr(p.slug, '/') - 1)
+            LIMIT 1
             """,
-            [verification_id],
+            [slug],
         )
         if row is None:
             return None
-        workspace_id_raw = row["workspace_id"]
-        return {
-            "problem_id": int(row["problem_id"]),
-            "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
-            "source_commit": str(row["source_commit"] or ""),
-            "status": str(row["status"] or ""),
-            "artifact_path": str(row["artifact_path"] or ""),
-        }
+        return int(row["id"])
 
     def insert_export_record(
         self,

@@ -80,14 +80,10 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     workspace_head_raw = cast(str | None, ctx['workspace'].get('head_commit'))
     workspace_head = workspace_head_raw or ''
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
-    try:
-        _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
-        safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
-        ctx['problem_mode'] = safe_mode
-        ctx['general_cfg'] = {'time_limit_ms': coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS), 'memory_limit_mb': coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB), 'mode': safe_mode, 'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))}
-    except Exception:
-        ctx['problem_mode'] = str(_C.GENERAL_CONFIG_DEFAULTS['mode'])
-        ctx['general_cfg'] = {'time_limit_ms': int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), 'memory_limit_mb': int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), 'mode': str(_C.GENERAL_CONFIG_DEFAULTS['mode']), 'pass_limit': int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit'])}
+    _payload, general_cfg, _cfg_path = read_problem_config(workspace_path)
+    safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
+    ctx['problem_mode'] = safe_mode
+    ctx['general_cfg'] = {'time_limit_ms': coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS), 'memory_limit_mb': coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB), 'mode': safe_mode, 'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))}
     ctx['workspace_revision'] = workspace_revision_info(
         workspace_path,
         workspace_branch,
@@ -398,7 +394,7 @@ def render_workspace_page(request: Request, problem: str, user: str, *, show_acc
     )
     if show_access_admin:
         acl_entries = problem_acl_entries(int(ctx['problem']['id']))
-        return template_response(request, 'access.html', {'ctx': ctx, 'message': message, 'acl_entries': acl_entries, 'repo_role_options': ['owner', 'write', 'read']})
+        return template_response(request, 'access.html', {'ctx': ctx, 'message': message, 'acl_entries': acl_entries, 'repo_role_options': ['write', 'read']})
 
     workspace_changes = cast(dict[str, object], ctx['workspace_changes'])
     change_rows = cast(list[dict[str, object]], workspace_changes.get('rows') or [])

@@ -5,7 +5,7 @@ from fastapi import Form
 from app.impl.auth.shared import normalize_username_required, redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
-from app.impl.workspace.access import normalize_repo_role, require_manage_access
+from app.impl.workspace.access import normalize_transferable_repo_role, require_manage_access
 from app.impl.workspace.context_job import page_ctx
 
 
@@ -15,7 +15,7 @@ def workspace_access_grant(problem: str, user: str, target_user: str = Form(...)
     msg = "access updated"
     try:
         safe_target = normalize_username_required(target_user)
-        safe_role = normalize_repo_role(role)
+        safe_role = normalize_transferable_repo_role(role)
         problem_id = int(ctx["problem"]["id"])
         config.workspace_service.set_repo_access_for_problem_id(problem_id, safe_target, safe_role)
         audit(int(ctx["user"]["id"]), problem_id, "access.grant", {"target_user": safe_target, "role": safe_role})

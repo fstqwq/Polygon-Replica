@@ -21,6 +21,26 @@ from app.main_util import normalize_workspace_rel_path, safe_workspace_path
 
 _C = config.constants
 
+
+def _files_redirect_href(
+    problem: str,
+    user: str,
+    *,
+    path: str = '',
+    browse_tail: str = '',
+    source_tail: str = '',
+) -> str:
+    query_parts: list[str] = []
+    if path:
+        query_parts.append(f'path={quote_plus(path)}')
+    if browse_tail:
+        query_parts.append(browse_tail.lstrip('&'))
+    if source_tail:
+        query_parts.append(source_tail.lstrip('&'))
+    if not query_parts:
+        return f'/problems/{problem}/{user}/files'
+    return f'/problems/{problem}/{user}/files?' + '&'.join(query_parts)
+
 def files_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
@@ -89,7 +109,6 @@ def files_save(
     workspace = Path(ctx['workspace']['path'])
     source_page = normalize_files_source(src)
     source_id = normalize_source_id(sid)
-    tail = files_browse_query_tail(dir) + files_source_query_tail(source_page, source_id)
     msg = 'saved'
     try:
         with config.workspace_service.workspace_lock(workspace):
@@ -97,7 +116,11 @@ def files_save(
         audit(ctx['user']['id'], ctx['problem']['id'], 'files.save', {'path': path})
     except ValueError as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message=msg)
+    return redirect_response(
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        status_code=303,
+        message=msg,
+    )
 
 def files_new(
     problem: str,
@@ -112,7 +135,6 @@ def files_new(
     workspace = Path(ctx['workspace']['path'])
     source_page = normalize_files_source(src)
     source_id = normalize_source_id(sid)
-    tail = files_browse_query_tail(dir) + files_source_query_tail(source_page, source_id)
     msg = 'created'
     try:
         with config.workspace_service.workspace_lock(workspace):
@@ -120,7 +142,11 @@ def files_new(
         audit(ctx['user']['id'], ctx['problem']['id'], 'files.new', {'path': path})
     except ValueError as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message=msg)
+    return redirect_response(
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        status_code=303,
+        message=msg,
+    )
 
 def files_create_template(
     problem: str,
@@ -136,7 +162,6 @@ def files_create_template(
     workspace = Path(ctx['workspace']['path'])
     source_page = normalize_files_source(src)
     source_id = normalize_source_id(sid)
-    tail = files_browse_query_tail(dir) + files_source_query_tail(source_page, source_id)
     msg = 'template created'
     try:
         expected_kind = kind_for_path(path)
@@ -158,7 +183,11 @@ def files_create_template(
                 audit(ctx['user']['id'], ctx['problem']['id'], 'files.create_template', {'path': path, 'kind': kind})
     except ValueError as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message=msg)
+    return redirect_response(
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        status_code=303,
+        message=msg,
+    )
 
 async def files_upload(
     problem: str,
@@ -174,7 +203,6 @@ async def files_upload(
     workspace = Path(ctx['workspace']['path'])
     source_page = normalize_files_source(src)
     source_id = normalize_source_id(sid)
-    tail = files_browse_query_tail(dir) + files_source_query_tail(source_page, source_id)
     total_bytes = 0
     tmp_path: Path | None = None
     try:
@@ -208,7 +236,11 @@ async def files_upload(
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
     audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': path, 'bytes': total_bytes})
-    return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(path)}{tail}', status_code=303, message='uploaded')
+    return redirect_response(
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        status_code=303,
+        message='uploaded',
+    )
 
 def files_rename(
     problem: str,
@@ -224,7 +256,6 @@ def files_rename(
     workspace = Path(ctx['workspace']['path'])
     source_page = normalize_files_source(src)
     source_id = normalize_source_id(sid)
-    tail = files_browse_query_tail(dir) + files_source_query_tail(source_page, source_id)
     selected = new_path
     msg = 'renamed'
     try:
@@ -234,7 +265,11 @@ def files_rename(
     except (ValueError, OSError) as exc:
         selected = old_path
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/files?path={quote_plus(selected)}{tail}', status_code=303, message=msg)
+    return redirect_response(
+        _files_redirect_href(problem, user, path=selected, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        status_code=303,
+        message=msg,
+    )
 
 def files_delete(
     problem: str,
@@ -249,7 +284,6 @@ def files_delete(
     workspace = Path(ctx['workspace']['path'])
     source_page = normalize_files_source(src)
     source_id = normalize_source_id(sid)
-    tail = files_browse_query_tail(dir) + files_source_query_tail(source_page, source_id)
     msg = 'deleted'
     try:
         with config.workspace_service.workspace_lock(workspace):
@@ -257,7 +291,11 @@ def files_delete(
         audit(ctx['user']['id'], ctx['problem']['id'], 'files.delete', {'path': path})
     except ValueError as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/files{tail}', status_code=303, message=msg)
+    return redirect_response(
+        _files_redirect_href(problem, user, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        status_code=303,
+        message=msg,
+    )
 
 def files_download(problem: str, user: str, path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)

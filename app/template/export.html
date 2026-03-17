@@ -9,7 +9,11 @@
   <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/create">
     <label>Revision</label>
     <strong class="{{ 'danger' if generate_revision_display == 'missing' else '' }}">{{ generate_revision_display }}</strong>
-    <input type="hidden" name="export_type" value="icpc" />
+    <label for="export-type">Type</label>
+    <select id="export-type" name="export_type">
+      <option value="icpc">ICPC</option>
+      <option value="native">Native</option>
+    </select>
     <button class="btn btn-primary primary-action" type="submit">Generate</button>
   </form>
 </section>
@@ -55,7 +59,7 @@
       <td>{{ e.summary_display }}</td>
       <td>{{ e.size_bytes }}</td>
       <td>{{ e.created_at|local_time }}</td>
-      <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ e.verification_id }}/export/{{ e.filename }}">zip</a></td>
+      <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/exports/{{ e.id }}/{{ e.filename }}">zip</a></td>
     </tr>
     {% endfor %}
   </table>

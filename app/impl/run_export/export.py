@@ -13,7 +13,6 @@ from app.impl.workspace.access import require_write_access
 from app.impl.workspace.artifact import git_commit_count
 from app.impl.workspace.context_job import page_ctx, start_export_job
 from app.impl.workspace.context_operation import audit
-from app.impl.workspace.context_verification import latest_workspace_committed_stage_verification
 from app.impl.run_export.query import (
     _verification_runtime_progress,
     _count_label,
@@ -165,7 +164,7 @@ def _build_validation_status(verification_row: dict[str, object] | None) -> str:
         return "validation passed"
     return "validation unknown"
 
-def _export_archive_summary(problem: str, verification_id: str, filename: str) -> dict[str, object]:
+def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict[str, object]:
     result: dict[str, object] = {
         "available": False,
         "has_pdf": False,
@@ -174,9 +173,9 @@ def _export_archive_summary(problem: str, verification_id: str, filename: str) -
         "tests_total": None,
     }
     archive_name = Path(filename.strip()).name
-    if not verification_id or not archive_name:
+    if not export_id or not archive_name:
         return result
-    archive_path = _resolve_export_archive_path(problem, verification_id, archive_name)
+    archive_path = _resolve_export_archive_path(problem, export_id, archive_name)
     if archive_path is None:
         return result
     if not archive_path.exists() or not archive_path.is_file() or archive_path.is_symlink():
@@ -184,6 +183,29 @@ def _export_archive_summary(problem: str, verification_id: str, filename: str) -
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
             names = [name for name in zf.namelist() if name and not name.endswith("/")]
+            native_marker = next((name for name in names if name.endswith("/polygonlike-native.json")), "")
+            if native_marker:
+                package_root = native_marker[: -len("polygonlike-native.json")]
+                repo_prefix = f"{package_root}repo/"
+                solutions_total = sum(
+                    1
+                    for name in names
+                    if name.startswith(f"{repo_prefix}solutions/") and Path(name).suffix.lower() in {".cpp", ".cc", ".cxx", ".c", ".py", ".java", ".kt", ".go", ".rs", ".pas"}
+                )
+                tests_total = 0
+                tests_spec_name = f"{repo_prefix}tests/spec.json"
+                if tests_spec_name in names:
+                    try:
+                        tests_payload = json.loads(zf.read(tests_spec_name).decode("utf-8", errors="replace"))
+                        tests_total = len(cast(list[object], tests_payload.get("tests") or [])) if isinstance(tests_payload, dict) else 0
+                    except Exception:
+                        tests_total = 0
+                result["available"] = True
+                result["has_pdf"] = False
+                result["solutions_total"] = int(solutions_total)
+                result["solutions_correct"] = None
+                result["tests_total"] = int(tests_total)
+                return result
     except Exception:
         return result
     if not names:
@@ -218,31 +240,23 @@ def _export_archive_summary(problem: str, verification_id: str, filename: str) -
     result["tests_total"] = int(tests_total)
     return result
 
-def _resolve_export_archive_path(problem: str, verification_id: str, filename: str) -> Path | None:
+def _resolve_export_archive_path(problem: str, export_id: str, filename: str) -> Path | None:
     archive_name = Path(filename.strip()).name
-    if (not verification_id) or (not archive_name):
+    if (not export_id) or (not archive_name):
         return None
-    artifact_path = config.verification_service.artifact_path_for_verification(verification_id)
-    if not artifact_path:
+    problem_id = config.workspace_service.known_problem_id(problem)
+    if problem_id is None:
         return None
-    try:
-        root = Path(artifact_path).resolve()
-        base = config.settings.artifacts_root.resolve()
-    except Exception:
-        return None
-    if root != base and base not in root.parents:
-        return None
-    export_dir = (root / "export").resolve()
-    if root != export_dir and root not in export_dir.parents:
-        return None
-    if (not export_dir.exists()) or (not export_dir.is_dir()) or export_dir.is_symlink():
-        return None
-    candidate = (export_dir / archive_name).resolve()
-    if export_dir != candidate and export_dir not in candidate.parents:
-        return None
-    if (not candidate.exists()) or (not candidate.is_file()) or candidate.is_symlink():
-        return None
-    return candidate
+    owner = problem.split("/", 1)[0]
+    workspace_ctx = config.workspace_service.workspace_context(problem, owner, include_recent=False)
+    workspace_id = int(workspace_ctx["workspace"]["id"])
+    return config.export_service.export_archive_path(
+        int(problem_id),
+        int(workspace_id),
+        export_id,
+        problem,
+        archive_name,
+    )
 
 def export_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
@@ -255,13 +269,10 @@ def export_page(request: Request, problem: str, user: str):
     workspace = Path(ctx['workspace']['path'])
     generate_revision: int | None = git_commit_count(workspace, head_commit) if head_commit else None
     generate_revision_display = f'v{generate_revision}' if generate_revision is not None and generate_revision >= 0 else 'missing'
-    active_build = latest_workspace_committed_stage_verification(problem_id, int(workspace_id), head_commit, ok_only=True)
     if not head_commit:
         build_note = 'no committed revision yet; commit changes before generating package'
-    elif active_build is None:
-        build_note = 'no committed verification for this revision; Generate will build from committed revision'
     else:
-        build_note = 'committed revision artifacts are ready for export'
+        build_note = 'Generate will build from committed revision'
     exports_rows = config.export_service.workspace_exports(int(ctx['problem']['id']), int(workspace_id), limit=40)
     revision_cache: dict[str, int | None] = {}
     verification_meta_cache: dict[str, dict[str, object] | None] = {}
@@ -304,7 +315,7 @@ def export_page(request: Request, problem: str, user: str):
             verification_meta_cache[verification_id] = verification_meta
         validation_status = _build_validation_status(verification_meta)
         summary_bits: list[str] = [validation_status]
-        summary_key = (verification_id, stored_filename)
+        summary_key = (cast(str, item["id"]), stored_filename)
         archive_summary = archive_summary_cache.get(summary_key)
         if archive_summary is None:
             archive_summary = _export_archive_summary(problem, summary_key[0], summary_key[1])
@@ -359,8 +370,8 @@ def export_create(problem: str, user: str, verification_id: str=Form(''), export
         'error': '',
     }
     try:
-        if requested_export_type != 'icpc':
-            raise ValueError('unsupported package type (ICPC only)')
+        if requested_export_type not in {'icpc', 'native'}:
+            raise ValueError('unsupported package type')
         if not head_commit:
             raise ValueError('no committed revision; commit changes first')
         started = start_export_job(

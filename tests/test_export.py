@@ -22,6 +22,21 @@ workspace_service = config.workspace_service
 
 
 class TestExport(SmokeBase):
+    def _seed_export_tests(self, workspace: Path, token: str) -> list[str]:
+        tracked = [
+            f"tests/manual/{token}.in",
+            f"tests/answers/{token}.ans",
+            "tests/spec.json",
+        ]
+        (workspace / tracked[0]).write_text("1\n", encoding="utf-8")
+        (workspace / tracked[1]).write_text("1\n", encoding="utf-8")
+        (workspace / tracked[2]).write_text(
+            json.dumps({"tests": [{"id": token, "kind": "manual", "sample": True, "sample_output": "1\n"}]}, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        return tracked
+
     def _insert_exportable_verification(self, verification_id: str, source_commit: str) -> None:
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         problem_id = int(ctx["problem"]["id"])
@@ -95,7 +110,7 @@ class TestExport(SmokeBase):
         head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export type reject {token}")
         verification_id = f"ver-exp-reject-{token}"
         self._insert_exportable_verification(verification_id, head)
-        with self.assertRaisesRegex(ValueError, "ICPC only"):
+        with self.assertRaisesRegex(ValueError, "unsupported export type"):
             export_service.create_export(self.problem, verification_id, "kattis")
 
     def test_icpc_export_can_be_imported_as_new_problem(self) -> None:
@@ -127,12 +142,17 @@ class TestExport(SmokeBase):
                 files["validator"],
                 files["checker"],
                 files["build_cfg"],
+                *self._seed_export_tests(ws, "001"),
             ],
             f"test export import roundtrip {token}",
         )
-        verification_id = f"ver-exp-imp-{token}"
-        self._insert_exportable_verification(verification_id, head)
-        archive = export_service.create_export(self.problem, verification_id, "icpc")
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+            source_commit=head,
+        )
 
         actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
@@ -157,6 +177,270 @@ class TestExport(SmokeBase):
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertIn(str(imported_problem_cfg.get("mode") or ""), {"pass-fail", "interactive"})
         self.assertGreaterEqual(int(imported_problem_cfg.get("pass_limit") or 0), 1)
+        imported_head = run_cmd(["git", "-C", str(imported_ws), "rev-parse", "HEAD"])
+        self.assertEqual(imported_head.returncode, 0, imported_head.stderr)
+        self.assertRegex(imported_head.stdout.strip(), r"^[0-9a-f]{40}$")
+        self.assertEqual(run_cmd(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
+
+    def test_interactive_icpc_export_reimports_with_configured_nested_interactor(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        tracked = [
+            f"solutions/ac_roundtrip_interactive_{token}.cpp",
+            f"solutions/ac_roundtrip_interactive_{token}.cpp.desc",
+            f"solutions/wa_roundtrip_interactive_{token}.cpp",
+            f"solutions/wa_roundtrip_interactive_{token}.cpp.desc",
+            "config/problem.json",
+            "config/build.json",
+            f"interactors/interactor/interactor_{token}.cpp",
+            *self._seed_export_tests(ws, "001"),
+        ]
+        (ws / tracked[0]).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / tracked[1]).write_text("expected: accepted\n", encoding="utf-8")
+        (ws / tracked[2]).write_text("int main(){return 1;}\n", encoding="utf-8")
+        (ws / tracked[3]).write_text("expected: wrong_answer\n", encoding="utf-8")
+        (ws / tracked[6]).parent.mkdir(parents=True, exist_ok=True)
+        (ws / tracked[6]).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / tracked[4]).write_text(
+            json.dumps(
+                {
+                    "mode": "interactive",
+                    "pass_limit": 2,
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                    "input_file": "stdin",
+                    "output_file": "stdout",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / tracked[5]).write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": tracked[0],
+                    "interactor_source": tracked[6],
+                    "generator_sources": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(ws, tracked, f"test interactive export import roundtrip {token}")
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+            source_commit=head,
+        )
+        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor_row)
+        target_slug = f"imp-icpc-interactive-{token}"
+        imported = import_package_as_new_problem(
+            actor_user_id=int(actor_row["id"]),
+            actor_user=str(actor_row["username"]),
+            package_name=archive.name,
+            package_content=archive.read_bytes(),
+            requested_slug=target_slug,
+            source_problem=self.problem,
+        )
+        imported_ws = Path(workspace_service.ensure_workspace(f"{self.user}/{target_slug}", self.user))
+        self.assertEqual(str(imported.get("package_format") or ""), "icpc")
+        imported_build_cfg = json.loads((imported_ws / "config" / "build.json").read_text(encoding="utf-8"))
+        imported_interactor_source = str(imported_build_cfg.get("interactor_source") or "")
+        self.assertTrue(imported_interactor_source)
+        self.assertTrue((imported_ws / imported_interactor_source).is_file())
+        imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
+        self.assertEqual(imported_problem_cfg.get("mode"), "interactive")
+        self.assertEqual(imported_problem_cfg.get("pass_limit"), 2)
+        self.assertEqual(run_cmd(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
+
+    def test_icpc_export_emits_domjudge_reference_metadata(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_domjudge_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        problem_cfg = ws / "config" / "problem.json"
+        problem_cfg.write_text(
+            json.dumps(
+                {
+                    "mode": "interactive",
+                    "pass_limit": 2,
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                    "input_file": "stdin",
+                    "output_file": "stdout",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / "interactors" / f"interactor_{token}.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        build_cfg = ws / "config" / "build.json"
+        build_cfg.write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": rel,
+                    "interactor_source": f"interactors/interactor_{token}.cpp",
+                    "generator_sources": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [
+                rel,
+                f"{rel}.desc",
+                "config/problem.json",
+                "config/build.json",
+                f"interactors/interactor_{token}.cpp",
+                *self._seed_export_tests(ws, "001"),
+            ],
+            f"test export domjudge metadata {token}",
+        )
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+            source_commit=head,
+        )
+        with zipfile.ZipFile(archive, "r") as zf:
+            problem_yaml_name = next(name for name in zf.namelist() if name.endswith("/problem.yaml"))
+            package_root = problem_yaml_name.split("/", 1)[0]
+            problem_yaml = zf.read(problem_yaml_name).decode("utf-8", errors="replace")
+            domjudge_ini = zf.read(f"{package_root}/domjudge-problem.ini").decode("utf-8", errors="replace")
+            self.assertIn("validation: custom interactive multi-pass", problem_yaml)
+            self.assertIn("validation_passes: 2", problem_yaml)
+            self.assertIn("timelimit = 2", domjudge_ini)
+            self.assertTrue(any(name.endswith("/output_validators/interactor/interactor_" + token + ".cpp") for name in zf.namelist()))
+
+    def test_native_export_roundtrip_preserves_canonical_repo_state(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        tracked = [
+            f"solutions/native_{token}.cpp",
+            f"solutions/native_{token}.cpp.desc",
+            f"validators/native_{token}.cpp",
+            "config/problem.json",
+            "config/build.json",
+            "tests/manual/001.in",
+            "tests/answers/001.ans",
+            "tests/spec.json",
+        ]
+        (ws / tracked[0]).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / tracked[1]).write_text("expected: accepted\n", encoding="utf-8")
+        (ws / tracked[2]).write_text("#include \"testlib.h\"\nint main(){return 0;}\n", encoding="utf-8")
+        (ws / tracked[5]).write_text("1\n", encoding="utf-8")
+        (ws / tracked[6]).write_text("1\n", encoding="utf-8")
+        (ws / tracked[7]).write_text(
+            json.dumps({"tests": [{"id": "001", "kind": "manual", "sample": True, "sample_output": "1\n"}]}, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / "config" / "problem.json").write_text(
+            json.dumps(
+                {
+                    "mode": "pass-fail",
+                    "pass_limit": 1,
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                    "input_file": "stdin",
+                    "output_file": "stdout",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / "config" / "build.json").write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": tracked[0],
+                    "validator_source": tracked[2],
+                    "generator_sources": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(ws, tracked, f"test native export roundtrip {token}")
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        baseline_status = run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip()
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "native",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
+        self.assertEqual(run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), baseline_status)
+        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor_row)
+        target_slug = f"imp-native-{token}"
+        imported = import_package_as_new_problem(
+            actor_user_id=int(actor_row["id"]),
+            actor_user=str(actor_row["username"]),
+            package_name=archive.name,
+            package_content=archive.read_bytes(),
+            requested_slug=target_slug,
+            source_problem=self.problem,
+        )
+        self.assertEqual(str(imported.get("package_format") or ""), "native")
+        self.assertEqual(int(imported.get("total_tests") or 0), 1)
+        self.assertEqual(int((((imported.get("result") or {}).get("tests") or {}).get("total") or 0)), 1)
+        imported_ws = Path(workspace_service.ensure_workspace(f"{self.user}/{target_slug}", self.user))
+        self.assertEqual((imported_ws / tracked[0]).read_text(encoding="utf-8"), "int main(){return 0;}\n")
+        self.assertEqual((imported_ws / tracked[5]).read_text(encoding="utf-8"), "1\n")
+        self.assertEqual(
+            json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8")).get("pass_limit"),
+            1,
+        )
+        imported_head = run_cmd(["git", "-C", str(imported_ws), "rev-parse", "HEAD"])
+        self.assertEqual(imported_head.returncode, 0, imported_head.stderr)
+        self.assertRegex(imported_head.stdout.strip(), r"^[0-9a-f]{40}$")
+        self.assertEqual(run_cmd(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
+
+    def test_icpc_export_uses_committed_snapshot_without_verification(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_no_ver_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export without verification {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        baseline_status = run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip()
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
+        self.assertTrue(archive.exists())
+        self.assertEqual(
+            run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip(),
+            baseline_status,
+        )
 
     def test_polygon_import_builds_missing_sample_answers_via_verification(self) -> None:
         payload = io.BytesIO()
@@ -332,6 +616,32 @@ class TestExport(SmokeBase):
                 source_problem=self.problem,
             )
 
+    def test_import_failure_cleans_up_half_created_problem(self) -> None:
+        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor_row)
+        target_slug = f"broken-import-{uuid.uuid4().hex[:8]}"
+        package = io.BytesIO()
+        with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "broken/problem.yaml",
+                "problem_format_version: 2025-09\nname: broken\nvalidation: custom interactive\n",
+            )
+            zf.writestr("broken/domjudge-problem.ini", "short-name = broken\ntimelimit = 1\n")
+            zf.writestr("broken/data/secret/001.in", "1\n")
+            zf.writestr("broken/data/secret/001.ans", "1\n")
+            zf.writestr("broken/submissions/accepted/std.cpp", "int main(){return 0;}\n")
+        target_problem = f"{self.user}/{target_slug}"
+        with self.assertRaisesRegex(ValueError, "missing output_validator/interactor source"):
+            import_package_as_new_problem(
+                actor_user_id=int(actor_row["id"]),
+                actor_user=str(actor_row["username"]),
+                package_name="broken-interactive-icpc.zip",
+                package_content=package.getvalue(),
+                requested_slug=target_slug,
+                source_problem=self.problem,
+            )
+        self.assertIsNone(workspace_service.known_problem_id(target_problem))
+
     def test_export_respects_configured_validator_and_checker_sources(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
@@ -366,12 +676,17 @@ class TestExport(SmokeBase):
             files["checker_selected"],
             files["checker_other"],
             files["build_cfg"],
+            *self._seed_export_tests(ws, "001"),
         ]
         head = self._commit_workspace_paths(ws, tracked, f"test export cfg sources {token}")
 
-        verification_id = f"ver-exp-cfg-{token}"
-        self._insert_exportable_verification(verification_id, head)
-        archive = export_service.create_export(self.problem, verification_id, "icpc")
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+            source_commit=head,
+        )
 
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
@@ -385,8 +700,8 @@ class TestExport(SmokeBase):
 
             self.assertIn(f"{package_root}/input_validators/{Path(files['validator_selected']).name}", names)
             self.assertNotIn(f"{package_root}/input_validators/{Path(files['validator_other']).name}", names)
-            self.assertIn(f"{package_root}/output_validator/{Path(files['checker_selected']).name}", names)
-            self.assertNotIn(f"{package_root}/output_validator/{Path(files['checker_other']).name}", names)
+            self.assertIn(f"{package_root}/output_validators/checker/{Path(files['checker_selected']).name}", names)
+            self.assertNotIn(f"{package_root}/output_validators/checker/{Path(files['checker_other']).name}", names)
 
             content = zf.read(problem_yaml).decode("utf-8", errors="replace")
             self.assertIn("problem_format_version:", content)
@@ -397,16 +712,27 @@ class TestExport(SmokeBase):
         rel = f"solutions/ac_latest_{token}.cpp"
         (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
-        head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export latest-per-revision {token}")
-
-        verification_id_1 = f"ver-exp-latest-a-{token}"
-        verification_id_2 = f"ver-exp-latest-b-{token}"
-        self._insert_exportable_verification(verification_id_1, head)
-        self._insert_exportable_verification(verification_id_2, head)
-
-        first = export_service.create_export(self.problem, verification_id_1, "icpc")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export latest-per-revision {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        first = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
         self.assertTrue(first.exists())
-        second = export_service.create_export(self.problem, verification_id_2, "icpc")
+        second = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
         self.assertTrue(second.exists())
         self.assertEqual(first.name, second.name)
 
@@ -423,7 +749,7 @@ class TestExport(SmokeBase):
             [problem_id, workspace_id, head],
         )
         self.assertEqual(len(rows), 1)
-        self.assertEqual(str(rows[0]["verification_id"]), verification_id_2)
+        self.assertEqual(str(rows[0]["verification_id"]), "")
 
     def test_export_includes_statement_pdf_when_export_compile_succeeds(self) -> None:
         ws = Path(self._workspace_path())
@@ -431,10 +757,12 @@ class TestExport(SmokeBase):
         rel = f"solutions/ac_pdf_ok_{token}.cpp"
         (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
-        head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export statement pdf ok {token}")
-
-        verification_id = f"ver-exp-pdf-ok-{token}"
-        self._insert_exportable_verification(verification_id, head)
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export statement pdf ok {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
 
         def _compile_ok(_statement_root: Path, dst_statement: Path) -> bool:
             dst_statement.mkdir(parents=True, exist_ok=True)
@@ -442,7 +770,13 @@ class TestExport(SmokeBase):
             return True
 
         with patch.object(export_service, "_try_compile_statement_pdf", side_effect=_compile_ok) as compile_mock:
-            archive = export_service.create_export(self.problem, verification_id, "icpc")
+            archive = export_service.create_export(
+                self.problem,
+                "",
+                "icpc",
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+            )
 
         compile_mock.assert_called_once()
         with zipfile.ZipFile(archive, "r") as zf:
@@ -461,13 +795,21 @@ class TestExport(SmokeBase):
         rel = f"solutions/ac_pdf_fail_{token}.cpp"
         (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
-        head = self._commit_workspace_paths(ws, [rel, f"{rel}.desc"], f"test export statement pdf fail {token}")
-
-        verification_id = f"ver-exp-pdf-fail-{token}"
-        self._insert_exportable_verification(verification_id, head)
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export statement pdf fail {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
 
         with patch.object(export_service, "_try_compile_statement_pdf", return_value=False) as compile_mock:
-            archive = export_service.create_export(self.problem, verification_id, "icpc")
+            archive = export_service.create_export(
+                self.problem,
+                "",
+                "icpc",
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+            )
 
         compile_mock.assert_called_once()
         with zipfile.ZipFile(archive, "r") as zf:

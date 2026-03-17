@@ -6,7 +6,7 @@ from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
 
-from .common import _normalize_contest_member_role_required
+from .common import _normalize_transferable_contest_member_role_required
 from .shared import _contest_ctx, _contest_redirect
 
 
@@ -31,14 +31,17 @@ def contest_access_grant(contest: str, user: str, target_user: str = Form(...), 
     contest_id = int(ctx["contest"]["id"])
     actor_user_id = int(ctx["user"]["id"])
     safe_target = target_user.strip()
-    safe_role = _normalize_contest_member_role_required(role)
-    if not config.contest_service.grant_member_role(contest_id, safe_target, safe_role):
-        return _contest_redirect(
-            str(ctx["contest"]["slug"]),
-            user,
-            "access",
-            message=f"user {safe_target} not found; ask them to register first",
-        )
+    try:
+        safe_role = _normalize_transferable_contest_member_role_required(role)
+        if not config.contest_service.grant_member_role(contest_id, safe_target, safe_role):
+            return _contest_redirect(
+                str(ctx["contest"]["slug"]),
+                user,
+                "access",
+                message=f"user {safe_target} not found; ask them to register first",
+            )
+    except ValueError as exc:
+        return _contest_redirect(str(ctx["contest"]["slug"]), user, "access", message=str(exc))
     audit(
         actor_user_id,
         None,
@@ -63,8 +66,8 @@ def contest_access_revoke(contest: str, user: str, target_user: str = Form(...))
     membership = config.contest_service.membership_for_username(contest_id, safe_target)
     if membership is None:
         return _contest_redirect(str(ctx["contest"]["slug"]), user, "access", message=f"{safe_target} is not a member")
-    if membership["role"] == "owner" and config.contest_service.owner_count(contest_id) <= 1:
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "access", message="cannot remove the last owner")
+    if membership["role"] == "owner":
+        return _contest_redirect(str(ctx["contest"]["slug"]), user, "access", message="owner access is fixed and cannot be transferred")
     config.contest_service.revoke_member(contest_id, membership["user_id"])
     audit(
         actor_user_id,
