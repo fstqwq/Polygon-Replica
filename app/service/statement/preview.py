@@ -185,6 +185,9 @@ class PreviewService:
             copied += 1
         return {"sample_count": len(rows), "copied": copied, "verification_id": verification_id}
 
+    def sync_sample_payloads_for_snapshot(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
+        return self._copy_sample_payloads_from_verification(problem, username, snapshot)
+
     def _coerce_int(self, raw: object, default: int, min_value: int, max_value: int) -> int:
         try:
             value = int(raw)

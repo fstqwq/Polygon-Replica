@@ -20,11 +20,8 @@
       <input id="contest-date" name="date_text" value="{{ date_text }}" placeholder="2026-02-28" />
     </div>
     <div class="form-row">
-      <label for="contest-source-mode">Statement Source Mode</label>
-      <select id="contest-source-mode" name="source_mode">
-        <option value="latest_committed" {% if source_mode == "latest_committed" %}selected{% endif %}>latest_committed</option>
-        <option value="built_packages" {% if source_mode == "built_packages" %}selected{% endif %}>built_packages</option>
-      </select>
+      <label>Statement Language</label>
+      <span>{{ statement_language if statement_language else "-" }}</span>
     </div>
     <div class="form-row">
       <button class="btn" type="submit">Save Contest Properties</button>

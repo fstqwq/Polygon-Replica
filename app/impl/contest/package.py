@@ -11,7 +11,7 @@ from app.impl.workspace.context_operation import audit
 
 from .shared import (
     _CONTEST_JOB_TYPE_PACKAGE,
-    _CONTEST_JOB_TYPE_PREVIEW,
+    _CONTEST_JOB_TYPE_PDF,
     _contest_ctx,
     _contest_redirect,
     _queue_contest_job,
@@ -30,18 +30,18 @@ def contest_packages_preview_start(contest: str, user: str):
         contest_slug=str(ctx["contest"]["slug"]),
         actor_user_id=int(ctx["user"]["id"]),
         actor_username=str(ctx["user"]["username"]),
-        job_type=_CONTEST_JOB_TYPE_PREVIEW,
+        job_type=_CONTEST_JOB_TYPE_PDF,
     )
     if queued:
-        message = "contest preview queued"
+        message = "contest pdf build queued"
     elif reason == "already_running":
-        message = f"contest preview already running ({job_id})"
+        message = f"contest pdf build already running ({job_id})"
     else:
-        message = f"contest preview queue rejected ({reason})"
+        message = f"contest pdf build queue rejected ({reason})"
     audit(
         int(ctx["user"]["id"]),
         None,
-        "contest.packages.preview.start",
+        "contest.packages.pdf.start",
         {
             "contest_id": contest_id,
             "contest_slug": str(ctx["contest"]["slug"]),

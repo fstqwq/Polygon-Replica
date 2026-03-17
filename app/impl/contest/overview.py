@@ -23,6 +23,7 @@ def contest_overview_page(request: Request, contest: str, user: str):
             "member_count": config.contest_service.member_count(contest_id),
             "owner_count": config.contest_service.owner_count(contest_id),
             "latest_job": config.contest_service.latest_job(contest_id),
-            "contest_properties": config.contest_service.properties_map(contest_id),
+            "contest_properties": config.contest_service.overview_properties_map(contest_id, str(ctx["contest"]["slug"])),
+            "contest_statement_language": config.contest_service.statement_default_language(contest_id),
         },
     )

@@ -5,16 +5,16 @@
 {% include "_flash_message.html" %}
 
 <section>
-  <h2>Preview / Build</h2>
+  <h2>Build</h2>
   <p><strong>Problems in contest:</strong> {{ problem_count }}</p>
   {% if not ctx.access.can_write %}
-  <p class="muted">Write access is required to start preview/build jobs.</p>
+  <p class="muted">Write access is required to start contest jobs.</p>
   {% elif problem_count <= 0 %}
-  <p class="muted">Add at least one problem before running preview/build.</p>
+  <p class="muted">Add at least one problem before running contest jobs.</p>
   {% else %}
   <div class="form-row">
     <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages/preview/start">
-      <button class="btn" type="submit">Build Contest Preview Bundle</button>
+      <button class="btn" type="submit">Build Contest PDF</button>
     </form>
     <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages/build/start">
       <button class="btn btn-primary primary-action" type="submit">Build Contest Package Bundle</button>
@@ -39,7 +39,7 @@
     {% set totals = row.summary.get("totals", {}) if row.summary else {} %}
     <tr>
       <td><a href="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/packages?job_id={{ row.id }}"><code>{{ row.id }}</code></a></td>
-      <td>{{ row.job_type }}</td>
+      <td>{{ "pdf" if row.job_type == "pdf" else row.job_type }}</td>
       <td>{{ row.status | status_label }}</td>
       <td>
         {% if totals %}
@@ -62,15 +62,21 @@
 <section>
   <h2>Selected Job Report</h2>
   <p><strong>Job:</strong> <code>{{ selected_job.id }}</code> / {{ selected_job.job_type }} / {{ selected_job.status | status_label }}</p>
+  {% if selected_job.summary.get("language") %}
+  <p><strong>Language:</strong> {{ selected_job.summary.get("language") }}</p>
+  {% endif %}
   {% if selected_job.summary.get("artifact_id") %}
   <p><strong>Artifact:</strong> <code>{{ selected_job.summary.get("artifact_id") }}</code></p>
+  {% endif %}
+  {% if selected_job.summary.get("pdf_file") %}
+  <p><strong>PDF:</strong> <code>{{ selected_job.summary.get("pdf_file") }}</code></p>
   {% endif %}
   <table>
     <tr>
       <th>Idx</th>
       <th>Problem</th>
       <th>Status</th>
-      <th>Build/Preview</th>
+      <th>Source</th>
       <th>Error</th>
     </tr>
     {% for row in selected_job.summary.get("results") %}
@@ -78,7 +84,7 @@
       <td><code>{{ row.get("idx", "") }}</code></td>
       <td><code>{{ row.get("problem_slug", "") }}</code></td>
       <td>{{ row.get("status", "") | status_label }}</td>
-      <td><code>{{ row.get("preview_id", row.get("verification_id", "")) }}</code></td>
+      <td><code>{{ row.get("source_commit", row.get("verification_id", "")) }}</code></td>
       <td>{{ row.get("error", "") }}</td>
     </tr>
     {% endfor %}

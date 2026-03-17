@@ -324,6 +324,7 @@ def import_package_as_new_problem(
     requested_slug: str = "",
     source_problem: str = "",
     normalize_test_data_newlines: bool = False,
+    build_polygon_sample_answers: bool = True,
 ) -> dict[str, object]:
     safe_actor_user = actor_user.strip()
     if not safe_actor_user:
@@ -368,7 +369,7 @@ def import_package_as_new_problem(
                 imported_title = ""
             if imported_title:
                 config.workspace_service.set_problem_name(target_problem, imported_title)
-        if package_format == "polygon":
+        if package_format == "polygon" and bool(build_polygon_sample_answers):
             sample_answer_summary = _build_polygon_sample_answers(target_problem, safe_actor_user, target_workspace)
             tests_summary = result.get("tests")
             if tests_summary is not None:

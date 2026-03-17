@@ -6,6 +6,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from app.service.platform.process import run_cmd
+from app.service.sandbox.base import ExecResult
 
 from .ui_support import (
     Path,
@@ -214,9 +215,11 @@ class TestUIContests(UIBaseSuite):
             title="Props Contest Updated",
             location="San Francisco",
             date_text="2026-03-01",
-            source_mode="built_packages",
         )
         self.assertEqual(save_props.status_code, 303)
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(alice_row)
+        config.contest_service.set_statement_default_language(contest_id, int(alice_row["id"]), "english")
 
         contest_row = db_fetch_one("SELECT title FROM contests WHERE id=?", [contest_id])
         self.assertIsNotNone(contest_row)
@@ -230,7 +233,8 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(props_page.status_code, 200)
         props_html = props_page.body.decode("utf-8", errors="replace")
         self.assertIn("Contest Properties", props_html)
-        self.assertIn("built_packages", props_html)
+        self.assertIn("Statement Language", props_html)
+        self.assertIn("english", props_html)
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="write")
         self.assertEqual(grant.status_code, 303)
@@ -272,6 +276,44 @@ class TestUIContests(UIBaseSuite):
         packages_html = packages_page.body.decode("utf-8", errors="replace")
         self.assertIn("Contest Packages", packages_html)
 
+    def test_contest_overview_best_effort_infers_location_and_date_from_statements(self) -> None:
+        contest_slug = f"ui-contest-overview-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug, "Overview Contest")
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(alice_row)
+        actor_user_id = int(alice_row["id"])
+        config.contest_service.replace_statement_sources(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            actor_user_id=actor_user_id,
+            files=[
+                {
+                    "key": "statements/english/statements.tex",
+                    "language": "english",
+                    "package_bytes": (
+                        b"\\documentclass{article}\n"
+                        b"\\begin{document}\n"
+                        b"\\contest\n"
+                        b"{Overview Contest}%\n"
+                        b"{Hangzhou, China}%\n"
+                        b"{1 February, 2026}%\n"
+                        b"\\end{document}\n"
+                    ),
+                }
+            ],
+        )
+        config.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
+
+        overview = contest_overview_page(
+            _request(f"/contests/{contest_slug}/alice/overview"),
+            contest_slug,
+            "alice",
+        )
+        self.assertEqual(overview.status_code, 200)
+        overview_html = overview.body.decode("utf-8", errors="replace")
+        self.assertIn("Hangzhou, China", overview_html)
+        self.assertIn("1 February, 2026", overview_html)
+
     def test_contest_access_cannot_transfer_owner_role(self) -> None:
         contest_slug = f"ui-contest-owner-transfer-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Owner Transfer Contest")
@@ -294,12 +336,21 @@ class TestUIContests(UIBaseSuite):
         self.assertTrue(revoke_messages)
         self.assertIn("owner access is fixed and cannot be transferred", revoke_messages[0])
 
-    def test_contest_preview_and_package_jobs_create_artifacts(self) -> None:
+    def test_contest_pdf_and_package_jobs_create_artifacts(self) -> None:
         problem_slug = f"alice/ui-contest-pack-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem_slug, "Contest Package Problem")
         workspace_service.grant_repo_access(problem_slug, "alice", "owner")
         ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
         (ws / "README.problem.md").write_text("contest package test\n", encoding="utf-8")
+        (ws / "statement" / "olymp.sty").write_text("% problem style\n", encoding="utf-8")
+        (ws / "statement-sections" / "english" / "legend.tex").write_text("Problem legend\n", encoding="utf-8")
+        (ws / "statement-sections" / "english" / "example.mp").write_text("verbatimtex\netex\nbeginfig(1);endfig;end.\n", encoding="utf-8")
+        (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+        (ws / "tests" / "manual" / "001.in").write_text("1 2 3\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps({"version": 2, "tests": [{"id": "001", "kind": "manual", "sample": True}]}, indent=2) + "\n",
+            encoding="utf-8",
+        )
         commit_id = git_service.commit(ws, "seed commit", "alice", "alice@polygonlike.local")
         git_service.push(ws, "main")
         self.assertRegex(str(commit_id), r"^[0-9a-f]{40}$")
@@ -313,37 +364,72 @@ class TestUIContests(UIBaseSuite):
             q="",
         )
         self.assertEqual(add_resp.status_code, 303)
+        problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
+        self.assertIsNotNone(problem_row)
+        problem_id = int(problem_row["id"])
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(alice_row)
+        actor_user_id = int(alice_row["id"])
+        config.contest_service.replace_statement_sources(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            actor_user_id=actor_user_id,
+            files=[
+                {
+                    "key": "statements/english/statements.tex",
+                    "language": "english",
+                    "package_bytes": b"\\\\documentclass{article}\n\\\\usepackage{olymp}\n\\\\begin{document}\n\\\\import{../../problems/src-problem/statements/english/}{./problem.tex}\n\\\\end{document}\n",
+                },
+                {
+                    "key": "statements/english/olymp.sty",
+                    "language": "english",
+                    "package_bytes": b"% contest style\n",
+                },
+                {
+                    "key": "statements/english/banner.tex",
+                    "language": "english",
+                    "package_bytes": b"% contest banner\n",
+                },
+                {
+                    "key": "statements/english/banner.png",
+                    "language": "english",
+                    "package_bytes": b"\x89PNG\r\n\x1a\nmock",
+                },
+            ],
+        )
+        config.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
+        config.contest_service.set_statement_problem_source_folders(contest_id, actor_user_id, {problem_id: "src-problem"})
 
-        def _fake_compile_preview(problem: str, username: str, *, sample_only: bool = False) -> str:
-            _ = bool(sample_only)
-            problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
-            self.assertIsNotNone(problem_row)
-            ws_ctx = workspace_service.workspace_context(problem, username, include_recent=False)
-            workspace_id = int(ws_ctx["workspace"]["id"])
-            head = str(ws_ctx["workspace"].get("head_commit") or "").strip()
-            preview_id = f"p-{uuid.uuid4().hex[:12]}"
-            artifact_root = Path(config.settings.artifacts_root) / problem / preview_id
-            (artifact_root / "statement_preview").mkdir(parents=True, exist_ok=True)
-            (artifact_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%mock preview\n")
-            db_execute(
-                """
-                INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    preview_id,
-                    int(problem_row["id"]),
-                    workspace_id,
-                    head,
-                    head,
-                    "ok",
-                    json.dumps({"pdf": "statement_preview/statement.pdf"}),
-                    str(artifact_root.resolve()),
-                    "2026-02-28T00:00:00+00:00",
-                    "2026-02-28T00:00:00+00:00",
-                ],
+        tex_commands: list[tuple[list[str], str, tuple[str, ...], dict[str, str] | None]] = []
+
+        def _fake_sandbox_run(spec):
+            command = [str(token) for token in spec.command]
+            cwd = Path(spec.cwd)
+            tex_commands.append(
+                (
+                    command,
+                    str(cwd),
+                    tuple(str(Path(path)) for path in spec.extra_mounts),
+                    None if spec.env is None else dict(spec.env),
+                )
             )
-            return preview_id
+            if command[0] == "extractbb":
+                source = cwd / command[1]
+                (source.with_suffix(source.suffix + ".xbb")).write_text("%%BoundingBox: 0 0 10 10\n", encoding="utf-8")
+                return ExecResult(backend="test", status="ok", returncode=0, elapsed_ms=1, stdout="", stderr="")
+            if command[0] == "mpost":
+                return ExecResult(backend="test", status="ok", returncode=0, elapsed_ms=1, stdout="", stderr="")
+            if command[0] == "latex":
+                (cwd / "statements.dvi").write_bytes(b"DVI")
+                (cwd / "statements.log").write_text("latex ok\n", encoding="utf-8")
+                return ExecResult(backend="test", status="ok", returncode=0, elapsed_ms=1, stdout="", stderr="")
+            if command[0] == "dvips":
+                (cwd / "statements.ps").write_bytes(b"PS")
+                return ExecResult(backend="test", status="ok", returncode=0, elapsed_ms=1, stdout="", stderr="")
+            if command[0] == "dvipdfmx":
+                (cwd / "statements.pdf").write_bytes(b"%PDF-1.4\n%mock contest pdf\n")
+                return ExecResult(backend="test", status="ok", returncode=0, elapsed_ms=1, stdout="", stderr="")
+            return ExecResult(backend="test", status="error", returncode=1, elapsed_ms=1, stdout="", stderr="unexpected command")
 
         def _fake_run_build(problem: str, username: str, *, commit: str = "", ref: str = "", force_recompile: bool = False) -> str:
             _ = bool(force_recompile)
@@ -383,8 +469,18 @@ class TestUIContests(UIBaseSuite):
             out.write_bytes(b"PK\x03\x04mock export")
             return out
 
+        sample_sync_calls: list[tuple[str, str, str]] = []
+
+        def _fake_sync_sample_payloads(problem: str, username: str, snapshot: Path) -> dict[str, object]:
+            sample_sync_calls.append((problem, username, str(snapshot)))
+            answers_dir = snapshot / "tests" / "answers"
+            answers_dir.mkdir(parents=True, exist_ok=True)
+            (answers_dir / "001.ans").write_text("6\n", encoding="utf-8")
+            return {"sample_count": 1, "copied": 1, "verification_id": "ver-sample-sync"}
+
         with (
-            patch.object(config.preview_service, "compile_preview", side_effect=_fake_compile_preview),
+            patch.object(config.preview_service.sandbox, "run", side_effect=_fake_sandbox_run),
+            patch.object(config.preview_service, "sync_sample_payloads_for_snapshot", side_effect=_fake_sync_sample_payloads),
             patch.object(config.verification_service, "run_verification", side_effect=_fake_run_build),
             patch.object(config.export_service, "create_export", side_effect=_fake_create_export),
         ):
@@ -419,7 +515,7 @@ class TestUIContests(UIBaseSuite):
         self.assertFalse(bool(status_payload.get("running")))
 
         preview_artifact = db_fetch_one(
-            "SELECT id FROM contest_artifacts WHERE contest_id=? AND job_id=? AND artifact_type='preview-bundle' ORDER BY created_at DESC LIMIT 1",
+            "SELECT id FROM contest_artifacts WHERE contest_id=? AND job_id=? AND artifact_type='contest-pdf' ORDER BY created_at DESC LIMIT 1",
             [contest_id, preview_job_id],
         )
         self.assertIsNotNone(preview_artifact)
@@ -437,6 +533,88 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(download_resp.status_code, 200)
         disposition = str(download_resp.headers.get("content-disposition") or "").lower()
         self.assertIn("attachment", disposition)
+        preview_job = db_fetch_one(
+            "SELECT summary_json FROM contest_jobs WHERE id=? AND contest_id=?",
+            [preview_job_id, contest_id],
+        )
+        self.assertIsNotNone(preview_job)
+        preview_summary = json.loads(str(preview_job["summary_json"] or "{}"))
+        self.assertEqual(str(preview_summary.get("job_type") or ""), "pdf")
+        self.assertEqual(str(preview_summary.get("language") or ""), "english")
+        self.assertTrue(str(preview_summary.get("pdf_file") or "").endswith("statements.pdf"))
+        contest_job_root = config.contest_service.job_root(contest_slug, preview_job_id)
+        compile_root = contest_job_root / "contest-pdf-src"
+        self.assertTrue((compile_root / "statements" / "english" / "olymp.sty").is_file())
+        self.assertEqual((compile_root / "statements" / "english" / "olymp.sty").read_text(encoding="utf-8"), "% contest style\n")
+        self.assertTrue((compile_root / "problems" / "src-problem" / "statements" / "english" / "problem.tex").is_file())
+        rendered_problem_tex = (compile_root / "problems" / "src-problem" / "statements" / "english" / "problem.tex").read_text(encoding="utf-8")
+        self.assertIn("\\Example", rendered_problem_tex)
+        self.assertIn("sample.001.in", rendered_problem_tex)
+        self.assertIn("sample.001.ans", rendered_problem_tex)
+        self.assertTrue((compile_root / "problems" / "src-problem" / "statements" / "english" / "sample.001.in").is_file())
+        self.assertTrue((compile_root / "problems" / "src-problem" / "statements" / "english" / "sample.001.ans").is_file())
+        self.assertEqual(len(sample_sync_calls), 1)
+        self.assertEqual(sample_sync_calls[0][0], problem_slug)
+        self.assertEqual(sample_sync_calls[0][1], "alice")
+        command_names = [command[0] for command, _cwd, _mounts, _env in tex_commands]
+        self.assertIn("extractbb", command_names)
+        self.assertIn("mpost", command_names)
+        self.assertIn("latex", command_names)
+        self.assertIn("dvips", command_names)
+        self.assertIn("dvipdfmx", command_names)
+        self.assertNotIn("pdflatex", command_names)
+        self.assertFalse((compile_root / "statements" / "english" / "tutorials.pdf").exists())
+        for _command, _cwd, mounts, env in tex_commands:
+            self.assertIn(str(compile_root), mounts)
+            self.assertIsNotNone(env)
+            assert env is not None
+            self.assertEqual(env.get("HOME"), str(compile_root))
+            self.assertEqual(env.get("TEXMFVAR"), str(compile_root / ".texmf-var"))
+            self.assertEqual(env.get("TEXMFCACHE"), str(compile_root / ".texmf-cache"))
+            self.assertEqual(env.get("TEXMFCONFIG"), str(compile_root / ".texmf-config"))
+            self.assertEqual(env.get("VARTEXFONTS"), str(compile_root / ".texfonts"))
+            self.assertEqual(env.get("TEXMFOUTPUT"), str(compile_root / ".texmf-output"))
+        latex_commands = [command for command, _cwd, _mounts, _env in tex_commands if command[0] == "latex"]
+        self.assertEqual(len(latex_commands), 2)
+        for command in latex_commands:
+            self.assertIn("-interaction=nonstopmode", command)
+            self.assertIn("-halt-on-error", command)
+            self.assertIn("-jobname=statements", command)
+            self.assertEqual(command[-1], "__contest_wrapper__.tex")
+        wrapper_path = compile_root / "statements" / "english" / "__contest_wrapper__.tex"
+        self.assertTrue(wrapper_path.is_file())
+        wrapper_text = wrapper_path.read_text(encoding="utf-8")
+        self.assertIn("\\AtBeginDocument", wrapper_text)
+        self.assertIn("\\providecommand{\\url}[1]", wrapper_text)
+        self.assertIn("\\providecommand{\\href}[2]", wrapper_text)
+
+    def test_contest_statement_sources_normalize_text_newlines(self) -> None:
+        contest_slug = f"ui-contest-src-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug, "Contest Source Normalize")
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(alice_row)
+        actor_user_id = int(alice_row["id"])
+        config.contest_service.replace_statement_sources(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            actor_user_id=actor_user_id,
+            files=[
+                {
+                    "key": "statements/english/statements.tex",
+                    "language": "english",
+                    "package_bytes": b"\\documentclass{article}\r\n\\begin{document}\r\ncontest\r\n\\end{document}\r\n",
+                },
+                {
+                    "key": "statements/english/banner.png",
+                    "language": "english",
+                    "package_bytes": b"\x89PNG\r\n\x1a\nmock",
+                },
+            ],
+        )
+        text_path = config.contest_service.statement_file_path(contest_slug, "statements/english/statements.tex")
+        self.assertEqual(text_path.read_text(encoding="utf-8"), "\\documentclass{article}\n\\begin{document}\ncontest\n\\end{document}\n")
+        image_path = config.contest_service.statement_file_path(contest_slug, "statements/english/banner.png")
+        self.assertEqual(image_path.read_bytes(), b"\x89PNG\r\n\x1a\nmock")
 
     def test_contest_status_labels_render_consistently_in_ui(self) -> None:
         contest_slug = f"ui-contest-status-{uuid.uuid4().hex[:8]}"
@@ -455,9 +633,9 @@ class TestUIContests(UIBaseSuite):
                 running_job_id,
                 contest_id,
                 actor_user_id,
-                "preview",
+                "pdf",
                 "running",
-                json.dumps({"job_type": "preview", "results": []}),
+                json.dumps({"job_type": "pdf", "results": [], "language": "english"}),
                 "2026-03-01T10:00:00+00:00",
                 "2026-03-01T10:00:10+00:00",
             ],
@@ -471,7 +649,7 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(overview.status_code, 200)
         overview_html = overview.body.decode("utf-8", errors="replace")
         self.assertIn(running_job_id, overview_html)
-        self.assertIn("preview", overview_html)
+        self.assertIn("pdf", overview_html)
         self.assertIn("RUNNING", overview_html)
 
         packages_page = contest_packages_page(

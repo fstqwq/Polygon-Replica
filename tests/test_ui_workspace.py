@@ -14,7 +14,10 @@ from fastapi.testclient import TestClient
 
 from fastapi import HTTPException
 
+from app.service.importing.contest import PolygonContestImportService
+from app.service.problem.test_spec import TESTS_SPEC_MANUAL_MAX_CHARS, normalize_imported_manual_input, normalize_manual_input
 from app.service.platform.process import run_cmd
+from app.impl.run_export.import_source import import_package_as_new_problem
 
 from .ui_support import (
     AUTH_COOKIE_NAME,
@@ -1112,13 +1115,14 @@ class TestUIWorkspace(UIBaseSuite):
                 "sample_answers_built": 0,
                 "build_id": "",
             },
-        ):
+        ) as build_sample_answers:
             confirm_resp = asyncio.run(
                 contests_root_import_confirm(
                     _post_form_request("/contests/import/confirm", confirm_form),
                     user="alice",
                 )
             )
+        build_sample_answers.assert_not_called()
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertIn(f"/contests/{target_slug}/alice/overview", str(confirm_resp.headers.get("location", "")))
         confirm_messages = _flash_messages_from_response(confirm_resp)
@@ -1129,6 +1133,29 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIsNotNone(contest_row)
         self.assertIn("The 2025 ICPC Asia East Continent Final Practice Contest", str(contest_row["title"] or ""))
         contest_id = int(contest_row["id"])
+        default_language_row = db_fetch_one(
+            "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='statement_default_language'",
+            [contest_id],
+        )
+        self.assertIsNotNone(default_language_row)
+        self.assertEqual(json.loads(str(default_language_row["value_json"])), "english")
+        source_folder_row = db_fetch_one(
+            "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='statement_source_folders'",
+            [contest_id],
+        )
+        self.assertIsNotNone(source_folder_row)
+        source_folder_map = json.loads(str(source_folder_row["value_json"]))
+        self.assertIsInstance(source_folder_map, dict)
+        attachment_rows = db_fetch_all(
+            "SELECT key,rel_path FROM contest_attachments WHERE contest_id=? ORDER BY key ASC",
+            [contest_id],
+        )
+        attachment_keys = [str(row["key"] or "") for row in attachment_rows]
+        self.assertIn("statements/english/statements.tex", attachment_keys)
+        self.assertIn("statements/english/olymp.sty", attachment_keys)
+        contest_source_root = config.contest_service.contest_source_root(target_slug)
+        self.assertTrue((contest_source_root / "statements" / "english" / "statements.tex").is_file())
+        self.assertTrue((contest_source_root / "statements" / "english" / "olymp.sty").is_file())
         imported_rows = db_fetch_all(
             """
             SELECT cp.idx,p.slug
@@ -1150,6 +1177,11 @@ class TestUIWorkspace(UIBaseSuite):
                 f"alice/{custom_problem_slugs[4]}",
             ],
         )
+        for row in imported_rows:
+            problem_slug = str(row["slug"] or "").strip()
+            problem_id_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
+            self.assertIsNotNone(problem_id_row)
+            self.assertTrue(str(source_folder_map.get(str(int(problem_id_row["id"]))) or "").strip())
 
         taxi_problem_slug = ""
         for row in imported_rows:
@@ -1176,6 +1208,170 @@ class TestUIWorkspace(UIBaseSuite):
             if not answers_files:
                 continue
             self.assertNotIn(b"\r\n", answers_files[0].read_bytes())
+
+    def test_polygon_contest_package_parser_prefers_english_default_language(self) -> None:
+        package = Path("third_party/polygon-package-examples/contest/contest-41963.zip")
+        self.assertTrue(package.exists(), f"missing contest package fixture: {package}")
+        parsed = PolygonContestImportService().parse_package(package.name, package.read_bytes())
+        self.assertEqual(str(parsed["default_language"]), "english")
+        self.assertEqual(int(parsed["total_problems"]), 13)
+        self.assertEqual(str(parsed["location"]), "Jinan")
+        self.assertEqual(str(parsed["date"]), "Oct 27, 2024")
+        statement_keys = [str(row["key"]) for row in parsed["statement_files"]]
+        self.assertIn("statements/english/statements.tex", statement_keys)
+        self.assertIn("statements/chinese/statements.tex", statement_keys)
+
+    def test_imported_manual_input_allows_package_payloads_larger_than_ui_limit(self) -> None:
+        oversized = ("1" * (TESTS_SPEC_MANUAL_MAX_CHARS + 32)) + "\n"
+        with self.assertRaisesRegex(ValueError, "manual test input is too long"):
+            normalize_manual_input(oversized)
+        normalized = normalize_imported_manual_input(oversized)
+        self.assertGreater(len(normalized), TESTS_SPEC_MANUAL_MAX_CHARS)
+        self.assertTrue(normalized.endswith("\n"))
+
+    def test_contests_root_import_polygon_contest_package_41963_imports_all_problems(self) -> None:
+        class _Upload:
+            def __init__(self, path: Path):
+                self.filename = path.name
+                self.file = path.open("rb")
+
+        package = Path("third_party/polygon-package-examples/contest/contest-41963.zip")
+        self.assertTrue(package.exists(), f"missing contest package fixture: {package}")
+        upload = _Upload(package)
+        target_slug = f"contest-import-{uuid.uuid4().hex[:8]}"
+
+        resp = contests_root_import(
+            _post_request("/contests/import"),
+            user="alice",
+            package_upload=upload,
+            contest_slug=target_slug,
+            contest_title="",
+        )
+        self.assertEqual(resp.status_code, 303)
+        location = str(resp.headers.get("location", ""))
+        self.assertIn("/contests/import/review?", location)
+        draft_id = str(parse_qs(urlparse(location).query)["draft_id"][0])
+
+        review_resp = contests_root_import_review(
+            _request("/contests/import/review", f"draft_id={draft_id}"),
+            user="alice",
+            draft_id=draft_id,
+        )
+        self.assertEqual(review_resp.status_code, 200)
+
+        confirm_form = {
+            "draft_id": draft_id,
+            "contest_slug": target_slug,
+            "contest_title": "",
+        }
+        parsed = PolygonContestImportService().parse_package(package.name, package.read_bytes())
+        rows = parsed["problems"]
+        for seq, row in enumerate(rows, start=1):
+            confirm_form[f"problem_slug_{seq}"] = str(row["source_slug"])
+
+        with patch(
+            "app.impl.run_export.import_source._build_polygon_sample_answers",
+            return_value={
+                "sample_manual_total": 0,
+                "sample_answers_missing": 0,
+                "sample_answers_built": 0,
+                "build_id": "",
+            },
+        ) as build_sample_answers:
+            confirm_resp = asyncio.run(
+                contests_root_import_confirm(
+                    _post_form_request("/contests/import/confirm", confirm_form),
+                    user="alice",
+                )
+            )
+        build_sample_answers.assert_not_called()
+        self.assertEqual(confirm_resp.status_code, 303)
+        self.assertIn(f"/contests/{target_slug}/alice/overview", str(confirm_resp.headers.get("location", "")))
+        messages = _flash_messages_from_response(confirm_resp)
+        self.assertTrue(messages)
+        self.assertIn(f"contest {target_slug} imported (13 problems)", messages[0])
+
+        contest_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug])
+        self.assertIsNotNone(contest_row)
+        contest_id = int(contest_row["id"])
+        self.assertEqual(
+            int(db_fetch_one("SELECT COUNT(*) AS c FROM contest_problems WHERE contest_id=?", [contest_id])["c"]),
+            13,
+        )
+        default_language_row = db_fetch_one(
+            "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='statement_default_language'",
+            [contest_id],
+        )
+        self.assertIsNotNone(default_language_row)
+        self.assertEqual(json.loads(str(default_language_row["value_json"])), "english")
+        location_row = db_fetch_one(
+            "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='location'",
+            [contest_id],
+        )
+        self.assertIsNotNone(location_row)
+        self.assertEqual(json.loads(str(location_row["value_json"])), "Jinan")
+        date_row = db_fetch_one(
+            "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='date'",
+            [contest_id],
+        )
+        self.assertIsNotNone(date_row)
+        self.assertEqual(json.loads(str(date_row["value_json"])), "Oct 27, 2024")
+
+    def test_contest_import_confirm_rolls_back_partial_contest_on_problem_import_failure(self) -> None:
+        class _Upload:
+            def __init__(self, path: Path):
+                self.filename = path.name
+                self.file = path.open("rb")
+
+        package = Path("third_party/polygon-package-examples/contest/contest-55738.zip")
+        upload = _Upload(package)
+        target_slug = f"contest-import-{uuid.uuid4().hex[:8]}"
+
+        resp = contests_root_import(
+            _post_request("/contests/import"),
+            user="alice",
+            package_upload=upload,
+            contest_slug=target_slug,
+            contest_title="",
+        )
+        draft_id = str(parse_qs(urlparse(str(resp.headers.get("location", ""))).query)["draft_id"][0])
+        confirm_form = {
+            "draft_id": draft_id,
+            "contest_slug": target_slug,
+            "contest_title": "",
+            "problem_slug_1": f"contest-problem-a-{uuid.uuid4().hex[:8]}",
+            "problem_slug_2": f"contest-problem-b-{uuid.uuid4().hex[:8]}",
+            "problem_slug_3": f"contest-problem-c-{uuid.uuid4().hex[:8]}",
+            "problem_slug_4": f"contest-problem-d-{uuid.uuid4().hex[:8]}",
+        }
+
+        real_import = import_package_as_new_problem
+        call_count = {"count": 0}
+        created_problem_slugs: list[str] = []
+
+        def _failing_import(**kwargs: object) -> dict[str, object]:
+            call_count["count"] += 1
+            if call_count["count"] == 3:
+                raise ValueError("synthetic contest import failure")
+            imported = real_import(**kwargs)
+            created_problem_slugs.append(str(imported["target_problem"]))
+            return imported
+
+        with patch("app.impl.root.api.import_package_as_new_problem", side_effect=_failing_import):
+            confirm_resp = asyncio.run(
+                contests_root_import_confirm(
+                    _post_form_request("/contests/import/confirm", confirm_form),
+                    user="alice",
+                )
+            )
+        self.assertEqual(confirm_resp.status_code, 303)
+        self.assertEqual(str(confirm_resp.headers.get("location", "")), "/contests")
+        messages = _flash_messages_from_response(confirm_resp)
+        self.assertTrue(messages)
+        self.assertIn("synthetic contest import failure", messages[0])
+        self.assertIsNone(db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug]))
+        for problem_slug in created_problem_slugs:
+            self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug]))
 
     def test_revision_history_page_v0_does_not_show_head_error_notification(self) -> None:
         # Fresh test workspace starts at v0 (no commits).

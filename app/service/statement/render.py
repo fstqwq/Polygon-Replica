@@ -261,6 +261,50 @@ def _render_polygon_statement(workspace: Path, statement_root: Path, problem_tit
     return main_path
 
 
+def render_statement_problem_assets_for_language(
+    workspace: Path,
+    language: str,
+    target_dir: Path,
+    *,
+    problem_title: str | None = None,
+) -> Path:
+    template_text = _safe_read_text(workspace / STATEMENT_PROBLEM_REL, DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
+    _read_required_text(
+        workspace / STATEMENT_STYLE_REL,
+        label=f"statement olymp style ({STATEMENT_STYLE_REL.as_posix()})",
+    )
+    safe_language = str(language or "").strip()
+    if not safe_language:
+        raise RuntimeError("statement language is required")
+    language_root = workspace / STATEMENT_SECTIONS_DIR / safe_language
+    if not language_root.exists() or not language_root.is_dir() or language_root.is_symlink():
+        raise RuntimeError(f"missing statement sections for language: {safe_language}")
+    shutil.rmtree(target_dir, ignore_errors=True)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    _copy_tree_without_symlinks(language_root, target_dir)
+    sample_tests = _collect_sample_tests(workspace, target_dir)
+    problem_ctx = _problem_context_for_language(
+        workspace,
+        safe_language,
+        problem_title,
+        sample_tests=sample_tests,
+    )
+    rendered_problem_tex = render_ftl_template(
+        template_text,
+        {
+            "problem": problem_ctx,
+            "language": safe_language,
+            "contest": {"name": "", "location": "", "date": "", "language": safe_language},
+            "shortProblemTitle": False,
+            "providedStatementsCommands": [],
+            "statements": [],
+        },
+    )
+    problem_tex = target_dir / "problem.tex"
+    problem_tex.write_text(rendered_problem_tex, encoding="utf-8")
+    return problem_tex
+
+
 def seed_statement_sources(workspace: Path) -> None:
     _seed_polygon_statement_sources(workspace)
 

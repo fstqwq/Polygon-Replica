@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 from pathlib import Path
 
@@ -15,16 +17,19 @@ from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_verification import latest_workspace_committed_stage_verification
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.revision import workspace_revision_info
+from app.service.sandbox.base import ExecSpec, ExecResult
+from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.platform.process import run_cmd
 
 _C = config.constants
 
-_CONTEST_PROPERTY_SOURCE_MODE = "source_mode"
 _CONTEST_PROPERTY_LOCATION = "location"
 _CONTEST_PROPERTY_DATE = "date"
-_CONTEST_SOURCE_MODE_VALUES = {"latest_committed", "built_packages"}
-_CONTEST_JOB_TYPE_PREVIEW = "preview"
+_CONTEST_JOB_TYPE_PDF = "pdf"
 _CONTEST_JOB_TYPE_PACKAGE = "package"
+_CONTEST_EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}
+_CONTEST_LATEX_JOB_NAME = "statements"
+_CONTEST_LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
 
 
 def _contest_nav(contest_slug: str, user: str, active: str) -> list[dict[str, str]]:
@@ -139,6 +144,241 @@ def _ensure_zip_bundle(job_root: Path, bundle_name: str, source_dir: Path) -> Pa
     target_base = job_root / safe_name
     out = Path(shutil.make_archive(str(target_base), "zip", root_dir=source_dir, base_dir="."))
     return out.resolve()
+
+
+def _contest_compile_target(root: Path, *parts: str) -> Path:
+    safe_root = root.resolve()
+    target = (root / Path(*parts)).resolve()
+    if safe_root not in target.parents:
+        raise RuntimeError("invalid contest compile path")
+    return target
+
+
+def _contest_latex_compile_error_detail(output_text: str, returncode: int | None) -> str:
+    text = str(output_text or "")
+    low = text.lower()
+    if ("can't find the format file" in low) and ("latex.fmt" in low):
+        return "missing LaTeX format latex.fmt"
+    if ("can't find the format file" in low) and ("mpost.fmt" in low):
+        return "missing MetaPost format mpost.fmt"
+    if "dvipdfmx:fatal" in low:
+        return "dvipdfmx failed"
+    missing_pkg = re.search("File `([^`]+\\.sty)' not found", text)
+    if missing_pkg is not None:
+        pkg_name = str(missing_pkg.group(1) or "").strip()
+        if pkg_name:
+            return f"missing LaTeX package {pkg_name}"
+    if int(returncode or 0) != 0:
+        return "latex compile failed"
+    return ""
+
+
+def _append_contest_job_log(log_path: Path, *, title: str, result: ExecResult) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(f"== {title} ==\n")
+        fh.write(f"status: {result.status}\n")
+        fh.write(f"returncode: {result.returncode}\n")
+        fh.write(f"elapsed_ms: {result.elapsed_ms}\n")
+        fh.write("[stdout]\n")
+        fh.write(str(result.stdout or ""))
+        fh.write("\n[stderr]\n")
+        fh.write(str(result.stderr or ""))
+        fh.write("\n\n")
+
+
+def _run_contest_tex_command(
+    command: list[str],
+    cwd: Path,
+    log_path: Path,
+    *,
+    title: str,
+    extra_mounts: tuple[Path, ...] = (),
+    env: dict[str, str] | None = None,
+) -> ExecResult:
+    merged_env = dict(os.environ)
+    if env is not None:
+        merged_env.update(env)
+    proc = config.preview_service.sandbox.run(
+        ExecSpec(
+            command=command,
+            cwd=cwd,
+            extra_mounts=extra_mounts,
+            env=merged_env,
+            timeout_sec=config.preview_service.tex_timeout_sec,
+            output_kb=config.preview_service.tex_output_kb,
+            memory_mb=config.preview_service.tex_memory_mb,
+            process_limit=config.preview_service.tex_process_limit,
+        )
+    )
+    _append_contest_job_log(log_path, title=title, result=proc)
+    return proc
+
+
+def _prepare_contest_graphics_bounding_boxes(
+    compile_root: Path,
+    log_path: Path,
+    *,
+    extra_mounts: tuple[Path, ...] = (),
+    env: dict[str, str] | None = None,
+) -> str:
+    safe_root = compile_root.resolve()
+    for file_path in sorted(compile_root.rglob("*")):
+        if file_path.is_symlink() or (not file_path.is_file()):
+            continue
+        if file_path.suffix.lower() not in _CONTEST_EXTRACTBB_SUFFIXES:
+            continue
+        if safe_root not in file_path.resolve().parents:
+            raise RuntimeError("invalid contest compile asset path")
+        relative_name = file_path.relative_to(compile_root).as_posix()
+        proc = _run_contest_tex_command(
+            ["extractbb", file_path.name],
+            file_path.parent,
+            log_path,
+            title=f"extractbb {relative_name}",
+            extra_mounts=extra_mounts,
+            env=env,
+        )
+        if proc.timed_out:
+            return f"extractbb timeout for {relative_name}"
+        if int(proc.returncode or 0) != 0:
+            return f"extractbb failed for {relative_name}"
+    return ""
+
+
+def _write_contest_latex_wrapper(statements_root: Path) -> Path:
+    wrapper_path = (statements_root / _CONTEST_LATEX_WRAPPER_NAME).resolve()
+    wrapper_path.write_text(
+        "\\PassOptionsToPackage{dvipdfmx}{graphicx}\n"
+        "\\PassOptionsToPackage{dvipdfmx}{color}\n"
+        "\\PassOptionsToPackage{dvipdfmx}{hyperref}\n"
+        "\\AtBeginDocument{%\n"
+        "  \\providecommand{\\url}[1]{\\texttt{#1}}%\n"
+        "  \\providecommand{\\href}[2]{#2}%\n"
+        "}\n"
+        "\\input{statements.tex}\n",
+        encoding="utf-8",
+    )
+    return wrapper_path
+
+
+def _contest_tex_env(compile_root: Path) -> dict[str, str]:
+    texmf_var = _contest_compile_target(compile_root, ".texmf-var")
+    texmf_cache = _contest_compile_target(compile_root, ".texmf-cache")
+    texmf_config = _contest_compile_target(compile_root, ".texmf-config")
+    var_tex_fonts = _contest_compile_target(compile_root, ".texfonts")
+    texmf_output = _contest_compile_target(compile_root, ".texmf-output")
+    for path in (texmf_var, texmf_cache, texmf_config, var_tex_fonts, texmf_output):
+        path.mkdir(parents=True, exist_ok=True)
+    return {
+        "HOME": str(compile_root),
+        "TEXMFVAR": str(texmf_var),
+        "TEXMFCACHE": str(texmf_cache),
+        "TEXMFCONFIG": str(texmf_config),
+        "VARTEXFONTS": str(var_tex_fonts),
+        "TEXMFOUTPUT": str(texmf_output),
+    }
+
+
+def _copy_contest_statement_language_tree(
+    *,
+    contest_id: int,
+    contest_slug: str,
+    language: str,
+    compile_root: Path,
+) -> Path:
+    prefix = f"statements/{language}/"
+    copied = 0
+    for row in config.contest_service.statement_attachment_rows(contest_id):
+        rel_path = str(row["rel_path"] or "").strip()
+        if not rel_path.startswith(prefix):
+            continue
+        source_path = config.contest_service.statement_file_path(contest_slug, rel_path)
+        if source_path.is_symlink() or (not source_path.exists()) or (not source_path.is_file()):
+            raise RuntimeError(f"contest statement source missing: {rel_path}")
+        target_path = _contest_compile_target(compile_root, *Path(rel_path).parts)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+        copied += 1
+    if copied <= 0:
+        raise RuntimeError(f"contest statement tree missing for language: {language}")
+    statements_root = _contest_compile_target(compile_root, "statements", language)
+    statements_tex = statements_root / "statements.tex"
+    if statements_tex.is_symlink() or (not statements_tex.exists()) or (not statements_tex.is_file()):
+        raise RuntimeError(f"contest statements.tex missing for language: {language}")
+    return statements_root
+
+
+def _prepare_contest_pdf_problem(
+    *,
+    compile_root: Path,
+    actor_user_id: int,
+    actor_username: str,
+    problem_id: int,
+    problem_slug: str,
+    problem_name: str,
+    idx: str,
+    source_folder: str,
+    language: str,
+) -> dict[str, object]:
+    item: dict[str, object] = {
+        "idx": idx,
+        "problem_id": int(problem_id),
+        "problem_slug": problem_slug,
+        "source_folder": source_folder,
+        "status": "failed",
+        "source_commit": "",
+        "error": "",
+    }
+    if not source_folder:
+        item["error"] = f"contest source folder missing for {problem_slug}"
+        return item
+    access = workspace_access_context(problem_id, actor_user_id)
+    if not bool(access.get("can_read")):
+        item["error"] = "read access to problem is required"
+        return item
+    snapshot_root: Path | None = None
+    try:
+        workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
+        ws_ctx = config.workspace_service.workspace_context(problem_slug, actor_username, include_recent=False)
+        head_obj = ws_ctx["workspace"].get("head_commit")
+        head_commit = str(head_obj).strip() if head_obj is not None else ""
+        if not head_commit:
+            raise RuntimeError("no committed revision")
+        snapshot_root = config.workspace_service.create_snapshot(
+            workspace,
+            head_commit,
+            workspace_head=head_commit,
+            workspace_dirty=False,
+        )
+        sample_sync = config.preview_service.sync_sample_payloads_for_snapshot(
+            problem_slug,
+            actor_username,
+            snapshot_root,
+        )
+        if int(sample_sync.get("sample_count", 0)) > 0:
+            item["sample_sync"] = sample_sync
+        target_dir = _contest_compile_target(
+            compile_root,
+            "problems",
+            source_folder,
+            "statements",
+            language,
+        )
+        render_statement_problem_assets_for_language(
+            snapshot_root,
+            language,
+            target_dir,
+            problem_title=problem_name,
+        )
+        item["source_commit"] = head_commit
+        item["status"] = "success"
+    except Exception as exc:
+        item["error"] = str(exc)
+    finally:
+        if snapshot_root is not None:
+            shutil.rmtree(snapshot_root.parent, ignore_errors=True)
+    return item
 
 
 def _contest_redirect(contest_slug: str, user: str, page: str, *, query: str = "", message: str = ""):
@@ -281,7 +521,7 @@ def _finalize_contest_job_failure_if_running(
         finished=True,
     )
 
-def _run_contest_preview_job_worker(
+def _run_contest_pdf_job_worker(
     *,
     contest_id: int,
     contest_slug: str,
@@ -290,73 +530,44 @@ def _run_contest_preview_job_worker(
     job_id: str,
 ) -> None:
     job_root = config.contest_service.job_root(contest_slug, job_id)
-    preview_dir = job_root / "preview"
-    preview_dir.mkdir(parents=True, exist_ok=True)
-    entries = config.contest_service.contest_problem_entries(contest_id)
+    compile_root = (job_root / "contest-pdf-src").resolve()
+    if compile_root.exists():
+        shutil.rmtree(compile_root, ignore_errors=True)
+    compile_root.mkdir(parents=True, exist_ok=True)
+    contest_mounts = (compile_root,)
+    contest_tex_env = _contest_tex_env(compile_root)
+    log_path = job_root / "logs" / "contest-pdf.log"
+    language = config.contest_service.statement_default_language(contest_id)
+    if not language:
+        raise RuntimeError("contest statement default language is missing")
+    statements_root = _copy_contest_statement_language_tree(
+        contest_id=contest_id,
+        contest_slug=contest_slug,
+        language=language,
+        compile_root=compile_root,
+    )
+    source_folder_map = config.contest_service.statement_problem_source_folders(contest_id)
+    entries = config.contest_service.contest_problems(contest_id)
     results: list[dict[str, object]] = []
     for entry in entries:
-        problem_id = int(entry["problem_id"])
-        idx = str(entry["idx"] or "")
-        problem_slug = str(entry["problem_slug"] or "")
-        item: dict[str, object] = {
-            "idx": idx,
-            "problem_id": problem_id,
-            "problem_slug": problem_slug,
-            "status": "failed",
-            "preview_id": "",
-            "output_pdf": "",
-            "error": "",
-        }
-        access = workspace_access_context(problem_id, actor_user_id)
-        if not bool(access.get("can_read")):
-            item["error"] = "read access to problem is required"
-            results.append(item)
-            continue
-        try:
-            preview_id = str(config.preview_service.compile_preview(problem_slug, actor_username) or "").strip()
-            if not preview_id:
-                raise RuntimeError("preview id missing")
-            preview_result = config.contest_service.preview_result(preview_id)
-            if preview_result is None:
-                raise RuntimeError("preview metadata missing")
-            preview_status = str(preview_result["status"] or "").strip().lower()
-            item["preview_id"] = preview_id
-            if preview_status != "ok":
-                error_text = str(preview_result["summary"].get("error") or "preview failed")
-                raise RuntimeError(error_text)
-            preview_root_text = str(preview_result["artifact_path"] or "").strip()
-            if not preview_root_text:
-                raise RuntimeError("preview artifact root missing")
-            preview_root = Path(preview_root_text).resolve()
-            problem_artifacts_root = (config.settings.artifacts_root / problem_slug).resolve()
-            if problem_artifacts_root not in preview_root.parents and problem_artifacts_root != preview_root:
-                raise RuntimeError("invalid preview artifact path")
-            source_pdf = (preview_root / "statement_preview" / "statement.pdf").resolve()
-            if problem_artifacts_root not in source_pdf.parents:
-                raise RuntimeError("invalid preview artifact path")
-            if not source_pdf.exists() or not source_pdf.is_file() or source_pdf.is_symlink():
-                raise RuntimeError("preview pdf is missing")
-            file_token = _contest_problem_slug_file_token(problem_slug)
-            output_name = f"{idx}-{file_token}.pdf" if idx else f"{file_token}.pdf"
-            target_pdf = (preview_dir / output_name).resolve()
-            shutil.copy2(source_pdf, target_pdf)
-            item["output_pdf"] = f"preview/{output_name}"
-            item["status"] = "success"
-        except Exception as exc:
-            item["status"] = "failed"
-            item["error"] = str(exc)
+        item = _prepare_contest_pdf_problem(
+            compile_root=compile_root,
+            actor_user_id=actor_user_id,
+            actor_username=actor_username,
+            problem_id=int(entry["problem_id"]),
+            problem_slug=str(entry["problem_slug"]),
+            problem_name=str(entry["problem_name"]),
+            idx=str(entry["idx"]),
+            source_folder=str(source_folder_map.get(int(entry["problem_id"]), "") or "").strip(),
+            language=language,
+        )
         results.append(item)
     success_count = sum((1 for row in results if str(row.get("status")) == "success"))
-    failed_count = sum((1 for row in results if str(row.get("status")) != "success"))
-    bundle_root = job_root / "bundle-preview"
-    if bundle_root.exists():
-        shutil.rmtree(bundle_root, ignore_errors=True)
-    bundle_root.mkdir(parents=True, exist_ok=True)
-    if preview_dir.exists() and any(preview_dir.iterdir()):
-        shutil.copytree(preview_dir, bundle_root / "preview", dirs_exist_ok=True)
+    failed_count = len(results) - success_count
     summary: dict[str, object] = {
-        "job_type": _CONTEST_JOB_TYPE_PREVIEW,
+        "job_type": _CONTEST_JOB_TYPE_PDF,
         "contest_slug": contest_slug,
+        "language": language,
         "results": results,
         "totals": {
             "total": len(results),
@@ -364,39 +575,133 @@ def _run_contest_preview_job_worker(
             "failed": failed_count,
         },
     }
-    (bundle_root / "manifest.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    artifact_id = ""
-    artifact_filename = ""
-    if success_count > 0:
-        archive_path = _ensure_zip_bundle(job_root, f"{contest_slug}-preview-{job_id}", bundle_root)
-        artifact_filename = archive_path.name
-        artifact_id = config.contest_service.record_artifact(
-            contest_id=contest_id,
-            job_id=job_id,
-            artifact_type="preview-bundle",
-            filename=archive_path.name,
-            artifact_path=archive_path,
+    if failed_count > 0:
+        first_error = str(next((row.get("error") for row in results if str(row.get("status")) != "success"), "") or "").strip()
+        summary["error"] = first_error or "problem preparation failed"
+        config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+        audit(
+            actor_user_id,
+            None,
+            "contest.packages.pdf",
+            {
+                "contest_id": contest_id,
+                "contest_slug": contest_slug,
+                "job_id": job_id,
+                "language": language,
+                "total": len(results),
+                "success": success_count,
+                "failed": failed_count,
+            },
         )
-    summary["artifact_id"] = artifact_id
-    summary["filename"] = artifact_filename
-    config.contest_service.update_job(
-        contest_id,
-        job_id,
-        "ok" if failed_count == 0 and success_count > 0 else "failed",
-        summary,
-        finished=True,
+        return
+    for row in results:
+        problem_root = _contest_compile_target(
+            compile_root,
+            "problems",
+            str(row["source_folder"]),
+            "statements",
+            language,
+        )
+        for mp_file in sorted(problem_root.glob("*.mp")):
+            proc = _run_contest_tex_command(
+                ["mpost", mp_file.name],
+                problem_root,
+                log_path,
+                title=f"{row['problem_slug']} :: mpost {mp_file.name}",
+                extra_mounts=contest_mounts,
+                env=contest_tex_env,
+            )
+            if proc.timed_out:
+                summary["error"] = f"mpost timeout for {row['problem_slug']}: {mp_file.name}"
+                config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+                return
+            if int(proc.returncode or 0) != 0:
+                summary["error"] = f"mpost failed for {row['problem_slug']}: {mp_file.name}"
+                config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+                return
+    extractbb_error = _prepare_contest_graphics_bounding_boxes(
+        compile_root,
+        log_path,
+        extra_mounts=contest_mounts,
+        env=contest_tex_env,
     )
+    if extractbb_error:
+        summary["error"] = extractbb_error
+        config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+        return
+    latex_wrapper = _write_contest_latex_wrapper(statements_root)
+    final_output = ""
+    for command, title in (
+        (
+            [
+                "latex",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-jobname={_CONTEST_LATEX_JOB_NAME}",
+                latex_wrapper.name,
+            ],
+            "latex pass 1",
+        ),
+        (
+            [
+                "latex",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-jobname={_CONTEST_LATEX_JOB_NAME}",
+                latex_wrapper.name,
+            ],
+            "latex pass 2",
+        ),
+        (["dvips", "statements.dvi"], "dvips"),
+        (["dvipdfmx", "-p", "a4", "statements.dvi"], "dvipdfmx"),
+    ):
+        proc = _run_contest_tex_command(
+            command,
+            statements_root,
+            log_path,
+            title=title,
+            extra_mounts=contest_mounts,
+            env=contest_tex_env,
+        )
+        final_output = f"{proc.stdout}\n{proc.stderr}".strip()
+        if proc.timed_out:
+            summary["error"] = f"{title} timeout"
+            config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+            return
+        if int(proc.returncode or 0) != 0:
+            error_text = _contest_latex_compile_error_detail(final_output, proc.returncode)
+            summary["error"] = error_text or f"{title} failed"
+            config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+            return
+    generated_pdf = statements_root / "statements.pdf"
+    if generated_pdf.is_symlink() or (not generated_pdf.exists()) or (not generated_pdf.is_file()):
+        summary["error"] = "contest pdf missing after compile"
+        config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)
+        return
+    pdf_dir = job_root / "contest-pdf"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    target_pdf = (pdf_dir / "statements.pdf").resolve()
+    shutil.copy2(generated_pdf, target_pdf)
+    artifact_id = config.contest_service.record_artifact(
+        contest_id=contest_id,
+        job_id=job_id,
+        artifact_type="contest-pdf",
+        filename=f"{contest_slug}-{language}-statements.pdf",
+        artifact_path=target_pdf,
+    )
+    summary["artifact_id"] = artifact_id
+    summary["filename"] = target_pdf.name
+    summary["pdf_file"] = "contest-pdf/statements.pdf"
+    config.contest_service.update_job(contest_id, job_id, "ok", summary, finished=True)
     audit(
         actor_user_id,
         None,
-        "contest.packages.preview",
+        "contest.packages.pdf",
         {
             "contest_id": contest_id,
             "contest_slug": contest_slug,
             "job_id": job_id,
+            "language": language,
             "total": len(results),
             "success": success_count,
             "failed": failed_count,
@@ -583,8 +888,8 @@ def _queue_contest_job(
 
     def _runner() -> None:
         try:
-            if job_type == _CONTEST_JOB_TYPE_PREVIEW:
-                _run_contest_preview_job_worker(
+            if job_type == _CONTEST_JOB_TYPE_PDF:
+                _run_contest_pdf_job_worker(
                     contest_id=contest_id,
                     contest_slug=contest_slug,
                     actor_user_id=actor_user_id,

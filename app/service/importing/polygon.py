@@ -26,7 +26,7 @@ from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import (
     dumps_tests_spec,
     normalize_gen_command,
-    normalize_manual_input,
+    normalize_imported_manual_input,
     parse_gen_command_tokens,
     payload_rel_path_for_test,
 )
@@ -614,7 +614,7 @@ class PolygonPackageImportService:
                     gen_count += 1
                     continue
                 raise ValueError(f"missing test input file in package: {input_rel}")
-            payload_text = normalize_manual_input(_read_bytes_from_zip(zf, info).decode("utf-8", errors="replace"))
+            payload_text = normalize_imported_manual_input(_read_bytes_from_zip(zf, info).decode("utf-8", errors="replace"))
             spec_entries.append({**spec_row, "kind": "manual"})
             self._write_text(workspace, Path(payload_rel_path_for_test(test_id, "manual")), payload_text)
             manual_count += 1

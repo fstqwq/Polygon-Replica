@@ -177,6 +177,8 @@ class TexSandboxBackend(SandboxBackend):
         for candidate in self._optional_tex_runtime_dirs(spec):
             self._add_mount_path(mounts, candidate, writable=False)
         self._add_mount_path(mounts, working_dir, writable=True)
+        for extra_mount in spec.extra_mounts:
+            self._add_mount_path(mounts, extra_mount, writable=True)
         if spec.stdin_path is not None:
             self._add_mount_path(mounts, spec.stdin_path, writable=False)
         if spec.stdout_path is not None:

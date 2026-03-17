@@ -15,6 +15,7 @@ from app.impl.root.contest_import import (
     _delete_contest_import_draft,
     _load_contest_import_draft,
     _normalize_import_contest_idx,
+    _rollback_imported_contest,
     _resolve_import_contest_slug,
 )
 from app.impl.run_export.import_source import (
@@ -529,6 +530,7 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
     actor_user_id = int(gctx["user"]["id"])
     actor_username = str(gctx["user"]["username"])
     created_contest_slug = ""
+    imported_problem_slugs: list[str] = []
     form = await request.form()
     draft_id_obj = form.get("draft_id")
     draft_id = draft_id_obj.strip() if isinstance(draft_id_obj, str) else ""
@@ -581,6 +583,14 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
         parsed = _POLYGON_CONTEST_IMPORT_SERVICE.parse_package(package_name, payload)
         parsed_rows_raw = parsed.get("problems")
         parsed_rows = [dict(item) for item in parsed_rows_raw] if isinstance(parsed_rows_raw, list) else []
+        statement_files_raw = parsed.get("statement_files")
+        statement_files = [dict(item) for item in statement_files_raw] if isinstance(statement_files_raw, list) else []
+        default_language_obj = parsed.get("default_language")
+        default_language = default_language_obj.strip().lower() if isinstance(default_language_obj, str) else ""
+        location_obj = parsed.get("location")
+        inferred_location = location_obj.strip() if isinstance(location_obj, str) else ""
+        date_obj = parsed.get("date")
+        inferred_date = date_obj.strip() if isinstance(date_obj, str) else ""
         if len(parsed_rows) != len(review_rows):
             raise ValueError("contest package changed; please re-upload and review again")
 
@@ -598,9 +608,9 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
         )
         created_contest_slug = target_contest_slug
 
-        imported_problem_slugs: list[str] = []
         import_warnings: list[str] = []
         used_indices: set[str] = set()
+        source_folder_map: dict[int, str] = {}
         for idx, row in enumerate(parsed_rows, start=1):
             row_review = review_rows[idx - 1]
             sub_package_name_obj = row.get("package_name")
@@ -621,6 +631,7 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
                 requested_slug=requested_problem_slug,
                 source_problem="",
                 normalize_test_data_newlines=True,
+                build_polygon_sample_answers=False,
             )
             imported_problem_slug_obj = imported.get("target_problem")
             imported_problem_slug = imported_problem_slug_obj.strip() if isinstance(imported_problem_slug_obj, str) else ""
@@ -632,6 +643,10 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             problem_id = config.workspace_service.known_problem_id(imported_problem_slug)
             if problem_id is None:
                 raise RuntimeError(f"imported problem missing: {imported_problem_slug}")
+            source_folder_obj = row.get("source_folder")
+            source_folder = source_folder_obj.strip() if isinstance(source_folder_obj, str) else ""
+            if not source_folder:
+                raise RuntimeError(f"contest source folder missing for problem #{idx}")
             contest_problem_idx = _normalize_import_contest_idx(row.get("index"), idx, used_indices)
             config.contest_service.add_problem(
                 contest_id=contest_id,
@@ -639,7 +654,21 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
                 problem_id=problem_id,
                 added_by_user_id=actor_user_id,
             )
+            source_folder_map[int(problem_id)] = source_folder
             imported_problem_slugs.append(imported_problem_slug)
+
+        config.contest_service.replace_statement_sources(
+            contest_id=contest_id,
+            contest_slug=target_contest_slug,
+            actor_user_id=actor_user_id,
+            files=statement_files,
+        )
+        config.contest_service.set_statement_default_language(contest_id, actor_user_id, default_language)
+        if inferred_location:
+            config.contest_service.upsert_property(contest_id, actor_user_id, "location", inferred_location)
+        if inferred_date:
+            config.contest_service.upsert_property(contest_id, actor_user_id, "date", inferred_date)
+        config.contest_service.set_statement_problem_source_folders(contest_id, actor_user_id, source_folder_map)
 
         audit(
             actor_user_id,
@@ -653,6 +682,9 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
                 "draft_id": draft_id,
                 "problems_imported": imported_problem_slugs,
                 "total_problems": len(imported_problem_slugs),
+                "statement_default_language": default_language,
+                "location": inferred_location,
+                "date": inferred_date,
                 "normalize_test_data_newlines": True,
             },
         )
@@ -670,12 +702,12 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
         )
     except Exception as exc:
         message = str(exc)
-    if created_contest_slug:
-        return redirect_response(
-            f"/contests/{created_contest_slug}/{actor_username}/overview",
-            status_code=303,
-            message=message,
-        )
+    if created_contest_slug or imported_problem_slugs:
+        try:
+            _rollback_imported_contest(created_contest_slug, imported_problem_slugs)
+        finally:
+            _delete_contest_import_draft(draft_id)
+        return redirect_response("/contests", status_code=303, message=message)
     return _render_contest_import_review_page(
         request,
         gctx,

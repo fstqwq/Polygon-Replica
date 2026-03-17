@@ -89,6 +89,17 @@ def payload_rel_path_for_test(test_id: str, kind: str) -> str:
 
 
 def normalize_manual_input(raw: object) -> str:
+    normalized = _normalize_manual_input_text(raw)
+    if len(normalized) > TESTS_SPEC_MANUAL_MAX_CHARS:
+        raise ValueError("manual test input is too long")
+    return normalized
+
+
+def normalize_imported_manual_input(raw: object) -> str:
+    return _normalize_manual_input_text(raw)
+
+
+def _normalize_manual_input_text(raw: object) -> str:
     value = _normalize_newlines(str(raw or ""))
     # Canonical manual input format:
     # - LF newlines only
@@ -96,10 +107,7 @@ def normalize_manual_input(raw: object) -> str:
     # - exactly one trailing newline at EOF
     lines = value.split("\n")
     stripped_lines = [line.rstrip(" \t") for line in lines]
-    normalized = "\n".join(stripped_lines).rstrip("\n") + "\n"
-    if len(normalized) > TESTS_SPEC_MANUAL_MAX_CHARS:
-        raise ValueError("manual test input is too long")
-    return normalized
+    return "\n".join(stripped_lines).rstrip("\n") + "\n"
 
 
 def parse_gen_command_tokens(command: str) -> list[str]:

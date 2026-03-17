@@ -74,6 +74,12 @@ class ContestArtifactRecord(TypedDict):
     created_at: str
 
 
+class ContestAttachmentRecord(TypedDict):
+    key: str
+    rel_path: str
+    created_at: str
+
+
 class ContestDiskStore:
     def __init__(self, db: DB):
         self.db = db
@@ -257,10 +263,17 @@ class ContestDiskStore:
         )
         return [dict(row) for row in rows]
 
+    def property_row(self, contest_id: int, key: str) -> ContestPropertyRecord | None:
+        row = self.db.fetch_one(
+            "SELECT key,value_json FROM contest_properties WHERE contest_id=? AND key=?",
+            [int(contest_id), str(key).strip()],
+        )
+        return None if row is None else dict(row)
+
     def update_title(self, contest_id: int, title: str) -> None:
         self.db.execute("UPDATE contests SET title=? WHERE id=?", [title, int(contest_id)])
 
-    def upsert_property(self, contest_id: int, actor_user_id: int, key: str, value: str, updated_at: str) -> None:
+    def upsert_property(self, contest_id: int, actor_user_id: int, key: str, value: object, updated_at: str) -> None:
         self.db.execute(
             """
             INSERT INTO contest_properties(contest_id,key,value_json,updated_at,updated_by_user_id)
@@ -272,6 +285,42 @@ class ContestDiskStore:
             """,
             [int(contest_id), key, json.dumps(value), updated_at, int(actor_user_id)],
         )
+
+    def attachment_rows(self, contest_id: int) -> list[ContestAttachmentRecord]:
+        rows = self.db.fetch_all(
+            """
+            SELECT key,rel_path,created_at
+            FROM contest_attachments
+            WHERE contest_id=?
+            ORDER BY key ASC
+            """,
+            [int(contest_id)],
+        )
+        return [dict(row) for row in rows]
+
+    def replace_attachment_rows(
+        self,
+        *,
+        contest_id: int,
+        created_by_user_id: int,
+        created_at: str,
+        rows: list[tuple[str, str]],
+    ) -> None:
+        safe_rows = [(str(key).strip(), str(rel_path).strip()) for key, rel_path in rows]
+
+        def tx(conn: sqlite3.Connection) -> int:
+            conn.execute("DELETE FROM contest_attachments WHERE contest_id=?", [int(contest_id)])
+            for key, rel_path in safe_rows:
+                conn.execute(
+                    """
+                    INSERT INTO contest_attachments(contest_id,key,rel_path,created_at,created_by_user_id)
+                    VALUES(?,?,?,?,?)
+                    """,
+                    [int(contest_id), key, rel_path, created_at, int(created_by_user_id)],
+                )
+            return len(safe_rows)
+
+        self.db.write_transaction(tx)
 
     def contest_problem_rows(self, contest_id: int) -> list[ContestProblemRecord]:
         rows = self.db.fetch_all(

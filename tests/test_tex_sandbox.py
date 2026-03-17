@@ -95,3 +95,32 @@ class TestTexSandbox(unittest.TestCase):
             self.assertFalse((workdir / "main.pdf").exists())
             merged = f"{result.stdout}\n{result.stderr}".lower()
             self.assertIn("secret", merged)
+
+    def test_tex_sandbox_allows_parent_include_with_explicit_extra_mount(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="polygonlike-tex-sandbox-") as tmp:
+            root = Path(tmp)
+            workdir = root / "work"
+            workdir.mkdir(parents=True, exist_ok=True)
+            (root / "shared.tex").write_text("VISIBLE\n", encoding="utf-8")
+            (workdir / "main.tex").write_text(
+                "\\documentclass{article}\n"
+                "\\begin{document}\n"
+                "\\input{../shared.tex}\n"
+                "\\end{document}\n",
+                encoding="utf-8",
+            )
+            backend = TexSandboxBackend()
+            result = backend.run(
+                ExecSpec(
+                    command=["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+                    cwd=workdir,
+                    extra_mounts=(root,),
+                    timeout_sec=20,
+                    memory_mb=1024,
+                    process_limit=64,
+                    output_kb=131072,
+                )
+            )
+            self.assertEqual(result.status, "ok")
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue((workdir / "main.pdf").is_file())

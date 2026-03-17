@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import secrets
+import shutil
 from pathlib import Path
 from typing import TypedDict
 
 from app.db import DB, now_iso
+from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import ContestDiskStore
 from app.service.disk.preview_store import PreviewStore
 from app.service.disk.verification_store import VerificationStore
@@ -92,6 +94,18 @@ class ContestArtifact(TypedDict):
     downloadable: bool
 
 
+class ContestStatementSourceFile(TypedDict):
+    key: str
+    language: str
+    package_bytes: bytes
+
+
+class ContestStatementAttachment(TypedDict):
+    key: str
+    rel_path: str
+    created_at: str
+
+
 class ContestPreviewResult(TypedDict):
     status: str
     summary: dict[str, object]
@@ -111,6 +125,24 @@ class ContestVerificationStage(TypedDict):
 class ContestService:
     _ARTIFACT_BUCKET = "__contests__"
     _ACCESS_ROLES = {"owner", "write", "read"}
+    _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
+    _STATEMENT_SOURCE_FOLDERS_KEY = "statement_source_folders"
+    _LOCATION_KEY = "location"
+    _DATE_KEY = "date"
+    _TEXT_SOURCE_SUFFIXES = {
+        ".bat",
+        ".bib",
+        ".bst",
+        ".cfg",
+        ".cls",
+        ".def",
+        ".ltx",
+        ".mp",
+        ".sh",
+        ".sty",
+        ".tex",
+        ".txt",
+    }
 
     def __init__(self, db: DB, settings: Settings):
         self.db = db
@@ -150,6 +182,15 @@ class ContestService:
             return payload
         return str(payload)
 
+    def _property_value(self, raw_json: str) -> object:
+        text = str(raw_json).strip()
+        if not text:
+            return ""
+        try:
+            return json.loads(text)
+        except Exception:
+            return text
+
     def _contest_idx_label(self, seq: int) -> str:
         value = max(1, int(seq))
         chars: list[str] = []
@@ -161,6 +202,14 @@ class ContestService:
 
     def _path_within(self, root: Path, target: Path) -> bool:
         return root == target or root in target.parents
+
+    def _normalize_statement_source_bytes(self, key: str, package_bytes: bytes) -> bytes:
+        suffix = Path(str(key).strip()).suffix.lower()
+        if suffix not in self._TEXT_SOURCE_SUFFIXES:
+            return package_bytes
+        text = bytes(package_bytes).decode("utf-8", errors="replace")
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        return normalized.encode("utf-8")
 
     def _job_payload(self, row: dict[str, object]) -> ContestJob:
         return {
@@ -176,6 +225,19 @@ class ContestService:
         base = (self.settings.artifacts_root / self._ARTIFACT_BUCKET).resolve()
         base.mkdir(parents=True, exist_ok=True)
         return base
+
+    def contest_sources_base(self) -> Path:
+        base = (self.settings.cache_root / "contest-sources").resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
+    def contest_source_root(self, contest_slug: str) -> Path:
+        base = self.contest_sources_base()
+        root = (base / str(contest_slug).strip()).resolve()
+        if not self._path_within(base, root):
+            raise ValueError("invalid contest source path")
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     def job_root(self, contest_slug: str, job_id: str) -> Path:
         safe_job_id = str(job_id).strip()
@@ -314,11 +376,141 @@ class ContestService:
                 result[key] = self._property_text(str(row["value_json"]))
         return result
 
+    def overview_properties_map(self, contest_id: int, contest_slug: str) -> dict[str, str]:
+        result = self.properties_map(int(contest_id))
+        if result.get(self._LOCATION_KEY) and result.get(self._DATE_KEY):
+            return result
+        inferred = self._infer_statement_header_fields_for_contest(int(contest_id), contest_slug)
+        if (not result.get(self._LOCATION_KEY)) and inferred["location"]:
+            result[self._LOCATION_KEY] = inferred["location"]
+        if (not result.get(self._DATE_KEY)) and inferred["date"]:
+            result[self._DATE_KEY] = inferred["date"]
+        return result
+
     def update_title(self, contest_id: int, title: str) -> None:
         self._store.update_title(int(contest_id), title)
 
-    def upsert_property(self, contest_id: int, actor_user_id: int, key: str, value: str) -> None:
+    def upsert_property(self, contest_id: int, actor_user_id: int, key: str, value: object) -> None:
         self._store.upsert_property(int(contest_id), int(actor_user_id), key, value, now_iso())
+
+    def property_value(self, contest_id: int, key: str) -> object:
+        row = self._store.property_row(int(contest_id), str(key).strip())
+        if row is None:
+            return ""
+        return self._property_value(str(row["value_json"]))
+
+    def replace_statement_sources(
+        self,
+        *,
+        contest_id: int,
+        contest_slug: str,
+        actor_user_id: int,
+        files: list[ContestStatementSourceFile],
+    ) -> None:
+        root = self.contest_source_root(contest_slug)
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+        attachment_rows: list[tuple[str, str]] = []
+        safe_root = root.resolve()
+        for row in files:
+            key = str(row["key"]).strip()
+            rel_path = Path(key)
+            target = (root / rel_path).resolve()
+            if safe_root not in target.parents:
+                raise ValueError(f"invalid contest source path: {key}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(self._normalize_statement_source_bytes(key, bytes(row["package_bytes"])))
+            attachment_rows.append((key, key))
+        self._store.replace_attachment_rows(
+            contest_id=int(contest_id),
+            created_by_user_id=int(actor_user_id),
+            created_at=now_iso(),
+            rows=attachment_rows,
+        )
+
+    def statement_attachment_rows(self, contest_id: int) -> list[ContestStatementAttachment]:
+        result: list[ContestStatementAttachment] = []
+        for row in self._store.attachment_rows(int(contest_id)):
+            result.append(
+                {
+                    "key": str(row["key"]),
+                    "rel_path": str(row["rel_path"]),
+                    "created_at": str(row["created_at"]),
+                }
+            )
+        return result
+
+    def statement_file_path(self, contest_slug: str, rel_path: str) -> Path:
+        root = self.contest_source_root(contest_slug)
+        target = (root / str(rel_path).strip()).resolve()
+        if not self._path_within(root, target):
+            raise ValueError("invalid contest source file path")
+        return target
+
+    def statement_default_language(self, contest_id: int) -> str:
+        raw = self.property_value(int(contest_id), self._STATEMENT_DEFAULT_LANGUAGE_KEY)
+        value = str(raw).strip().lower() if raw is not None else ""
+        return value
+
+    def set_statement_default_language(self, contest_id: int, actor_user_id: int, language: str) -> None:
+        self.upsert_property(
+            int(contest_id),
+            int(actor_user_id),
+            self._STATEMENT_DEFAULT_LANGUAGE_KEY,
+            str(language).strip().lower(),
+        )
+
+    def _infer_statement_header_fields_for_contest(self, contest_id: int, contest_slug: str) -> dict[str, str]:
+        default_language = self.statement_default_language(int(contest_id))
+        candidate_rel_paths: list[str] = []
+        if default_language:
+            candidate_rel_paths.append(f"statements/{default_language}/statements.tex")
+        if "statements/english/statements.tex" not in candidate_rel_paths:
+            candidate_rel_paths.append("statements/english/statements.tex")
+        for row in self.statement_attachment_rows(int(contest_id)):
+            rel_path = str(row["rel_path"]).strip()
+            if rel_path.endswith("/statements.tex") and rel_path not in candidate_rel_paths:
+                candidate_rel_paths.append(rel_path)
+        for rel_path in candidate_rel_paths:
+            try:
+                source_path = self.statement_file_path(contest_slug, rel_path)
+                text = source_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            inferred = infer_contest_header_fields(text)
+            if inferred["title"] or inferred["location"] or inferred["date"]:
+                return inferred
+        return {"title": "", "location": "", "date": ""}
+
+    def statement_problem_source_folders(self, contest_id: int) -> dict[int, str]:
+        raw = self.property_value(int(contest_id), self._STATEMENT_SOURCE_FOLDERS_KEY)
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[int, str] = {}
+        for key, value in raw.items():
+            try:
+                problem_id = int(str(key).strip())
+            except Exception:
+                continue
+            folder = str(value).strip()
+            if problem_id > 0 and folder:
+                result[problem_id] = folder
+        return result
+
+    def set_statement_problem_source_folders(
+        self,
+        contest_id: int,
+        actor_user_id: int,
+        source_folders: dict[int, str],
+    ) -> None:
+        payload = {str(problem_id): str(folder).strip() for problem_id, folder in source_folders.items() if int(problem_id) > 0 and str(folder).strip()}
+        self.upsert_property(
+            int(contest_id),
+            int(actor_user_id),
+            self._STATEMENT_SOURCE_FOLDERS_KEY,
+            payload,
+        )
 
     def contest_problems(self, contest_id: int) -> list[ContestProblem]:
         result: list[ContestProblem] = []

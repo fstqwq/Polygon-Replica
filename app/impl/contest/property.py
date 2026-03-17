@@ -9,8 +9,6 @@ from app.impl.workspace.context_operation import audit, normalize_contest_title_
 from .shared import (
     _CONTEST_PROPERTY_DATE,
     _CONTEST_PROPERTY_LOCATION,
-    _CONTEST_PROPERTY_SOURCE_MODE,
-    _CONTEST_SOURCE_MODE_VALUES,
     _contest_ctx,
     _contest_redirect,
 )
@@ -20,9 +18,6 @@ def contest_properties_page(request: Request, contest: str, user: str):
     ctx = _contest_ctx(contest, user, "properties")
     contest_id = int(ctx["contest"]["id"])
     props = config.contest_service.properties_map(contest_id)
-    source_mode = props.get(_CONTEST_PROPERTY_SOURCE_MODE, "latest_committed")
-    if source_mode not in _CONTEST_SOURCE_MODE_VALUES:
-        source_mode = "latest_committed"
     return template_response(
         request,
         "contest_properties.html",
@@ -30,7 +25,7 @@ def contest_properties_page(request: Request, contest: str, user: str):
             "ctx": ctx,
             "location": props.get(_CONTEST_PROPERTY_LOCATION),
             "date_text": props.get(_CONTEST_PROPERTY_DATE),
-            "source_mode": source_mode,
+            "statement_language": config.contest_service.statement_default_language(contest_id),
         },
     )
 
@@ -41,7 +36,6 @@ def contest_properties_save(
     title: str = Form(""),
     location: str = Form(""),
     date_text: str = Form(""),
-    source_mode: str = Form("latest_committed"),
 ):
     ctx = _contest_ctx(contest, user, "properties")
     if not bool(ctx["access"].get("can_write")):
@@ -55,13 +49,9 @@ def contest_properties_save(
     safe_title = normalize_contest_title_required(title.strip() or current_title)
     safe_location = location.strip()
     safe_date = date_text.strip()
-    safe_source_mode = source_mode.strip().lower()
-    if safe_source_mode not in _CONTEST_SOURCE_MODE_VALUES:
-        safe_source_mode = "latest_committed"
     config.contest_service.update_title(contest_id, safe_title)
     config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_LOCATION, safe_location)
     config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_DATE, safe_date)
-    config.contest_service.upsert_property(contest_id, actor_user_id, _CONTEST_PROPERTY_SOURCE_MODE, safe_source_mode)
     audit(
         actor_user_id,
         None,
@@ -72,7 +62,6 @@ def contest_properties_save(
             "title": safe_title,
             "location": safe_location,
             "date": safe_date,
-            "source_mode": safe_source_mode,
         },
     )
     return _contest_redirect(ctx["contest"]["slug"], user, "properties", message="contest properties saved")

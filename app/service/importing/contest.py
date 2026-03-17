@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import TypedDict
 from urllib.parse import unquote, urlparse
 
+from app.service.contest.statement_meta import infer_contest_header_fields
 
 ZIP_MAX_BYTES = 512 * 1024 * 1024
 ZIP_MAX_FILE_BYTES = 128 * 1024 * 1024
@@ -51,12 +52,25 @@ ImportedContestProblem = TypedDict(
     },
 )
 
+ImportedContestStatementFile = TypedDict(
+    "ImportedContestStatementFile",
+    {
+        "key": str,
+        "language": str,
+        "package_bytes": bytes,
+    },
+)
+
 ParsedContestPackage = TypedDict(
     "ParsedContestPackage",
     {
         "package_name": str,
         "title": str,
+        "location": str,
+        "date": str,
         "problems": list[ImportedContestProblem],
+        "statement_files": list[ImportedContestStatementFile],
+        "default_language": str,
         "total_problems": int,
     },
 )
@@ -170,6 +184,75 @@ def _xml_attr(node: ET.Element, name: str) -> str:
 
 
 class PolygonContestImportService:
+    def _infer_statement_header_fields(
+        self,
+        statement_files: list[ImportedContestStatementFile],
+        default_language: str,
+    ) -> dict[str, str]:
+        text_by_key: dict[str, str] = {}
+        for row in statement_files:
+            key = str(row["key"]).strip()
+            if not key.endswith("/statements.tex"):
+                continue
+            try:
+                text_by_key[key] = bytes(row["package_bytes"]).decode("utf-8", errors="replace")
+            except Exception:
+                continue
+        candidate_keys: list[str] = []
+        safe_default_language = str(default_language or "").strip().lower()
+        if safe_default_language:
+            candidate_keys.append(f"statements/{safe_default_language}/statements.tex")
+        if "statements/english/statements.tex" not in candidate_keys:
+            candidate_keys.append("statements/english/statements.tex")
+        for key in sorted(text_by_key):
+            if key not in candidate_keys:
+                candidate_keys.append(key)
+        for key in candidate_keys:
+            text = text_by_key.get(key, "")
+            if not text:
+                continue
+            inferred = infer_contest_header_fields(text)
+            if inferred["title"] or inferred["location"] or inferred["date"]:
+                return inferred
+        return {"title": "", "location": "", "date": ""}
+
+    def _statement_source_rows(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo]) -> list[ImportedContestStatementFile]:
+        rows: list[ImportedContestStatementFile] = []
+        for path, info in sorted(entries.items()):
+            if not path.startswith("statements/"):
+                continue
+            parts = path.split("/")
+            if len(parts) < 3:
+                continue
+            language = parts[1].strip().lower()
+            if not language:
+                continue
+            rows.append(
+                {
+                    "key": path,
+                    "language": language,
+                    "package_bytes": _read_bytes_from_zip(zf, info),
+                }
+            )
+        return rows
+
+    def _default_statement_language(self, statement_files: list[ImportedContestStatementFile]) -> str:
+        languages: set[str] = set()
+        statement_roots: set[str] = set()
+        for row in statement_files:
+            language = row["language"].strip().lower()
+            key = row["key"].strip()
+            if not language or not key:
+                continue
+            languages.add(language)
+            if key.endswith("/statements.tex"):
+                statement_roots.add(language)
+        if "english" in statement_roots:
+            return "english"
+        if statement_roots:
+            return sorted(statement_roots)[0]
+        raise ValueError("contest package missing statements/<language>/statements.tex")
+
     def _parse_contest_xml(self, xml_text: str) -> ParsedContest:
         try:
             root = ET.fromstring(xml_text)
@@ -289,6 +372,9 @@ class PolygonContestImportService:
         with zipfile.ZipFile(io.BytesIO(package_bytes), "r") as zf:
             entry_map = _entry_map_from_zip(zf, "contest.xml")
             contest = self._parse_contest_xml(_read_text_from_zip(zf, entry_map["contest.xml"]))
+            statement_files = self._statement_source_rows(zf, entry_map)
+            default_language = self._default_statement_language(statement_files)
+            inferred_header = self._infer_statement_header_fields(statement_files, default_language)
             folder_map = self._problem_folder_map(entry_map)
             if not folder_map:
                 raise ValueError("no problem.xml found under problems/ in contest package")
@@ -312,10 +398,14 @@ class PolygonContestImportService:
                 )
             title = contest["title"]
             if not title:
-                title = Path(package_name or "imported-contest").stem
+                title = inferred_header["title"] or Path(package_name or "imported-contest").stem
             return {
                 "package_name": package_name,
                 "title": title,
+                "location": inferred_header["location"],
+                "date": inferred_header["date"],
                 "problems": imported_rows,
+                "statement_files": statement_files,
+                "default_language": default_language,
                 "total_problems": len(imported_rows),
             }

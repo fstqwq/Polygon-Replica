@@ -8,6 +8,7 @@ from pathlib import Path
 class ExecSpec:
     command: list[str]
     cwd: Path | None = None
+    extra_mounts: tuple[Path, ...] = ()
     timeout_sec: int = 30
     stdin_path: Path | None = None
     stdout_path: Path | None = None
