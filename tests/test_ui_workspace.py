@@ -443,7 +443,7 @@ class TestUIWorkspace(UIBaseSuite):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         preview_id = f"p-workspace-failed-{uuid.uuid4().hex[:8]}"
-        preview_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "sample" / preview_id
+        preview_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "sample" / preview_id
         (preview_root / "logs").mkdir(parents=True, exist_ok=True)
         (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
         db_execute(

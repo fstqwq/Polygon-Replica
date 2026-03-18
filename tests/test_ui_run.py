@@ -638,7 +638,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         db_execute("DELETE FROM verifications WHERE workspace_id=?", [workspace_id])
         artifact_verification_id = self.random_id("ver-run-execute-artifact")
-        artifact_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / artifact_verification_id
+        artifact_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / artifact_verification_id
         artifact_root.mkdir(parents=True, exist_ok=True)
         self._insert_stage_verification(
             verification_id=artifact_verification_id,
@@ -869,9 +869,9 @@ class TestUIRun(UIBaseSuite):
         accepted_run_id = f"r-verif-accepted-reuse-{uuid.uuid4().hex[:8]}"
         wa_run_id = f"r-verif-wa-reuse-{uuid.uuid4().hex[:8]}"
         buildsolve_run_id = f"r-buildsolve-reuse-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / build_id
         build_root.mkdir(parents=True, exist_ok=True)
-        buildsolve_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / buildsolve_run_id
+        buildsolve_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / buildsolve_run_id
         buildsolve_root.mkdir(parents=True, exist_ok=True)
         self._insert_stage_verification(
             verification_id=build_id,
@@ -951,7 +951,7 @@ class TestUIRun(UIBaseSuite):
             snapshot_row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
             snapshot_summary = json.loads(str(snapshot_row["summary_json"] or "{}")) if snapshot_row is not None else {}
             queued_snapshot["summary"] = snapshot_summary
-            run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+            run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
             run_root.mkdir(parents=True, exist_ok=True)
             summary = {
                 "mode": "pass-fail",
@@ -1113,7 +1113,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"ver-retry-tests-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-ver-retry-tests")
 
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         self._insert_stage_verification(
             verification_id=build_id,
@@ -1152,7 +1152,7 @@ class TestUIRun(UIBaseSuite):
                 }
             )
             run_id = str(kwargs.get("run_id") or "")
-            run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+            run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
             run_root.mkdir(parents=True, exist_ok=True)
             call_index = len(submitted_calls)
             verdict = "WA" if call_index == 1 else "OK"
@@ -1238,7 +1238,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"ver-running-placeholder-{uuid.uuid4().hex[:8]}"
         accepted_run_id = f"r-verif-accepted-running-{uuid.uuid4().hex[:8]}"
         wa_run_id = f"r-verif-wa-running-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         self._insert_stage_verification(
             verification_id=build_id,
@@ -1270,7 +1270,7 @@ class TestUIRun(UIBaseSuite):
         def _fake_run_submission(**kwargs):
             run_id = str(kwargs.get("run_id") or "")
             source_path = str(kwargs.get("submission_path") or "")
-            run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+            run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
             run_root.mkdir(parents=True, exist_ok=True)
             self._insert_verification_row(
                 verification_id=verification_id,
@@ -2246,7 +2246,7 @@ class TestUIRun(UIBaseSuite):
         run_ok = f"r-refresh-ok-{uuid.uuid4().hex[:8]}"
         run_wa = f"r-refresh-wa-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-inv-refresh")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         run_ok_root = build_root / "logs" / f"run-{run_ok}"
         run_wa_root = build_root / "logs" / f"run-{run_wa}"
         run_ok_root.mkdir(parents=True, exist_ok=True)
@@ -2381,8 +2381,8 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-rejudge-{uuid.uuid4().hex[:8]}"
         run_ok = f"r-rejudge-ok-{uuid.uuid4().hex[:8]}"
         run_pending = f"r-rejudge-pending-{uuid.uuid4().hex[:8]}"
-        run_ok_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_ok
-        run_pending_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_pending
+        run_ok_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_ok
+        run_pending_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_pending
         run_ok_root.mkdir(parents=True, exist_ok=True)
         run_pending_root.mkdir(parents=True, exist_ok=True)
         summary_ok = {
@@ -2456,7 +2456,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"inv-cancel-{uuid.uuid4().hex[:8]}"
         run_running = f"r-cancel-running-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_running
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_running
         run_root.mkdir(parents=True, exist_ok=True)
         summary_running = {
             "mode": "pass-fail",
@@ -2549,7 +2549,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-cancel-late-{uuid.uuid4().hex[:8]}"
         run_id = f"r-cancel-late-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-cancel-late")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         (build_root / "tests").mkdir(parents=True, exist_ok=True)
         (build_root / "ans").mkdir(parents=True, exist_ok=True)
         (build_root / "tests" / "001.in").write_text("1\n", encoding="utf-8")
@@ -2641,8 +2641,8 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         build_id = f"ver-artifact-cancel-finalize-{uuid.uuid4().hex[:8]}"
         run_id = f"r-cancel-finalize-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         build_root.mkdir(parents=True, exist_ok=True)
         run_root.mkdir(parents=True, exist_ok=True)
         self._insert_stage_verification(
@@ -2686,9 +2686,9 @@ class TestUIRun(UIBaseSuite):
         build_id = f"ver-artifact-cancel-active-{uuid.uuid4().hex[:8]}"
         run_cancelled_id = f"r-cancel-active-failed-{uuid.uuid4().hex[:8]}"
         run_active_id = f"r-cancel-active-running-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        run_cancelled_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_cancelled_id
-        run_active_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_active_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        run_cancelled_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_cancelled_id
+        run_active_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_active_id
         build_root.mkdir(parents=True, exist_ok=True)
         run_cancelled_root.mkdir(parents=True, exist_ok=True)
         run_active_root.mkdir(parents=True, exist_ok=True)
@@ -2822,7 +2822,7 @@ class TestUIRun(UIBaseSuite):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         run_id = f"r-running-progress-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -2937,7 +2937,7 @@ class TestUIRun(UIBaseSuite):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         run_id = f"r-running-domjudge-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3022,7 +3022,7 @@ class TestUIRun(UIBaseSuite):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         run_id = f"r-running-singular-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3061,7 +3061,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-lifecycle-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-lifecycle-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-lifecycle")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3147,7 +3147,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"inv-verif-step-shape-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-step-shape")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         self._insert_verification_row(
             verification_id=verification_id,
@@ -3192,7 +3192,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-no-validate-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-no-validate-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-no-validate")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         (build_root / "logs").mkdir(parents=True, exist_ok=True)
         (build_root / "logs" / "tests_meta.json").write_text(
@@ -3205,7 +3205,7 @@ class TestUIRun(UIBaseSuite):
             ),
             encoding="utf-8",
         )
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3290,7 +3290,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"ver-running-tests-meta-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-running-tests-meta")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         (build_root / "logs").mkdir(parents=True, exist_ok=True)
         (build_root / "logs" / "tests_meta.json").write_text(
             json.dumps(
@@ -3389,7 +3389,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"ver-partial-artifact-tests-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-partial-artifact-tests")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         (build_root / "tests").mkdir(parents=True, exist_ok=True)
         (build_root / "tests" / "001.in").write_text("1\n", encoding="utf-8")
         run_id = f"r-partial-artifact-tests-{uuid.uuid4().hex[:8]}"
@@ -3458,7 +3458,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-gen-running-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-gen-running-{uuid.uuid4().hex[:8]}"
         build_id = f"ver-artifact-gen-running-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         tests_root = build_root / "tests"
         tests_root.mkdir(parents=True, exist_ok=True)
         (tests_root / "001.in").write_text("1\n", encoding="utf-8")
@@ -3526,7 +3526,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-step2-done-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-step2-done-{uuid.uuid4().hex[:8]}"
         build_id = f"ver-artifact-step2-done-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         tests_root = build_root / "tests"
         ans_root = build_root / "ans"
         tests_root.mkdir(parents=True, exist_ok=True)
@@ -3535,7 +3535,7 @@ class TestUIRun(UIBaseSuite):
             name = f"{idx:03}.in"
             (tests_root / name).write_text(f"{idx}\n", encoding="utf-8")
             (ans_root / f"{idx:03}.ans").write_text(f"{idx}\n", encoding="utf-8")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3640,7 +3640,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-buildsolve-{uuid.uuid4().hex[:12]}"
         run_id = f"r-buildsolve-{uuid.uuid4().hex[:12]}"
         build_id = self.random_id("b-buildsolve-step2")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         tests_root = build_root / "tests"
         ans_root = build_root / "ans"
         tests_root.mkdir(parents=True, exist_ok=True)
@@ -3648,7 +3648,7 @@ class TestUIRun(UIBaseSuite):
         for idx in range(1, 28):
             (tests_root / f"{idx:03}.in").write_text(f"{idx}\n", encoding="utf-8")
             (ans_root / f"{idx:03}.ans").write_text(f"{idx}\n", encoding="utf-8")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         tests_payload = [
             {
@@ -3733,7 +3733,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"inv-buildsolve-table-{uuid.uuid4().hex[:12]}"
         build_id = self.random_id("b-buildsolve-table")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         tests_root = build_root / "tests"
         ans_root = build_root / "ans"
         tests_root.mkdir(parents=True, exist_ok=True)
@@ -3852,7 +3852,7 @@ class TestUIRun(UIBaseSuite):
         actor_user_id = int(ctx["user"]["id"] )
         verification_id = f"inv-verif-val-note-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-val-note-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3924,7 +3924,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"inv-verif-step2-cancel-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-step2-cancel")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
         manual_run_id = f"r-verif-step2-cancel-manual-{uuid.uuid4().hex[:8]}"
         gen_run_id = f"r-verif-step2-cancel-gen-{uuid.uuid4().hex[:8]}"
@@ -3944,7 +3944,7 @@ class TestUIRun(UIBaseSuite):
                     "status": "failed",
                     "source_label": "manual_validate.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / manual_run_id),
+                    "artifact_path": str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / manual_run_id),
                     "summary": {
                         "source": "manual_validate.cpp",
                         "verification_source": "verification.generate-input",
@@ -3961,7 +3961,7 @@ class TestUIRun(UIBaseSuite):
                     "status": "failed",
                     "source_label": "gen.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / gen_run_id),
+                    "artifact_path": str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / gen_run_id),
                     "summary": {
                         "source": "gen.cpp",
                         "verification_source": "verification.generate-input",
@@ -3979,7 +3979,7 @@ class TestUIRun(UIBaseSuite):
                     "status": "running",
                     "source_label": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / main_run_id),
+                    "artifact_path": str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / main_run_id),
                     "summary": {
                         "source": "solutions/accepted.cpp",
                         "verification_source": "verification.solve-main",
@@ -4402,9 +4402,9 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-run-failed-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-run-failed-{uuid.uuid4().hex[:8]}"
         build_id = f"ver-artifact-run-failed-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
 
         self._insert_stage_verification(
@@ -4496,9 +4496,9 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-run-cancel-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-run-cancel-{uuid.uuid4().hex[:8]}"
         build_id = f"ver-artifact-run-cancel-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
 
         self._insert_stage_verification(
@@ -4728,9 +4728,9 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-skip-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-skip-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-skip")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
 
         self._insert_stage_verification(
@@ -4826,10 +4826,10 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"ver-build-fail-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-build-fail")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
-        main_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"r-main-{uuid.uuid4().hex[:8]}"
-        other_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / f"r-other-{uuid.uuid4().hex[:8]}"
+        main_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / f"r-main-{uuid.uuid4().hex[:8]}"
+        other_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / f"r-other-{uuid.uuid4().hex[:8]}"
         main_root.mkdir(parents=True, exist_ok=True)
         other_root.mkdir(parents=True, exist_ok=True)
 
@@ -4915,7 +4915,7 @@ class TestUIRun(UIBaseSuite):
         run_a = f"r-verif-dedup-a-{uuid.uuid4().hex[:8]}"
         run_b = f"r-verif-dedup-b-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-dedup")
-        build_root = Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
+        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
         build_root.mkdir(parents=True, exist_ok=True)
 
         summary_a = {
@@ -4938,7 +4938,7 @@ class TestUIRun(UIBaseSuite):
             mode="pass-fail",
             status="ok",
             summary=summary_a,
-            artifact_path=str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_a),
+            artifact_path=str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_a),
             created_at="2026-02-23T00:00:02Z",
             finished_at="2026-02-23T00:00:03Z",
             verification_id=verification_id,
@@ -4952,7 +4952,7 @@ class TestUIRun(UIBaseSuite):
             mode="pass-fail",
             status="ok",
             summary=summary_b,
-            artifact_path=str(Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_b),
+            artifact_path=str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_b),
             created_at="2026-02-23T00:00:04Z",
             finished_at="2026-02-23T00:00:05Z",
             verification_id=verification_id,
@@ -5021,7 +5021,7 @@ class TestUIRun(UIBaseSuite):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         run_id = f"r-source-link-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -5320,7 +5320,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         run_id = f"r-unknown-fl-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-unknown-fl")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -5356,7 +5356,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         run_id = f"r-rejected-ce-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-rejected-ce")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -5391,7 +5391,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         run_id = f"r-diag-heading-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-diag-heading")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -5442,7 +5442,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-wa-fallback-{uuid.uuid4().hex[:8]}"
         run_id = f"r-wa-fallback-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-wa-fallback")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -5518,7 +5518,7 @@ class TestUIRun(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         run_id = f"r-multipass-rows-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-multipass-rows")
-        run_root = Path(os.environ["POLYGONLIKE_RUN_ROOT"]) / run_id
+        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -5965,7 +5965,7 @@ class TestUIRun(UIBaseSuite):
             source_ref="main",
             status="ok",
             summary=json.dumps({}),
-            artifact_path=str(Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice" / "sample" / build_id),
+            artifact_path=str(Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice" / "sample" / build_id),
             created_at="2026-03-12T00:00:00Z",
             finished_at="2026-03-12T00:00:01Z",
         )
@@ -6001,7 +6001,7 @@ class TestUIRun(UIBaseSuite):
             source_ref="main",
             status="ok",
             summary=json.dumps({}),
-            artifact_path=str(Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / "alice" / "sample" / build_id),
+            artifact_path=str(Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice" / "sample" / build_id),
             created_at="2026-03-12T00:00:00Z",
             finished_at="2026-03-12T00:00:01Z",
         )

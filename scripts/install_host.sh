@@ -26,6 +26,9 @@ if [[ "${EUID}" -ne 0 ]]; then
   fi
 fi
 
+RUNTIME_USER="${SUDO_USER:-$(id -un)}"
+RUNTIME_GROUP="$(id -gn "$RUNTIME_USER")"
+
 echo "[1/5] Installing system dependencies..."
 "${SUDO[@]}" apt-get update
 "${SUDO[@]}" apt-get install -y \
@@ -51,7 +54,7 @@ if command -v fmtutil-sys >/dev/null 2>&1; then
 fi
 
 echo "[2/5] Configuring kernel user namespace settings..."
-SYSCTL_FILE="/etc/sysctl.d/99-polygonlike-sandbox.conf"
+SYSCTL_FILE="/etc/sysctl.d/99-polygon-replica-sandbox.conf"
 TMP_SYSCTL="$(mktemp)"
 cat >"$TMP_SYSCTL" <<'EOF'
 kernel.unprivileged_userns_clone = 1
@@ -73,8 +76,25 @@ echo "  kernel.unprivileged_userns_clone=$USERNS_CLONE"
 echo "  user.max_user_namespaces=$USERNS_MAX"
 echo "  kernel.apparmor_restrict_unprivileged_userns=$APPARMOR_USERNS"
 
+echo "  Preparing runtime storage roots..."
+RUNTIME_DIRS=(
+  /srv/git
+  /srv/workspaces
+  /srv/runs
+  /var/lib/polygon-replica
+  /var/lib/polygon-replica/artifacts
+  /var/lib/polygon-replica/tls
+  /var/cache/polygon-replica
+)
+"${SUDO[@]}" install -d -m 0755 "${RUNTIME_DIRS[@]}"
+"${SUDO[@]}" chown -R "${RUNTIME_USER}:${RUNTIME_GROUP}" \
+  /srv/git \
+  /srv/workspaces \
+  /srv/runs \
+  /var/lib/polygon-replica \
+  /var/cache/polygon-replica
+
 echo "[3/5] Probing bubblewrap root-switch capability..."
-RUNTIME_USER="${SUDO_USER:-$(id -un)}"
 PROBE_CMD=(bwrap --die-with-parent --new-session --ro-bind / / --chdir / -- /bin/sh -lc 'true')
 if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
   if ! sudo -u "$RUNTIME_USER" "${PROBE_CMD[@]}" >/dev/null 2>&1; then
@@ -188,14 +208,24 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
 echo "[5/5] Writing runtime environment file..."
-mkdir -p var
-ENV_FILE="var/polygonlike.env"
-cat >"$ENV_FILE" <<'EOF'
+TMP_ENV_FILE="$(mktemp)"
+cat >"$TMP_ENV_FILE" <<'EOF'
+export POLYGON_REPLICA_DB=/var/lib/polygon-replica/metadata.db
+export POLYGON_REPLICA_BARE_ROOT=/srv/git
+export POLYGON_REPLICA_WORKSPACE_ROOT=/srv/workspaces
+export POLYGON_REPLICA_RUN_ROOT=/srv/runs
+export POLYGON_REPLICA_ARTIFACTS_ROOT=/var/lib/polygon-replica/artifacts
+export POLYGON_REPLICA_CACHE_ROOT=/var/cache/polygon-replica
+export POLYGON_REPLICA_TLS_KEY_PATH=/var/lib/polygon-replica/tls/dev-localhost.key
+export POLYGON_REPLICA_TLS_CERT_PATH=/var/lib/polygon-replica/tls/dev-localhost.crt
 EOF
+ENV_FILE="/etc/polygon-replica.env"
+"${SUDO[@]}" install -m 0644 "$TMP_ENV_FILE" "$ENV_FILE"
+rm -f "$TMP_ENV_FILE"
 
 echo
 echo "Install completed."
 echo "Next steps:"
 echo "  source .venv/bin/activate"
-echo "  source var/polygonlike.env"
-echo "  ./scripts/bootstrap_demo.sh"
+echo "  source /etc/polygon-replica.env"
+echo "  ./scripts/start_local.sh"

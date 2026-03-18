@@ -39,7 +39,7 @@ Forbidden examples under `/mnt/*`:
 ```bash
 cd /root/work/Polygon-Replica
 source .venv/bin/activate
-./scripts/test.sh
+./tests/scripts/test.sh
 ```
 
 Focused test example:
@@ -53,8 +53,8 @@ python -m unittest tests.test_toolchain_languages -v
 ```bash
 cd /root/work/Polygon-Replica
 source .venv/bin/activate
-[ -f var/polygonlike.env ] && source var/polygonlike.env
-./scripts/bootstrap_demo.sh
+[ -f /etc/polygon-replica.env ] && source /etc/polygon-replica.env
+./scripts/start_local.sh
 ```
 
 Default URL:

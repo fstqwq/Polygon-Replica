@@ -40,12 +40,12 @@ def _count_label(count: int, singular: str, plural: str | None = None) -> str:
 
 def _setup_config_rows() -> list[dict[str, str]]:
     return [
-        {'name': 'POLYGONLIKE_DB', 'value': str(config.settings.db_path)},
-        {'name': 'POLYGONLIKE_BARE_ROOT', 'value': str(config.settings.bare_root)},
-        {'name': 'POLYGONLIKE_WORKSPACE_ROOT', 'value': str(config.settings.workspace_root)},
-        {'name': 'POLYGONLIKE_RUN_ROOT', 'value': str(config.settings.run_root)},
-        {'name': 'POLYGONLIKE_ARTIFACTS_ROOT', 'value': str(config.settings.artifacts_root)},
-        {'name': 'POLYGONLIKE_CACHE_ROOT', 'value': str(config.settings.cache_root)},
+        {'name': 'POLYGON_REPLICA_DB', 'value': str(config.settings.db_path)},
+        {'name': 'POLYGON_REPLICA_BARE_ROOT', 'value': str(config.settings.bare_root)},
+        {'name': 'POLYGON_REPLICA_WORKSPACE_ROOT', 'value': str(config.settings.workspace_root)},
+        {'name': 'POLYGON_REPLICA_RUN_ROOT', 'value': str(config.settings.run_root)},
+        {'name': 'POLYGON_REPLICA_ARTIFACTS_ROOT', 'value': str(config.settings.artifacts_root)},
+        {'name': 'POLYGON_REPLICA_CACHE_ROOT', 'value': str(config.settings.cache_root)},
     ]
 
 

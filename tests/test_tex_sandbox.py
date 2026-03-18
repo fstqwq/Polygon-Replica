@@ -12,7 +12,7 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 @unittest.skipUnless(shutil.which("bwrap") and shutil.which("pdflatex"), "bwrap and pdflatex are required")
 class TestTexSandbox(unittest.TestCase):
     def test_tex_sandbox_compiles_in_root_switched_workspace(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="polygonlike-tex-sandbox-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:
             workdir = Path(tmp) / "work"
             workdir.mkdir(parents=True, exist_ok=True)
             (workdir / "main.tex").write_text(
@@ -39,7 +39,7 @@ class TestTexSandbox(unittest.TestCase):
             self.assertTrue(bool(result.details.get("root_switched")))
 
     def test_tex_sandbox_blocks_parent_include_escape(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="polygonlike-tex-sandbox-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:
             root = Path(tmp)
             workdir = root / "work"
             workdir.mkdir(parents=True, exist_ok=True)
@@ -68,7 +68,7 @@ class TestTexSandbox(unittest.TestCase):
             self.assertIn("secret.tex", merged)
 
     def test_tex_sandbox_blocks_parent_include_command_escape(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="polygonlike-tex-sandbox-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:
             root = Path(tmp)
             workdir = root / "work"
             workdir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +97,7 @@ class TestTexSandbox(unittest.TestCase):
             self.assertIn("secret", merged)
 
     def test_tex_sandbox_allows_parent_include_with_explicit_extra_mount(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="polygonlike-tex-sandbox-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:
             root = Path(tmp)
             workdir = root / "work"
             workdir.mkdir(parents=True, exist_ok=True)

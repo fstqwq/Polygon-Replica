@@ -17,7 +17,7 @@ Remember that Claude Opus 4.6 will review your code.
 
 - bare repository: `/srv/git/<owner>/<slug>.git`
 - per-user workspace: `/srv/workspaces/<viewer>/<owner>/<slug>/`
-- build/preview artifacts: `/var/lib/polygonlike/artifacts/objects/<hh>/<ref>/`
+- build/preview artifacts: `/var/lib/polygon-replica/artifacts/objects/<hh>/<ref>/`
 - run artifacts: `/srv/runs/<run_id>/`
 - judgehost temp work root: `/srv/runs/judgehost-domjudge/<task_id>/`
 - metadata DB: problems/users/workspaces/builds/runs/exports/audit/...

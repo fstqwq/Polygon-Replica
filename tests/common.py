@@ -12,7 +12,7 @@ from pathlib import Path
 from app.service.platform.testlib_source import maintained_testlib_header
 
 
-_TESTSUITE_BASE = Path("./var")
+_TESTSUITE_BASE = Path("/tmp/polygon-replica")
 _TESTSUITE_ROOT = _TESTSUITE_BASE / f"testsuite-{uuid.uuid4().hex[:8]}"
 _DEFAULT_TESTSUITE_STALE_TTL_SEC = 3600.0
 
@@ -28,7 +28,7 @@ def _rmtree_retry(path: Path, attempts: int = 3, delay_sec: float = 0.1) -> None
 
 
 def _testsuite_stale_ttl_sec() -> float:
-    raw = str(os.environ.get("POLYGONLIKE_TESTSUITE_STALE_TTL_SEC", "")).strip()
+    raw = str(os.environ.get("POLYGON_REPLICA_TESTSUITE_STALE_TTL_SEC", "")).strip()
     if not raw:
         return _DEFAULT_TESTSUITE_STALE_TTL_SEC
     try:
@@ -77,13 +77,13 @@ _cleanup_stale_testsuite_roots(exclude=testsuite_root())
 
 def ensure_local_env() -> None:
     root = testsuite_root()
-    os.environ["POLYGONLIKE_DB"] = str(root / "polygonlike.db")
-    os.environ["POLYGONLIKE_BARE_ROOT"] = str(root / "srv" / "git")
-    os.environ["POLYGONLIKE_WORKSPACE_ROOT"] = str(root / "srv" / "workspaces")
-    os.environ["POLYGONLIKE_RUN_ROOT"] = str(root / "srv" / "runs")
-    os.environ["POLYGONLIKE_ARTIFACTS_ROOT"] = str(root / "lib" / "polygonlike" / "artifacts")
-    os.environ["POLYGONLIKE_CACHE_ROOT"] = str(root / "cache" / "polygonlike")
-    os.environ["POLYGONLIKE_AUTH_COOKIE_SECURE"] = "1"
+    os.environ["POLYGON_REPLICA_DB"] = str(root / "var" / "lib" / "polygon-replica" / "metadata.db")
+    os.environ["POLYGON_REPLICA_BARE_ROOT"] = str(root / "srv" / "git")
+    os.environ["POLYGON_REPLICA_WORKSPACE_ROOT"] = str(root / "srv" / "workspaces")
+    os.environ["POLYGON_REPLICA_RUN_ROOT"] = str(root / "srv" / "runs")
+    os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"] = str(root / "var" / "lib" / "polygon-replica" / "artifacts")
+    os.environ["POLYGON_REPLICA_CACHE_ROOT"] = str(root / "var" / "cache" / "polygon-replica")
+    os.environ["POLYGON_REPLICA_AUTH_COOKIE_SECURE"] = "1"
 
 
 ensure_local_env()
@@ -243,7 +243,7 @@ class SmokeBase(unittest.TestCase):
 
     def _artifact_root(self, artifact_id: str) -> Path:
         problem = str(getattr(self, "problem", "alice/sample"))
-        return Path(os.environ["POLYGONLIKE_ARTIFACTS_ROOT"]) / problem / artifact_id
+        return Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / artifact_id
 
     def _workspace_path(self) -> Path:
         problem = str(getattr(self, "problem", "alice/sample"))

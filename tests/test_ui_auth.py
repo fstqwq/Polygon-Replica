@@ -310,7 +310,7 @@ class TestUIAuth(UIBaseSuite):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("System Setup", html)
         self.assertIn("Create Super Admin", html)
-        self.assertIn("POLYGONLIKE_DB", html)
+        self.assertIn("POLYGON_REPLICA_DB", html)
         self.assertIn("I confirm the configuration paths below.", html)
 
     def test_setup_submit_creates_super_admin(self) -> None:

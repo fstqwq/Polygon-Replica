@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts import import_policy
+from tests.scripts import import_policy
 ROOT = Path(__file__).resolve().parents[1]
-IMPORT_POLICY_SCRIPT = ROOT / "scripts" / "import_policy.py"
+IMPORT_POLICY_SCRIPT = ROOT / "tests" / "scripts" / "import_policy.py"
 
 
 class TestImportPolicy(unittest.TestCase):
@@ -21,7 +21,7 @@ def _export_public(namespace, module):
 _export_public(globals(), module)
 """
         self.assertTrue(import_policy._dynamic_reexport_detected("app.impl.workspace.context_ui", source))
-        self.assertFalse(import_policy._dynamic_reexport_detected("scripts.import_policy", source))
+        self.assertFalse(import_policy._dynamic_reexport_detected("tests.scripts.import_policy", source))
 
     def test_plural_segment_naming_detector(self) -> None:
         self.assertEqual(
