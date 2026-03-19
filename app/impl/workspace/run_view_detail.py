@@ -71,6 +71,7 @@ from app.impl.workspace.run_view_list import (
     _run_expected_behavior_from_summary,
     _verification_source_from_summary,
     _is_main_correct_verification_source,
+    _solution_run_ids_from_summary,
     _run_test_answer_name,
     _run_test_sort_key,
     _run_timeout_ms_from_summary,
@@ -156,9 +157,12 @@ def build_run_detail_context(
     verification_created_at = ''
     if not verification_created_at and verification_record is not None:
         verification_created_at = verification_record['created_at']
+    solutions = verification_details.get('solutions') or []
+    preferred_solution_run_ids = _solution_run_ids_from_summary(verification_details)
+    if preferred_solution_run_ids:
+        selected_ids = list(preferred_solution_run_ids)
     expected_by_run_id: dict[str, str] = {}
     expected_by_source: dict[str, str] = {}
-    solutions = verification_details.get('solutions') or []
     for item in solutions:
         expected_token = normalize_expected_behavior((item.get('expected_behavior') or 'unknown'))
         if expected_token == 'unknown':

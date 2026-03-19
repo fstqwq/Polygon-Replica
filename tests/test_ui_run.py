@@ -5985,6 +5985,115 @@ class TestUIRun(UIBaseSuite):
         scope_run_ids = workspace_impl.verification_run_ids(problem_id, workspace_id, verification_id)
         self.assertEqual(scope_run_ids, ["r-one", "r-two"])
 
+    def test_verification_run_ids_ignores_stale_runs_outside_runs_order(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        build_id = self.random_id("b-ver-runids-stale")
+        verification_id = f"inv-ver-runids-stale-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=build_id,
+            kind=Kind.VERIFICATION,
+            status="running",
+            created_at="2026-03-19T00:00:02Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": "r-current",
+                    "status": "running",
+                    "source_label": "solutions/current.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {"source": "solutions/current.cpp", "status": "running"},
+                },
+                {
+                    "id": "r-stale",
+                    "status": "failed",
+                    "source_label": "solutions/stale.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {"source": "solutions/stale.cpp", "status": "failed"},
+                },
+            ],
+            summary_extra={"status": "running", "runs_order": ["r-current"]},
+        )
+        scope_run_ids = workspace_impl.verification_run_ids(problem_id, workspace_id, verification_id)
+        self.assertEqual(scope_run_ids, ["r-current"])
+
+    def test_run_details_prefers_current_solution_run_over_stale_duplicate_run(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-detail-dedupe-{uuid.uuid4().hex[:8]}"
+        stale_run_id = "r-chat-old"
+        current_run_id = "r-chat-new"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id="",
+            kind=Kind.VERIFICATION,
+            status="failed",
+            created_at="2026-03-19T01:00:00Z",
+            finished_at="2026-03-19T01:00:30Z",
+            runs=[
+                {
+                    "id": stale_run_id,
+                    "status": "failed",
+                    "source_label": "solutions/chat.java",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "source": "solutions/chat.java",
+                        "tests_total": 1,
+                        "tests": [{"test": "001.in", "verdict": "FL", "time_ms": 0, "memory_kb": 0}],
+                        "error": "old synthetic failure",
+                    },
+                },
+                {
+                    "id": current_run_id,
+                    "status": "failed",
+                    "source_label": "solutions/chat.java",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "source": "solutions/chat.java",
+                        "verification_source": "verification.start",
+                        "selected_tests_count": 21,
+                        "tests": [{"test": "001.in", "verdict": "CE", "time_ms": 0, "memory_kb": 0}],
+                        "error": "real compile error",
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "failed",
+                "runs_order": [stale_run_id, current_run_id],
+                "solutions": [
+                    {
+                        "source_path": "solutions/chat.java",
+                        "expected_behavior": "accepted",
+                        "run_id": stale_run_id,
+                        "run_status": "failed",
+                        "completed": True,
+                        "passed_all_tests": False,
+                        "matched": False,
+                        "reason": "required=[AC], allowed=[AC], got=[FL]",
+                        "error": "old synthetic failure",
+                    }
+                ],
+            },
+        )
+        detail_ctx = workspace_impl.build_run_detail_context(
+            ctx,
+            "pass-fail",
+            requested_verification_id=verification_id,
+        )
+        columns = list(detail_ctx.get("detail_columns") or [])
+        self.assertEqual(len(columns), 1)
+        self.assertEqual(str(columns[0].get("id") or ""), current_run_id)
+        self.assertEqual(str(columns[0].get("got_short") or ""), "CE")
+
     def test_run_verification_details_prefers_verification_record_over_audit(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_snapshot
 

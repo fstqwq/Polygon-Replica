@@ -13,6 +13,7 @@ from app.service.verification.store import (
     create_verification_record,
     default_verification_summary,
     default_verification_run,
+    drop_verification_run,
     load_verification_run,
     load_verification_summary,
     save_verification_summary,
@@ -751,6 +752,29 @@ def _run_verification_start_worker(
     verification_details.pop('runs', None)
     verification_details.pop('runs_order', None)
 
+    def _drop_stale_solution_run(stale_run_id: str, replacement_run_id: str) -> None:
+        safe_stale_run_id = normalize_run_id_token(stale_run_id)
+        safe_replacement_run_id = normalize_run_id_token(replacement_run_id)
+        if (not safe_stale_run_id) or (not safe_replacement_run_id) or safe_stale_run_id == safe_replacement_run_id:
+            return
+        try:
+            with verification_update_lock(verification_id):
+                existing_summary = load_verification_summary(config.db, verification_id)
+                if not existing_summary:
+                    return
+                updated_summary = drop_verification_run(dict(existing_summary), run_id=safe_stale_run_id)
+                current_status = str(updated_summary.get('status') or existing_summary.get('status') or 'running')
+                finished = current_status not in {'', 'queued', 'pending', 'running'}
+                save_verification_summary(
+                    config.db,
+                    verification_id=verification_id,
+                    status=current_status,
+                    summary=updated_summary,
+                    finished=finished,
+                )
+        except Exception:
+            return
+
     def _backfill_missing_verification_runs(
         error_text: str,
         *,
@@ -1159,6 +1183,7 @@ def _run_verification_start_worker(
                         current_run_id = normalize_run_id_token(current_run_id) or current_run_id
                         if requested_run_id and current_run_id and requested_run_id != current_run_id:
                             run_ids = [current_run_id if token == requested_run_id else token for token in run_ids]
+                            _drop_stale_solution_run(requested_run_id, current_run_id)
                         if current_run_id and current_run_id not in run_ids:
                             run_ids.append(current_run_id)
                         run_ids = dedupe_preserve_order(run_ids)
@@ -1277,6 +1302,7 @@ def _run_verification_start_worker(
                 if (not replaced) and retry_run_id:
                     rewritten_run_ids.append(retry_run_id)
                 run_ids = dedupe_preserve_order(rewritten_run_ids)
+                _drop_stale_solution_run(previous_run_id, retry_run_id)
             except Exception:
                 # Keep original mismatch result when retry itself fails.
                 continue

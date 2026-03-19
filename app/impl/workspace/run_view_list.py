@@ -153,6 +153,46 @@ def _is_main_correct_verification_source(source: str) -> bool:
 def _is_solution_list_source(source: str) -> bool:
     return bool(normalize_optional_component_source_path_safe(source, "solutions", "solution path"))
 
+
+def _latest_solution_run_ids_by_source(summary: dict[str, object]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for run_id in verification_run_ids(summary):
+        run_token = normalize_run_id_token(run_id)
+        if not run_token:
+            continue
+        run_row = verification_run(summary, run_token)
+        run_summary = dict(run_row.get("summary") or {})
+        source_token = normalize_optional_component_source_path_safe(
+            run_summary.get("source") or run_row.get("source_label") or "",
+            "solutions",
+            "solution path",
+        )
+        if source_token:
+            values[source_token] = run_token
+    return values
+
+
+def _solution_run_ids_from_summary(summary: dict[str, object]) -> list[str]:
+    values: list[str] = []
+    latest_by_source = _latest_solution_run_ids_by_source(summary)
+    solutions = summary.get("solutions")
+    if solutions is None:
+        return values
+    for item in solutions:
+        source_token = normalize_optional_component_source_path_safe(
+            item.get("source_path"),
+            "solutions",
+            "solution path",
+        )
+        run_id = normalize_run_id_token(item.get("run_id"))
+        preferred_run_id = latest_by_source.get(source_token, "") if source_token else ""
+        if not preferred_run_id:
+            preferred_run_id = run_id
+        if preferred_run_id and preferred_run_id not in values:
+            values.append(preferred_run_id)
+    return values
+
+
 def _verification_runs_for_list(summary: dict[str, object], *, fallback_status: str) -> list[dict[str, object]]:
     source_paths = verification_source_paths(summary)
     source_by_run_id: dict[str, str] = {}
@@ -182,7 +222,7 @@ def _verification_runs_for_list(summary: dict[str, object], *, fallback_status: 
             reason_text = item.get("reason")
             reason_by_run_id[run_id] = "" if reason_text is None else reason_text
     runs: list[dict[str, object]] = []
-    run_ids = verification_run_ids(summary)
+    run_ids = _solution_run_ids_from_summary(summary) or verification_run_ids(summary)
     for idx, run_id in enumerate(run_ids):
         run_id = normalize_run_id_token(run_id)
         if not run_id:

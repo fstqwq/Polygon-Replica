@@ -226,10 +226,13 @@ def default_verification_run(
 
 
 def verification_run_ids(summary: VerificationSummary) -> list[str]:
-    values: list[str] = []
+    ordered_values: list[str] = []
     for token in _summary_run_order(summary):
-        if token and token not in values:
-            values.append(token)
+        if token and token not in ordered_values:
+            ordered_values.append(token)
+    if ordered_values:
+        return ordered_values
+    values: list[str] = []
     for token in _summary_runs(summary).keys():
         if token and token not in values:
             values.append(token)
@@ -372,6 +375,22 @@ def set_verification_run(
     runs[run_id] = dict(run)
     if run_id not in order:
         order.append(run_id)
+    summary["runs"] = runs
+    summary["runs_order"] = order
+    summary["status"] = _normalize_verification_status(summary)
+    return summary
+
+
+def drop_verification_run(
+    summary: VerificationSummary,
+    *,
+    run_id: str,
+) -> VerificationSummary:
+    if not run_id:
+        return summary
+    runs = _summary_runs(summary)
+    order = [token for token in _summary_run_order(summary) if token and token != run_id]
+    runs.pop(run_id, None)
     summary["runs"] = runs
     summary["runs_order"] = order
     summary["status"] = _normalize_verification_status(summary)
