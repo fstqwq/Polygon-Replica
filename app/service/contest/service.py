@@ -88,7 +88,6 @@ class ContestArtifact(TypedDict):
     job_id: str
     artifact_type: str
     filename: str
-    artifact_path: str
     size_bytes: int
     created_at: str
     downloadable: bool
@@ -109,7 +108,6 @@ class ContestStatementAttachment(TypedDict):
 class ContestPreviewResult(TypedDict):
     status: str
     summary: dict[str, object]
-    artifact_path: str
 
 
 class ContestVerificationStage(TypedDict):
@@ -121,7 +119,6 @@ class ContestVerificationStage(TypedDict):
 
 
 class ContestService:
-    _ARTIFACT_BUCKET = "__contests__"
     _ACCESS_ROLES = {"owner", "write", "read"}
     _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
     _STATEMENT_SOURCE_FOLDERS_KEY = "statement_source_folders"
@@ -229,7 +226,7 @@ class ContestService:
         }
 
     def artifacts_base(self) -> Path:
-        base = (self.settings.artifacts_root / self._ARTIFACT_BUCKET).resolve()
+        base = (self.settings.artifacts_root / "contests").resolve()
         base.mkdir(parents=True, exist_ok=True)
         return base
 
@@ -256,6 +253,27 @@ class ContestService:
             raise ValueError("invalid contest artifact path")
         root.mkdir(parents=True, exist_ok=True)
         return root
+
+    def artifact_root(self, contest_slug: str, job_id: str, artifact_id: str) -> Path:
+        safe_artifact_id = str(artifact_id).strip()
+        if not is_canonical_artifact_id(safe_artifact_id):
+            raise ValueError("invalid contest artifact id")
+        job_root = self.job_root(contest_slug, job_id)
+        root = (job_root / "artifacts" / safe_artifact_id).resolve()
+        if not self._path_within(job_root, root):
+            raise ValueError("invalid contest artifact path")
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def artifact_path(self, contest_slug: str, job_id: str, artifact_id: str, filename: str) -> Path:
+        safe_filename = Path(str(filename).strip()).name
+        if not safe_filename:
+            raise ValueError("invalid contest artifact filename")
+        root = self.artifact_root(contest_slug, job_id, artifact_id)
+        target = (root / safe_filename).resolve()
+        if not self._path_within(root, target):
+            raise ValueError("invalid contest artifact file path")
+        return target
 
     def user_contests_overview(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
@@ -701,33 +719,49 @@ class ContestService:
     ) -> str:
         safe_filename = Path(str(filename).strip() or artifact_path.name).name
         resolved = artifact_path.resolve()
-        base = self.artifacts_base()
-        if not self._path_within(base, resolved):
-            raise ValueError("invalid contest artifact path")
         if not resolved.exists() or not resolved.is_file() or resolved.is_symlink():
             raise ValueError("contest artifact file not found")
+        contest_row = self._store.contest_context_by_id(int(contest_id))
+        if contest_row is None:
+            raise ValueError("contest not found")
+        safe_job_id = str(job_id).strip()
+        if not safe_job_id:
+            raise ValueError("contest job id is required")
         artifact_id = f"ca-{secrets.token_hex(6)}"
+        target_path = self.artifact_path(str(contest_row["slug"]), safe_job_id, artifact_id, safe_filename)
+        if resolved != target_path:
+            shutil.copy2(resolved, target_path)
+        stored_file = target_path.resolve()
         self._store.insert_artifact(
             artifact_id=artifact_id,
             contest_id=int(contest_id),
-            job_id=str(job_id).strip(),
+            job_id=safe_job_id,
             artifact_type=str(artifact_type).strip(),
             filename=safe_filename,
-            artifact_path=str(resolved),
-            sha256=sha256_file(resolved),
-            size_bytes=int(resolved.stat().st_size),
+            sha256=sha256_file(stored_file),
+            size_bytes=int(stored_file.stat().st_size),
             created_at=now_iso(),
         )
         return artifact_id
 
     def list_artifacts(self, contest_id: int, *, limit: int) -> list[ContestArtifact]:
-        base = self.artifacts_base()
+        contest_row = self._store.contest_context_by_id(int(contest_id))
+        if contest_row is None:
+            return []
+        contest_slug = str(contest_row["slug"])
         result: list[ContestArtifact] = []
         for row in self._store.artifact_rows(int(contest_id), limit=max(1, int(limit))):
-            artifact_path = Path(str(row["artifact_path"])).resolve()
+            job_id = str(row["job_id"] or "")
+            artifact_id = str(row["id"] or "")
+            filename = str(row["filename"] or "")
+            try:
+                artifact_path = self.artifact_path(contest_slug, job_id, artifact_id, filename).resolve()
+            except Exception:
+                artifact_path = Path()
             downloadable = (
-                is_canonical_artifact_id(str(row["id"]))
-                and self._path_within(base, artifact_path)
+                is_canonical_artifact_id(artifact_id)
+                and bool(job_id)
+                and artifact_path != Path()
                 and artifact_path.exists()
                 and artifact_path.is_file()
                 and (not artifact_path.is_symlink())
@@ -738,7 +772,6 @@ class ContestService:
                     "job_id": str(row["job_id"]),
                     "artifact_type": str(row["artifact_type"]),
                     "filename": str(row["filename"]),
-                    "artifact_path": str(row["artifact_path"]),
                     "size_bytes": int(row["size_bytes"]),
                     "created_at": str(row["created_at"]),
                     "downloadable": downloadable,
@@ -750,12 +783,20 @@ class ContestService:
         safe_artifact_id = str(artifact_id).strip()
         if not is_canonical_artifact_id(safe_artifact_id):
             return None
+        contest_row = self._store.contest_context_by_id(int(contest_id))
+        if contest_row is None:
+            return None
         row = self._store.artifact_row(int(contest_id), safe_artifact_id)
         if row is None:
             return None
-        file_path = Path(str(row["artifact_path"])).resolve()
-        base = self.artifacts_base()
-        if not self._path_within(base, file_path):
+        try:
+            file_path = self.artifact_path(
+                str(contest_row["slug"]),
+                str(row["job_id"] or ""),
+                safe_artifact_id,
+                str(row["filename"] or ""),
+            ).resolve()
+        except Exception:
             return None
         if not file_path.exists() or not file_path.is_file() or file_path.is_symlink():
             return None
@@ -769,7 +810,6 @@ class ContestService:
         return {
             "status": str(row["status"]).strip().lower(),
             "summary": dict(row["summary"]),
-            "artifact_path": str(row["artifact_path"]),
         }
 
     def verification_stage(self, problem_id: int, workspace_id: int, verification_id: str) -> ContestVerificationStage | None:

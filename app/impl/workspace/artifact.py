@@ -37,7 +37,7 @@ def artifact_root(problem: str, artifact_id: str) -> Path:
     if not artifact_path:
         raise HTTPException(status_code=404, detail="artifact not found")
     try:
-        base = config.settings.artifacts_root.resolve()
+        base = config.fs_manager.cache_artifacts_root.resolve()
         root = Path(artifact_path).resolve()
     except OSError:
         raise HTTPException(status_code=404, detail="artifact not found")

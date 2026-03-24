@@ -114,7 +114,7 @@ class RuntimeConfig:
         self.workspace_service = workspace.WorkspaceService(self.db, self.settings)
         self.contest_service = ContestService(self.db, self.settings)
         self.git_service = GitService()
-        self.fs_manager = FsManager(self.settings.artifacts_root, self.settings.run_root)
+        self.fs_manager = FsManager(self.settings.cache_root, self.settings.artifacts_root)
         self.artifact_service = ArtifactService(self.settings.artifacts_root)
         self.preview_sandbox_backend = TexSandboxBackend()
         self.judgehost_task_service = Judgehost(
@@ -143,7 +143,7 @@ class RuntimeConfig:
         )
         self.export_service = ExportService(self.db, self.settings.artifacts_root, self.settings.workspace_root)
         durable_log_raw = str(self.constants.WORKER_QUEUE_DURABLE_LOG or "").strip()
-        durable_log_path = self.settings.cache_root / "worker-queue-events.jsonl"
+        durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"
         if durable_log_raw:
             durable_log_path = Path(durable_log_raw).expanduser().resolve()
         self.worker_queue_service = WorkerQueueService(
@@ -155,4 +155,3 @@ class RuntimeConfig:
         )
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
 config = RuntimeConfig()
-

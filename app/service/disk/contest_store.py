@@ -69,7 +69,6 @@ class ContestArtifactRecord(TypedDict):
     job_id: str
     artifact_type: str
     filename: str
-    artifact_path: str
     size_bytes: int
     created_at: str
 
@@ -566,23 +565,22 @@ class ContestDiskStore:
         job_id: str,
         artifact_type: str,
         filename: str,
-        artifact_path: str,
         sha256: str,
         size_bytes: int,
         created_at: str,
     ) -> None:
         self.db.execute(
             """
-            INSERT INTO contest_artifacts(id,contest_id,job_id,artifact_type,filename,artifact_path,sha256,size_bytes,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO contest_artifacts(id,contest_id,job_id,artifact_type,filename,sha256,size_bytes,created_at)
+            VALUES(?,?,?,?,?,?,?,?)
             """,
-            [artifact_id, int(contest_id), job_id, artifact_type, filename, artifact_path, sha256, int(size_bytes), created_at],
+            [artifact_id, int(contest_id), job_id, artifact_type, filename, sha256, int(size_bytes), created_at],
         )
 
     def artifact_rows(self, contest_id: int, *, limit: int) -> list[ContestArtifactRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT id,job_id,artifact_type,filename,artifact_path,size_bytes,created_at
+            SELECT id,job_id,artifact_type,filename,size_bytes,created_at
             FROM contest_artifacts
             WHERE contest_id=?
             ORDER BY created_at DESC, id DESC
@@ -595,7 +593,7 @@ class ContestDiskStore:
     def artifact_row(self, contest_id: int, artifact_id: str) -> ContestArtifactRecord | None:
         row = self.db.fetch_one(
             """
-            SELECT id,job_id,artifact_type,filename,artifact_path,size_bytes,created_at
+            SELECT id,job_id,artifact_type,filename,size_bytes,created_at
             FROM contest_artifacts
             WHERE contest_id=? AND id=?
             """,

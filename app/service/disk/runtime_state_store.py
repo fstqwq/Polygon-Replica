@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
 from app.db import DB
 
 
@@ -56,18 +54,13 @@ class RuntimeStateStore:
             if not preview_id:
                 continue
             try:
-                artifact_row = self.db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [preview_id])
-                artifact_path = "" if artifact_row is None else str(artifact_row["artifact_path"] or "")
-                if artifact_path:
-                    summary_path = (Path(artifact_path).resolve() / "summary.json").resolve()
-                else:
-                    summary_path = None
-            except Exception:
-                summary_path = None
-            if summary_path is not None:
-                try:
-                    summary_path.parent.mkdir(parents=True, exist_ok=True)
-                    summary_path.write_text(
+                self.db.execute(
+                    """
+                    UPDATE previews
+                    SET status='failed', summary_json=?, finished_at=COALESCE(finished_at, ?)
+                    WHERE id=?
+                    """,
+                    [
                         json.dumps(
                             {
                                 "cancelled": True,
@@ -79,18 +72,9 @@ class RuntimeStateStore:
                             ensure_ascii=True,
                             separators=(",", ":"),
                         ),
-                        encoding="utf-8",
-                    )
-                except Exception:
-                    pass
-            try:
-                self.db.execute(
-                    """
-                    UPDATE previews
-                    SET status='failed', finished_at=COALESCE(finished_at, ?)
-                    WHERE id=?
-                    """,
-                    [now_text, preview_id],
+                        now_text,
+                        preview_id,
+                    ],
                 )
             except Exception as exc:
                 warnings.append(f"startup previews inflight cancel failed for {preview_id}: {exc}")
@@ -113,7 +97,7 @@ class RuntimeStateStore:
                 self.db.execute(
                     """
                     UPDATE verifications
-                    SET status='cancelled', fail_reason=?, finished_at=COALESCE(finished_at, ?)
+                    SET status='failed', fail_reason=?, finished_at=COALESCE(finished_at, ?)
                     WHERE id=?
                     """,
                     [reason, now_text, verification_id],

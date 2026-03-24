@@ -12,6 +12,7 @@ from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transa
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import preview_page, preview_run
+from app.impl.auth.internal.runtime import _startup_clear_all_caches
 from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_job import _run_export_create_worker
@@ -19,6 +20,30 @@ from app.service.disk.verification_store import VerificationStore
 
 
 class TestBackendMinimal(SmokeBase):
+    def test_startup_clear_all_caches_wipes_cache_root_artifacts_and_runtime(self) -> None:
+        artifact_file = config.fs_manager.cache_artifacts_root / "verifications" / "ver-test" / "metadata.json"
+        runtime_file = config.fs_manager.runtime_root / "judgehost-runs" / "jt-test" / "stdout.txt"
+        durable_log = config.fs_manager.runtime_root / "worker-queue-events.jsonl"
+        artifact_file.parent.mkdir(parents=True, exist_ok=True)
+        runtime_file.parent.mkdir(parents=True, exist_ok=True)
+        durable_log.parent.mkdir(parents=True, exist_ok=True)
+        artifact_file.write_text("{}", encoding="utf-8")
+        runtime_file.write_text("ok\n", encoding="utf-8")
+        durable_log.write_text("event\n", encoding="utf-8")
+
+        with (
+            patch.object(config.async_task_cache_service, "clear_all", return_value=None),
+            patch.object(config.judge_fs_index_service, "clear_all", return_value=None),
+            patch.object(config.judgehost_task_service, "clear_testcase_registry", return_value=None),
+        ):
+            _startup_clear_all_caches()
+
+        self.assertTrue(config.fs_manager.cache_artifacts_root.exists())
+        self.assertTrue(config.fs_manager.runtime_root.exists())
+        self.assertFalse(artifact_file.exists())
+        self.assertFalse(runtime_file.exists())
+        self.assertFalse(durable_log.exists())
+
     def test_db_init_fails_fast_on_incompatible_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "legacy-schema.db"
@@ -254,12 +279,10 @@ class TestBackendMinimal(SmokeBase):
     def test_preview_run_uses_sample_build_failed_flash_for_sample_sync_failure(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-sample-sync-failed")
-        artifact_path = self._artifact_root(preview_id)
-        artifact_path.mkdir(parents=True, exist_ok=True)
         db_execute(
             (
                 "INSERT INTO previews("
-                "id,problem_id,workspace_id,status,source_commit,source_ref,artifact_path,created_at,finished_at"
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
                 ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
             ),
             [
@@ -269,7 +292,7 @@ class TestBackendMinimal(SmokeBase):
                 "failed",
                 "",
                 "",
-                str(artifact_path),
+                "{}",
             ],
         )
         write_preview_summary(
@@ -291,7 +314,7 @@ class TestBackendMinimal(SmokeBase):
     def test_preview_page_shows_full_sample_build_failure_detail(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-sample-sync-detail")
-        artifact_path = self._artifact_root(preview_id)
+        artifact_path = config.fs_manager.prepare_preview_layout(preview_id).root
         artifact_path.mkdir(parents=True, exist_ok=True)
         (artifact_path / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_path / "logs" / "latex.log").write_text(
@@ -301,7 +324,7 @@ class TestBackendMinimal(SmokeBase):
         db_execute(
             (
                 "INSERT INTO previews("
-                "id,problem_id,workspace_id,status,source_commit,source_ref,artifact_path,created_at,finished_at"
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
                 ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
             ),
             [
@@ -311,7 +334,7 @@ class TestBackendMinimal(SmokeBase):
                 "failed",
                 "",
                 "",
-                str(artifact_path),
+                "{}",
             ],
         )
         write_preview_summary(

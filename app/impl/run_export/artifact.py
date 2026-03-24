@@ -42,7 +42,7 @@ def _verification_artifact_root(problem_id: int, verification_id: str) -> Path |
         return None
     try:
         root = Path(artifact_path).resolve()
-        base = config.settings.artifacts_root.resolve()
+        base = config.fs_manager.cache_artifacts_root.resolve()
     except Exception:
         return None
     try:
@@ -132,6 +132,3 @@ def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
             raise HTTPException(status_code=404, detail="artifact unavailable")
         raise
     return browser_file_response(file_path)
-
-
-

@@ -10,6 +10,17 @@ from app.service.verification.test_rows import build_verification_test_pass_row,
 
 
 class JudgehostQueueMixin:
+    def _run_ids_with_leased_cases(self, run_ids: list[str]) -> set[str]:
+        progress = self._judgehost_state_store.case_progress_for_runs(run_ids)
+        return {
+            run_id
+            for run_id, row in progress.items()
+            if int(row.get("leased") or 0) > 0
+        }
+
+    def domjudge_runs_with_leased_cases(self, run_ids: list[str]) -> set[str]:
+        return self._run_ids_with_leased_cases([self._normalize_run_id(run_id) for run_id in run_ids if run_id])
+
     def _lease_matching_group_task(self, *, hostname: str, group_key: str) -> dict[str, object] | None:
         safe_host = self._normalize_hostname(hostname)
         safe_group_key = str(group_key or "")
@@ -679,6 +690,7 @@ class JudgehostQueueMixin:
             return 0
         now_text = now_iso()
         affected = 0
+        leased_run_ids = self._run_ids_with_leased_cases(run_ids)
         with self._state_lock:
             for run_id in run_ids:
                 task_id = self._task_id_by_run.get(run_id)
@@ -687,10 +699,9 @@ class JudgehostQueueMixin:
                 row = self._tasks_by_id.get(task_id)
                 if row is None:
                     continue
-                if row["status"] != self.STATUS_QUEUED:
+                if row["status"] not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
                     continue
-                case_rows = self._judgehost_state_store.cases_for_run(run_id)
-                if any(str(case_row.get("status") or "") == "leased" for case_row in case_rows):
+                if run_id in leased_run_ids:
                     continue
                 row["status"] = self.STATUS_FAILED
                 row["result"] = {"cancelled": True, "reason": reason, "error": reason}

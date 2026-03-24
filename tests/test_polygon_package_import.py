@@ -375,12 +375,15 @@ class TestPolygonPackageImport(SmokeBase):
         service = PolygonPackageImportService()
         result = service.import_package(ws, package.name, package.read_bytes())
         render_statement_main(ws / "statement", problem_title=str(result.get("title") or ""))
-        with patch.object(config.preview_service.sandbox, "run", side_effect=FileNotFoundError("pdflatex missing")):
+        with (
+            patch.object(config.preview_service, "_sample_verification_rows_from_spec", return_value=[]),
+            patch.object(config.preview_service.sandbox, "run", side_effect=FileNotFoundError("pdflatex missing")),
+        ):
             preview_id = config.preview_service.compile_preview(problem, user)
-        row = db_fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         summary = read_preview_summary(preview_id)
         self.assertIn("pdflatex missing", str(summary.get("error") or ""))
-        artifact_root = Path(str(row["artifact_path"]))
+        artifact_root = config.fs_manager.resolve_preview_root(preview_id)
         self.assertFalse((artifact_root / "statement_preview" / "statement.pdf").exists())

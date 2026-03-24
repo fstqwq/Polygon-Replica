@@ -161,32 +161,25 @@ def _startup_clear_all_caches() -> None:
         config.judge_fs_index_service.clear_all()
     except Exception as exc:
         warnings.warn(f"startup judge fs index clear failed: {exc}", RuntimeWarning)
-    testcase_cache_root = (config.settings.cache_root / "judgehost-domjudge-testcases").resolve()
-    judgehost_runs_cache_root = (config.settings.cache_root / "judgehost-domjudge-runs").resolve()
-    try:
-        if testcase_cache_root.exists() and testcase_cache_root.is_dir() and (not testcase_cache_root.is_symlink()):
-            shutil.rmtree(testcase_cache_root, ignore_errors=True)
-    except Exception as exc:
-        warnings.warn(f"startup testcase cache clear failed: {exc}", RuntimeWarning)
-    try:
-        testcase_cache_root.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-    try:
-        if judgehost_runs_cache_root.exists() and judgehost_runs_cache_root.is_dir() and (not judgehost_runs_cache_root.is_symlink()):
-            shutil.rmtree(judgehost_runs_cache_root, ignore_errors=True)
-    except Exception as exc:
-        warnings.warn(f"startup judgehost transient run cache clear failed: {exc}", RuntimeWarning)
-    try:
-        judgehost_runs_cache_root.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    for root, label in (
+        (config.fs_manager.cache_artifacts_root.resolve(), "artifact cache"),
+        (config.fs_manager.runtime_root.resolve(), "runtime cache"),
+    ):
+        try:
+            if root.exists() and root.is_dir() and (not root.is_symlink()):
+                shutil.rmtree(root, ignore_errors=True)
+        except Exception as exc:
+            warnings.warn(f"startup {label} clear failed: {exc}", RuntimeWarning)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            warnings.warn(f"startup {label} recreate failed: {exc}", RuntimeWarning)
     try:
         config.judgehost_task_service.clear_testcase_registry()
     except Exception as exc:
         warnings.warn(f"startup testcase registry reset failed: {exc}", RuntimeWarning)
     durable_log_raw = str(_C.WORKER_QUEUE_DURABLE_LOG or "").strip()
-    durable_log = (config.settings.cache_root / "worker-queue-events.jsonl").resolve()
+    durable_log = (config.fs_manager.runtime_root / "worker-queue-events.jsonl").resolve()
     if durable_log_raw:
         durable_log = Path(durable_log_raw).expanduser().resolve()
     try:

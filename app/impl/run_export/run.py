@@ -265,12 +265,7 @@ def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] 
     )
     notify_verification_cancelled(safe_verification_id, reason)
     cancelled_tasks = _cancel_judgehost_tasks(verification_run_ids, reason)
-    run_progress = config.judgehost_task_service.domjudge_case_progress_for_runs(verification_run_ids)
-    protected_run_ids = {
-        run_id
-        for run_id, progress in run_progress.items()
-        if int(progress.get("total") or 0) > int(progress.get("reported") or 0)
-    }
+    protected_run_ids = config.judgehost_task_service.domjudge_runs_with_leased_cases(verification_run_ids)
     task_store.cancel_not_started_tasks(
         safe_verification_id,
         reason=reason,

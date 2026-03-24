@@ -71,7 +71,7 @@ class VerificationService:
         self.judgehost_task_service = judgehost_task_service
         self._verification_inflight_lock = threading.RLock()
         self._verification_inflight: dict[str, str] = {}
-        self.fs_manager = FsManager(self.workspace_service.settings.artifacts_root, self.workspace_service.settings.run_root)
+        self.fs_manager = FsManager(self.workspace_service.settings.cache_root, self.workspace_service.settings.artifacts_root)
         self._verification_store = VerificationStore(db, self.fs_manager)
         self.apply_runtime_values(constants or build_runtime_values())
 

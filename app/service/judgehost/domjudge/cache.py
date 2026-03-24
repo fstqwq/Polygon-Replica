@@ -53,31 +53,6 @@ def domjudge_case_cache_ref(
     return (safe_testcase_hash, signature)
 
 
-def domjudge_solve_output_cache_ref(
-    *,
-    source_hash: str,
-    compile_hash: str,
-    run_hash: str,
-    compile_config_hash: str,
-    run_config_hash: str,
-    toolchain_cmd_digest: str,
-    testcase_input_hash: str,
-) -> tuple[str, str]:
-    safe_input_hash = domjudge_safe_hash(testcase_input_hash)
-    signature = JudgeFsIndexService.signature(
-        {
-            "schema": "solve-output-cache",
-            "source_hash": source_hash.strip().lower(),
-            "compile_hash": compile_hash.strip().lower(),
-            "run_hash": run_hash.strip().lower(),
-            "compile_config_hash": compile_config_hash.strip().lower(),
-            "run_config_hash": run_config_hash.strip().lower(),
-            "toolchain_cmd_digest": toolchain_cmd_digest.strip().lower(),
-        }
-    )
-    return (safe_input_hash, signature)
-
-
 def domjudge_cache_blob_ref(*, kind: str, key_hash: str, signature: str, name: str) -> str:
     safe_kind = kind.strip().lower()
     safe_key = key_hash.strip().lower()

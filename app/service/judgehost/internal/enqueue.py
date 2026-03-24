@@ -226,18 +226,13 @@ class JudgehostEnqueueMixin:
     ) -> dict[str, object]:
         if not self._include_build_payload:
             return {}
-        artifact_path = self._verification_store.artifact_path_for_verification(
-            JudgehostEnqueueMixin._normalize_text(artifact_verification_id)
-        )
-        if not artifact_path:
+        safe_verification_id = JudgehostEnqueueMixin._normalize_text(artifact_verification_id)
+        if not safe_verification_id:
             return {}
-        artifact_root = Path(artifact_path).resolve()
-        if not artifact_root.exists() or (not artifact_root.is_dir()):
-            return {}
-        tests_dir = (artifact_root / "tests").resolve()
-        ans_dir = (artifact_root / "ans").resolve()
-        logs_dir = (artifact_root / "logs").resolve()
-        bin_dir = (artifact_root / "bin").resolve()
+        runtime_layout = self._fs_manager.verification_runtime_layout(safe_verification_id)
+        tests_dir = runtime_layout.tests.resolve()
+        ans_dir = runtime_layout.answers.resolve()
+        verification_metadata = self._verification_store.metadata(safe_verification_id)
 
         wanted_tests: list[str] = []
         if selected_tests:
@@ -249,14 +244,16 @@ class JudgehostEnqueueMixin:
                     continue
                 wanted_tests.append(token)
         else:
-            if tests_dir.exists():
-                for p in sorted(tests_dir.glob("*.in")):
-                    token = p.name
-                    if not RUN_TEST_NAME_RE.fullmatch(token):
-                        continue
-                    wanted_tests.append(token)
-                    if len(wanted_tests) >= self._max_tests_per_task:
-                        break
+            selected_test_names = cast(list[object], verification_metadata.get("selected_test_names") or [])
+            for raw in selected_test_names:
+                token = Path(JudgehostEnqueueMixin._normalize_text(raw)).name
+                if not RUN_TEST_NAME_RE.fullmatch(token):
+                    continue
+                if token in wanted_tests:
+                    continue
+                wanted_tests.append(token)
+                if len(wanted_tests) >= self._max_tests_per_task:
+                    break
 
         tests_payload: list[dict[str, object]] = []
         for test_name in wanted_tests:
@@ -288,27 +285,15 @@ class JudgehostEnqueueMixin:
 
         run_config_text = ""
         run_cfg_obj: dict[str, object] = {}
-        run_cfg_path = (logs_dir / "run_config.json").resolve()
-        if run_cfg_path.exists() and run_cfg_path.is_file():
-            run_cfg_bytes = self._safe_read_bytes(
-                run_cfg_path,
-                max_bytes=self._max_test_payload_bytes,
-                label="run config payload",
-            )
-            run_config_text = run_cfg_bytes.decode("utf-8", errors="replace")
+        run_config_value = verification_metadata.get("run_config_json")
+        if isinstance(run_config_value, str):
+            run_config_text = run_config_value
+        elif isinstance(run_config_value, dict):
+            run_config_text = json.dumps(run_config_value, ensure_ascii=True, separators=(",", ":"))
+        if run_config_text:
             run_cfg_obj = self._json_object(run_config_text)
 
         binaries: dict[str, str] = {}
-        for name in ("checker", "validator", "interactor"):
-            p = (bin_dir / name).resolve()
-            if not p.exists() or (not p.is_file()):
-                continue
-            blob = self._safe_read_bytes(
-                p,
-                max_bytes=self._max_binary_payload_bytes,
-                label=f"{name} payload",
-            )
-            binaries[name] = base64.b64encode(blob).decode("ascii")
 
         workspace_resolved = workspace.resolve()
 

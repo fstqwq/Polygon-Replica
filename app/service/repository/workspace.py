@@ -95,7 +95,6 @@ class WorkspaceService:
         for p in [
             self.settings.bare_root,
             self.settings.workspace_root,
-            self.settings.run_root,
             self.settings.artifacts_root,
             self.settings.cache_root,
         ]:
@@ -672,11 +671,6 @@ class WorkspaceService:
             )
             workspace_paths.append(row_path)
 
-        artifact_root = self._assert_safe_delete_target(
-            (self.settings.artifacts_root / safe_problem).resolve(),
-            self.settings.artifacts_root,
-            label=f"artifact root for {safe_problem}",
-        )
         bare_repo_path = self._assert_safe_delete_target(
             (self.settings.bare_root / repo_name).resolve(),
             self.settings.bare_root,
@@ -711,15 +705,6 @@ class WorkspaceService:
                     shutil.rmtree(bare_repo_path, ignore_errors=False)
         except Exception as exc:
             fs_warnings.append(f"bare repo cleanup failed ({bare_repo_path}): {exc}")
-        try:
-            if artifact_root.exists():
-                if artifact_root.is_symlink():
-                    fs_warnings.append(f"artifact root is symlink: {artifact_root}")
-                else:
-                    shutil.rmtree(artifact_root, ignore_errors=False)
-        except Exception as exc:
-            fs_warnings.append(f"artifact cleanup failed ({artifact_root}): {exc}")
-
         with self._cache_lock:
             self._problem_cache.pop(safe_problem, None)
         return {
@@ -767,8 +752,8 @@ class WorkspaceService:
         workspace_head: str | None = None,
         workspace_dirty: bool | None = None,
     ) -> Path:
-        run_id = f"snapshot-{uuid.uuid4().hex[:12]}"
-        snap = self.settings.run_root / run_id / "src"
+        snapshot_id = f"snapshot-{uuid.uuid4().hex[:12]}"
+        snap = self.settings.cache_root / "runtime" / "snapshots" / snapshot_id / "src"
         ensure_dir(snap.parent)
         if commit:
             self._extract_commit_snapshot(workspace, commit, snap)

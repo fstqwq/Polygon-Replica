@@ -314,7 +314,12 @@ def preview_page(request: Request, problem: str, user: str):
         if lp is not None:
             latex_log_href = f'/problems/{problem}/{user}/artifacts/{preview_id}/logs/latex.log'
             raw_log, log_truncated = read_text_safe_limited(lp, _C.UI_LOG_TEXT_CHAR_LIMIT)
-            redact_prefixes: list[tuple[str, str]] = [(str(workspace.resolve()), '.'), (str(config.settings.workspace_root.resolve()), '__workspace_root__'), (str(config.settings.artifacts_root.resolve()), '__artifacts__'), (str(config.settings.run_root.resolve()), '__runs__'), (str(config.settings.cache_root.resolve()), '__cache__')]
+            redact_prefixes: list[tuple[str, str]] = [
+                (str(workspace.resolve()), '.'),
+                (str(config.settings.workspace_root.resolve()), '__workspace_root__'),
+                (str(config.settings.artifacts_root.resolve()), '__artifacts__'),
+                (str(config.settings.cache_root.resolve()), '__cache__'),
+            ]
             log = sanitize_log_text_for_ui(raw_log, path_prefixes=redact_prefixes)
             if not log.strip():
                 log = '(empty)'

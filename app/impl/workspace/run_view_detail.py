@@ -7,7 +7,6 @@ from fastapi import HTTPException
 from app.impl.runtime.config import config
 from .artifact import (
     safe_artifact_path,
-    safe_run_artifact_path,
 )
 from .context import count_label
 from .problem_config import read_problem_config
@@ -25,7 +24,6 @@ from .context_run_detail import (
     normalize_run_id_token,
     normalize_run_test_name_token,
     _run_detail_preview_from_path,
-    _run_detail_preview_is_noise,
     _run_detail_preview_unavailable,
     _verification_status_summary,
     _run_rejudge_context_for_entries,
@@ -37,7 +35,6 @@ from app.service.platform.error_text import (
 from app.service.platform.workspace_path import (
     normalize_optional_component_source_path_safe,
     normalize_workspace_rel_path,
-    safe_workspace_path,
 )
 from app.service.verification.runtime import (
     effective_run_timeout_ms,
@@ -253,8 +250,6 @@ def build_run_detail_context(
                 status = 'pending'
             tests: list[dict[str, object]] = []
             compile_log = ''
-            compile_log_truncated = False
-            compile_log_total_chars = 0
             compile_diagnostics: list[dict[str, object]] = []
             compile_diagnostics_total = 0
             compile_diagnostics_truncated = False
@@ -288,8 +283,6 @@ def build_run_detail_context(
                         max_memory_kb = memory_kb
                 if (not compile_log) and str(row['compile_log'] or ''):
                     compile_log = str(row['compile_log'] or '')
-                    compile_log_truncated = bool(row['compile_log_truncated'])
-                    compile_log_total_chars = int(row['compile_log_total_chars'] or len(compile_log))
                 diagnostics_json = str(row['diagnostics_json'] or '[]')
                 try:
                     task_diagnostics = cast(list[dict[str, object]], json.loads(diagnostics_json))
@@ -310,8 +303,6 @@ def build_run_detail_context(
                 'tests_total': int(item['tests_total']),
                 'tests': tests,
                 'compile_log': compile_log,
-                'compile_log_truncated': bool(compile_log_truncated),
-                'compile_log_total_chars': int(compile_log_total_chars),
                 'compile_diagnostics': compile_diagnostics,
                 'compile_diagnostics_total': int(compile_diagnostics_total),
                 'compile_diagnostics_truncated': bool(compile_diagnostics_truncated),
@@ -1079,27 +1070,22 @@ def build_run_detail_context(
                 if blob is None:
                     return _run_detail_preview_unavailable('missing')
                 return _run_detail_preview_from_bytes(blob, download_href)
+            verification_id = verification_id_hint
+            if not verification_id:
+                return _run_detail_preview_unavailable('missing')
             try:
-                preview_file = safe_run_artifact_path(ctx, safe_run_id, safe_rel_path)
-            except HTTPException:
+                preview_file = config.fs_manager.resolve_verification_run_root(verification_id, safe_run_id) / safe_rel_path
+                preview_file = preview_file.resolve()
+                run_root = config.fs_manager.resolve_verification_run_root(verification_id, safe_run_id).resolve()
+            except Exception:
                 return _run_detail_preview_unavailable('missing')
-            download_href = f'/problems/{problem_slug}/{username}/runs/{safe_run_id}/artifacts/{safe_rel_path}'
-            return _run_detail_preview_from_path(preview_file, download_href)
-
-        def _workspace_answer_preview(test_name: str) -> dict[str, object]:
-            if not problem_slug or not username:
-                return _run_detail_preview_unavailable('missing')
-            test_stem = Path((test_name or '')).stem
-            if not test_stem:
-                return _run_detail_preview_unavailable('missing')
-            answer_source_rel = f'tests/answers/{test_stem}.ans'
-            try:
-                preview_file = safe_workspace_path(workspace, answer_source_rel)
-            except HTTPException:
+            if run_root not in preview_file.parents:
                 return _run_detail_preview_unavailable('missing')
             if (not preview_file.exists()) or (not preview_file.is_file()) or preview_file.is_symlink():
                 return _run_detail_preview_unavailable('missing')
-            download_href = f'/problems/{problem_slug}/{username}/files/download?path={quote_plus(answer_source_rel)}&src=workspace'
+            download_href = (
+                f'/problems/{problem_slug}/{username}/artifacts/{verification_id}/runs/{safe_run_id}/{safe_rel_path}'
+            )
             return _run_detail_preview_from_path(preview_file, download_href)
 
         for test_name in target_tests:
@@ -1109,21 +1095,8 @@ def build_run_detail_context(
             input_rel = f'tests/{test_name}'
             answer_name = _run_test_answer_name(test_name)
             answer_rel = f'ans/{answer_name}' if answer_name else ''
-            input_preview = _run_detail_preview_unavailable('missing')
-            answer_preview = _run_detail_preview_unavailable('missing')
-            source_answer_preview = _workspace_answer_preview(test_name)
-            for col in columns:
-                artifact_verification_id = (col.get('artifact_verification_id') or '')
-                if not is_canonical_artifact_id(artifact_verification_id):
-                    continue
-                if not bool(input_preview.get('available')):
-                    input_preview = _verification_artifact_preview(artifact_verification_id, input_rel)
-                if answer_rel and (not bool(answer_preview.get('available'))):
-                    answer_preview = _verification_artifact_preview(artifact_verification_id, answer_rel)
-                if bool(input_preview.get('available')) and (not answer_rel or bool(answer_preview.get('available'))):
-                    break
-            if bool(source_answer_preview.get('available')) and _run_detail_preview_is_noise(answer_preview):
-                answer_preview = source_answer_preview
+            input_preview = _verification_artifact_preview(verification_id_hint, input_rel)
+            answer_preview = _verification_artifact_preview(verification_id_hint, answer_rel) if answer_rel else _run_detail_preview_unavailable('missing')
             cells: list[dict] = []
             for col in columns:
                 cell = col['tests_map'].get(test_name)

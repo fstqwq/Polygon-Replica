@@ -89,6 +89,7 @@ def _verification_record_run_ids(problem_id: int, workspace_id: int, verificatio
 
 run_export_impl = SimpleNamespace(
     _run_detail_use_compact_layout=run_export_query_module._run_detail_use_compact_layout,
+    artifact_file=run_export_artifact_module.artifact_file,
     run_artifact_file=run_export_artifact_module.run_artifact_file,
     run_cancel=run_export_run_module.run_cancel,
 )

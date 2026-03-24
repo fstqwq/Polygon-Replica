@@ -35,7 +35,6 @@ class Judgehost(
     STATUS_ENQUEUING = "enqueuing"
     STATUS_REPORTING = "reporting"
     CASE_CACHE_KIND = JudgeFsIndexService.KIND_CASE
-    SOLVE_OUTPUT_CACHE_KIND = JudgeFsIndexService.KIND_SOLVE_OUTPUT
 
     def __init__(
         self,

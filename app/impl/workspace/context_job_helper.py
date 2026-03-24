@@ -138,17 +138,9 @@ def record_async_run_failure(
         wall_sec=0.0,
         memory_kb=0,
         compile_log=detail_error,
-        compile_log_truncated=False,
-        compile_log_total_chars=len(detail_error),
         diagnostics_json="[]",
-        diagnostics_truncated=False,
-        diagnostics_total=0,
         error_text=detail_error,
-        error_text_truncated=False,
-        error_text_total_chars=len(detail_error),
         feedback_text=detail_error,
-        feedback_text_truncated=False,
-        feedback_text_total_chars=len(detail_error),
         output_ref="",
     )
     config.verification_service.update_verification_record_status(

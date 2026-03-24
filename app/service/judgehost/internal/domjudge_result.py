@@ -739,7 +739,6 @@ class JudgehostDomjudgeResultsMixin:
 
         testcase_hash = domjudge_lower_text(row["testcase_hash"])
         testcase_input_hash = domjudge_sha256_bytes(input_bytes)
-        testcase_answer_hash = domjudge_sha256_bytes(answer_bytes)
         if not re.fullmatch(r"[0-9a-f]{64}", testcase_hash):
             if task_kind == self._TASK_KIND_MAIN_CORRECT:
                 testcase_hash = testcase_input_hash
@@ -868,32 +867,6 @@ class JudgehostDomjudgeResultsMixin:
         team_message_token = _case_blob_token("teammessage.txt", team_message_rel)
         # Prefer cache refs for summary output_ref so build/run consumers can still
         # resolve artifacts after judgehost temp work directories are cleaned.
-
-        if task_kind == self._TASK_KIND_MAIN_CORRECT and runresult == "correct":
-            solve_key_hash, solve_signature = self._domjudge_solve_output_cache_ref(
-                source_hash=source_hash,
-                compile_hash=compile_hash,
-                run_hash=run_hash,
-                compile_config_hash=compile_config_hash,
-                run_config_hash=run_config_hash,
-                toolchain_cmd_digest=toolchain_cmd_digest,
-                testcase_input_hash=testcase_input_hash,
-            )
-            output_hash = domjudge_sha256_bytes(cache_files.get("program.out", b""))
-            self._domjudge_store_solve_output_cache(
-                key_parts={"key_hash": solve_key_hash, "signature": solve_signature},
-                tags={
-                    "source_hash": source_hash,
-                    "testcase_input_hash": testcase_input_hash,
-                    "testcase_answer_hash": testcase_answer_hash,
-                },
-                output_hash=output_hash,
-                runtime_sec=runtime_sec,
-                cpu_sec=cpu_sec,
-                wall_sec=wall_sec,
-                memory_kb=memory_kb,
-                files=cache_files,
-            )
 
         now_text = now_iso()
         updated_case = self._judgehost_state_store.report_case_result(

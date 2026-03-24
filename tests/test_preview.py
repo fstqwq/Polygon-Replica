@@ -291,13 +291,11 @@ class TestPreview(SmokeBase):
             encoding="utf-8",
         )
         verification_id = self.random_id("ver-preview-sample-sync")
-        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
-        (artifact_root / "tests").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "tests" / "001.in").write_text("build-manual-input\n", encoding="utf-8")
-        (artifact_root / "ans" / "001.ans").write_text("build-manual-answer\n", encoding="utf-8")
-        (artifact_root / "tests" / "002.in").write_text("build-gen-input\n", encoding="utf-8")
-        (artifact_root / "ans" / "002.ans").write_text("build-gen-answer\n", encoding="utf-8")
+        runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
+        (runtime_layout.tests / "001.in").write_text("build-manual-input\n", encoding="utf-8")
+        (runtime_layout.answers / "001.ans").write_text("build-manual-answer\n", encoding="utf-8")
+        (runtime_layout.tests / "002.in").write_text("build-gen-input\n", encoding="utf-8")
+        (runtime_layout.answers / "002.ans").write_text("build-gen-answer\n", encoding="utf-8")
 
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         db_execute(
@@ -365,11 +363,9 @@ class TestPreview(SmokeBase):
             encoding="utf-8",
         )
         verification_id = self.random_id("ver-preview-custom-sample")
-        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
-        (artifact_root / "tests").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
-        (artifact_root / "tests" / "001.in").write_text("custom-sample-input\n", encoding="utf-8")
-        (artifact_root / "ans" / "001.ans").write_text("custom-sample-answer\n", encoding="utf-8")
+        runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
+        (runtime_layout.tests / "001.in").write_text("custom-sample-input\n", encoding="utf-8")
+        (runtime_layout.answers / "001.ans").write_text("custom-sample-answer\n", encoding="utf-8")
 
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         db_execute(
@@ -436,7 +432,7 @@ class TestPreview(SmokeBase):
                     except OSError:
                         pass
             calls["sync"] = int(calls["sync"]) + 1
-            return {"sample_count": 1, "copied": 1, "verification_id": "ver-sync"}
+            return {"sample_count": 1, "copied": 1, "verification_id": ""}
 
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
@@ -757,7 +753,7 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = db_fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         summary = read_preview_summary(preview_id)
@@ -765,7 +761,7 @@ class TestPreview(SmokeBase):
         self.assertEqual(int(summary.get("returncode") or 0), 1)
         self.assertTrue(str(summary.get("statement_signature") or "").strip())
         self.assertTrue(str(summary.get("preview_ref") or "").strip())
-        log_text = (Path(str(row["artifact_path"] or "")) / "logs" / "latex.log").read_text(
+        log_text = (config.fs_manager.resolve_preview_root(preview_id) / "logs" / "latex.log").read_text(
             encoding="utf-8",
             errors="replace",
         )
@@ -806,10 +802,10 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = db_fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
-        artifact_root = Path(str(row["artifact_path"] or ""))
+        artifact_root = config.fs_manager.resolve_preview_root(preview_id)
         log_path = artifact_root / "logs" / "latex.log"
         self.assertTrue(log_path.exists())
         log_text = log_path.read_text(encoding="utf-8", errors="replace").strip()
@@ -839,10 +835,10 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = db_fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
-        artifact_root = Path(str(row["artifact_path"] or ""))
+        artifact_root = config.fs_manager.resolve_preview_root(preview_id)
         self.assertFalse((artifact_root / "statement_preview" / "statement.pdf").exists())
 
     def test_statement_signature_changes_when_gen_sample_payload_changes(self) -> None:
@@ -877,34 +873,34 @@ class TestPreview(SmokeBase):
         keep_id = f"p-{uuid.uuid4().hex[:12]}"
         running_id = f"p-{uuid.uuid4().hex[:12]}"
         done_id = f"p-{uuid.uuid4().hex[:12]}"
-        keep_root = self._artifact_root(keep_id)
-        running_root = self._artifact_root(running_id)
-        done_root = self._artifact_root(done_id)
+        keep_root = config.fs_manager.prepare_preview_layout(keep_id).root
+        running_root = config.fs_manager.prepare_preview_layout(running_id).root
+        done_root = config.fs_manager.prepare_preview_layout(done_id).root
         keep_root.mkdir(parents=True, exist_ok=True)
         running_root.mkdir(parents=True, exist_ok=True)
         done_root.mkdir(parents=True, exist_ok=True)
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,created_at)
             VALUES(?,?,?,?,?,?,?,?)
             """,
-            [keep_id, problem_id, workspace_id, "", "main", "ok", str(keep_root), "2026-03-05T00:00:00Z"],
+            [keep_id, problem_id, workspace_id, "", "main", "ok", "{}", "2026-03-05T00:00:00Z"],
         )
         write_preview_summary(keep_id, {})
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,created_at)
             VALUES(?,?,?,?,?,?,?,?)
             """,
-            [running_id, problem_id, workspace_id, "", "main", "running", str(running_root), "2026-03-05T00:00:00Z"],
+            [running_id, problem_id, workspace_id, "", "main", "running", "{}", "2026-03-05T00:00:00Z"],
         )
         write_preview_summary(running_id, {})
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,created_at)
             VALUES(?,?,?,?,?,?,?,?)
             """,
-            [done_id, problem_id, workspace_id, "", "main", "failed", str(done_root), "2026-03-05T00:00:00Z"],
+            [done_id, problem_id, workspace_id, "", "main", "failed", "{}", "2026-03-05T00:00:00Z"],
         )
         write_preview_summary(done_id, {})
 
@@ -922,17 +918,21 @@ class TestPreview(SmokeBase):
         workspace_id = int(ctx["workspace"]["id"])
         keep_id = f"p-{uuid.uuid4().hex[:12]}"
         done_id = f"p-{uuid.uuid4().hex[:12]}"
-        shared_root = self._artifact_root(self.random_id("preview-shared"))
-        shared_root.mkdir(parents=True, exist_ok=True)
-        (shared_root / "statement_preview").mkdir(parents=True, exist_ok=True)
-        (shared_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+        keep_root = config.fs_manager.prepare_preview_layout(keep_id).root
+        done_root = config.fs_manager.prepare_preview_layout(done_id).root
+        keep_root.mkdir(parents=True, exist_ok=True)
+        done_root.mkdir(parents=True, exist_ok=True)
+        (keep_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+        (keep_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+        (done_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+        (done_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
         for preview_id, status in ((keep_id, "ok"), (done_id, "failed")):
             db_execute(
                 """
-                INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+                INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,created_at)
                 VALUES(?,?,?,?,?,?,?,?)
                 """,
-                [preview_id, problem_id, workspace_id, "", "main", status, str(shared_root), "2026-03-05T00:00:00Z"],
+                [preview_id, problem_id, workspace_id, "", "main", status, "{}", "2026-03-05T00:00:00Z"],
             )
             write_preview_summary(preview_id, {})
 
@@ -943,5 +943,6 @@ class TestPreview(SmokeBase):
         self.assertIsNotNone(keep_row)
         self.assertEqual(str(keep_row["status"] or ""), "ok")
         self.assertIsNone(done_row)
-        self.assertTrue(shared_root.exists())
-        self.assertTrue((shared_root / "statement_preview" / "statement.pdf").exists())
+        self.assertTrue(keep_root.exists())
+        self.assertTrue((keep_root / "statement_preview" / "statement.pdf").exists())
+        self.assertFalse(done_root.exists())

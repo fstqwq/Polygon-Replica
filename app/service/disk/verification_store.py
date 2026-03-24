@@ -16,7 +16,6 @@ class VerificationRuntimeRow(TypedDict):
     id: str
     status: str
     metadata: dict[str, object]
-    artifact_path: str
 
 
 class VerificationStatusRow(TypedDict):
@@ -60,7 +59,7 @@ class VerificationStore:
         self.db = db
         if fs_manager is None:
             settings = load_settings()
-            fs_manager = FsManager(settings.artifacts_root, settings.run_root)
+            fs_manager = FsManager(settings.cache_root, settings.artifacts_root)
         self._fs_manager = fs_manager
 
     def allocate_id(self) -> str:
@@ -133,7 +132,6 @@ class VerificationStore:
             "id": str(row["id"]),
             "status": str(row["status"]),
             "metadata": self._read_metadata(verification_id),
-            "artifact_path": str(self._verification_root(verification_id)),
         }
 
     def get_status_row(self, problem_id: int, verification_id: str) -> VerificationStatusRow | None:
@@ -287,16 +285,15 @@ class VerificationStore:
             "id": str(row["id"]),
             "status": str(row["status"]),
             "metadata": self._read_metadata(verification_id),
-            "artifact_path": str(self._verification_root(verification_id)),
         }
 
     def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
         if artifact_id.startswith("p-"):
             row = self.db.fetch_one(
-                "SELECT artifact_path FROM previews WHERE id=? AND problem_id=?",
+                "SELECT id FROM previews WHERE id=? AND problem_id=?",
                 [artifact_id, problem_id],
             )
-            return "" if row is None else str(row["artifact_path"] or "")
+            return "" if row is None else str(self._fs_manager.resolve_preview_root(artifact_id))
         row = self.db.fetch_one(
             "SELECT id FROM verifications WHERE id=? AND problem_id=?",
             [artifact_id, problem_id],

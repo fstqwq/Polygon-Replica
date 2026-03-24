@@ -89,17 +89,9 @@ class _InMemoryTaskStore:
         wall_sec: float | None,
         memory_kb: int | None,
         compile_log: str,
-        compile_log_truncated: bool,
-        compile_log_total_chars: int,
         diagnostics_json: str,
-        diagnostics_truncated: bool,
-        diagnostics_total: int,
         error_text: str,
-        error_text_truncated: bool,
-        error_text_total_chars: int,
         feedback_text: str,
-        feedback_text_truncated: bool,
-        feedback_text_total_chars: int,
         output_ref: str,
     ) -> None:
         with self._lock:
@@ -111,6 +103,11 @@ class _InMemoryTaskStore:
                 row["status"] = status
                 row["verdict"] = verdict
                 row["run_id"] = run_id
+                row["compile_log"] = compile_log
+                row["diagnostics_json"] = diagnostics_json
+                row["error_text"] = error_text
+                row["feedback_text"] = feedback_text
+                row["output_ref"] = output_ref
                 return
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
@@ -217,6 +214,35 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(status, "failed")
         self.assertTrue(finished)
 
+    def test_effective_verification_kind_uses_full_available_test_set(self) -> None:
+        from app.impl.workspace.verification_dag import _effective_verification_kind
+        from app.service.verification.types import Kind
+
+        self.assertEqual(
+            _effective_verification_kind(
+                sample_only=True,
+                requested_test_names=["001.in"],
+                available_test_names=["001.in", "002.in"],
+            ),
+            Kind.SAMPLE.value,
+        )
+        self.assertEqual(
+            _effective_verification_kind(
+                sample_only=False,
+                requested_test_names=["001.in", "002.in"],
+                available_test_names=["001.in", "002.in", "003.in"],
+            ),
+            Kind.CUSTOM.value,
+        )
+        self.assertEqual(
+            _effective_verification_kind(
+                sample_only=False,
+                requested_test_names=["001.in", "002.in", "003.in"],
+                available_test_names=["001.in", "002.in", "003.in"],
+            ),
+            Kind.ALL.value,
+        )
+
     def test_build_graph_creates_per_source_per_test_nodes(self) -> None:
         from app.impl.workspace.verification_dag import _build_graph
         from app.impl.workspace.verification_dag_plan import VerificationTestPlan
@@ -321,17 +347,9 @@ class TestVerificationTaskScheduler(SmokeBase):
             wall_sec=0.01,
             memory_kb=1,
             compile_log="",
-            compile_log_truncated=False,
-            compile_log_total_chars=0,
             diagnostics_json="[]",
-            diagnostics_truncated=False,
-            diagnostics_total=0,
             error_text="",
-            error_text_truncated=False,
-            error_text_total_chars=0,
             feedback_text="",
-            feedback_text_truncated=False,
-            feedback_text_total_chars=0,
             output_ref="",
         )
 
@@ -512,17 +530,9 @@ class TestVerificationTaskScheduler(SmokeBase):
             wall_sec=0.01,
             memory_kb=1,
             compile_log="",
-            compile_log_truncated=False,
-            compile_log_total_chars=0,
             diagnostics_json="[]",
-            diagnostics_truncated=False,
-            diagnostics_total=0,
             error_text="",
-            error_text_truncated=False,
-            error_text_total_chars=0,
             feedback_text="",
-            feedback_text_truncated=False,
-            feedback_text_total_chars=0,
             output_ref="",
         )
 
@@ -617,17 +627,9 @@ class TestVerificationTaskScheduler(SmokeBase):
             wall_sec=0.1,
             memory_kb=1,
             compile_log="",
-            compile_log_truncated=False,
-            compile_log_total_chars=0,
             diagnostics_json="[]",
-            diagnostics_truncated=False,
-            diagnostics_total=0,
             error_text="",
-            error_text_truncated=False,
-            error_text_total_chars=0,
             feedback_text="",
-            feedback_text_truncated=False,
-            feedback_text_total_chars=0,
             output_ref="",
         )
         rows = {str(row["id"]): row for row in task_store.list_rows("ver-cancel")}
@@ -656,17 +658,9 @@ class TestVerificationTaskScheduler(SmokeBase):
                 "wall_sec": None,
                 "memory_kb": None,
                 "compile_log": "",
-                "compile_log_truncated": 0,
-                "compile_log_total_chars": 0,
                 "diagnostics_json": "[]",
-                "diagnostics_truncated": 0,
-                "diagnostics_total": 0,
                 "error_text": "",
-                "error_text_truncated": 0,
-                "error_text_total_chars": 0,
                 "feedback_text": "",
-                "feedback_text_truncated": 0,
-                "feedback_text_total_chars": 0,
                 "output_ref": "",
                 "started_at": "2026-03-23T00:00:00Z",
                 "finished_at": "2026-03-23T00:00:01Z",
@@ -773,17 +767,9 @@ class TestVerificationTaskScheduler(SmokeBase):
                 "wall_sec": 0.01,
                 "memory_kb": 1,
                 "compile_log": "",
-                "compile_log_truncated": 0,
-                "compile_log_total_chars": 0,
                 "diagnostics_json": "[]",
-                "diagnostics_truncated": 0,
-                "diagnostics_total": 0,
                 "error_text": "",
-                "error_text_truncated": 0,
-                "error_text_total_chars": 0,
                 "feedback_text": "",
-                "feedback_text_truncated": 0,
-                "feedback_text_total_chars": 0,
                 "output_ref": "",
                 "started_at": None,
                 "finished_at": None,
@@ -809,17 +795,9 @@ class TestVerificationTaskScheduler(SmokeBase):
                 "wall_sec": None,
                 "memory_kb": None,
                 "compile_log": "",
-                "compile_log_truncated": 0,
-                "compile_log_total_chars": 0,
                 "diagnostics_json": "[]",
-                "diagnostics_truncated": 0,
-                "diagnostics_total": 0,
                 "error_text": "",
-                "error_text_truncated": 0,
-                "error_text_total_chars": 0,
                 "feedback_text": "",
-                "feedback_text_truncated": 0,
-                "feedback_text_total_chars": 0,
                 "output_ref": "",
                 "started_at": None,
                 "finished_at": None,
@@ -855,10 +833,7 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(status, "running")
         self.assertEqual(int(counts["total"]), 2)
         self.assertTrue(bool(summary.get("task_graph")))
-        self.assertEqual(summary.get("execution_model"), "task-dag")
-        self.assertEqual(summary.get("runs_order"), ["r-main", "r-wa"])
-        self.assertIn("r-main", summary.get("runs") or {})
-        self.assertEqual([str(item.get("source_path") or "") for item in summary.get("solutions") or []], ["solutions/wa.cpp"])
+        self.assertEqual(summary.get("source_paths"), ["solutions/wa.cpp"])
 
     def test_summary_parts_uses_canonical_metadata_shapes(self) -> None:
         from app.impl.workspace.verification_dag import _summary_parts
@@ -885,8 +860,7 @@ class TestVerificationTaskScheduler(SmokeBase):
         diagnostics_rows = json.loads(parts.diagnostics_json)
         self.assertEqual(parts.verdict, "WA")
         self.assertEqual(parts.output_ref, "ref-output")
-        self.assertGreaterEqual(parts.compile_log_total_chars, len("compile failed"))
-        self.assertEqual(parts.diagnostics_total, 1)
+        self.assertTrue(str(parts.compile_log).startswith("compile failed"))
         self.assertTrue(bool(diagnostics_rows[0].get("message_truncated")))
         self.assertEqual(parts.memory_kb, 123)
         self.assertAlmostEqual(parts.runtime_sec or 0.0, 0.01, places=3)

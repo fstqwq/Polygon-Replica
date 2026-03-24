@@ -16,7 +16,6 @@ from app.service.judgehost.domjudge.cache import (
     domjudge_manifest_digest,
     domjudge_parse_cache_blob_ref,
     domjudge_set_hash_from_blobs,
-    domjudge_solve_output_cache_ref,
 )
 from app.service.judgehost.internal.shared import (
     _DOMJUDGE_CACHE_NAME_RE,
@@ -72,7 +71,7 @@ class JudgehostDomjudgeUtilsMixin:
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", domjudge_text(task_id)).strip("-")
         if not safe:
             safe = f"task-{uuid.uuid4().hex[:8]}"
-        return (self._settings.cache_root / "judgehost-domjudge-runs" / safe).resolve()
+        return (self._fs_manager.judgehost_runs_root / safe).resolve()
 
     @staticmethod
     def _domjudge_b64_decode(text: str | bytes | bytearray | memoryview | None) -> bytes:
@@ -221,27 +220,6 @@ class JudgehostDomjudgeUtilsMixin:
             compare_config_hash=compare_config_hash,
             toolchain_cmd_digest=toolchain_cmd_digest,
             testcase_hash=testcase_hash,
-        )
-
-    def _domjudge_solve_output_cache_ref(
-        self,
-        *,
-        source_hash: str,
-        compile_hash: str,
-        run_hash: str,
-        compile_config_hash: str,
-        run_config_hash: str,
-        toolchain_cmd_digest: str,
-        testcase_input_hash: str,
-    ) -> tuple[str, str]:
-        return domjudge_solve_output_cache_ref(
-            source_hash=source_hash,
-            compile_hash=compile_hash,
-            run_hash=run_hash,
-            compile_config_hash=compile_config_hash,
-            run_config_hash=run_config_hash,
-            toolchain_cmd_digest=toolchain_cmd_digest,
-            testcase_input_hash=testcase_input_hash,
         )
 
     def _domjudge_cache_get(self, kind: str, key_hash: str, signature: str) -> dict[str, object] | None:
@@ -412,39 +390,6 @@ class JudgehostDomjudgeUtilsMixin:
         if not key_hash:
             return
 
-    def _domjudge_store_solve_output_cache(
-        self,
-        *,
-        key_parts: dict[str, str],
-        tags: dict[str, object],
-        output_hash: str,
-        runtime_sec: float,
-        cpu_sec: float,
-        wall_sec: float,
-        memory_kb: int,
-        files: dict[str, bytes],
-    ) -> None:
-        manifest_rows, manifest_digest = self._domjudge_manifest_from_files(files)
-        key_hash = self._domjudge_cache_put(
-            self.SOLVE_OUTPUT_CACHE_KIND,
-            key_parts["key_hash"],
-            key_parts["signature"],
-            {
-                "output_hash": domjudge_lower_text(output_hash),
-                "runtime_sec": float(max(0.0, runtime_sec)),
-                "cpu_sec": float(max(0.0, cpu_sec)),
-                "wall_sec": float(max(0.0, wall_sec)),
-                "memory_kb": int(max(0, memory_kb)),
-                "runresult": "correct",
-                "manifest": manifest_rows,
-                "manifest_digest": manifest_digest,
-            },
-            files=files,
-            tags=tags,
-        )
-        if not key_hash:
-            return
-
     @staticmethod
     def _domjudge_strip_protocol_trace(raw: bytes) -> bytes:
         payload = raw
@@ -490,7 +435,7 @@ class JudgehostDomjudgeUtilsMixin:
                 logger.debug("failed to set executable bit on %s: %s", target, exc)
 
     def _domjudge_testcase_cache_root(self) -> Path:
-        root = (self._settings.cache_root / "judgehost-domjudge-testcases").resolve()
+        root = self._fs_manager.judgehost_testcases_root.resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
 

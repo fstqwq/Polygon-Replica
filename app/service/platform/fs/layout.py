@@ -1,63 +1,61 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.service.platform.hashing import sha256_hex_json
 
-_BUILD_REF_RE = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
-
-@dataclass(frozen=True)
-class ArtifactPaths:
-    root: Path
-    tests: Path
-    ans: Path
-    logs: Path
-    bin: Path
-    export: Path
-    statement_preview: Path
 
 
 @dataclass(frozen=True)
 class VerificationLayout:
     root: Path
-    tests: Path
-    ans: Path
     logs: Path
+    runs: Path
+    tests: Path
+    answers: Path
     bin: Path
+    uploaded_sources: Path
+
+
+@dataclass(frozen=True)
+class VerificationRuntimeLayout:
+    root: Path
+    tests: Path
+    answers: Path
+    bin: Path
+    uploaded_sources: Path
+
+
+@dataclass(frozen=True)
+class PreviewLayout:
+    root: Path
+    logs: Path
+    statement_preview: Path
 
 
 class FsManager:
-    def __init__(self, artifacts_root: Path, run_root: Path):
+    def __init__(self, cache_root: Path, artifacts_root: Path):
+        self.cache_root = cache_root
         self.artifacts_root = artifacts_root
-        self.run_root = run_root
-        self.verification_cache_root = self.artifacts_root / "cache" / "verifications"
+        self.cache_artifacts_root = self.cache_root / "artifacts"
+        self.runtime_root = self.cache_root / "runtime"
+        self.verification_root = self.cache_artifacts_root / "verifications"
+        self.preview_root = self.cache_artifacts_root / "previews"
+        self.snapshot_root = self.runtime_root / "snapshots"
+        self.judgehost_runs_root = self.runtime_root / "judgehost-runs"
+        self.judgehost_testcases_root = self.runtime_root / "judgehost-testcases"
+        self.export_root = self.artifacts_root / "exports"
+        self.contest_root = self.artifacts_root / "contests"
 
-    def compute_artifact_ref(self, payload: dict[str, object]) -> str:
-        return sha256_hex_json(payload, ensure_ascii=True)
-
-    def artifact_paths(self, artifact_ref: str) -> ArtifactPaths:
-        safe_artifact_ref = self._normalize_artifact_ref(artifact_ref)
-        root = self.artifacts_root / "objects" / safe_artifact_ref[:2] / safe_artifact_ref
-        return ArtifactPaths(
-            root=root,
-            tests=root / "tests",
-            ans=root / "ans",
-            logs=root / "logs",
-            bin=root / "bin",
-            export=root / "export",
-            statement_preview=root / "statement_preview",
-        )
-
-    def ensure_artifact_layout(self, artifact_ref: str) -> ArtifactPaths:
-        paths = self.artifact_paths(artifact_ref)
-        paths.root.mkdir(parents=True, exist_ok=True)
-        for directory in (paths.tests, paths.ans, paths.logs, paths.bin, paths.export, paths.statement_preview):
-            directory.mkdir(parents=True, exist_ok=True)
-        return paths
+    def resolve_verification_root(self, verification_id: str) -> Path:
+        safe_verification_id = self._normalize_token(verification_id, field_name="verification_id")
+        base = self.verification_root.resolve()
+        target = (base / safe_verification_id).resolve()
+        if target != base and base not in target.parents:
+            raise ValueError("verification_id escapes verification root")
+        return target
 
     def prepare_verification_root(self, verification_id: str) -> Path:
         path = self.resolve_verification_root(verification_id)
@@ -68,31 +66,24 @@ class FsManager:
         root = self.resolve_verification_root(verification_id)
         return VerificationLayout(
             root=root,
-            tests=root / "tests",
-            ans=root / "ans",
             logs=root / "logs",
+            runs=root / "runs",
+            tests=root / "tests",
+            answers=root / "ans",
             bin=root / "bin",
+            uploaded_sources=root / "uploaded-sources",
         )
 
     def prepare_verification_layout(self, verification_id: str) -> VerificationLayout:
         layout = self.verification_layout(verification_id)
         layout.root.mkdir(parents=True, exist_ok=True)
-        for directory in (layout.tests, layout.ans, layout.logs, layout.bin):
-            directory.mkdir(parents=True, exist_ok=True)
+        layout.logs.mkdir(parents=True, exist_ok=True)
+        layout.runs.mkdir(parents=True, exist_ok=True)
+        layout.tests.mkdir(parents=True, exist_ok=True)
+        layout.answers.mkdir(parents=True, exist_ok=True)
+        layout.bin.mkdir(parents=True, exist_ok=True)
+        layout.uploaded_sources.mkdir(parents=True, exist_ok=True)
         return layout
-
-    def resolve_verification_root(self, verification_id: str) -> Path:
-        safe_verification_id = self._normalize_token(verification_id, field_name="verification_id")
-        base = self.verification_cache_root.resolve()
-        target = (base / safe_verification_id).resolve()
-        if target != base and base not in target.parents:
-            raise ValueError("verification_id escapes run_root")
-        return target
-
-    def prepare_verification_run_root(self, verification_id: str, run_id: str) -> Path:
-        path = self.resolve_verification_run_root(verification_id, run_id)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
 
     def resolve_verification_run_root(self, verification_id: str, run_id: str) -> Path:
         root = self.resolve_verification_root(verification_id)
@@ -102,11 +93,69 @@ class FsManager:
             raise ValueError("run_id escapes verification root")
         return target
 
-    def _normalize_artifact_ref(self, artifact_ref: str) -> str:
-        token = artifact_ref.strip().lower()
-        if not _BUILD_REF_RE.fullmatch(token):
-            raise ValueError("artifact_ref must be a 64-char lowercase hex digest")
-        return token
+    def prepare_verification_run_root(self, verification_id: str, run_id: str) -> Path:
+        path = self.resolve_verification_run_root(verification_id, run_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def resolve_verification_runtime_root(self, verification_id: str) -> Path:
+        return self.resolve_verification_root(verification_id)
+
+    def verification_runtime_layout(self, verification_id: str) -> VerificationRuntimeLayout:
+        layout = self.verification_layout(verification_id)
+        return VerificationRuntimeLayout(
+            root=layout.root,
+            tests=layout.tests,
+            answers=layout.answers,
+            bin=layout.bin,
+            uploaded_sources=layout.uploaded_sources,
+        )
+
+    def prepare_verification_runtime_layout(self, verification_id: str) -> VerificationRuntimeLayout:
+        layout = self.prepare_verification_layout(verification_id)
+        return VerificationRuntimeLayout(
+            root=layout.root,
+            tests=layout.tests,
+            answers=layout.answers,
+            bin=layout.bin,
+            uploaded_sources=layout.uploaded_sources,
+        )
+
+    def resolve_preview_root(self, preview_id: str) -> Path:
+        safe_preview_id = self._normalize_token(preview_id, field_name="preview_id")
+        base = self.preview_root.resolve()
+        target = (base / safe_preview_id).resolve()
+        if target != base and base not in target.parents:
+            raise ValueError("preview_id escapes preview root")
+        return target
+
+    def preview_layout(self, preview_id: str) -> PreviewLayout:
+        root = self.resolve_preview_root(preview_id)
+        return PreviewLayout(
+            root=root,
+            logs=root / "logs",
+            statement_preview=root / "statement_preview",
+        )
+
+    def prepare_preview_layout(self, preview_id: str) -> PreviewLayout:
+        layout = self.preview_layout(preview_id)
+        layout.root.mkdir(parents=True, exist_ok=True)
+        layout.logs.mkdir(parents=True, exist_ok=True)
+        layout.statement_preview.mkdir(parents=True, exist_ok=True)
+        return layout
+
+    def resolve_snapshot_root(self, snapshot_id: str) -> Path:
+        safe_snapshot_id = self._normalize_token(snapshot_id, field_name="snapshot_id")
+        base = self.snapshot_root.resolve()
+        target = (base / safe_snapshot_id).resolve()
+        if target != base and base not in target.parents:
+            raise ValueError("snapshot_id escapes snapshot root")
+        return target
+
+    def prepare_snapshot_root(self, snapshot_id: str) -> Path:
+        root = self.resolve_snapshot_root(snapshot_id)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     def _normalize_token(self, value: str, *, field_name: str) -> str:
         token = value.strip()

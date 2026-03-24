@@ -574,18 +574,8 @@ class JudgehostDomjudgeDispatchMixin:
             toolchain_cmd_digest=toolchain_cmd_digest,
             testcase_hash=testcase_hash,
         )
-        solve_key_hash, solve_signature = self._domjudge_solve_output_cache_ref(
-            source_hash=source_hash,
-            compile_hash=compile_hash,
-            run_hash=run_hash,
-            compile_config_hash=compile_config_hash,
-            run_config_hash=run_config_hash,
-            toolchain_cmd_digest=toolchain_cmd_digest,
-            testcase_input_hash=testcase_input_hash,
-        )
         if force_recompile:
             self._domjudge_cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
-            self._domjudge_cache_delete(self.SOLVE_OUTPUT_CACHE_KIND, solve_key_hash, solve_signature)
             return None
 
         run_cfg_obj = self._domjudge_config_object(job_row["run_config_json"])
@@ -634,33 +624,7 @@ class JudgehostDomjudgeDispatchMixin:
                     return None
             return cached_result
 
-        if main_correct or expected_behavior != "accepted":
-            return None
-        cached_solve = self._domjudge_cache_entry(
-            self._domjudge_cache_get(self.SOLVE_OUTPUT_CACHE_KIND, solve_key_hash, solve_signature)
-        )
-        if cached_solve is None:
-            return None
-        solve_obj = cached_solve["value"]
-        output_hash = domjudge_text(solve_obj.get("output_hash"))
-        if (not output_hash) or (not testcase_answer_hash) or output_hash != testcase_answer_hash:
-            return None
-        built = self._domjudge_build_cached_case(
-            cache_kind=self.SOLVE_OUTPUT_CACHE_KIND,
-            cache_key_hash=solve_key_hash,
-            cache_signature=solve_signature,
-            cache_value=solve_obj,
-            cache_files=cached_solve["files"],
-        )
-        cached_result = self._domjudge_cached_case_result(
-            hostname=hostname,
-            runresult="correct",
-            built=built,
-        )
-        if not cached_result["output_run_rel"]:
-            self._domjudge_cache_delete(self.SOLVE_OUTPUT_CACHE_KIND, solve_key_hash, solve_signature)
-            return None
-        return cached_result
+        return None
 
 
     def _domjudge_release_prepared_job_for_queue(self, job_id: int) -> None:

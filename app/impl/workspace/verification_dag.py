@@ -79,7 +79,7 @@ class TaskExecutionContext:
     mode: str
     pass_limit: int
     snapshot_root: Path
-    layout_root: Path
+    uploaded_sources_root: Path
     tests_root: Path
     answers_root: Path
     source_file_by_path: dict[str, Path]
@@ -96,17 +96,9 @@ class _TaskSummaryParts:
     wall_sec: float | None
     memory_kb: int | None
     compile_log: str
-    compile_log_truncated: bool
-    compile_log_total_chars: int
     diagnostics_json: str
-    diagnostics_truncated: bool
-    diagnostics_total: int
     error_text: str
-    error_text_truncated: bool
-    error_text_total_chars: int
     feedback_text: str
-    feedback_text_truncated: bool
-    feedback_text_total_chars: int
     output_ref: str
 
 
@@ -384,8 +376,6 @@ def _logical_run_summary(
     ordered_rows = sorted(rows, key=lambda item: (str(item["test_name"]), str(item["id"])))
     tests: list[dict[str, object]] = []
     compile_log = ""
-    compile_log_truncated = False
-    compile_log_total_chars = 0
     compile_diagnostics: list[dict[str, object]] = []
     diagnostics_total = 0
     diagnostics_truncated = False
@@ -419,8 +409,6 @@ def _logical_run_summary(
             max_memory_kb = max(max_memory_kb, int(test_row.get("memory_kb") or 0))
         if (not compile_log) and str(row["compile_log"] or ""):
             compile_log = str(row["compile_log"] or "")
-            compile_log_truncated = bool(row["compile_log_truncated"])
-            compile_log_total_chars = int(row["compile_log_total_chars"] or len(compile_log))
         task_diagnostics_json = str(row["diagnostics_json"] or "[]")
         try:
             task_diagnostics = cast(list[dict[str, object]], json.loads(task_diagnostics_json))
@@ -464,8 +452,6 @@ def _logical_run_summary(
         "tests": tests,
         "tests_total": len(test_names),
         "compile_log": compile_log,
-        "compile_log_truncated": bool(compile_log_truncated),
-        "compile_log_total_chars": int(compile_log_total_chars),
         "compile_diagnostics": list(compile_diagnostics),
         "compile_diagnostics_total": diagnostics_total,
         "compile_diagnostics_truncated": bool(diagnostics_truncated),
@@ -604,12 +590,18 @@ def _effective_verification_kind(
     *,
     sample_only: bool,
     requested_test_names: list[str],
-    test_names: list[str],
+    available_test_names: list[str],
 ) -> str:
     if sample_only:
         return Kind.SAMPLE.value
-    if requested_test_names and len(requested_test_names) < len(test_names):
-        return Kind.CUSTOM.value
+    if requested_test_names:
+        requested_set = {name for name in requested_test_names}
+        available_set = {name for name in available_test_names}
+        if requested_set != available_set:
+            return Kind.CUSTOM.value
+        if len(requested_test_names) != len(available_test_names):
+            return Kind.CUSTOM.value
+        return Kind.ALL.value
     return Kind.ALL.value
 
 
@@ -650,15 +642,6 @@ def _prepared_payload_for_uploaded_source(
     if manual_validate_only:
         prepared["manual_validate_only"] = True
     return prepared
-
-
-def _resolve_output_blob(output_ref: str) -> bytes | None:
-    if not output_ref:
-        return None
-    try:
-        return config.judgehost_task_service.resolve_artifact_blob(output_ref)
-    except Exception:
-        return None
 
 
 def _source_bytes_for_path(execution: TaskExecutionContext, source_path: str) -> tuple[str, bytes]:
@@ -718,17 +701,9 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
         wall_sec=wall_sec,
         memory_kb=memory_kb,
         compile_log=compile_log_meta["text"],
-        compile_log_truncated=bool(compile_log_meta["truncated"]),
-        compile_log_total_chars=int(compile_log_meta["total_chars"]),
         diagnostics_json=diagnostics_json,
-        diagnostics_truncated=bool(diagnostics_meta["truncated"]),
-        diagnostics_total=int(diagnostics_meta["total"]),
         error_text=error_text_meta["text"],
-        error_text_truncated=bool(error_text_meta["truncated"]),
-        error_text_total_chars=int(error_text_meta["total_chars"]),
         feedback_text=feedback_meta["text"],
-        feedback_text_truncated=bool(feedback_meta["truncated"]),
-        feedback_text_total_chars=int(feedback_meta["total_chars"]),
         output_ref=output_ref,
     )
 
@@ -755,17 +730,9 @@ def _empty_task_result(
         wall_sec=None,
         memory_kb=None,
         compile_log="",
-        compile_log_truncated=False,
-        compile_log_total_chars=0,
         diagnostics_json="[]",
-        diagnostics_truncated=False,
-        diagnostics_total=0,
         error_text=error_meta["text"],
-        error_text_truncated=bool(error_meta["truncated"]),
-        error_text_total_chars=int(error_meta["total_chars"]),
         feedback_text="",
-        feedback_text_truncated=False,
-        feedback_text_total_chars=0,
         output_ref="",
         fail_flag_reason=fail_flag_reason,
     )
@@ -945,6 +912,7 @@ def run_workspace_verification_dag(
         raise RuntimeError("workspace path is unavailable")
     task_store = VerificationTaskStore(config.db)
     layout = config.fs_manager.prepare_verification_layout(verification_id)
+    runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
     snapshot_root = snapshot_root_override
     if snapshot_root is None:
         snapshot_root = config.workspace_service.create_snapshot(
@@ -957,7 +925,7 @@ def run_workspace_verification_dag(
     try:
         execution_plan = build_verification_execution_plan(
             snapshot_root,
-            bin_dir=layout.bin,
+            bin_dir=runtime_layout.bin,
             sample_only=bool(sample_only),
         )
         _require_online_judgehost()
@@ -1010,8 +978,11 @@ def run_workspace_verification_dag(
     try:
         verification_mode = execution_plan.mode
         verification_pass_limit = execution_plan.pass_limit
+        uploaded_sources_root = runtime_layout.uploaded_sources
+        execution_tests_root = runtime_layout.tests
+        execution_answers_root = runtime_layout.answers
         source_file_by_path = dict(execution_plan.source_file_by_path)
-        source_file_by_path.update(_materialize_uploaded_sources(layout_root=layout.root, targets=targets))
+        source_file_by_path.update(_materialize_uploaded_sources(layout_root=uploaded_sources_root, targets=targets))
         snapshot_resolved = execution_plan.snapshot_root.resolve()
         for target in targets:
             source_path = str(target.get("path") or "")
@@ -1033,7 +1004,7 @@ def run_workspace_verification_dag(
         effective_kind = _effective_verification_kind(
             sample_only=bool(sample_only),
             requested_test_names=list(requested_test_names),
-            test_names=test_names,
+            available_test_names=list(execution_plan.test_names),
         )
         selected_test_plans = [execution_plan.test_plan_by_name[name] for name in test_names if name in execution_plan.test_plan_by_name]
         sanity_checks = planned_sanity_checks(selected_test_plans)
@@ -1066,15 +1037,9 @@ def run_workspace_verification_dag(
                 "selected_test_names": list(test_names),
                 "sanity_checks": list(sanity_checks),
                 "sanity_status": sanity_status,
+                "run_config_json": str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
+                "tests_meta_rows": list(execution_plan.tests_meta_rows),
             },
-        )
-        (layout.logs / "run_config.json").write_text(
-            str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
-            encoding="utf-8",
-        )
-        (layout.logs / "tests_meta.json").write_text(
-            json.dumps(execution_plan.tests_meta_rows, indent=2),
-            encoding="utf-8",
         )
         task_store.replace_graph(verification_id, tasks=graph.tasks, edges=graph.edges)
         execution = TaskExecutionContext(
@@ -1084,9 +1049,9 @@ def run_workspace_verification_dag(
             mode=verification_mode,
             pass_limit=verification_pass_limit,
             snapshot_root=execution_plan.snapshot_root,
-            layout_root=layout.root,
-            tests_root=layout.tests,
-            answers_root=layout.ans,
+            uploaded_sources_root=uploaded_sources_root,
+            tests_root=execution_tests_root,
+            answers_root=execution_answers_root,
             source_file_by_path=source_file_by_path,
             test_plan_by_name=execution_plan.test_plan_by_name,
             run_verification_payload_base=execution_plan.run_verification_payload_base,

@@ -142,7 +142,6 @@ CREATE TABLE IF NOT EXISTS contest_artifacts (
     job_id TEXT,
     artifact_type TEXT NOT NULL,
     filename TEXT NOT NULL,
-    artifact_path TEXT NOT NULL,
     sha256 TEXT,
     size_bytes INTEGER,
     created_at TEXT NOT NULL,
@@ -182,7 +181,7 @@ CREATE TABLE IF NOT EXISTS previews (
     source_commit TEXT,
     source_ref TEXT,
     status TEXT NOT NULL,
-    artifact_path TEXT NOT NULL,
+    summary_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     finished_at TEXT,
     FOREIGN KEY(problem_id) REFERENCES problems(id),
@@ -210,6 +209,7 @@ CREATE TABLE IF NOT EXISTS verification_tasks (
     predecessor_task_id TEXT,
     task_kind TEXT NOT NULL,
     source_path TEXT NOT NULL,
+    logical_run_id TEXT NOT NULL DEFAULT '',
     test_name TEXT NOT NULL,
     expected_behavior TEXT NOT NULL,
     final_status TEXT NOT NULL,
@@ -218,7 +218,11 @@ CREATE TABLE IF NOT EXISTS verification_tasks (
     cpu_sec REAL,
     wall_sec REAL,
     memory_kb INTEGER,
-    result_bundle_ref TEXT NOT NULL DEFAULT '',
+    compile_log TEXT NOT NULL DEFAULT '',
+    diagnostics_json TEXT NOT NULL DEFAULT '[]',
+    error_text TEXT NOT NULL DEFAULT '',
+    feedback_text TEXT NOT NULL DEFAULT '',
+    output_ref TEXT NOT NULL DEFAULT '',
     finished_at TEXT,
     created_at TEXT NOT NULL,
     FOREIGN KEY(verification_id) REFERENCES verifications(id),
@@ -333,7 +337,6 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "job_id",
         "artifact_type",
         "filename",
-        "artifact_path",
         "sha256",
         "size_bytes",
         "created_at",
@@ -348,7 +351,7 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "source_commit",
         "source_ref",
         "status",
-        "artifact_path",
+        "summary_json",
         "created_at",
         "finished_at",
     ),
@@ -369,6 +372,7 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "predecessor_task_id",
         "task_kind",
         "source_path",
+        "logical_run_id",
         "test_name",
         "expected_behavior",
         "final_status",
@@ -377,7 +381,11 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "cpu_sec",
         "wall_sec",
         "memory_kb",
-        "result_bundle_ref",
+        "compile_log",
+        "diagnostics_json",
+        "error_text",
+        "feedback_text",
+        "output_ref",
         "finished_at",
         "created_at",
     ),
@@ -505,6 +513,7 @@ class DB:
         if self._db_file_exists():
             with sqlite3.connect(self.path) as conn:
                 self._prepare_connection(conn)
+                self._migrate_existing_schema(conn)
                 self._validate_existing_schema(conn)
                 conn.executescript(SCHEMA_INDEXES)
                 conn.commit()
@@ -515,6 +524,152 @@ class DB:
             self._validate_existing_schema(conn)
             conn.executescript(SCHEMA_INDEXES)
             conn.commit()
+
+    def _migrate_existing_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            self._migrate_previews_table(conn)
+            self._migrate_contest_artifacts_table(conn)
+            self._migrate_verification_tasks_table(conn)
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+
+    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {str(row[1]) for row in rows}
+
+    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            [table_name],
+        ).fetchone()
+        return row is not None
+
+    def _migrate_previews_table(self, conn: sqlite3.Connection) -> None:
+        if not self._table_exists(conn, "previews"):
+            return
+        columns = self._table_columns(conn, "previews")
+        if ("artifact_path" not in columns) and ("summary_json" in columns):
+            return
+        conn.execute("ALTER TABLE previews RENAME TO previews_old")
+        conn.execute(
+            """
+            CREATE TABLE previews (
+                id TEXT PRIMARY KEY,
+                problem_id INTEGER NOT NULL,
+                workspace_id INTEGER,
+                verification_id TEXT,
+                source_commit TEXT,
+                source_ref TEXT,
+                status TEXT NOT NULL,
+                summary_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(problem_id) REFERENCES problems(id),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
+                FOREIGN KEY(verification_id) REFERENCES verifications(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
+            SELECT id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,'{}',created_at,finished_at
+            FROM previews_old
+            """
+        )
+        conn.execute("DROP TABLE previews_old")
+
+    def _migrate_contest_artifacts_table(self, conn: sqlite3.Connection) -> None:
+        if not self._table_exists(conn, "contest_artifacts"):
+            return
+        columns = self._table_columns(conn, "contest_artifacts")
+        if "artifact_path" not in columns:
+            return
+        conn.execute("ALTER TABLE contest_artifacts RENAME TO contest_artifacts_old")
+        conn.execute(
+            """
+            CREATE TABLE contest_artifacts (
+                id TEXT PRIMARY KEY,
+                contest_id INTEGER NOT NULL,
+                job_id TEXT,
+                artifact_type TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                sha256 TEXT,
+                size_bytes INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(contest_id) REFERENCES contests(id),
+                FOREIGN KEY(job_id) REFERENCES contest_jobs(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO contest_artifacts(id,contest_id,job_id,artifact_type,filename,sha256,size_bytes,created_at)
+            SELECT id,contest_id,job_id,artifact_type,filename,sha256,size_bytes,created_at
+            FROM contest_artifacts_old
+            """
+        )
+        conn.execute("DROP TABLE contest_artifacts_old")
+
+    def _migrate_verification_tasks_table(self, conn: sqlite3.Connection) -> None:
+        if not self._table_exists(conn, "verification_tasks"):
+            return
+        columns = self._table_columns(conn, "verification_tasks")
+        required_columns = {
+            "logical_run_id",
+            "compile_log",
+            "diagnostics_json",
+            "error_text",
+            "feedback_text",
+            "output_ref",
+        }
+        if ("result_bundle_ref" not in columns) and required_columns.issubset(columns):
+            return
+        conn.execute("ALTER TABLE verification_tasks RENAME TO verification_tasks_old")
+        conn.execute(
+            """
+            CREATE TABLE verification_tasks (
+                id TEXT PRIMARY KEY,
+                verification_id TEXT NOT NULL,
+                predecessor_task_id TEXT,
+                task_kind TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                logical_run_id TEXT NOT NULL DEFAULT '',
+                test_name TEXT NOT NULL,
+                expected_behavior TEXT NOT NULL,
+                final_status TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                runtime_sec REAL,
+                cpu_sec REAL,
+                wall_sec REAL,
+                memory_kb INTEGER,
+                compile_log TEXT NOT NULL DEFAULT '',
+                diagnostics_json TEXT NOT NULL DEFAULT '[]',
+                error_text TEXT NOT NULL DEFAULT '',
+                feedback_text TEXT NOT NULL DEFAULT '',
+                output_ref TEXT NOT NULL DEFAULT '',
+                finished_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(verification_id) REFERENCES verifications(id),
+                FOREIGN KEY(predecessor_task_id) REFERENCES verification_tasks(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO verification_tasks(
+                id,verification_id,predecessor_task_id,task_kind,source_path,logical_run_id,test_name,expected_behavior,
+                final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,compile_log,diagnostics_json,error_text,
+                feedback_text,output_ref,finished_at,created_at
+            )
+            SELECT
+                id,verification_id,predecessor_task_id,task_kind,source_path,'',test_name,expected_behavior,
+                final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,'','[]','','','',finished_at,created_at
+            FROM verification_tasks_old
+            """
+        )
+        conn.execute("DROP TABLE verification_tasks_old")
 
     def _db_file_exists(self) -> bool:
         return self.path.exists() and self.path.stat().st_size > 0

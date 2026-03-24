@@ -1602,6 +1602,68 @@ class TestUIRun(UIBaseSuite):
             [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
         )
 
+    def test_run_cancel_cancels_queued_rows_when_domjudge_has_only_pending_cases(self) -> None:
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}"
+        build_id = self.random_id("b-cancel-domjudge-pending")
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=build_id,
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-03-05T00:00:00Z",
+            finished_at="",
+            runs=[],
+            summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-cancel-domjudge-pending-1",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "run_id": run_id,
+                    "judgehost_task_id": "jt-cancel-domjudge-pending",
+                },
+                {
+                    "id": "vt-cancel-domjudge-pending-2",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "run_id": run_id,
+                    "judgehost_task_id": "jt-cancel-domjudge-pending",
+                },
+            ],
+            edges=[],
+        )
+        with patch.object(
+            config.judgehost_task_service,
+            "domjudge_runs_with_leased_cases",
+            return_value=set(),
+        ):
+            cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
+        self.assertEqual(cancel_resp.status_code, 303)
+        rows = VerificationTaskStore(config.db).list_rows(verification_id)
+        self.assertEqual(
+            [str(row["status"] or "") for row in rows],
+            [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
+        )
+
 
     def test_run_list_treats_failed_verification_as_terminal_even_with_queued_runs(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -4861,6 +4923,98 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("[  0.071s/0]]", detail_html)
         self.assertIn(judge_message.strip(), detail_html)
         self.assertNotIn("feedback_dir/001/judgemessage.txt", detail_html)
+
+    def test_run_details_reads_runtime_inputs_answers_and_column_outputs_for_task_graph(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        verification_id = f"ver-runtime-detail-{uuid.uuid4().hex[:8]}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="ok",
+            metadata={"status": "ok"},
+        )
+        runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
+        (runtime_layout.tests / "001.in").write_text("1 2 3\n", encoding="utf-8")
+        (runtime_layout.answers / "001.ans").write_text("6\n", encoding="utf-8")
+        run_root = config.fs_manager.prepare_verification_run_root(verification_id, "tmp.cpp").resolve()
+        (run_root / "001.out").write_text("6\n", encoding="utf-8")
+
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-runtime-detail-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/tmp.cpp",
+                    "logical_run_id": "tmp.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "runtime_sec": 0.003,
+                    "cpu_sec": 0.002,
+                    "wall_sec": 0.003,
+                    "memory_kb": 1024,
+                    "compile_log": "",
+                    "diagnostics_json": "[]",
+                    "error_text": "",
+                    "feedback_text": "",
+                    "output_ref": "001.out",
+                }
+            ],
+            edges=[],
+        )
+
+        detail = run_details_test_fragment(
+            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertRegex(detail_html, r"(?s)<strong>Input 001\.in</strong>.*?<pre[^>]*>\s*1 2 3\s*</pre>")
+        self.assertRegex(detail_html, r"(?s)<strong>Answer</strong>.*?<pre[^>]*>\s*6\s*</pre>")
+        self.assertRegex(detail_html, r"(?s)<strong>Output</strong>.*?<pre[^>]*>\s*6\s*</pre>")
+        self.assertIn(
+            f"/problems/alice/sample/alice/artifacts/{verification_id}/tests/001.in",
+            detail_html,
+        )
+        self.assertIn(
+            f"/problems/alice/sample/alice/artifacts/{verification_id}/ans/001.ans",
+            detail_html,
+        )
+        self.assertIn(
+            f"/problems/alice/sample/alice/artifacts/{verification_id}/runs/tmp.cpp/001.out",
+            detail_html,
+        )
+        self.assertNotIn("(output file missing)", detail_html)
+        self.assertNotIn(">missing<", detail_html)
+        input_download = run_export_impl.artifact_file(
+            "alice/sample",
+            "alice",
+            verification_id,
+            "tests/001.in",
+        )
+        self.assertEqual(input_download.status_code, 200)
+        self.assertEqual(Path(str(input_download.path)).read_text(encoding="utf-8"), "1 2 3\n")
+        answer_download = run_export_impl.artifact_file(
+            "alice/sample",
+            "alice",
+            verification_id,
+            "ans/001.ans",
+        )
+        self.assertEqual(answer_download.status_code, 200)
+        self.assertEqual(Path(str(answer_download.path)).read_text(encoding="utf-8"), "6\n")
 
     def test_run_details_uses_program_stderr_token_for_re_feedback(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

@@ -57,8 +57,8 @@ class PreviewService:
         self.verification_service = verification_service
         self._async_task_cache_service = async_task_cache_service
         self.fs_manager = FsManager(
+            self.workspace_service.settings.cache_root,
             self.workspace_service.settings.artifacts_root,
-            self.workspace_service.settings.run_root,
         )
         self.sandbox = sandbox_backend or TexSandboxBackend()
         self.tex_timeout_sec = 120
@@ -171,12 +171,9 @@ class PreviewService:
             if error_text:
                 raise RuntimeError(f"sample verification failed ({verification_id}): {error_text}")
             raise RuntimeError(f"sample verification failed ({verification_id})")
-        artifact_path = self._verification_store.artifact_path_for_verification(verification_id).strip()
-        if not artifact_path:
-            raise RuntimeError(f"sample verification has no artifact path: {verification_id}")
-        artifact_root = Path(artifact_path)
-        tests_dir = artifact_root / "tests"
-        ans_dir = artifact_root / "ans"
+        runtime_layout = self.fs_manager.verification_runtime_layout(verification_id)
+        tests_dir = runtime_layout.tests
+        ans_dir = runtime_layout.answers
         if not tests_dir.exists() or not tests_dir.is_dir() or tests_dir.is_symlink():
             raise RuntimeError(f"sample verification missing tests directory: {verification_id}")
         if not ans_dir.exists() or not ans_dir.is_dir() or ans_dir.is_symlink():
@@ -408,12 +405,9 @@ class PreviewService:
         row = self._store.get_workspace_preview_artifact(int(problem_id), int(workspace_id), str(preview_id or "").strip())
         if row is None:
             return None
-        artifact_path = row["artifact_path"].strip()
-        if not artifact_path:
-            return None
         try:
-            root = Path(artifact_path).resolve()
-            base = self.workspace_service.settings.artifacts_root.resolve()
+            root = self.fs_manager.resolve_preview_root(str(preview_id or "").strip())
+            base = self.fs_manager.preview_root.resolve()
         except OSError:
             return None
         if root != base and base not in root.parents:
@@ -440,12 +434,6 @@ class PreviewService:
             if status not in {"ok", "failed", "cancelled"}:
                 continue
             terminal_ids.append(stale_id)
-            artifact_path = row["artifact_path"].strip()
-            has_other_ref = False
-            if artifact_path:
-                has_other_ref = self._store.artifact_path_has_other_preview_ref(artifact_path, stale_id)
-            if has_other_ref:
-                continue
             root = self._preview_artifact_root(
                 problem_id=int(problem_id),
                 workspace_id=int(workspace_id),
@@ -472,7 +460,7 @@ class PreviewService:
         preview_ref = ""
         preview_id = ""
         sample_verification_id: str | None = None
-        artifacts = None
+        preview_layout = None
         with self.workspace_service.workspace_lock(workspace):
             ws_status = self.workspace_service.read_workspace_status(workspace)
             head_obj = ws_status.get("head_commit")
@@ -527,19 +515,18 @@ class PreviewService:
                 dynamic_samples=bool(dynamic_samples),
             )
             preview_id = f"p-{uuid.uuid4().hex[:12]}"
-            artifacts = self.fs_manager.ensure_artifact_layout(preview_ref)
+            preview_layout = self.fs_manager.prepare_preview_layout(preview_id)
             self._store.insert_running_preview(
                 preview_id=preview_id,
                 problem_id=problem_id,
                 workspace_id=workspace_id,
-                artifact_path=str(artifacts.root),
                 source_commit=source_commit,
                 source_ref=source_ref,
             )
-        if snapshot is None or artifacts is None or (not str(preview_id or "").strip()):
+        if snapshot is None or preview_layout is None or (not str(preview_id or "").strip()):
             raise RuntimeError("preview compile setup failed")
 
-        log = artifacts.logs / "latex.log"
+        log = preview_layout.logs / "latex.log"
         status = "ok"
         summary: dict[str, object] = {"statement_signature": statement_signature, "preview_ref": preview_ref}
         sample_sync: dict[str, object] | None = None
@@ -595,7 +582,7 @@ class PreviewService:
                         break
                 log.write_text(final_log_text, encoding="utf-8")
                 generated = tex.parent / f"{tex.stem}.pdf"
-                target = artifacts.statement_preview / "statement.pdf"
+                target = preview_layout.statement_preview / "statement.pdf"
                 if final_proc is None:
                     status = "failed"
                     summary = _summary_with_sample(

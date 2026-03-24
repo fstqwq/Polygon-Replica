@@ -29,17 +29,9 @@ class TaskExecutionResult:
     wall_sec: float | None
     memory_kb: int | None
     compile_log: str
-    compile_log_truncated: bool
-    compile_log_total_chars: int
     diagnostics_json: str
-    diagnostics_truncated: bool
-    diagnostics_total: int
     error_text: str
-    error_text_truncated: bool
-    error_text_total_chars: int
     feedback_text: str
-    feedback_text_truncated: bool
-    feedback_text_total_chars: int
     output_ref: str
     fail_flag_reason: str = ""
 
@@ -114,17 +106,9 @@ def _save_result(
         wall_sec=result.wall_sec,
         memory_kb=result.memory_kb,
         compile_log=result.compile_log,
-        compile_log_truncated=result.compile_log_truncated,
-        compile_log_total_chars=result.compile_log_total_chars,
         diagnostics_json=result.diagnostics_json,
-        diagnostics_truncated=result.diagnostics_truncated,
-        diagnostics_total=result.diagnostics_total,
         error_text=result.error_text,
-        error_text_truncated=result.error_text_truncated,
-        error_text_total_chars=result.error_text_total_chars,
         feedback_text=result.feedback_text,
-        feedback_text_truncated=result.feedback_text_truncated,
-        feedback_text_total_chars=result.feedback_text_total_chars,
         output_ref=result.output_ref,
     )
     if result.fail_flag_reason:

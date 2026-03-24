@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import json
 import secrets
 import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
 import re
 from typing import TypedDict, cast
 
 from app.db import DB, now_iso
-from app.service.disk.verification_store import VerificationStore
 
 
 class VerificationTaskRow(TypedDict):
@@ -31,17 +28,9 @@ class VerificationTaskRow(TypedDict):
     wall_sec: float | None
     memory_kb: int | None
     compile_log: str
-    compile_log_truncated: int
-    compile_log_total_chars: int
     diagnostics_json: str
-    diagnostics_truncated: int
-    diagnostics_total: int
     error_text: str
-    error_text_truncated: int
-    error_text_total_chars: int
     feedback_text: str
-    feedback_text_truncated: int
-    feedback_text_total_chars: int
     output_ref: str
     started_at: str | None
     finished_at: str | None
@@ -119,7 +108,6 @@ class VerificationTaskStore:
 
     def __init__(self, db: DB) -> None:
         self.db = db
-        self._verification_store = VerificationStore(db)
         self._runtime_by_task_id = self._shared_runtime_by_task_id
         self._logical_run_id_by_task_id = self._shared_logical_run_id_by_task_id
         self._fail_reason_by_verification_id = self._shared_fail_reason_by_verification_id
@@ -130,73 +118,6 @@ class VerificationTaskStore:
             if self.db.fetch_one("SELECT id FROM verification_tasks WHERE id=?", [candidate]) is None:
                 return candidate
         return f"vt-{secrets.token_hex(8)}"
-
-    def _verification_root(self, verification_id: str) -> Path:
-        return self._verification_store._verification_root(verification_id)
-
-    def _result_bundle_root(self, verification_id: str, task_id: str) -> tuple[str, Path]:
-        rel = f"tasks/{task_id}"
-        root = (self._verification_root(verification_id) / rel).resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return (rel, root)
-
-    def _write_result_bundle(
-        self,
-        *,
-        verification_id: str,
-        task_id: str,
-        compile_log: str,
-        compile_log_truncated: bool,
-        compile_log_total_chars: int,
-        diagnostics_json: str,
-        diagnostics_truncated: bool,
-        diagnostics_total: int,
-        error_text: str,
-        error_text_truncated: bool,
-        error_text_total_chars: int,
-        feedback_text: str,
-        feedback_text_truncated: bool,
-        feedback_text_total_chars: int,
-        output_ref: str,
-        logical_run_id: str,
-    ) -> str:
-        bundle_ref, bundle_root = self._result_bundle_root(verification_id, task_id)
-        payload = {
-            "compile_log": compile_log,
-            "compile_log_truncated": bool(compile_log_truncated),
-            "compile_log_total_chars": int(compile_log_total_chars),
-            "diagnostics_json": diagnostics_json,
-            "diagnostics_truncated": bool(diagnostics_truncated),
-            "diagnostics_total": int(diagnostics_total),
-            "error_text": error_text,
-            "error_text_truncated": bool(error_text_truncated),
-            "error_text_total_chars": int(error_text_total_chars),
-            "feedback_text": feedback_text,
-            "feedback_text_truncated": bool(feedback_text_truncated),
-            "feedback_text_total_chars": int(feedback_text_total_chars),
-            "output_ref": output_ref,
-            "logical_run_id": logical_run_id,
-        }
-        (bundle_root / "metadata.json").write_text(
-            json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        return bundle_ref
-
-    def _load_result_bundle(self, verification_root: Path, result_bundle_ref: str) -> dict[str, object]:
-        if not result_bundle_ref:
-            return {}
-        try:
-            text = (verification_root / result_bundle_ref / "metadata.json").read_text(encoding="utf-8")
-        except OSError:
-            return {}
-        try:
-            payload = json.loads(text)
-        except Exception:
-            return {}
-        if not isinstance(payload, dict):
-            return {}
-        return payload
 
     def replace_graph(
         self,
@@ -235,10 +156,10 @@ class VerificationTaskStore:
                 conn.execute(
                     """
                     INSERT INTO verification_tasks(
-                        id,verification_id,predecessor_task_id,task_kind,source_path,test_name,expected_behavior,
-                        final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,result_bundle_ref,finished_at,created_at
+                        id,verification_id,predecessor_task_id,task_kind,source_path,logical_run_id,test_name,expected_behavior,
+                        final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,compile_log,diagnostics_json,error_text,feedback_text,output_ref,finished_at,created_at
                     )
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     [
                         task_id,
@@ -246,6 +167,7 @@ class VerificationTaskStore:
                         predecessor_by_child.get(task_id),
                         str(item.get("task_kind") or ""),
                         str(item.get("source_path") or ""),
+                        logical_run_ids[task_id],
                         str(item.get("test_name") or ""),
                         str(item.get("expected_behavior") or ""),
                         final_status,
@@ -254,7 +176,11 @@ class VerificationTaskStore:
                         cpu_sec,
                         wall_sec,
                         memory_kb,
-                        "",
+                        str(item.get("compile_log") or ""),
+                        str(item.get("diagnostics_json") or "[]"),
+                        str(item.get("error_text") or ""),
+                        str(item.get("feedback_text") or ""),
+                        str(item.get("output_ref") or ""),
                         finished_at,
                         now_text,
                     ],
@@ -283,7 +209,7 @@ class VerificationTaskStore:
             str(row["id"] or ""),
         )
 
-    def _decorate_row(self, index: int, row: dict[str, object], bundle_payload: dict[str, object]) -> VerificationTaskRow:
+    def _decorate_row(self, index: int, row: dict[str, object]) -> VerificationTaskRow:
         verification_id = str(row["verification_id"] or "")
         runtime = self._runtime_status(row)
         final_status = str(row["final_status"] or "")
@@ -300,9 +226,10 @@ class VerificationTaskStore:
         source_path = str(row["source_path"] or "")
         expected_behavior = str(row["expected_behavior"] or "")
         task_kind = str(row["task_kind"] or "")
-        logical_run_id = str(bundle_payload.get("logical_run_id") or self._logical_run_id_by_task_id.get(str(row["id"] or "")) or "")
+        task_id = str(row["id"] or "")
+        logical_run_id = str(row["logical_run_id"] or self._logical_run_id_by_task_id.get(task_id) or "")
         return {
-            "id": str(row["id"] or ""),
+            "id": task_id,
             "verification_id": verification_id,
             "predecessor_task_id": str(row["predecessor_task_id"] or ""),
             "task_kind": task_kind,
@@ -319,19 +246,11 @@ class VerificationTaskStore:
             "cpu_sec": cast(float | None, row["cpu_sec"]),
             "wall_sec": cast(float | None, row["wall_sec"]),
             "memory_kb": cast(int | None, row["memory_kb"]),
-            "compile_log": str(bundle_payload.get("compile_log") or ""),
-            "compile_log_truncated": int(bool(bundle_payload.get("compile_log_truncated"))),
-            "compile_log_total_chars": int(bundle_payload.get("compile_log_total_chars") or 0),
-            "diagnostics_json": str(bundle_payload.get("diagnostics_json") or "[]"),
-            "diagnostics_truncated": int(bool(bundle_payload.get("diagnostics_truncated"))),
-            "diagnostics_total": int(bundle_payload.get("diagnostics_total") or 0),
-            "error_text": str(bundle_payload.get("error_text") or ""),
-            "error_text_truncated": int(bool(bundle_payload.get("error_text_truncated"))),
-            "error_text_total_chars": int(bundle_payload.get("error_text_total_chars") or 0),
-            "feedback_text": str(bundle_payload.get("feedback_text") or ""),
-            "feedback_text_truncated": int(bool(bundle_payload.get("feedback_text_truncated"))),
-            "feedback_text_total_chars": int(bundle_payload.get("feedback_text_total_chars") or 0),
-            "output_ref": str(bundle_payload.get("output_ref") or ""),
+            "compile_log": str(row["compile_log"] or ""),
+            "diagnostics_json": str(row["diagnostics_json"] or "[]"),
+            "error_text": str(row["error_text"] or ""),
+            "feedback_text": str(row["feedback_text"] or ""),
+            "output_ref": str(row["output_ref"] or ""),
             "started_at": started_at,
             "finished_at": finished_at,
             "created_at": created_at,
@@ -363,19 +282,7 @@ class VerificationTaskStore:
     def list_rows(self, verification_id: str) -> list[VerificationTaskRow]:
         rows = [dict(row) for row in self.db.fetch_all("SELECT * FROM verification_tasks WHERE verification_id=?", [verification_id])]
         ordered = sorted(rows, key=self._row_order)
-        verification_root = self._verification_root(verification_id)
-        bundle_payload_by_ref: dict[str, dict[str, object]] = {}
-        for row in ordered:
-            result_bundle_ref = str(row["result_bundle_ref"] or "")
-            if not result_bundle_ref:
-                continue
-            if result_bundle_ref in bundle_payload_by_ref:
-                continue
-            bundle_payload_by_ref[result_bundle_ref] = self._load_result_bundle(verification_root, result_bundle_ref)
-        return [
-            self._decorate_row(index + 1, row, bundle_payload_by_ref.get(str(row["result_bundle_ref"] or ""), {}))
-            for index, row in enumerate(ordered)
-        ]
+        return [self._decorate_row(index + 1, row) for index, row in enumerate(ordered)]
 
     def list_rows_for_list(self, verification_id: str) -> list[VerificationTaskListRow]:
         rows = [
@@ -411,12 +318,7 @@ class VerificationTaskStore:
         for row in sorted((dict(item) for item in rows), key=self._row_order):
             if str(row["test_name"] or "") != safe_test_name:
                 continue
-            verification_id = str(row["verification_id"] or "")
-            bundle_payload = {}
-            result_bundle_ref = str(row["result_bundle_ref"] or "")
-            if result_bundle_ref:
-                bundle_payload = self._load_result_bundle(self._verification_root(verification_id), result_bundle_ref)
-            return self._decorate_row(1, row, bundle_payload)
+            return self._decorate_row(1, row)
         return None
 
     def find_runtime_rows_by_judgehost_task_id(self, judgehost_task_id: str) -> list[VerificationTaskRow]:
@@ -435,29 +337,7 @@ class VerificationTaskStore:
             candidate_ids,
         )
         ordered = sorted((dict(item) for item in rows), key=self._row_order)
-        verification_root_by_id: dict[str, Path] = {}
-        bundle_payload_by_key: dict[tuple[str, str], dict[str, object]] = {}
-        for row in ordered:
-            verification_id = str(row["verification_id"] or "")
-            result_bundle_ref = str(row["result_bundle_ref"] or "")
-            if not result_bundle_ref:
-                continue
-            key = (verification_id, result_bundle_ref)
-            if key in bundle_payload_by_key:
-                continue
-            verification_root = verification_root_by_id.get(verification_id)
-            if verification_root is None:
-                verification_root = self._verification_root(verification_id)
-                verification_root_by_id[verification_id] = verification_root
-            bundle_payload_by_key[key] = self._load_result_bundle(verification_root, result_bundle_ref)
-        return [
-            self._decorate_row(
-                index + 1,
-                row,
-                bundle_payload_by_key.get((str(row["verification_id"] or ""), str(row["result_bundle_ref"] or "")), {}),
-            )
-            for index, row in enumerate(ordered)
-        ]
+        return [self._decorate_row(index + 1, row) for index, row in enumerate(ordered)]
 
     def list_edge_rows(self, verification_id: str) -> list[VerificationTaskEdgeRow]:
         rows = self.db.fetch_all(
@@ -522,50 +402,35 @@ class VerificationTaskStore:
         wall_sec: float | None,
         memory_kb: int | None,
         compile_log: str,
-        compile_log_truncated: bool,
-        compile_log_total_chars: int,
         diagnostics_json: str,
-        diagnostics_truncated: bool,
-        diagnostics_total: int,
         error_text: str,
-        error_text_truncated: bool,
-        error_text_total_chars: int,
         feedback_text: str,
-        feedback_text_truncated: bool,
-        feedback_text_total_chars: int,
         output_ref: str,
     ) -> None:
-        row = self.db.fetch_one("SELECT verification_id FROM verification_tasks WHERE id=?", [task_id])
-        if row is None:
-            return
-        verification_id = str(row["verification_id"] or "")
         logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
-        bundle_ref = self._write_result_bundle(
-            verification_id=verification_id,
-            task_id=task_id,
-            compile_log=compile_log,
-            compile_log_truncated=compile_log_truncated,
-            compile_log_total_chars=compile_log_total_chars,
-            diagnostics_json=diagnostics_json,
-            diagnostics_truncated=diagnostics_truncated,
-            diagnostics_total=diagnostics_total,
-            error_text=error_text,
-            error_text_truncated=error_text_truncated,
-            error_text_total_chars=error_text_total_chars,
-            feedback_text=feedback_text,
-            feedback_text_truncated=feedback_text_truncated,
-            feedback_text_total_chars=feedback_text_total_chars,
-            output_ref=output_ref,
-            logical_run_id=logical_run_id,
-        )
         finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
         self.db.execute(
             """
             UPDATE verification_tasks
-            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, result_bundle_ref=?, finished_at=?
+            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=?
             WHERE id=? AND final_status=''
             """,
-            [status, verdict, runtime_sec, cpu_sec, wall_sec, memory_kb, bundle_ref, finished_at, task_id],
+            [
+                status,
+                verdict,
+                runtime_sec,
+                cpu_sec,
+                wall_sec,
+                memory_kb,
+                logical_run_id,
+                compile_log,
+                diagnostics_json,
+                error_text,
+                feedback_text,
+                output_ref,
+                finished_at,
+                task_id,
+            ],
         )
         self._runtime_by_task_id.pop(task_id, None)
 
@@ -585,17 +450,9 @@ class VerificationTaskStore:
                 wall_sec=None,
                 memory_kb=None,
                 compile_log="",
-                compile_log_truncated=False,
-                compile_log_total_chars=0,
                 diagnostics_json="[]",
-                diagnostics_truncated=False,
-                diagnostics_total=0,
                 error_text=reason,
-                error_text_truncated=False,
-                error_text_total_chars=len(reason),
                 feedback_text="",
-                feedback_text_truncated=False,
-                feedback_text_total_chars=0,
                 output_ref="",
             )
         self.db.execute(
@@ -628,17 +485,9 @@ class VerificationTaskStore:
                 wall_sec=None,
                 memory_kb=None,
                 compile_log="",
-                compile_log_truncated=False,
-                compile_log_total_chars=0,
                 diagnostics_json="[]",
-                diagnostics_truncated=False,
-                diagnostics_total=0,
                 error_text=reason,
-                error_text_truncated=False,
-                error_text_total_chars=len(reason),
                 feedback_text="",
-                feedback_text_truncated=False,
-                feedback_text_total_chars=0,
                 output_ref="",
             )
 

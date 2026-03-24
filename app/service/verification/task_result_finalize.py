@@ -27,17 +27,9 @@ class _TaskSummaryParts:
     wall_sec: float | None
     memory_kb: int | None
     compile_log: str
-    compile_log_truncated: bool
-    compile_log_total_chars: int
     diagnostics_json: str
-    diagnostics_truncated: bool
-    diagnostics_total: int
     error_text: str
-    error_text_truncated: bool
-    error_text_total_chars: int
     feedback_text: str
-    feedback_text_truncated: bool
-    feedback_text_total_chars: int
     output_ref: str
 
 
@@ -48,14 +40,43 @@ def _answer_name(test_name: str) -> str:
     return f"{stem}.ans"
 
 
-def _resolve_output_blob(output_ref: str) -> bytes | None:
-    if not output_ref:
-        return None
-    try:
-        from app.impl.runtime.config import config
-        return config.judgehost_task_service.resolve_artifact_blob(output_ref)
-    except Exception:
-        return None
+def _materialized_output_name(test_name: str) -> str:
+    stem = Path(test_name).stem
+    if stem:
+        return f"{stem}.out"
+    return "program.out"
+
+
+def _materialize_run_output(
+    *,
+    verification_id: str,
+    artifact_run_id: str,
+    judgehost_task_id: str,
+    test_name: str,
+    output_ref: str,
+) -> tuple[str, bytes | None]:
+    if (not artifact_run_id) or (not judgehost_task_id) or (not test_name):
+        return ("", None)
+    from app.impl.runtime.config import config
+
+    case_output_ref, work_root, _case_id = config.judgehost_task_service.domjudge_case_output_for_task(
+        judgehost_task_id,
+        test_name,
+    )
+    resolved_output_ref = output_ref or case_output_ref
+    if not resolved_output_ref:
+        return ("", None)
+    output_blob = config.judgehost_task_service.resolve_artifact_blob(
+        resolved_output_ref,
+        work_root=work_root,
+    )
+    if output_blob is None:
+        return ("", None)
+    run_root = config.fs_manager.prepare_verification_run_root(verification_id, artifact_run_id)
+    filename = _materialized_output_name(test_name)
+    target_path = (run_root / filename).resolve()
+    target_path.write_bytes(output_blob)
+    return (filename, output_blob)
 
 
 def _verdict_from_summary(summary: dict[str, object], run_status: str) -> str:
@@ -108,17 +129,9 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
         wall_sec=wall_sec,
         memory_kb=memory_kb,
         compile_log=compile_log_meta["text"],
-        compile_log_truncated=bool(compile_log_meta["truncated"]),
-        compile_log_total_chars=int(compile_log_meta["total_chars"]),
         diagnostics_json=diagnostics_json,
-        diagnostics_truncated=bool(diagnostics_meta["truncated"]),
-        diagnostics_total=int(diagnostics_meta["total"]),
         error_text=error_text_meta["text"],
-        error_text_truncated=bool(error_text_meta["truncated"]),
-        error_text_total_chars=int(error_text_meta["total_chars"]),
         feedback_text=feedback_meta["text"],
-        feedback_text_truncated=bool(feedback_meta["truncated"]),
-        feedback_text_total_chars=int(feedback_meta["total_chars"]),
         output_ref=output_ref,
     )
 
@@ -146,17 +159,25 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     from app.impl.runtime.config import config
 
     verification_id = str(task_row["verification_id"] or "")
-    layout = config.fs_manager.prepare_verification_layout(verification_id)
+    runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
     task_id = str(task_row["id"] or "")
     task_kind = str(task_row["task_kind"] or "")
     test_name = str(task_row["test_name"] or "")
     judgehost_task_id = str(task_row["judgehost_task_id"] or "")
     run_id = str(result.get("run_id") or str(task_row["run_id"] or ""))
+    artifact_run_id = str(task_row["logical_run_id"] or run_id)
     result_summary = dict(result.get("summary") or {})
     result_status = str(result.get("status") or "")
     error_text = str(result.get("error") or result_summary.get("error") or "")
     missing_case_result = bool(result.get("missing_case_result"))
     parts = _summary_parts(result_summary, run_status=result_status, error_text=error_text)
+    materialized_output_ref, materialized_output_blob = _materialize_run_output(
+        verification_id=verification_id,
+        artifact_run_id=artifact_run_id,
+        judgehost_task_id=judgehost_task_id,
+        test_name=test_name,
+        output_ref=parts.output_ref,
+    )
 
     if missing_case_result:
         fail_reason = error_text or f"judgehost case result missing for {test_name}"
@@ -171,17 +192,9 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
             wall_sec=None,
             memory_kb=None,
             compile_log=parts.compile_log,
-            compile_log_truncated=parts.compile_log_truncated,
-            compile_log_total_chars=parts.compile_log_total_chars,
             diagnostics_json=parts.diagnostics_json,
-            diagnostics_truncated=parts.diagnostics_truncated,
-            diagnostics_total=parts.diagnostics_total,
             error_text=parts.error_text,
-            error_text_truncated=parts.error_text_truncated,
-            error_text_total_chars=parts.error_text_total_chars,
             feedback_text="",
-            feedback_text_truncated=False,
-            feedback_text_total_chars=0,
             output_ref="",
             fail_flag_reason=fail_reason if task_kind == TASK_MAIN_CORRECT else "",
         )
@@ -200,22 +213,14 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 wall_sec=parts.wall_sec,
                 memory_kb=parts.memory_kb,
                 compile_log=parts.compile_log,
-                compile_log_truncated=parts.compile_log_truncated,
-                compile_log_total_chars=parts.compile_log_total_chars,
                 diagnostics_json=parts.diagnostics_json,
-                diagnostics_truncated=parts.diagnostics_truncated,
-                diagnostics_total=parts.diagnostics_total,
                 error_text=parts.error_text,
-                error_text_truncated=parts.error_text_truncated,
-                error_text_total_chars=parts.error_text_total_chars,
                 feedback_text=parts.feedback_text,
-                feedback_text_truncated=parts.feedback_text_truncated,
-                feedback_text_total_chars=parts.feedback_text_total_chars,
-                output_ref=parts.output_ref,
+                output_ref=materialized_output_ref,
                 fail_flag_reason=fail_reason,
             )
-        output_blob = _resolve_output_blob(parts.output_ref)
-        target_path = layout.tests / test_name
+        output_blob = materialized_output_blob
+        target_path = runtime_layout.tests / test_name
         if output_blob is None:
             if not target_path.exists():
                 fail_message = f"generated input output missing for {test_name}"
@@ -231,18 +236,10 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                     wall_sec=parts.wall_sec,
                     memory_kb=parts.memory_kb,
                     compile_log=parts.compile_log,
-                    compile_log_truncated=parts.compile_log_truncated,
-                    compile_log_total_chars=parts.compile_log_total_chars,
                     diagnostics_json=parts.diagnostics_json,
-                    diagnostics_truncated=parts.diagnostics_truncated,
-                    diagnostics_total=parts.diagnostics_total,
                     error_text=fail_meta["text"],
-                    error_text_truncated=bool(fail_meta["truncated"]),
-                    error_text_total_chars=int(fail_meta["total_chars"]),
                     feedback_text=parts.feedback_text,
-                    feedback_text_truncated=parts.feedback_text_truncated,
-                    feedback_text_total_chars=parts.feedback_text_total_chars,
-                    output_ref=parts.output_ref,
+                    output_ref=materialized_output_ref,
                     fail_flag_reason=fail_message,
                 )
         else:
@@ -258,18 +255,10 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
             wall_sec=parts.wall_sec,
             memory_kb=parts.memory_kb,
             compile_log=parts.compile_log,
-            compile_log_truncated=parts.compile_log_truncated,
-            compile_log_total_chars=parts.compile_log_total_chars,
             diagnostics_json=parts.diagnostics_json,
-            diagnostics_truncated=parts.diagnostics_truncated,
-            diagnostics_total=parts.diagnostics_total,
             error_text=parts.error_text,
-            error_text_truncated=parts.error_text_truncated,
-            error_text_total_chars=parts.error_text_total_chars,
             feedback_text=parts.feedback_text,
-            feedback_text_truncated=parts.feedback_text_truncated,
-            feedback_text_total_chars=parts.feedback_text_total_chars,
-            output_ref=parts.output_ref,
+            output_ref=materialized_output_ref,
         )
 
     task_status = VerificationTaskStore.TASK_DONE if result_status == Status.OK.value else VerificationTaskStore.TASK_FAILED
@@ -277,7 +266,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     if task_kind == TASK_MAIN_CORRECT and task_status != VerificationTaskStore.TASK_DONE:
         fail_flag_reason = error_text or f"main correct failed on {test_name}"
     if task_kind == TASK_MAIN_CORRECT and task_status == VerificationTaskStore.TASK_DONE:
-        output_bytes = _resolve_output_blob(parts.output_ref)
+        output_bytes = materialized_output_blob
         if output_bytes is None:
             fail_message = f"main correct output missing for {test_name}"
             fail_meta = canonical_truncated_text(fail_message, limit=_ERROR_TEXT_CHAR_LIMIT)
@@ -292,21 +281,13 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 wall_sec=parts.wall_sec,
                 memory_kb=parts.memory_kb,
                 compile_log=parts.compile_log,
-                compile_log_truncated=parts.compile_log_truncated,
-                compile_log_total_chars=parts.compile_log_total_chars,
                 diagnostics_json=parts.diagnostics_json,
-                diagnostics_truncated=parts.diagnostics_truncated,
-                diagnostics_total=parts.diagnostics_total,
                 error_text=fail_meta["text"],
-                error_text_truncated=bool(fail_meta["truncated"]),
-                error_text_total_chars=int(fail_meta["total_chars"]),
                 feedback_text=parts.feedback_text,
-                feedback_text_truncated=parts.feedback_text_truncated,
-                feedback_text_total_chars=parts.feedback_text_total_chars,
-                output_ref=parts.output_ref,
+                output_ref=materialized_output_ref,
                 fail_flag_reason=fail_message,
             )
-        (layout.ans / _answer_name(test_name)).write_bytes(output_bytes)
+        (runtime_layout.answers / _answer_name(test_name)).write_bytes(output_bytes)
     return TaskExecutionResult(
         task_id=task_id,
         status=task_status,
@@ -318,17 +299,9 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
         wall_sec=parts.wall_sec,
         memory_kb=parts.memory_kb,
         compile_log=parts.compile_log,
-        compile_log_truncated=parts.compile_log_truncated,
-        compile_log_total_chars=parts.compile_log_total_chars,
         diagnostics_json=parts.diagnostics_json,
-        diagnostics_truncated=parts.diagnostics_truncated,
-        diagnostics_total=parts.diagnostics_total,
         error_text=parts.error_text,
-        error_text_truncated=parts.error_text_truncated,
-        error_text_total_chars=parts.error_text_total_chars,
         feedback_text=parts.feedback_text,
-        feedback_text_truncated=parts.feedback_text_truncated,
-        feedback_text_total_chars=parts.feedback_text_total_chars,
-        output_ref=parts.output_ref,
+        output_ref=materialized_output_ref,
         fail_flag_reason=fail_flag_reason,
     )

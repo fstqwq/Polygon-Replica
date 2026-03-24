@@ -12,6 +12,7 @@ from app.impl.workspace.context_verification import normalize_run_id_token
 from app.main_util import normalize_optional_component_source_path_safe
 from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
+from app.service.verification.task_store import VerificationTaskStore
 
 
 class RuntimeProgress(TypedDict):
@@ -56,16 +57,9 @@ def _count_files_with_suffix(directory: Path, suffix: str) -> int:
         return 0
     return count
 
-def _build_tests_total_from_artifacts(artifact_root: Path) -> int:
-    logs_meta = artifact_root / "logs" / "tests_meta.json"
-    try:
-        if logs_meta.exists() and logs_meta.is_file() and (not logs_meta.is_symlink()):
-            payload = cast(list[object], json.loads(logs_meta.read_text(encoding="utf-8", errors="replace")))
-            return max(0, len(payload))
-    except Exception:
-        pass
-    tests_dir = artifact_root / "tests"
-    return _count_files_with_suffix(tests_dir, ".in")
+def _verification_tests_total(metadata: dict[str, object]) -> int:
+    selected_test_names = cast(list[object], metadata.get("selected_test_names") or [])
+    return len([token for token in selected_test_names if str(token or "")])
 
 def _build_validated_count_from_log(validate_log: Path) -> int:
     try:
@@ -106,20 +100,16 @@ def _verification_runtime_progress(
     verification_row = config.verification_service.export_runtime_verification(int(problem_id), verification_id)
     verification_status = ""
     verification_metadata: dict[str, object] = {}
-    artifact_path = ""
     if verification_row is not None:
         status_value = cast(str | None, verification_row["status"])
         if status_value is not None:
             verification_status = status_value
-        verification_metadata = dict(cast(dict[str, object], verification_row["metadata"]))
-        artifact_path_value = cast(str | None, verification_row["artifact_path"])
-        if artifact_path_value is not None:
-            artifact_path = artifact_path_value
+            verification_metadata = dict(cast(dict[str, object], verification_row["metadata"]))
     artifact_root = None
-    if artifact_path:
+    if verification_id:
         try:
-            root = Path(artifact_path).resolve()
-            base = config.settings.artifacts_root.resolve()
+            root = config.fs_manager.resolve_verification_root(verification_id).resolve()
+            base = config.fs_manager.cache_artifacts_root.resolve()
             if (root == base or base in root.parents) and root.exists() and root.is_dir() and (not root.is_symlink()):
                 artifact_root = root
         except Exception:
@@ -140,8 +130,15 @@ def _verification_runtime_progress(
     solve_log = logs_dir / "solve.log"
     failure_log = logs_dir / "failure.log"
     compile_log = logs_dir / "compile.log"
-    tests_total = _build_tests_total_from_artifacts(artifact_root)
-    outputs_generated = _count_files_with_suffix(artifact_root / "ans", ".ans")
+    tests_total = _verification_tests_total(verification_metadata)
+    verification_rows = VerificationTaskStore(config.db).list_rows(verification_id)
+    outputs_generated = len(
+        [
+            row
+            for row in verification_rows
+            if str(row["task_kind"] or "") == "main-correct" and str(row["status"] or "") == VerificationTaskStore.TASK_DONE
+        ]
+    )
     validated_count = _build_validated_count_from_log(validate_log)
 
     def _log_href(name: str) -> str:

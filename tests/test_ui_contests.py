@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from app.service.platform.git_process import run_git
 from app.service.sandbox.base import ExecResult
+from app.service.verification.signature import verification_signature
 
 from .ui_support import (
     Path,
@@ -443,8 +444,9 @@ class TestUIContests(UIBaseSuite):
             self.assertIsNotNone(problem_row)
             ws_ctx = workspace_service.workspace_context(problem, username, include_recent=False)
             workspace_id = int(ws_ctx["workspace"]["id"])
+            workspace_path = Path(str(ws_ctx["workspace"]["path"] or "")).resolve()
             verification_id = f"ver-{uuid.uuid4().hex[:12]}"
-            artifact_root = Path(config.settings.artifacts_root) / problem / verification_id
+            artifact_root = config.fs_manager.prepare_verification_layout(verification_id).root
             artifact_root.mkdir(parents=True, exist_ok=True)
             db_execute(
                 """
@@ -455,7 +457,7 @@ class TestUIContests(UIBaseSuite):
                     verification_id,
                     int(problem_row["id"]),
                     workspace_id,
-                    "",
+                    verification_signature(workspace_path),
                     "all",
                     "ok",
                     "2026-02-28T00:00:00+00:00",

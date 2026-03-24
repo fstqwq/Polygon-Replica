@@ -2,7 +2,7 @@
   <div class="preview-card">
     <div class="preview-head">
       <strong>Input {{ row.test_name }}</strong>
-      {% if row.input_preview.available %}
+      {% if row.input_preview.available and row.input_preview.download_href %}
       <a href="{{ row.input_preview.download_href }}">download</a>
       {% endif %}
     </div>
@@ -18,7 +18,7 @@
   <div class="preview-card">
     <div class="preview-head">
       <strong>Answer</strong>
-      {% if row.answer_preview.available %}
+      {% if row.answer_preview.available and row.answer_preview.download_href %}
       <a href="{{ row.answer_preview.download_href }}">download</a>
       {% endif %}
     </div>

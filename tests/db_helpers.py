@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Callable
 
 from .common import db
@@ -52,16 +51,10 @@ def write_verification_summary(verification_id: str, summary: dict[str, object])
 
 
 def read_preview_summary(preview_id: str) -> dict[str, object]:
-    row = db_fetch_one("SELECT artifact_path FROM previews WHERE id=?", [str(preview_id).strip()])
+    row = db_fetch_one("SELECT summary_json FROM previews WHERE id=?", [str(preview_id).strip()])
     if row is None:
         return {}
-    artifact_path = str(row["artifact_path"] or "")
-    if not artifact_path:
-        return {}
-    try:
-        text = (Path(artifact_path).resolve() / "summary.json").read_text(encoding="utf-8")
-    except OSError:
-        return {}
+    text = str(row["summary_json"] or "")
     if not text:
         return {}
     try:
@@ -72,17 +65,15 @@ def read_preview_summary(preview_id: str) -> dict[str, object]:
 
 
 def write_preview_summary(preview_id: str, summary: dict[str, object]) -> None:
-    row = db_fetch_one("SELECT artifact_path FROM previews WHERE id=?", [str(preview_id).strip()])
+    row = db_fetch_one("SELECT id FROM previews WHERE id=?", [str(preview_id).strip()])
     if row is None:
         raise AssertionError(f"preview row missing: {preview_id}")
-    artifact_path = str(row["artifact_path"] or "")
-    if not artifact_path:
-        raise AssertionError(f"preview artifact path missing: {preview_id}")
-    path = (Path(artifact_path).resolve() / "summary.json").resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(summary, ensure_ascii=True, separators=(",", ":")),
-        encoding="utf-8",
+    db_execute(
+        "UPDATE previews SET summary_json=? WHERE id=?",
+        [
+            json.dumps(summary, ensure_ascii=True, separators=(",", ":")),
+            str(preview_id).strip(),
+        ],
     )
 
 

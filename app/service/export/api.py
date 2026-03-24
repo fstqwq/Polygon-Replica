@@ -59,12 +59,9 @@ class ExportService:
         archive_name = Path(str(filename or "").strip()).name
         if not stored_filename or stored_filename != archive_name:
             return None
-        export_type = str(row["export_type"] or "").strip()
-        if not export_type:
-            return None
-        export_dir = self._export_dir(problem_slug, export_type).resolve()
-        candidate = (export_dir / archive_name).resolve()
-        if export_dir != candidate and export_dir not in candidate.parents:
+        try:
+            candidate = self._export_path(problem_slug, export_id, archive_name).resolve()
+        except ValueError:
             return None
         if not candidate.exists() or not candidate.is_file() or candidate.is_symlink():
             return None
@@ -72,19 +69,6 @@ class ExportService:
 
     def export_audit_rows(self, problem_id: int, actor_user_id: int, *, limit: int) -> list[dict[str, str]]:
         return self._store.export_audit_rows(int(problem_id), int(actor_user_id), limit=limit)
-
-    def _canonical_verification_root(self, artifact_path: str) -> Path:
-        token = str(artifact_path or "").strip()
-        if not token:
-            raise ValueError("invalid artifact_path")
-        try:
-            base = self.artifacts_root.resolve()
-            root = Path(token).resolve()
-        except OSError as exc:
-            raise ValueError("invalid artifact_path") from exc
-        if root != base and base not in root.parents:
-            raise ValueError("invalid artifact_path")
-        return root
 
     def _yaml_quote(self, value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
@@ -521,7 +505,6 @@ class ExportService:
         export_type: str,
         source_commit: str,
         keep_export_id: str,
-        keep_filename: str,
     ) -> None:
         if workspace_id is None:
             return
@@ -532,23 +515,17 @@ class ExportService:
             source_commit=source_commit,
             keep_export_id=keep_export_id,
         )
-        export_root = self._export_dir(problem_slug, export_type).resolve()
         for row in rows:
             old_id = row["id"]
             old_filename = row["filename"]
-            if old_filename and old_filename != keep_filename:
+            if old_id and old_filename:
                 try:
-                    old_file = (export_root / old_filename).resolve()
-                    if (
-                        export_root.exists()
-                        and export_root.is_dir()
-                        and (not export_root.is_symlink())
-                        and old_file.exists()
-                        and old_file.is_file()
-                        and (not old_file.is_symlink())
-                        and (export_root == old_file.parent or export_root in old_file.parents)
-                    ):
+                    old_file = self._export_path(problem_slug, old_id, old_filename).resolve()
+                    if old_file.exists() and old_file.is_file() and (not old_file.is_symlink()):
                         old_file.unlink()
+                    old_dir = old_file.parent
+                    if old_dir.exists() and old_dir.is_dir() and (not old_dir.is_symlink()):
+                        old_dir.rmdir()
                 except Exception:
                     pass
             if old_id:
@@ -755,8 +732,24 @@ class ExportService:
         repo_dir.mkdir(parents=True, exist_ok=True)
         self._copy_dir_contents(snapshot, repo_dir)
 
-    def _export_dir(self, problem_slug: str, export_type: str) -> Path:
-        return self.artifacts_root / "exports" / export_type / self._archive_filename_slug(problem_slug)
+    def _export_problem_root(self, problem_slug: str) -> Path:
+        return self.artifacts_root / "exports" / self._archive_filename_slug(problem_slug)
+
+    def _export_dir(self, problem_slug: str, export_id: str) -> Path:
+        safe_export_id = Path(str(export_id).strip()).name
+        if not safe_export_id:
+            raise ValueError("invalid export id")
+        return self._export_problem_root(problem_slug) / safe_export_id
+
+    def _export_path(self, problem_slug: str, export_id: str, filename: str) -> Path:
+        safe_filename = Path(str(filename).strip()).name
+        if not safe_filename:
+            raise ValueError("invalid export filename")
+        export_dir = self._export_dir(problem_slug, export_id)
+        candidate = (export_dir / safe_filename).resolve()
+        if export_dir.resolve() not in candidate.parents:
+            raise ValueError("invalid export archive path")
+        return candidate
 
     def create_export(
         self,
@@ -785,10 +778,9 @@ class ExportService:
             if head.returncode != 0 or not head.stdout.strip():
                 raise ValueError("no committed revision; commit changes first")
             resolved_source_commit = head.stdout.strip()
-        export_dir = self._export_dir(str(problem_row["slug"]), resolved_export_type)
-        export_dir.mkdir(parents=True, exist_ok=True)
-
         export_id = f"e-{uuid.uuid4().hex[:10]}"
+        export_dir = self._export_dir(str(problem_row["slug"]), export_id)
+        export_dir.mkdir(parents=True, exist_ok=True)
         tmp_root = export_dir / f"tmp-{uuid.uuid4().hex[:8]}"
         package_root = tmp_root / self._package_root_name(problem_row["slug"])
         package_root.mkdir(parents=True, exist_ok=True)
@@ -837,7 +829,7 @@ class ExportService:
                 )
 
             preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"
-            archive_target = export_dir / preferred_filename
+            archive_target = self._export_path(str(problem_row["slug"]), export_id, preferred_filename)
             archive_prefix = archive_target.with_suffix("")
             archive = shutil.make_archive(
                 str(archive_prefix),
@@ -866,7 +858,6 @@ class ExportService:
                 export_type=resolved_export_type,
                 source_commit=resolved_source_commit,
                 keep_export_id=export_id,
-                keep_filename=out.name,
             )
             return out
         finally:
