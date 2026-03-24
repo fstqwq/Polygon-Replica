@@ -868,7 +868,6 @@ class TestUIAuth(UIBaseSuite):
             name="snapshot-probe",
             fn=lambda: None,
             queue_name="ops",
-            backend="domjudge-judgehost",
             job_type="snapshot-probe",
         )
         self.assertTrue(queued, msg=reason)
@@ -898,13 +897,12 @@ class TestUIAuth(UIBaseSuite):
         self.addCleanup(setattr, service, "_api_token", old_token)
         service._enabled = True
         service._api_token = "admin-snapshot-token"
-        service.fetch_work("judgehost-admin-snapshot", limit=1)
+        service.fetch_work("judgehost-admin-snapshot")
         resp = settings_judgehost_snapshot(user="alice")
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8", errors="replace"))
         self.assertIn("hosts", payload)
         self.assertIn("hosts_online", payload)
-        self.assertIn("verification_backend", payload)
         hosts = payload.get("hosts") or []
         self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-admin-snapshot" for item in hosts))
 
@@ -939,6 +937,4 @@ class TestUIAuth(UIBaseSuite):
         )
         self.assertEqual(valid.status_code, 303)
         self.assertIn("/problems/alice/minimal-spanning-tree/alice/statement", valid.headers.get("location", ""))
-
-
 

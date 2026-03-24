@@ -1,8 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_one
+from .db_helpers import db_execute, db_fetch_one, read_verification_summary, write_preview_summary
 
-import base64
 import asyncio
 import io
 import os
@@ -31,6 +30,7 @@ from .ui_support import (
     tests_spec_reindex as reindex_spec_call,
     config,
     general_page,
+    git_commit,
     json,
     preview_page,
     quote_plus,
@@ -48,6 +48,7 @@ from .ui_support import (
 )
 import app.impl.workspace.context_job as workspace_context_job
 import app.impl.workspace.context_verification as workspace_verification_module
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
 
 
@@ -72,45 +73,36 @@ class TestUIRun(UIBaseSuite):
     ) -> None:
         verification_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         verification_root.mkdir(parents=True, exist_ok=True)
-        existing_row = db_fetch_one(
-            "SELECT summary_json,created_at,finished_at,source_commit,source_ref FROM verifications WHERE id=?",
-            [verification_id],
-        )
-        existing_summary: dict[str, object] = {}
+        existing_row = config.verification_service.verification_record(verification_id)
+        existing_metadata: dict[str, object] = {}
         existing_created_at = ""
         existing_finished_at = ""
-        existing_source_commit = ""
-        existing_source_ref = ""
+        existing_signature = ""
         if existing_row is not None:
-            try:
-                payload = json.loads(str(existing_row["summary_json"] or "{}"))
-                if isinstance(payload, dict):
-                    existing_summary = dict(payload)
-            except Exception:
-                existing_summary = {}
+            payload = config.verification_service.verification_metadata(verification_id)
+            if isinstance(payload, dict):
+                existing_metadata = dict(payload)
             existing_created_at = str(existing_row["created_at"] or "").strip()
             existing_finished_at = str(existing_row["finished_at"] or "").strip()
-            existing_source_commit = str(existing_row["source_commit"] or "").strip()
-            existing_source_ref = str(existing_row["source_ref"] or "").strip()
+            existing_signature = str(existing_row["signature"] or "").strip()
         mode_token = "pass-fail"
         if isinstance(summary_extra, dict):
             mode_token = str(summary_extra.get("mode") or "").strip() or mode_token
-        if isinstance(existing_summary, dict) and existing_summary:
-            mode_token = str(existing_summary.get("mode") or mode_token).strip() or mode_token
+        if isinstance(existing_metadata, dict) and existing_metadata:
+            mode_token = str(existing_metadata.get("mode") or mode_token).strip() or mode_token
         runs_map: dict[str, object] = {}
-        existing_runs_obj = existing_summary.get("runs") if isinstance(existing_summary, dict) else None
+        existing_runs_obj = existing_metadata.get("runs") if isinstance(existing_metadata, dict) else None
         if isinstance(existing_runs_obj, dict):
             runs_map = {str(k): dict(v) for k, v in existing_runs_obj.items() if isinstance(v, dict)}
         runs_order: list[str] = []
-        existing_order_obj = existing_summary.get("runs_order") if isinstance(existing_summary, dict) else None
+        existing_order_obj = existing_metadata.get("runs_order") if isinstance(existing_metadata, dict) else None
         if isinstance(existing_order_obj, list):
             runs_order = [str(item or "").strip() for item in existing_order_obj if str(item or "").strip()]
         source_paths: list[str] = []
-        existing_paths_obj = existing_summary.get("source_paths") if isinstance(existing_summary, dict) else None
+        existing_paths_obj = existing_metadata.get("source_paths") if isinstance(existing_metadata, dict) else None
         if isinstance(existing_paths_obj, list):
             source_paths = [str(item or "").strip() for item in existing_paths_obj if str(item or "").strip()]
-        source_commit = existing_source_commit or str(existing_summary.get("source_commit") or "").strip()
-        source_ref = existing_source_ref or str(existing_summary.get("source_ref") or "").strip()
+        signature = existing_signature or str(existing_metadata.get("signature") or "").strip()
         for item in runs:
             run_id = str(item.get("id") or "").strip()
             if not run_id:
@@ -135,78 +127,49 @@ class TestUIRun(UIBaseSuite):
             if run_id not in runs_order:
                 runs_order.append(run_id)
         summary_extra_obj = dict(summary_extra or {})
+        kind_token = str(kind or existing_metadata.get("kind") or Kind.ALL).strip() or Kind.ALL.value
         safe_build_id = (
             str(summary_extra_obj.get("artifact_verification_id") or "").strip()
-            or str(existing_summary.get("artifact_verification_id") or "").strip()
+            or str(existing_metadata.get("artifact_verification_id") or "").strip()
             or str(build_id or "").strip()
         )
-        summary = {
-            "kind": str(kind or existing_summary.get("kind") or Kind.VERIFICATION).strip() or Kind.VERIFICATION,
+        metadata = {
+            "kind": kind_token,
             "mode": mode_token,
-            "status": str(status or existing_summary.get("status") or "").strip().lower() or "running",
-            "verification_source": "verification.start" if kind == Kind.VERIFICATION else "run.execute",
-            "error": str(existing_summary.get("error") or "").strip(),
+            "status": str(status or existing_metadata.get("status") or "").strip().lower() or "running",
+            "verification_source": str(existing_metadata.get("verification_source") or "verification.start").strip() or "verification.start",
+            "error": str(existing_metadata.get("error") or "").strip(),
             "updated_at": created_at,
             "finished_at": finished_at,
             "artifact_root": str(verification_root),
             "source_paths": source_paths,
             "artifact_verification_id": safe_build_id,
-            "source_commit": source_commit,
-            "source_ref": source_ref,
+            "signature": signature,
             "runs_order": runs_order,
             "runs": runs_map,
-            "tests": list(existing_summary.get("tests") or []),
-            "lifecycle": dict(existing_summary.get("lifecycle") or {"steps": []}),
+            "tests": list(existing_metadata.get("tests") or []),
+            "lifecycle": dict(existing_metadata.get("lifecycle") or {"steps": []}),
         }
         if summary_extra_obj:
-            if str(summary_extra_obj.get("source_commit") or "").strip():
-                source_commit = str(summary_extra_obj.get("source_commit") or "").strip()
-            if str(summary_extra_obj.get("source_ref") or "").strip():
-                source_ref = str(summary_extra_obj.get("source_ref") or "").strip()
-            summary.update(summary_extra_obj)
+            if str(summary_extra_obj.get("signature") or "").strip():
+                signature = str(summary_extra_obj.get("signature") or "").strip()
+            metadata.update(summary_extra_obj)
+        metadata["signature"] = signature
         final_created_at = existing_created_at or created_at
         final_finished_at = finished_at or existing_finished_at
-        if existing_row is None:
-            db_execute(
-                """
-                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    verification_id,
-                    problem_id,
-                    workspace_id,
-                    source_commit,
-                    source_ref,
-                    kind,
-                    status,
-                    json.dumps(summary),
-                    str(verification_root),
-                    final_created_at,
-                    final_finished_at or None,
-                ],
-            )
-        else:
-            db_execute(
-                """
-                UPDATE verifications
-                SET problem_id=?, workspace_id=?, source_commit=?, source_ref=?, kind=?, status=?, summary_json=?, artifact_path=?, created_at=?, finished_at=?
-                WHERE id=?
-                """,
-                [
-                    problem_id,
-                    workspace_id,
-                    source_commit,
-                    source_ref,
-                    kind,
-                    status,
-                    json.dumps(summary),
-                    str(verification_root),
-                    final_created_at,
-                    final_finished_at or None,
-                    verification_id,
-                ],
-            )
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=signature,
+            kind=kind_token,
+            status=status,
+            metadata=metadata,
+        )
+        db_execute(
+            "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
+            [final_created_at, final_finished_at or None, verification_id],
+        )
 
     def _insert_stage_verification(
         self,
@@ -214,9 +177,8 @@ class TestUIRun(UIBaseSuite):
         verification_id: str,
         problem_id: int,
         workspace_id: int,
-        kind: str = Kind.VERIFICATION,
-        source_commit: str = "",
-        source_ref: str = "",
+        kind: str = Kind.ALL,
+        signature: str = "",
         status: str = "ok",
         summary: dict[str, object] | None = None,
         artifact_path: str | None = None,
@@ -238,24 +200,18 @@ class TestUIRun(UIBaseSuite):
             else config.fs_manager.prepare_verification_root(verification_id).resolve()
         )
         root.mkdir(parents=True, exist_ok=True)
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=str(signature or "").strip(),
+            kind=str(kind or Kind.ALL).strip() or Kind.ALL.value,
+            status=status,
+            metadata=summary_obj,
+        )
         db_execute(
-            """
-            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                verification_id,
-                problem_id,
-                workspace_id,
-                str(source_commit or "").strip(),
-                str(source_ref or "").strip(),
-                str(kind or Kind.VERIFICATION).strip() or Kind.VERIFICATION,
-                status,
-                json.dumps(summary_obj),
-                str(root),
-                created_at,
-                finished_at,
-            ],
+            "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
+            [created_at, finished_at, verification_id],
         )
 
     def _insert_verification_run_row(
@@ -286,7 +242,7 @@ class TestUIRun(UIBaseSuite):
         verification_source = str(verification.get("source") or "").strip().lower()
         inferred_kind = str(kind or "").strip().lower()
         if not inferred_kind:
-            inferred_kind = Kind.VERIFICATION
+            inferred_kind = Kind.ALL.value
         expected_behavior = str(verification.get("expected_behavior") or "unknown").strip() or "unknown"
         source_label = str(summary_obj.get("source") or run_id).strip() or run_id
         summary_extra: dict[str, object] = {
@@ -621,6 +577,8 @@ class TestUIRun(UIBaseSuite):
         self.assertIn('action="/problems/alice/sample/alice/tests/spec/add-manual-upload"', html)
         self.assertIn('class="tests-editor-table"', html)
         self.assertIn("<th>Test</th>", html)
+        self.assertIn('data-sample-output-validate-group="1"', html)
+        self.assertIn('data-sample-toggle="1"', html)
         self.assertNotIn("Move Up", html)
         self.assertNotIn("Move Down", html)
         self.assertIn('placeholder="3&#10;1 2 3"', html)
@@ -637,39 +595,26 @@ class TestUIRun(UIBaseSuite):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         db_execute("DELETE FROM verifications WHERE workspace_id=?", [workspace_id])
-        artifact_verification_id = self.random_id("ver-run-execute-artifact")
-        artifact_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / artifact_verification_id
-        artifact_root.mkdir(parents=True, exist_ok=True)
-        self._insert_stage_verification(
-            verification_id=artifact_verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="ok",
-            summary={},
-            artifact_path=str(artifact_root),
-            created_at="2026-03-14T00:00:00Z",
-            finished_at="2026-03-14T00:00:01Z",
-        )
-        def _run_execute_inline(problem: str, user: str, **kwargs):
-            workspace_context_job._run_execute_batch_worker(
-                problem,
-                user,
-                **kwargs,
+        def _fake_start_verification_job(*args, **kwargs):
+            config.verification_service.begin_verification_record(
+                verification_id=str(kwargs["verification_id"]),
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                signature="deadbeef",
+                kind=Kind.ALL.value,
+                status="running",
+                metadata=dict(kwargs.get("initial_summary") or {}),
             )
             return True
 
-        with patch("app.impl.workspace.context_job._ensure_implicit_verification", return_value=(artifact_verification_id, False)):
-            with patch.object(config.judgehost_task_service, "run_submission", side_effect=RuntimeError("judge unavailable for run execute test")):
-                with patch("app.impl.run_export.run.start_run_execute_batch", side_effect=_run_execute_inline):
-                    resp = run_execute(
-                        problem="alice/sample",
-                        user="alice",
-                        artifact_verification_id="",
-                        solution_paths=["solutions/accepted.cpp"],
-                        submission_upload=None,
-                    )
+        with patch("app.impl.run_export.run.start_verification_job", side_effect=_fake_start_verification_job):
+            resp = run_execute(
+                problem="alice/sample",
+                user="alice",
+                artifact_verification_id="",
+                solution_paths=["solutions/accepted.cpp"],
+                submission_upload=None,
+            )
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
         self.assertIn("/problems/alice/sample/alice/run/details?verification_id=", loc)
@@ -686,21 +631,9 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertIsNotNone(verification_row)
         self.assertIn(str(verification_row["status"] or ""), {"running", "ok", "failed"})
-        deadline = time.monotonic() + 12.0
-        resolved_artifact_verification_id = ""
-        while time.monotonic() < deadline:
-            row = db_fetch_one(
-                "SELECT summary_json FROM verifications WHERE workspace_id=? AND id=? LIMIT 1",
-                [workspace_id, verification_id],
-            )
-            summary = json.loads(str(row["summary_json"] or "{}")) if row is not None else {}
-            resolved_artifact_verification_id = str(summary.get("artifact_verification_id") or "").strip()
-            if resolved_artifact_verification_id and resolved_artifact_verification_id != str(config.constants.RUN_PLACEHOLDER_VERIFICATION_ID):
-                break
-            time.sleep(0.05)
-        self.assertEqual(resolved_artifact_verification_id, artifact_verification_id)
-        artifact_row = db_fetch_one("SELECT id FROM verifications WHERE id=? LIMIT 1", [resolved_artifact_verification_id])
-        self.assertIsNotNone(artifact_row)
+        metadata = config.verification_service.verification_metadata(verification_id)
+        self.assertEqual(str(metadata.get("artifact_verification_id") or ""), verification_id)
+        self.assertTrue(bool(metadata.get("task_graph")))
 
     def test_run_execute_uses_problem_mode_from_general_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -722,14 +655,15 @@ class TestUIRun(UIBaseSuite):
         query = parse_qs(urlparse(loc).query)
         verification_id = (query.get("verification_id") or [""])[0]
         self.assertTrue(verification_id)
-        row = _wait_for_row(
-            "SELECT summary_json FROM verifications WHERE workspace_id=? AND id=? LIMIT 1",
-            [int(workspace_service.workspace_context("alice/sample", "alice", include_recent=False)["workspace"]["id"]), verification_id],
-            timeout_sec=8.0,
-        )
-        self.assertIsNotNone(row)
-        summary = json.loads(str(row["summary_json"] or "{}"))
-        self.assertEqual(str(summary.get("mode") or ""), "interactive")
+        deadline = time.monotonic() + 8.0
+        metadata: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            metadata = config.verification_service.verification_metadata(verification_id)
+            if metadata:
+                break
+            time.sleep(0.05)
+        self.assertTrue(metadata)
+        self.assertEqual(str(metadata.get("mode") or ""), "interactive")
 
     def test_run_execute_records_verification_audit_before_queue_start(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -741,9 +675,10 @@ class TestUIRun(UIBaseSuite):
         actor_user_id = int(ctx["user"]["id"])
         observed = {"checked": False}
 
-        def _fake_start_batch(*args, **kwargs) -> bool:
+        def _fake_start_verification_job(*args, **kwargs) -> bool:
             verification_id = str(kwargs.get("verification_id") or "")
-            verification_run_ids = [str(item or "") for item in (kwargs.get("verification_run_ids") or []) if str(item or "")]
+            targets = list(kwargs.get("targets") or [])
+            verification_run_ids = [str(item.get("run_id") or "") for item in targets if str(item.get("run_id") or "")]
             audit_row = db_fetch_one(
                 """
                 SELECT details_json
@@ -763,7 +698,7 @@ class TestUIRun(UIBaseSuite):
             observed["checked"] = True
             return True
 
-        with patch("app.impl.run_export.run.start_run_execute_batch", side_effect=_fake_start_batch):
+        with patch("app.impl.run_export.run.start_verification_job", side_effect=_fake_start_verification_job):
             resp = run_execute(
                 problem="alice/sample",
                 user="alice",
@@ -795,7 +730,7 @@ class TestUIRun(UIBaseSuite):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        with patch("app.impl.run_export.run.start_run_execute_batch", return_value=True) as start_batch:
+        with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_batch:
             resp = run_execute(
                 problem="alice/sample",
                 user="alice",
@@ -811,13 +746,48 @@ class TestUIRun(UIBaseSuite):
         start_batch.assert_called_once()
         kwargs = start_batch.call_args.kwargs
         self.assertEqual(kwargs.get("selected_test_names"), ["001.in", "003.in"])
-        self.assertEqual(str(kwargs.get("run_mode") or ""), "pass-fail")
         targets = kwargs.get("targets")
         self.assertIsInstance(targets, list)
         self.assertTrue(targets)
         first = targets[0]
-        self.assertEqual(str(first.get("submission_path") or ""), "solutions/accepted.cpp")
+        self.assertEqual(str(first.get("path") or ""), "solutions/accepted.cpp")
         self.assertEqual(str(first.get("expected_behavior") or ""), "accepted")
+
+    def test_run_execute_uploaded_source_uses_task_graph_verification(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        class _FakeUpload:
+            def __init__(self, filename: str, data: bytes):
+                self.filename = filename
+                self.file = io.BytesIO(data)
+
+        upload = _FakeUpload("../tmp.cpp", b"int main(){return 0;}\n")
+        with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_job:
+            resp = run_execute(
+                problem="alice/sample",
+                user="alice",
+                artifact_verification_id="",
+                solution_paths=[],
+                test_names=["001.in"],
+                submission_upload=upload,
+            )
+        self.assertEqual(resp.status_code, 303)
+        start_job.assert_called_once()
+        kwargs = start_job.call_args.kwargs
+        self.assertEqual(kwargs.get("selected_test_names"), ["001.in"])
+        targets = list(kwargs.get("targets") or [])
+        self.assertEqual(len(targets), 2)
+        self.assertEqual(str(targets[0].get("path") or ""), "solutions/accepted.cpp")
+        uploaded_target = targets[1]
+        self.assertEqual(str(uploaded_target.get("upload_filename") or ""), "tmp.cpp")
+        self.assertEqual(bytes(uploaded_target.get("upload_content") or b""), b"int main(){return 0;}\n")
+        self.assertTrue(str(uploaded_target.get("path") or "").startswith("uploads/"))
+        self.assertTrue(str(uploaded_target.get("path") or "").endswith("/tmp.cpp"))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("verification running", messages[0])
 
     def test_verification_start_requires_main_correct_solution_marker(self) -> None:
         problem = f"alice/verify-main-required-{uuid.uuid4().hex[:8]}"
@@ -854,513 +824,27 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(payload.get("status"), "failed")
         self.assertIn("main correct solution is required", str(payload.get("error") or ""))
 
-    def test_verification_worker_reuses_buildsolve_for_accepted_solution_without_second_run(self) -> None:
-        problem = f"alice/verify-buildsolve-reuse-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
-        build_id = self.random_id("b-verif-buildsolve-reuse")
-        verification_id = f"inv-verif-buildsolve-reuse-{uuid.uuid4().hex[:8]}"
-        accepted_run_id = f"r-verif-accepted-reuse-{uuid.uuid4().hex[:8]}"
-        wa_run_id = f"r-verif-wa-reuse-{uuid.uuid4().hex[:8]}"
-        buildsolve_run_id = f"r-buildsolve-reuse-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / build_id
-        build_root.mkdir(parents=True, exist_ok=True)
-        buildsolve_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / buildsolve_run_id
-        buildsolve_root.mkdir(parents=True, exist_ok=True)
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit=workspace_head,
-            source_ref="main",
-            status="ok",
-            summary={},
-            artifact_path=str(build_root),
-            created_at="2026-03-11T00:00:00Z",
-            finished_at="2026-03-11T00:00:01Z",
-        )
-        buildsolve_run_summary = {
-            "mode": "pass-fail",
-            "build_id": build_id,
-            "source": "solutions/accepted.cpp",
-            "artifact_path": str(buildsolve_root),
-            "verification_source": "verification.solve-main",
-            "status": "ok",
-            "tests": [
-                {
-                    "test": "001.in",
-                    "verdict": "OK",
-                    "time_ms": 15,
-                    "time_user_ms": 7,
-                    "time_wall_ms": 15,
-                    "memory_kb": 2048,
-                    "feedback_files": ["cache://case/test-key/test-signature/program.err"],
-                    "passes": [
-                        {
-                            "pass": 1,
-                            "verdict": "OK",
-                            "time_ms": 15,
-                            "time_user_ms": 7,
-                            "time_wall_ms": 15,
-                            "memory_kb": 2048,
-                            "output_ref": "cache://case/test-key/test-signature/program.out",
-                        }
-                    ],
-                }
-            ],
-            "tests_total": 2,
-            "error": "",
-        }
-        db_execute(
-            "UPDATE verifications SET summary_json=? WHERE id=?",
-            [
-                json.dumps(
-                    {
-                        "stage_results": {
-                            "generate_input": {
-                                "verification_source": "verification.generate-input",
-                                "status": "ok",
-                                "tests": [
-                                    {"test": "001.in", "verdict": "OK"},
-                                    {"test": "002.in", "verdict": "OK"},
-                                ],
-                            },
-                            "solve_main": buildsolve_run_summary,
-                        }
-                    }
-                ),
-                build_id,
-            ],
-        )
-
-        submitted_paths: list[str] = []
-        submitted_tests: list[list[str]] = []
-        queued_snapshot: dict[str, object] = {}
-
-        def _fake_run_submission(**kwargs):
-            run_id = str(kwargs.get("run_id") or "")
-            source_path = str(kwargs.get("submission_path") or "")
-            submitted_paths.append(source_path)
-            submitted_tests.append(list(kwargs.get("selected_tests") or []))
-            snapshot_row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
-            snapshot_summary = json.loads(str(snapshot_row["summary_json"] or "{}")) if snapshot_row is not None else {}
-            queued_snapshot["summary"] = snapshot_summary
-            run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
-            run_root.mkdir(parents=True, exist_ok=True)
-            summary = {
-                "mode": "pass-fail",
-                "build_id": build_id,
-                "source": source_path,
-                "verification_source": "verification.start",
-                "tests": [{"test": "001.in", "verdict": "WA", "passes": [{"pass": 1, "verdict": "WA"}]}],
-                "error": "",
-            }
-            self._insert_verification_row(
-                verification_id=verification_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                build_id=build_id,
-                kind=Kind.VERIFICATION,
-                status="ok",
-                created_at="2026-03-11T00:00:04Z",
-                finished_at="2026-03-11T00:00:05Z",
-                runs=[
-                    {
-                        "id": run_id,
-                        "status": "ok",
-                        "source_label": source_path,
-                        "expected_behavior": "wrong_answer",
-                        "artifact_path": str(run_root),
-                        "summary": summary,
-                    }
-                ],
-                summary_extra={
-                    "mode": "pass-fail",
-                    "build_id": build_id,
-                    "verification_source": "verification.start",
-                },
-            )
-            return run_id
-
-        targets = [
-            {"path": "solutions/accepted.cpp", "expected_behavior": "accepted", "run_id": accepted_run_id},
-            {"path": "solutions/wa.cpp", "expected_behavior": "wrong_answer", "run_id": wa_run_id},
-        ]
-        with patch("app.impl.workspace.context_job._ensure_implicit_verification", return_value=(build_id, False)):
-            with patch.object(config.judgehost_task_service, "run_submission", side_effect=_fake_run_submission):
-                workspace_context_job._run_verification_start_worker(
-                    problem,
-                    "alice",
-                    actor_user_id=actor_user_id,
-                    problem_id=problem_id,
-                    workspace_id=workspace_id,
-                    workspace_head=workspace_head,
-                    workspace_dirty=workspace_dirty,
-                    targets=targets,
-                    verification_id=verification_id,
-                )
-
-        self.assertEqual(submitted_paths, ["solutions/wa.cpp"])
-        self.assertEqual(submitted_tests, [["001.in", "002.in"]])
-        queued_summary = queued_snapshot.get("summary")
-        self.assertIsInstance(queued_summary, dict)
-        queued_runs = queued_summary.get("runs") if isinstance(queued_summary, dict) else {}
-        self.assertIsInstance(queued_runs, dict)
-        self.assertEqual(str(((queued_runs.get(accepted_run_id) or {}).get("status") or "")), "ok")
-        self.assertEqual(str(((queued_runs.get(wa_run_id) or {}).get("status") or "")), "queued")
-        verification_row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
-        self.assertIsNotNone(verification_row)
-        verification_summary = json.loads(str(verification_row["summary_json"] or "{}"))
-        runs = verification_summary.get("runs") if isinstance(verification_summary, dict) else {}
-        self.assertIsInstance(runs, dict)
-        accepted_runs = [
-            item
-            for item in runs.values()
-            if isinstance(item, dict)
-            and isinstance(item.get("summary"), dict)
-            and str(item["summary"].get("source") or "") == "solutions/accepted.cpp"
-        ]
-        self.assertEqual(len(accepted_runs), 1)
-        accepted_member = runs.get(accepted_run_id)
-        self.assertIsInstance(accepted_member, dict)
-        self.assertEqual(str(accepted_member.get("status") or ""), "ok")
-        accepted_summary = accepted_member.get("summary") if isinstance(accepted_member, dict) else {}
-        self.assertIsInstance(accepted_summary, dict)
-        self.assertEqual(str(accepted_summary.get("source") or ""), "solutions/accepted.cpp")
-        self.assertEqual(str(accepted_summary.get("verification_source") or ""), "verification.solve-main")
-        accepted_tests = accepted_summary.get("tests") if isinstance(accepted_summary, dict) else []
-        self.assertIsInstance(accepted_tests, list)
-        first_test = accepted_tests[0] if accepted_tests else {}
-        self.assertEqual(int((first_test or {}).get("time_user_ms") or 0), 7)
-        self.assertEqual(int((first_test or {}).get("time_wall_ms") or 0), 15)
-        self.assertEqual(int((first_test or {}).get("memory_kb") or 0), 2048)
-        first_passes = (first_test or {}).get("passes") if isinstance(first_test, dict) else []
-        first_pass = first_passes[0] if isinstance(first_passes, list) and first_passes else {}
-        self.assertEqual(str((first_pass or {}).get("output_ref") or ""), "cache://case/test-key/test-signature/program.out")
-        self.assertFalse(
-            any(
-                str(((item.get("summary") or {}) if isinstance(item, dict) else {}).get("verification_source") or "")
-                == "verification.start"
-                for item in accepted_runs
-            )
-        )
-
-    def test_verification_worker_persists_placeholder_runs_before_build_resolution(self) -> None:
-        problem = f"alice/verify-placeholder-runs-{uuid.uuid4().hex[:8]}"
-        self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
-        verification_id = f"inv-verif-placeholder-runs-{uuid.uuid4().hex[:8]}"
-        accepted_run_id = f"r-verif-placeholder-accepted-{uuid.uuid4().hex[:8]}"
-        wa_run_id = f"r-verif-placeholder-wa-{uuid.uuid4().hex[:8]}"
-        captured_summary: dict[str, object] = {}
-
-        def _capture_then_fail(*args, **kwargs):
-            row = db_fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
-            self.assertIsNotNone(row)
-            payload = json.loads(str(row["summary_json"] or "{}"))
-            self.assertIsInstance(payload, dict)
-            captured_summary.update(payload)
-            raise RuntimeError("stop after placeholder persistence")
-
-        targets = [
-            {"path": "solutions/accepted.cpp", "expected_behavior": "accepted", "run_id": accepted_run_id},
-            {"path": "solutions/wa.cpp", "expected_behavior": "wrong_answer", "run_id": wa_run_id},
-        ]
-        with patch("app.impl.workspace.context_job._ensure_implicit_verification", side_effect=_capture_then_fail):
-            workspace_context_job._run_verification_start_worker(
-                problem,
-                "alice",
-                actor_user_id=actor_user_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                workspace_head=workspace_head,
-                workspace_dirty=workspace_dirty,
-                targets=targets,
-                verification_id=verification_id,
-            )
-
-        self.assertEqual(captured_summary.get("status"), "running")
-        self.assertEqual(captured_summary.get("runs_order"), [accepted_run_id, wa_run_id])
-        runs = captured_summary.get("runs")
-        self.assertIsInstance(runs, dict)
-        self.assertEqual(str(((runs.get(accepted_run_id) or {}).get("status") or "")), "queued")
-        self.assertEqual(str(((runs.get(wa_run_id) or {}).get("status") or "")), "queued")
-        accepted_summary = (runs.get(accepted_run_id) or {}).get("summary") if isinstance(runs, dict) else {}
-        wa_summary = (runs.get(wa_run_id) or {}).get("summary") if isinstance(runs, dict) else {}
-        self.assertEqual(str((accepted_summary or {}).get("source") or ""), "solutions/accepted.cpp")
-        self.assertEqual(str((wa_summary or {}).get("source") or ""), "solutions/wa.cpp")
-
-    def test_verification_worker_retry_for_accepted_solution_keeps_selected_tests(self) -> None:
-        problem = f"alice/verify-retry-tests-{uuid.uuid4().hex[:8]}"
-        self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
-        verification_id = f"ver-retry-tests-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-ver-retry-tests")
-
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / build_id
-        build_root.mkdir(parents=True, exist_ok=True)
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit=workspace_head,
-            source_ref="main",
-            status="ok",
-            summary={
-                "stage_results": {
-                    "generate_input": {
-                        "verification_source": "verification.generate-input",
-                        "status": "ok",
-                        "tests": [
-                            {"test": "001.in", "verdict": "OK"},
-                            {"test": "002.in", "verdict": "OK"},
-                        ],
-                    }
-                }
-            },
-            artifact_path=str(build_root),
-            created_at="2026-03-14T00:00:00Z",
-            finished_at="2026-03-14T00:00:01Z",
-        )
-
-        submitted_calls: list[dict[str, object]] = []
-        accepted_run_ids = [f"r-retry-first-{uuid.uuid4().hex[:8]}", f"r-retry-second-{uuid.uuid4().hex[:8]}"]
-
-        def _fake_run_submission(**kwargs):
-            source_path = str(kwargs.get("submission_path") or "")
-            submitted_calls.append(
-                {
-                    "source_path": source_path,
-                    "selected_tests": list(kwargs.get("selected_tests") or []),
-                    "expected_behavior": str(kwargs.get("expected_behavior") or ""),
-                }
-            )
-            run_id = str(kwargs.get("run_id") or "")
-            run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
-            run_root.mkdir(parents=True, exist_ok=True)
-            call_index = len(submitted_calls)
-            verdict = "WA" if call_index == 1 else "OK"
-            summary = {
-                "mode": "pass-fail",
-                "build_id": build_id,
-                "source": source_path,
-                "verification_source": "verification.start",
-                "tests": [
-                    {
-                        "test": "001.in",
-                        "verdict": verdict,
-                        "passes": [{"pass": 1, "verdict": verdict}],
-                    }
-                ],
-                "error": "",
-            }
-            self._insert_verification_row(
-                verification_id=verification_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                build_id=build_id,
-                kind=Kind.VERIFICATION,
-                status="ok",
-                created_at="2026-03-14T00:00:02Z",
-                finished_at="2026-03-14T00:00:03Z",
-                runs=[
-                    {
-                        "id": run_id,
-                        "status": "ok",
-                        "source_label": source_path,
-                        "expected_behavior": "accepted",
-                        "artifact_path": str(run_root),
-                        "summary": summary,
-                    }
-                ],
-                summary_extra={
-                    "mode": "pass-fail",
-                    "build_id": build_id,
-                    "verification_source": "verification.start",
-                },
-            )
-            return run_id
-
-        targets = [
-            {"path": "solutions/accepted.cpp", "expected_behavior": "accepted", "run_id": accepted_run_ids[0]},
-        ]
-        with patch("app.impl.workspace.context_job._ensure_implicit_verification", return_value=(build_id, False)):
-            with patch.object(config.judgehost_task_service, "run_submission", side_effect=_fake_run_submission):
-                workspace_context_job._run_verification_start_worker(
-                    problem,
-                    "alice",
-                    actor_user_id=actor_user_id,
-                    problem_id=problem_id,
-                    workspace_id=workspace_id,
-                    workspace_head=workspace_head,
-                    workspace_dirty=workspace_dirty,
-                    targets=targets,
-                    verification_id=verification_id,
-                )
-
-        self.assertEqual(len(submitted_calls), 2)
-        self.assertEqual(
-            [call.get("selected_tests") for call in submitted_calls],
-            [["001.in", "002.in"], ["001.in", "002.in"]],
-        )
-        self.assertEqual(
-            [str(call.get("source_path") or "") for call in submitted_calls],
-            ["solutions/accepted.cpp", "solutions/accepted.cpp"],
-        )
-
-    def test_verification_worker_keeps_running_when_non_main_run_has_only_running_placeholder(self) -> None:
-        problem = f"alice/verify-running-placeholder-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
-        build_id = self.random_id("b-verif-running-placeholder")
-        verification_id = f"ver-running-placeholder-{uuid.uuid4().hex[:8]}"
-        accepted_run_id = f"r-verif-accepted-running-{uuid.uuid4().hex[:8]}"
-        wa_run_id = f"r-verif-wa-running-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / build_id
-        build_root.mkdir(parents=True, exist_ok=True)
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit=workspace_head,
-            source_ref="main",
-            status="ok",
-            summary={
-                "stage_results": {
-                    "generate_input": {
-                        "verification_source": "verification.generate-input",
-                        "status": "ok",
-                        "tests": [{"test": "001.in", "verdict": "OK"}],
-                    },
-                    "solve_main": {
-                        "verification_source": "verification.solve-main",
-                        "status": "ok",
-                        "source": "solutions/accepted.cpp",
-                        "tests": [{"test": "001.in", "verdict": "OK"}],
-                    },
-                }
-            },
-            artifact_path=str(build_root),
-            created_at="2026-03-14T00:00:00Z",
-            finished_at="2026-03-14T00:00:01Z",
-        )
-
-        def _fake_run_submission(**kwargs):
-            run_id = str(kwargs.get("run_id") or "")
-            source_path = str(kwargs.get("submission_path") or "")
-            run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
-            run_root.mkdir(parents=True, exist_ok=True)
-            self._insert_verification_row(
-                verification_id=verification_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                build_id=build_id,
-                kind=Kind.VERIFICATION,
-                status="running",
-                created_at="2026-03-14T00:00:02Z",
-                finished_at="",
-                runs=[
-                    {
-                        "id": run_id,
-                        "status": "running",
-                        "source_label": source_path,
-                        "expected_behavior": "wrong_answer",
-                        "artifact_path": str(run_root),
-                        "summary": {
-                            "mode": "pass-fail",
-                            "source": source_path,
-                            "verification_source": "verification.start",
-                            "tests": [],
-                            "error": "",
-                        },
-                    }
-                ],
-                summary_extra={
-                    "mode": "pass-fail",
-                    "verification_source": "verification.start",
-                },
-            )
-            return run_id
-
-        targets = [
-            {"path": "solutions/accepted.cpp", "expected_behavior": "accepted", "run_id": accepted_run_id},
-            {"path": "solutions/wa.cpp", "expected_behavior": "wrong_answer", "run_id": wa_run_id},
-        ]
-        with patch("app.impl.workspace.context_job._ensure_implicit_verification", return_value=(build_id, False)):
-            with patch.object(config.judgehost_task_service, "run_submission", side_effect=_fake_run_submission):
-                workspace_context_job._run_verification_start_worker(
-                    problem,
-                    "alice",
-                    actor_user_id=actor_user_id,
-                    problem_id=problem_id,
-                    workspace_id=workspace_id,
-                    workspace_head=workspace_head,
-                    workspace_dirty=workspace_dirty,
-                    targets=targets,
-                    verification_id=verification_id,
-                )
-
-        verification_row = db_fetch_one("SELECT status,summary_json,finished_at FROM verifications WHERE id=?", [verification_id])
-        self.assertIsNotNone(verification_row)
-        self.assertEqual(str(verification_row["status"] or ""), "running")
-        self.assertEqual(str(verification_row["finished_at"] or ""), "")
-        verification_summary = json.loads(str(verification_row["summary_json"] or "{}"))
-        self.assertEqual(str(verification_summary.get("status") or ""), "running")
-        self.assertEqual(str(verification_summary.get("error") or ""), "")
-        runs = verification_summary.get("runs") if isinstance(verification_summary, dict) else {}
-        self.assertIsInstance(runs, dict)
-        self.assertEqual(str(((runs.get(accepted_run_id) or {}).get("status") or "")), "ok")
-        self.assertEqual(str(((runs.get(wa_run_id) or {}).get("status") or "")), "running")
-
     def test_verification_sidebar_marks_stale_when_gen_chk_sol_tests_change(self) -> None:
         problem = f"alice/verify-stale-{uuid.uuid4().hex[:8]}"
         ws = self._prepare_verification_workspace(problem)
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
         signature = workspace_impl._verification_sources_signature(ws)
-        signature_details = workspace_impl._verification_sources_signature_details(ws)
 
         self._insert_verification_row(
             verification_id=f"ver-stale-{uuid.uuid4().hex[:8]}",
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verify-stale"),
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-02-23T00:00:00Z",
             finished_at="2026-02-23T00:00:01Z",
             runs=[],
             summary_extra={
                 "status": "pass",
-                "workspace_head": workspace_head,
-                "workspace_dirty": workspace_dirty,
-                "verification_signature": signature,
-                "verification_signature_details": signature_details,
+                "signature": signature,
             },
         )
 
@@ -1370,13 +854,13 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'<span class="status-title(?: [^"]+)?">Verification</span>\s*<strong\s+class="status-value warn"[^>]*>\s*stale</strong>',
+            r'<strong class="submenu-status-heading">Verification</strong>\s*<span\s+class="submenu-status-state warn"[^>]*>\s*stale</span>',
         )
         self.assertRegex(
             html,
-            r'<strong\s+class="status-value warn"[^>]*data-tooltip="[^"]*changed: tests[^"]*"[^>]*>\s*stale</strong>',
+            r'<span\s+class="submenu-status-state warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale</span>',
         )
-        self.assertIn("changed: tests", html)
+        self.assertIn("changed: verification inputs", html)
 
     def test_verification_sidebar_marks_stale_when_general_info_changes(self) -> None:
         problem = f"alice/verify-stale-general-{uuid.uuid4().hex[:8]}"
@@ -1384,27 +868,21 @@ class TestUIRun(UIBaseSuite):
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
         signature = workspace_impl._verification_sources_signature(ws)
-        signature_details = workspace_impl._verification_sources_signature_details(ws)
 
         self._insert_verification_row(
             verification_id=f"ver-stale-general-{uuid.uuid4().hex[:8]}",
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-verify-stale-general"),
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-02-23T00:00:00Z",
             finished_at="2026-02-23T00:00:01Z",
             runs=[],
             summary_extra={
                 "status": "pass",
-                "workspace_head": workspace_head,
-                "workspace_dirty": workspace_dirty,
-                "verification_signature": signature,
-                "verification_signature_details": signature_details,
+                "signature": signature,
             },
         )
 
@@ -1412,6 +890,10 @@ class TestUIRun(UIBaseSuite):
         payload: dict[str, object] = {}
         if problem_cfg.exists():
             payload = json.loads(problem_cfg.read_text(encoding="utf-8"))
+        if "mode" not in payload:
+            payload["mode"] = "pass-fail"
+        if "pass_limit" not in payload:
+            payload["pass_limit"] = 1
         payload["time_limit_ms"] = int(payload.get("time_limit_ms") or 2000) + 100
         problem_cfg.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -1419,13 +901,13 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'<span class="status-title(?: [^"]+)?">Verification</span>\s*<strong\s+class="status-value warn"[^>]*>\s*stale</strong>',
+            r'<strong class="submenu-status-heading">Verification</strong>\s*<span\s+class="submenu-status-state warn"[^>]*>\s*stale</span>',
         )
         self.assertRegex(
             html,
-            r'<strong\s+class="status-value warn"[^>]*data-tooltip="[^"]*changed: general info[^"]*"[^>]*>\s*stale</strong>',
+            r'<span\s+class="submenu-status-state warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale</span>',
         )
-        self.assertIn("changed: general info", html)
+        self.assertIn("changed: verification inputs", html)
 
     def test_run_page_shows_multi_solution_selector_without_mode_select(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1485,7 +967,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-03-03T00:00:01Z",
             finished_at="2026-03-03T00:00:04Z",
@@ -1505,6 +987,34 @@ class TestUIRun(UIBaseSuite):
                     "summary": dict(summary_wa),
                 },
             ],
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-rerun-link-ok-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_ok,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "run_id": run_ok,
+                },
+                {
+                    "id": f"vt-rerun-link-wa-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": run_wa,
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "run_id": run_wa,
+                },
+            ],
+            edges=[],
         )
         list_page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
         self.assertEqual(list_page.status_code, 200)
@@ -1548,526 +1058,14 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("No verification yet.", html)
         self.assertNotIn("page-grid-wide", html)
 
-    def test_run_list_keeps_run_ids_when_summary_is_oversized(self) -> None:
-        problem = f"alice/inv-oversized-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, f"{problem} title")
-        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-oversized-{uuid.uuid4().hex[:8]}"
-        run_ok = f"r-oversized-ok-{uuid.uuid4().hex[:8]}"
-        run_wa = f"r-oversized-wa-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-inv-oversized")
-        oversized_blob = "x" * 70000
-        base_summary = {
-            "mode": "pass-fail",
-            "tests": [{"test": "001.in", "verdict": "OK", "blob": oversized_blob}],
-        }
 
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "run.execute",
-                json.dumps(
-                    {
-                        "status": "queued",
-                        "verification_id": verification_id,
-                        "run_id": run_ok,
-                        "run_ids": [run_ok, run_wa],
-                        "run_count": 2,
-                    }
-                ),
-                "2026-02-23T00:00:00Z",
-            ],
-        )
 
-        run_specs = [
-            (run_ok, "solutions/accepted.cpp", "ok", "2026-02-23T00:00:01Z", "2026-02-23T00:00:02Z"),
-            (run_wa, "solutions/wa.cpp", "running", "2026-02-23T00:00:03Z", ""),
-        ]
-        for run_id, source, status, created_at, finished_at in run_specs:
-            summary = dict(base_summary)
-            summary["source"] = source
-            run_root = config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()
-            run_root.mkdir(parents=True, exist_ok=True)
-            self._insert_verification_run_row(
-                run_id=run_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                build_id=build_id,
-                mode="pass-fail",
-                status=status,
-                summary=summary,
-                artifact_path=str(run_root),
-                created_at=created_at,
-                finished_at=finished_at,
-            )
 
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
-        rows_by_id = {str(item.get("id") or ""): item for item in rows}
-        verification_ok = f"ver-{run_ok}"
-        verification_wa = f"ver-{run_wa}"
-        self.assertIn(verification_ok, rows_by_id)
-        self.assertIn(verification_wa, rows_by_id)
-        self.assertEqual(int(rows_by_id[verification_ok].get("run_count") or 0), 1)
-        self.assertEqual(int(rows_by_id[verification_wa].get("run_count") or 0), 1)
 
-    def test_run_list_does_not_backfill_missing_run_ids_from_audit(self) -> None:
-        problem = f"alice/inv-verify-map-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, f"{problem} title")
-        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-verify-map-{uuid.uuid4().hex[:8]}"
-        run_a = f"r-verify-map-a-{uuid.uuid4().hex[:8]}"
-        run_b = f"r-verify-map-b-{uuid.uuid4().hex[:8]}"
 
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "verification.start",
-                json.dumps(
-                    {
-                        "status": "running",
-                        "verification_id": verification_id,
-                        "run_id": run_a,
-                        "run_ids": [run_a, run_b],
-                        "run_count": 2,
-                    }
-                ),
-                "2026-02-23T00:00:00Z",
-            ],
-        )
 
-        summary = {"mode": "pass-fail", "source": "solutions/accepted.cpp", "tests": []}
-        run_root = config.fs_manager.prepare_verification_run_root(verification_id, run_a).resolve()
-        run_root.mkdir(parents=True, exist_ok=True)
-        self._insert_verification_run_row(
-            run_id=run_a,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-verify-map"),
-            mode="pass-fail",
-            status="running",
-            summary=summary,
-            artifact_path=str(run_root),
-            created_at="2026-02-23T00:00:01Z",
-            finished_at="",
-            verification_id=verification_id,
-        )
 
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
-        rows_by_id = {str(item.get("id") or ""): item for item in rows}
-        self.assertIn(verification_id, rows_by_id)
-        self.assertNotIn(run_b, list(rows_by_id))
-        self.assertEqual(int(rows_by_id[verification_id].get("run_count") or 0), 1)
-        self.assertEqual(list(rows_by_id[verification_id].get("run_ids") or []), [run_a])
 
-    def test_run_list_shows_running_verification_from_audit_before_runs_exist(self) -> None:
-        problem = f"alice/inv-audit-pending-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, f"{problem} title")
-        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-audit-pending-{uuid.uuid4().hex[:8]}"
-        run_a = f"r-audit-pending-a-{uuid.uuid4().hex[:8]}"
-        run_b = f"r-audit-pending-b-{uuid.uuid4().hex[:8]}"
-
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "verification.start",
-                json.dumps(
-                    {
-                        "status": "running",
-                        "mode": "pass-fail",
-                        "verification_id": verification_id,
-                        "run_id": run_a,
-                        "run_ids": [run_a, run_b],
-                        "run_count": 2,
-                        "submission_paths": ["solutions/accepted.cpp", "solutions/wa.cpp"],
-                    }
-                ),
-                "2026-03-02T00:00:00Z",
-            ],
-        )
-
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-audit-pending"),
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-02T00:00:00Z",
-            finished_at="",
-            runs=[
-                {"id": run_a, "status": "running", "source_label": "solutions/accepted.cpp", "summary": {"source": "solutions/accepted.cpp", "mode": "pass-fail", "tests": []}},
-                {"id": run_b, "status": "running", "source_label": "solutions/wa.cpp", "summary": {"source": "solutions/wa.cpp", "mode": "pass-fail", "tests": []}},
-            ],
-            summary_extra={
-                "mode": "pass-fail",
-                "verification_source": "verification.start",
-                "run_ids": [run_a, run_b],
-                "run_count": 2,
-                "source_paths": ["solutions/accepted.cpp", "solutions/wa.cpp"],
-            },
-        )
-
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(str(rows[0].get("id") or ""), verification_id)
-        self.assertEqual(str(rows[0].get("status") or ""), "running")
-        self.assertTrue(bool(rows[0].get("has_running")))
-        self.assertEqual(int(rows[0].get("run_count") or 0), 2)
-        self.assertIn("solutions/accepted.cpp", str(rows[0].get("source_display") or ""))
-        self.assertIn("solutions/wa.cpp", str(rows[0].get("source_display") or ""))
-        self.assertEqual(str(rows[0].get("tests_label") or ""), "tests: in progress")
-
-    def test_run_list_shows_running_verification_from_submission_paths_before_runs_exist(self) -> None:
-        problem = f"alice/verification-submission-paths-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, f"{problem} title")
-        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"ver-submission-paths-{uuid.uuid4().hex[:8]}"
-
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-submission-paths"),
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-13T00:00:00Z",
-            finished_at="",
-            runs=[],
-            summary_extra={
-                "status": "running",
-                "verification_id": verification_id,
-                "verification_source": "verification.start",
-                "submission_paths": ["solutions/accepted.cpp", "solutions/wa.cpp"],
-            },
-        )
-
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(str(rows[0].get("id") or ""), verification_id)
-        self.assertEqual(str(rows[0].get("status") or ""), "running")
-        self.assertTrue(bool(rows[0].get("has_running")))
-        self.assertEqual(int(rows[0].get("run_count") or 0), 2)
-        self.assertIn("solutions/accepted.cpp", str(rows[0].get("source_display") or ""))
-        self.assertIn("solutions/wa.cpp", str(rows[0].get("source_display") or ""))
-        self.assertEqual(str(rows[0].get("tests_label") or ""), "tests: in progress")
-
-    def test_run_list_shows_running_verification_from_solution_count_without_paths(self) -> None:
-        problem = f"alice/verification-solution-count-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, f"{problem} title")
-        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"])
-        verification_id = f"ver-solution-count-{uuid.uuid4().hex[:8]}"
-
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-solution-count"),
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-13T00:00:00Z",
-            finished_at="",
-            runs=[],
-            summary_extra={
-                "status": "running",
-                "verification_id": verification_id,
-                "verification_source": "verification.start",
-                "solution_count": 3,
-            },
-        )
-
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(str(rows[0].get("id") or ""), verification_id)
-        self.assertEqual(str(rows[0].get("status") or ""), "running")
-        self.assertTrue(bool(rows[0].get("has_running")))
-        self.assertEqual(int(rows[0].get("run_count") or 0), 3)
-        self.assertEqual(str(rows[0].get("tests_label") or ""), "tests: in progress")
-
-    def test_run_list_keeps_top_level_verification_when_summary_source_is_solve_main(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-buildsolve-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-buildsolve-{uuid.uuid4().hex[:8]}"
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-buildsolve"),
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-03T00:00:00Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": run_id,
-                    "status": "running",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "solutions/accepted.cpp",
-                        "verification_source": "verification.solve-main",
-                        "tests": [],
-                        "error": "",
-                    },
-                }
-            ],
-            summary_extra={
-                "status": "running",
-                "verification_id": verification_id,
-                "verification_source": "verification.solve-main",
-                "source_paths": ["solutions/accepted.cpp"],
-            },
-        )
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, Path(ctx["workspace"]["path"]), limit=20, actor_user_id=actor_user_id)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(str(rows[0].get("id") or ""), verification_id)
-        self.assertEqual(str(rows[0].get("status") or ""), "running")
-        self.assertTrue(bool(rows[0].get("has_running")))
-
-    def test_run_list_excludes_generate_stage_runs_from_solution_summary(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-list-hidden-{uuid.uuid4().hex[:8]}"
-        manual_run_id = f"r-list-hidden-manual-{uuid.uuid4().hex[:8]}"
-        generator_run_id = f"r-list-hidden-generator-{uuid.uuid4().hex[:8]}"
-        accepted_run_id = f"r-list-hidden-accepted-{uuid.uuid4().hex[:8]}"
-        wa_run_id = f"r-list-hidden-wa-{uuid.uuid4().hex[:8]}"
-
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-list-hidden"),
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-16T00:00:00Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": manual_run_id,
-                    "status": "ok",
-                    "source_label": "manual_validate.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "manual_validate.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests_total": 1,
-                        "tests": [{"test": "001.in", "verdict": "OK"}],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": generator_run_id,
-                    "status": "ok",
-                    "source_label": "gen.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "gen.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests_total": 1,
-                        "tests": [{"test": "001.in", "verdict": "OK"}],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": accepted_run_id,
-                    "status": "running",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "solutions/accepted.cpp",
-                        "verification_source": "verification.solve-main",
-                        "tests_total": 3,
-                        "tests": [{"test": "001.in", "verdict": "OK"}],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": wa_run_id,
-                    "status": "queued",
-                    "source_label": "solutions/wa.cpp",
-                    "expected_behavior": "wrong_answer",
-                    "summary": {
-                        "source": "solutions/wa.cpp",
-                        "verification_source": "verification.start",
-                        "tests_total": 0,
-                        "tests": [],
-                        "error": "",
-                    },
-                },
-            ],
-            summary_extra={
-                "status": "running",
-                "verification_source": "verification.start",
-                "source_paths": [
-                    "manual_validate.cpp",
-                    "gen.cpp",
-                    "solutions/accepted.cpp",
-                    "solutions/wa.cpp",
-                ],
-            },
-        )
-
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(str(row.get("id") or ""), verification_id)
-        self.assertEqual(int(row.get("run_count") or 0), 2)
-        self.assertEqual(list(row.get("run_ids") or []), [accepted_run_id, wa_run_id])
-        self.assertIn("solutions/accepted.cpp", str(row.get("source_display") or ""))
-        self.assertIn("solutions/wa.cpp", str(row.get("source_display") or ""))
-        self.assertNotIn("manual_validate.cpp", str(row.get("source_display") or ""))
-        self.assertNotIn("gen.cpp", str(row.get("source_display") or ""))
-        self.assertEqual(list(row.get("rerun_solution_paths") or []), [])
-
-    def test_run_list_summary_ignores_generate_input_runs_for_count_source_display_and_rerun_paths(self) -> None:
-        problem = f"alice/run-list-hidden-generate-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, f"{problem} title")
-        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"ver-list-hidden-generate-{uuid.uuid4().hex[:8]}"
-        manual_run_id = f"r-list-hidden-manual-{uuid.uuid4().hex[:8]}"
-        gen_run_id = f"r-list-hidden-gen-{uuid.uuid4().hex[:8]}"
-        accepted_run_id = f"r-list-hidden-accepted-{uuid.uuid4().hex[:8]}"
-        wa_run_id = f"r-list-hidden-wa-{uuid.uuid4().hex[:8]}"
-
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-list-hidden-generate"),
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-15T00:00:00Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": manual_run_id,
-                    "status": "running",
-                    "source_label": "manual_validate.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "manual_validate.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests": [{"test": "001.in", "verdict": "OK"}],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": gen_run_id,
-                    "status": "running",
-                    "source_label": "generators/gen.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "generators/gen.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests": [{"test": "002.in", "verdict": ""}],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": accepted_run_id,
-                    "status": "queued",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "solutions/accepted.cpp",
-                        "verification_source": "verification.solve-main",
-                        "tests": [],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": wa_run_id,
-                    "status": "queued",
-                    "source_label": "solutions/wa.cpp",
-                    "expected_behavior": "wrong_answer",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "solutions/wa.cpp",
-                        "verification_source": "verification.start",
-                        "tests": [],
-                        "error": "",
-                    },
-                },
-            ],
-            summary_extra={
-                "mode": "pass-fail",
-                "verification_source": "verification.start",
-            },
-        )
-
-        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=20, actor_user_id=actor_user_id)
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(str(row.get("id") or ""), verification_id)
-        self.assertEqual(int(row.get("run_count") or 0), 2)
-        self.assertEqual(str(row.get("source_display") or ""), "solutions/accepted.cpp, solutions/wa.cpp")
-        self.assertEqual(
-            list(row.get("rerun_solution_paths") or []),
-            ["solutions/accepted.cpp", "solutions/wa.cpp"],
-        )
-        self.assertNotIn("manual_validate.cpp", str(row.get("source_display") or ""))
-        self.assertNotIn("generators/gen.cpp", str(row.get("source_display") or ""))
 
     def test_run_details_hides_generate_input_runs_as_columns_and_shows_test_stage_cells_in_first_column(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -2090,7 +1088,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-03-10T00:00:02Z",
             finished_at="",
@@ -2223,7 +1221,7 @@ class TestUIRun(UIBaseSuite):
                 created_at=created_at,
                 finished_at=created_at,
                 verification_id=verification_id,
-                kind=Kind.VERIFICATION,
+                kind=Kind.ALL,
             )
 
         rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=10, actor_user_id=int(ctx["user"]["id"]))
@@ -2257,7 +1255,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:00Z",
             finished_at="",
@@ -2294,7 +1292,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:01Z",
             finished_at="",
@@ -2337,7 +1335,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-02-23T00:00:03Z",
             finished_at="2026-02-23T00:00:04Z",
@@ -2401,7 +1399,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=self.random_id("b-rejudge"),
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:01Z",
             finished_at="",
@@ -2450,47 +1448,56 @@ class TestUIRun(UIBaseSuite):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"inv-cancel-{uuid.uuid4().hex[:8]}"
-        run_running = f"r-cancel-running-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_running
-        run_root.mkdir(parents=True, exist_ok=True)
-        summary_running = {
-            "mode": "pass-fail",
-            "build_id": self.random_id("b-cancel-run"),
-            "source": "solutions/accepted.cpp",
-            "tests_total": 5,
-            "tests": [],
-        }
-        build_id = str(summary_running["build_id"])
+        run_id = f"r-cancel-running-{uuid.uuid4().hex[:8]}"
+        build_id = self.random_id("b-cancel-run")
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:00Z",
             finished_at="",
-            runs=[
-                {
-                    "id": run_running,
-                    "status": "running",
-                    "artifact_path": str(run_root),
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": summary_running,
-                }
-            ],
+            runs=[],
             summary_extra={
                 "mode": "pass-fail",
                 "build_id": build_id,
-                "verification_source": "verification.start",
-                "source_paths": ["solutions/accepted.cpp", "solutions/wa.cpp"],
+                "task_graph": True,
+                "source_paths": ["solutions/accepted.cpp"],
             },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-cancel-leased",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_LEASED,
+                    "run_id": run_id,
+                    "judgehost_task_id": "jt-cancel-leased",
+                },
+                {
+                    "id": "vt-cancel-pending",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+            ],
+            edges=[],
         )
 
         details_before = run_details_page(
@@ -2501,7 +1508,7 @@ class TestUIRun(UIBaseSuite):
         before_html = details_before.body.decode("utf-8", errors="replace")
         self.assertIn(">Cancel</a>", before_html)
         self.assertIn('class="linkish danger-link" data-submit-form="1">Cancel</a>', before_html)
-        self.assertIn("Verification Progress", before_html)
+        self.assertIn("Task Status", before_html)
 
         cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
         self.assertEqual(cancel_resp.status_code, 303)
@@ -2511,23 +1518,17 @@ class TestUIRun(UIBaseSuite):
         )
         cancel_messages = _flash_messages_from_response(cancel_resp)
         self.assertTrue(cancel_messages)
-        self.assertIn("cancel requested", cancel_messages[0])
+        self.assertIn("verification cancelled", cancel_messages[0])
 
-        verification_row = db_fetch_one("SELECT summary_json,status FROM verifications WHERE id=?", [verification_id])
+        verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
-        verification_summary = json.loads(str(verification_row["summary_json"] or "{}"))
-        runs = verification_summary.get("runs") if isinstance(verification_summary, dict) else {}
-        self.assertIsInstance(runs, dict)
-        running_member = runs.get(run_running)
-        self.assertIsInstance(running_member, dict)
-        self.assertEqual(str(running_member.get("status") or "").lower(), "failed")
-        running_summary_after = running_member.get("summary") if isinstance(running_member, dict) else {}
-        self.assertIsInstance(running_summary_after, dict)
-        self.assertTrue(bool(running_summary_after.get("cancelled")))
-        self.assertIn("cancelled by user", str(running_summary_after.get("error") or ""))
-        self.assertEqual(int(running_summary_after.get("tests_total") or 0), 5)
-        self.assertIsInstance(running_summary_after.get("tests"), list)
-        self.assertEqual(len(running_summary_after.get("tests") or []), 0)
+        self.assertEqual(str(verification_row["status"] or "").lower(), "failed")
+        rows = {
+            str(row["id"]): row
+            for row in VerificationTaskStore(config.db).list_rows(verification_id)
+        }
+        self.assertEqual(str(rows["vt-cancel-leased"]["status"] or ""), VerificationTaskStore.TASK_LEASED)
+        self.assertEqual(str(rows["vt-cancel-pending"]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
 
         details_after = run_details_page(
             _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
@@ -2535,323 +1536,72 @@ class TestUIRun(UIBaseSuite):
             "alice",
         )
         after_html = details_after.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification status:", after_html)
-        self.assertIn("FAILED", after_html)
+        self.assertIn(">failed<", after_html.lower())
+        self.assertIn("verification cancelled by user", after_html)
         self.assertNotIn(">Cancel</a>", after_html)
 
-    def test_run_cancel_ignores_late_leased_case_callback(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+    def test_run_cancel_cancels_not_started_rows_without_active_judgehost_work(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-cancel-late-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-cancel-late-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-cancel-late")
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        (build_root / "tests").mkdir(parents=True, exist_ok=True)
-        (build_root / "ans").mkdir(parents=True, exist_ok=True)
-        (build_root / "tests" / "001.in").write_text("1\n", encoding="utf-8")
-        (build_root / "ans" / "001.ans").write_text("1\n", encoding="utf-8")
-        self._insert_stage_verification(
-            verification_id=build_id,
+        verification_id = f"inv-cancel-pending-{uuid.uuid4().hex[:8]}"
+        build_id = self.random_id("b-cancel-pending")
+        self._insert_verification_row(
+            verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
+            build_id=build_id,
+            kind=Kind.ALL,
             status="running",
-            summary={},
-            artifact_path=str(build_root),
-            created_at="2026-03-17T00:00:00Z",
-            finished_at=None,
+            created_at="2026-03-05T00:00:00Z",
+            finished_at="",
+            runs=[],
+            summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
         )
-
-        service = config.judgehost_task_service
-        old_enabled = service._enabled
-        old_token = service._api_token
-        old_username = service._api_username
-        old_include_build_payload = service._include_build_payload
-        self.addCleanup(setattr, service, "_enabled", old_enabled)
-        self.addCleanup(setattr, service, "_api_token", old_token)
-        self.addCleanup(setattr, service, "_api_username", old_username)
-        self.addCleanup(setattr, service, "_include_build_payload", old_include_build_payload)
-        service._enabled = True
-        service._api_token = "test-token"
-        service._api_username = "judgehost"
-        service._include_build_payload = True
-        service.domjudge_register_host("judgehost-cancel-late")
-        service.enqueue_task(
-            problem="alice/sample",
-            username="alice",
-            artifact_verification_id=build_id,
-            mode="pass-fail",
-            submission_path="solutions/accepted.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-cancel-pending-1",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "run_id": f"r-cancel-pending-1-{uuid.uuid4().hex[:8]}",
+                    "judgehost_task_id": "jt-cancel-pending-1",
+                },
+                {
+                    "id": "vt-cancel-pending-2",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "run_id": f"r-cancel-pending-2-{uuid.uuid4().hex[:8]}",
+                    "judgehost_task_id": "jt-cancel-pending-2",
+                },
+            ],
+            edges=[],
         )
-        leased = service.domjudge_fetch_work("judgehost-cancel-late", max_batchsize=8)
-        self.assertEqual(len(leased), 1)
-        case_id = int(leased[0].get("judgetaskid") or 0)
-        self.assertGreater(case_id, 0)
-
         cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
         self.assertEqual(cancel_resp.status_code, 303)
         cancel_messages = _flash_messages_from_response(cancel_resp)
         self.assertTrue(cancel_messages)
-        self.assertIn("cancel requested", cancel_messages[0])
-
-        meta_text = "cpu-time: 0.004\nwall-time: 0.004\nmemory-bytes: 4096\n"
-        service.domjudge_add_judging_run(
-            "judgehost-cancel-late",
-            case_id,
-            {
-                "runresult": "correct",
-                "runtime": "0.004",
-                "output_run": base64.b64encode(b"1\n").decode("ascii"),
-                "output_diff": "",
-                "output_error": "",
-                "output_system": "",
-                "metadata": base64.b64encode(meta_text.encode("utf-8")).decode("ascii"),
-                "compare_metadata": "",
-            },
-        )
-
-        verification_row = db_fetch_one("SELECT status, summary_json FROM verifications WHERE id=?", [verification_id])
+        self.assertIn("verification cancelled", cancel_messages[0])
+        verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
-        self.assertEqual(str(verification_row["status"] or "").lower(), "failed")
-        verification_summary = json.loads(str(verification_row["summary_json"] or "{}"))
-        runs = verification_summary.get("runs") if isinstance(verification_summary, dict) else {}
-        self.assertIsInstance(runs, dict)
-        run_payload = runs.get(run_id) if isinstance(runs, dict) else None
-        self.assertIsInstance(run_payload, dict)
-        self.assertEqual(str(run_payload.get("status") or "").lower(), "failed")
-        run_summary = run_payload.get("summary") if isinstance(run_payload, dict) else {}
-        self.assertIsInstance(run_summary, dict)
-        self.assertTrue(bool(run_summary.get("cancelled")))
-        self.assertEqual(run_summary.get("tests") or [], [])
-
-    def test_finalize_cancelled_verifications_marks_verification_failed_without_active_runs(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = f"ver-artifact-cancel-finalize-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-cancel-finalize-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
-        build_root.mkdir(parents=True, exist_ok=True)
-        run_root.mkdir(parents=True, exist_ok=True)
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="running",
-            summary={"step": "run"},
-            artifact_path=str(build_root),
-            created_at="2026-03-05T00:00:00Z",
-            finished_at=None,
-        )
-        self._insert_verification_run_row(
-            run_id=run_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            mode="pass-fail",
-            status="failed",
-            summary={},
-            artifact_path=str(run_root),
-            created_at="2026-03-05T00:00:01Z",
-            finished_at="2026-03-05T00:00:02Z",
+        self.assertEqual(str(verification_row["status"] or "").strip().lower(), "failed")
+        rows = VerificationTaskStore(config.db).list_rows(verification_id)
+        self.assertEqual(
+            [str(row["status"] or "") for row in rows],
+            [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
         )
 
-        cancelled = run_export_impl._finalize_cancelled_verifications([build_id], "verification cancelled by user")
-        self.assertEqual(cancelled, 1)
-        build_row = db_fetch_one("SELECT status,summary_json FROM verifications WHERE id=?", [build_id])
-        self.assertIsNotNone(build_row)
-        self.assertEqual(str(build_row["status"] or "").strip().lower(), "failed")
-        summary = json.loads(str(build_row["summary_json"] or "{}"))
-        self.assertTrue(bool(summary.get("cancelled")))
-        self.assertIn("cancelled by user", str(summary.get("cancel_reason") or ""))
-
-    def test_finalize_cancelled_verifications_skips_when_other_active_runs_exist(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = f"ver-artifact-cancel-active-{uuid.uuid4().hex[:8]}"
-        run_cancelled_id = f"r-cancel-active-failed-{uuid.uuid4().hex[:8]}"
-        run_active_id = f"r-cancel-active-running-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        run_cancelled_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_cancelled_id
-        run_active_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_active_id
-        build_root.mkdir(parents=True, exist_ok=True)
-        run_cancelled_root.mkdir(parents=True, exist_ok=True)
-        run_active_root.mkdir(parents=True, exist_ok=True)
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="running",
-            summary={},
-            artifact_path=str(build_root),
-            created_at="2026-03-05T00:00:00Z",
-            finished_at=None,
-        )
-        self._insert_verification_run_row(
-            run_id=run_cancelled_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            mode="pass-fail",
-            status="failed",
-            summary={},
-            artifact_path=str(run_cancelled_root),
-            created_at="2026-03-05T00:00:01Z",
-            finished_at="2026-03-05T00:00:02Z",
-        )
-        self._insert_verification_run_row(
-            run_id=run_active_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            mode="pass-fail",
-            status="running",
-            summary={},
-            artifact_path=str(run_active_root),
-            created_at="2026-03-05T00:00:03Z",
-            finished_at="",
-        )
-
-        with patch.object(config.judgehost_task_service, "active_task_count_for_verification", return_value=1):
-            cancelled = run_export_impl._finalize_cancelled_verifications([build_id], "verification cancelled by user")
-        self.assertEqual(cancelled, 0)
-        build_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [build_id])
-        self.assertIsNotNone(build_row)
-        self.assertEqual(str(build_row["status"] or "").strip().lower(), "running")
-
-    def test_run_list_running_verification_shows_in_progress_labels(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-progress-{uuid.uuid4().hex[:8]}"
-        run_ok = f"r-progress-ok-{uuid.uuid4().hex[:8]}"
-        run_running = f"r-progress-running-{uuid.uuid4().hex[:8]}"
-        run_ids = [run_ok, run_running]
-
-        def _tests(total: int) -> list[dict[str, object]]:
-            return [{"test": f"{idx:03}.in", "verdict": "OK"} for idx in range(1, total + 1)]
-
-        summary_ok = {
-            "mode": "pass-fail",
-            "source": "solutions/accepted.cpp",
-            "tests": _tests(44),
-            "verification": {
-                "id": verification_id,
-                "run_ids": run_ids,
-                "matched": True,
-                "completed": True,
-                "passed_all_tests": True,
-            },
-        }
-        summary_running = {
-            "mode": "pass-fail",
-            "source": "solutions/wa.cpp",
-            "tests": _tests(18),
-            "verification": {
-                "id": verification_id,
-                "run_ids": run_ids,
-                "matched": False,
-                "completed": False,
-                "passed_all_tests": False,
-            },
-        }
-
-        self._insert_verification_run_row(
-            run_id=run_ok,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-progress-ok"),
-            mode="pass-fail",
-            status="ok",
-            summary=summary_ok,
-            artifact_path=str(config.fs_manager.prepare_verification_run_root(verification_id, run_ok).resolve()),
-            created_at="2026-02-23T00:10:00Z",
-            finished_at="2026-02-23T00:10:01Z",
-            verification_id=verification_id,
-        )
-        self._insert_verification_run_row(
-            run_id=run_running,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=self.random_id("b-progress-running"),
-            mode="pass-fail",
-            status="running",
-            summary=summary_running,
-            artifact_path=str(config.fs_manager.prepare_verification_run_root(verification_id, run_running).resolve()),
-            created_at="2026-02-23T00:10:02Z",
-            finished_at="",
-            verification_id=verification_id,
-        )
-
-        page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("tests: up to 44 (in progress)", html)
-        self.assertIn("1/1 completed matched (2 total)", html)
-        self.assertNotIn("tests: 18-44 (varied)", html)
-        self.assertNotIn("1/2 expected", html)
-        self.assertIn("/problems/alice/sample/alice/run/cancel", html)
-        self.assertIn(f'name="verification_id" value="{verification_id}"', html)
-        self.assertIn(">Cancel</a>", html)
-        self.assertIn('class="linkish danger-link" data-submit-form="1">Cancel</a>', html)
-
-    def test_run_details_show_progress_placeholders_while_running(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        run_id = f"r-running-progress-{uuid.uuid4().hex[:8]}"
-        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
-        run_root.mkdir(parents=True, exist_ok=True)
-        summary = {
-            "mode": "pass-fail",
-            "source": "solutions/accepted.cpp",
-            "tests": [],
-            "tests_total": 5,
-            "usage": {"tests": 5},
-        }
-        self._insert_verification_run_row(
-            run_id=run_id,
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            build_id=self.random_id("b-running-progress"),
-            mode="pass-fail",
-            status="running",
-            summary=summary,
-            artifact_path=str(run_root),
-            created_at="2026-02-23T00:00:00Z",
-            finished_at="",
-        )
-
-        verification_id = self._verification_id_for_run(run_id)
-        page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification Progress", html)
-        self.assertIn("0/5 tests finished", html)
-        self.assertIn("generating</span>", html)
-        self.assertNotIn("test 1", html)
 
     def test_run_list_treats_failed_verification_as_terminal_even_with_queued_runs(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -2870,7 +1620,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-14T00:00:00Z",
             finished_at="2026-03-14T00:00:10Z",
@@ -2925,9 +1675,8 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(verification_id, html)
-        self.assertIn(">FAILED<", html)
-        self.assertNotIn(">RUNNING<", html)
-        self.assertIn("tests: 1-1 (all)", html)
+        self.assertIn(">failed<", html)
+        self.assertNotIn(">running<", html)
         self.assertIn(">View</a>", html)
         self.assertNotIn(">Cancel</a>", html)
 
@@ -3051,17 +1800,17 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("0/1 tests finished", html)
         self.assertNotIn("tests reported", html)
 
-    def test_run_details_shows_verification_lifecycle_for_verification(self) -> None:
+    def test_run_details_shows_task_status_for_verification(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-lifecycle-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-verif-lifecycle-{uuid.uuid4().hex[:8]}"
+        verification_id = f"inv-verif-task-status-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-verif-task-status-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-lifecycle")
-        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
+        run_root = config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3070,38 +1819,16 @@ class TestUIRun(UIBaseSuite):
             "tests_total": 3,
             "usage": {"tests": 3},
         }
-        gen_summary = {
-            "mode": "pass-fail",
-            "source": "generators/generator.cpp",
-            "verification_source": "verification.generate-input",
-            "status": "ok",
-            "selected_tests_count": 3,
-            "tests": [
-                {"test": "001.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]},
-                {"test": "002.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]},
-                {"test": "003.in", "verdict": "OK", "passes": [{"pass": 1, "verdict": "OK"}]},
-            ],
-        }
-        gen_run_id = f"r-verif-lifecycle-gen-{uuid.uuid4().hex[:8]}"
-        gen_run_root = config.fs_manager.prepare_verification_run_root(verification_id, gen_run_id).resolve()
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:02Z",
             finished_at="",
             runs=[
-                {
-                    "id": gen_run_id,
-                    "status": "ok",
-                    "artifact_path": str(gen_run_root),
-                    "source_label": "generators/generator.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": gen_summary,
-                },
                 {
                     "id": run_id,
                     "status": "running",
@@ -3113,10 +1840,36 @@ class TestUIRun(UIBaseSuite):
             ],
             summary_extra={
                 "status": "running",
-                "steps": ["gen", "val", "run", "check"],
                 "verification_id": verification_id,
                 "build_id": build_id,
                 "verification_source": "verification.start",
+                "task_counts": {
+                    "total": 9,
+                    "pending": 5,
+                    "running": 2,
+                    "done": 2,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "by_kind": {},
+                },
+                "running_tasks": [
+                    {
+                        "task_id": "vt-gen-1",
+                        "task_kind": "generate-input",
+                        "task_kind_label": "Generate Input",
+                        "source_label": "accepted.cpp",
+                        "test_name": "001.in",
+                        "label": "Generate Input: 001.in",
+                    },
+                    {
+                        "task_id": "vt-main-2",
+                        "task_kind": "main-correct",
+                        "task_kind_label": "Main Correct",
+                        "source_label": "accepted.cpp",
+                        "test_name": "002.in",
+                        "label": "Main Correct: 002.in",
+                    },
+                ],
             },
         )
         page = run_details_page(
@@ -3126,17 +1879,1159 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification Progress", html)
-        self.assertIn("Generate Inputs", html)
-        self.assertIn("Check Expectations", html)
-        self.assertIn("Generated tests", html)
-        self.assertIn("3 tests", html)
-        self.assertIn("Prepared tests", html)
-        self.assertIn("3/3", html)
-        self.assertIn("Solutions finished", html)
-        self.assertIn("0/1", html)
-        self.assertIn("Matched expectations", html)
-        self.assertNotIn("Validated inputs", html)
+        self.assertIn("Task Status", html)
+        self.assertIn("queued 5", html)
+        self.assertIn("running 2", html)
+        self.assertIn("done 2", html)
+        self.assertIn("Generate Input: 001.in", html)
+        self.assertIn("Main Correct: 002.in", html)
+        self.assertNotIn("verification-lifecycle-tabs", html)
+
+    def test_run_details_task_graph_shows_main_correct_columns(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-task-graph-{uuid.uuid4().hex[:8]}"
+        main_run_id = f"r-main-{uuid.uuid4().hex[:8]}"
+        solution_run_id = f"r-solution-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-task-graph"),
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-03-22T00:00:00Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": main_run_id,
+                    "status": "ok",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "verification_source": "verification.solve-main",
+                        "tests": [{"test": "001.in", "verdict": "AC", "feedback_files": []}],
+                    },
+                },
+                {
+                    "id": solution_run_id,
+                    "status": "running",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "verification_source": "verification.start",
+                        "tests": [],
+                        "tests_total": 1,
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "running",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 1,
+                "solutions": [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "run_id": main_run_id,
+                        "verification_source": "verification.solve-main",
+                        "expected_behavior": "accepted",
+                    },
+                    {
+                        "source_path": "solutions/wa.cpp",
+                        "run_id": solution_run_id,
+                        "verification_source": "verification.start",
+                        "expected_behavior": "wrong_answer",
+                    },
+                ],
+                "task_counts": {
+                    "total": 3,
+                    "pending": 1,
+                    "running": 1,
+                    "done": 1,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "by_kind": {},
+                },
+                "running_tasks": [
+                    {
+                        "task_id": "vt-solution-1",
+                        "label": "Solution run: wa.cpp / 001.in",
+                    }
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-1",
+                    "task_kind": "generate-input",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-main-1",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": main_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-solution-1",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": solution_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_LEASED,
+                },
+            ],
+            edges=[
+                ("vt-generate-1", "vt-main-1"),
+                ("vt-main-1", "vt-solution-1"),
+            ],
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("wa.cpp", html)
+        self.assertIn("accepted.cpp", html)
+        self.assertIn("Solution Run / wa.cpp / 001.in", html)
+
+    def test_run_details_task_graph_uses_task_rows_without_summary_fallback(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-task-fallback-{uuid.uuid4().hex[:8]}"
+        main_run_id = f"r-main-{uuid.uuid4().hex[:8]}"
+        solution_run_id = f"r-solution-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-task-fallback"),
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-03-22T00:00:00Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": main_run_id,
+                    "status": "ok",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "verification_source": "verification.solve-main",
+                        "tests": [{"test": "001.in", "verdict": "AC", "feedback_files": []}],
+                    },
+                },
+                {
+                    "id": solution_run_id,
+                    "status": "running",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "verification_source": "verification.start",
+                        "tests": [],
+                        "tests_total": 1,
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "running",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 1,
+                "solutions": [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "run_id": main_run_id,
+                        "verification_source": "verification.solve-main",
+                        "expected_behavior": "accepted",
+                    },
+                    {
+                        "source_path": "solutions/wa.cpp",
+                        "run_id": solution_run_id,
+                        "verification_source": "verification.start",
+                        "expected_behavior": "wrong_answer",
+                    },
+                ],
+                "task_counts": {
+                    "total": 3,
+                    "pending": 3,
+                    "running": 0,
+                    "done": 0,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "by_kind": {},
+                },
+                "running_tasks": [
+                    {
+                        "task_id": "vt-stale-1",
+                        "label": "Stale task should not render",
+                    }
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-1",
+                    "task_kind": "generate-input",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-main-1",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": main_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-solution-1",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": solution_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_LEASED,
+                },
+            ],
+            edges=[
+                ("vt-generate-1", "vt-main-1"),
+                ("vt-main-1", "vt-solution-1"),
+            ],
+        )
+        fake_case_rows = [
+            {
+                "run_id": solution_run_id,
+                "test_name": "001.in",
+                "status": "reported",
+                "runresult": "wrong-answer",
+                "cpu_sec": 9.99,
+                "runtime_sec": 9.99,
+                "wall_sec": 9.99,
+                "memory_kb": 8192,
+            }
+        ]
+        with patch.object(config.judgehost_task_service, "domjudge_case_cells_for_runs", return_value=fake_case_rows):
+            page = run_details_page(
+                _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+                "alice/sample",
+                "alice",
+            )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("queued 0", html)
+        self.assertIn("running 1", html)
+        self.assertIn("done 2", html)
+        self.assertIn("Solution Run / wa.cpp / 001.in", html)
+        self.assertNotIn("Stale task should not render", html)
+        self.assertNotIn("9.99", html)
+
+    def test_run_details_task_graph_ignores_stale_summary_test_cells(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-task-stale-summary-{uuid.uuid4().hex[:8]}"
+        solution_run_id = f"r-stale-summary-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-task-stale-summary"),
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-03-23T00:00:00Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": solution_run_id,
+                    "status": "running",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "task_kind": "solution-run",
+                        "tests_total": 2,
+                        "tests": [
+                            {"test": "002.in", "verdict": "WA", "time_ms": 9999, "memory_kb": 8192, "feedback_files": []},
+                        ],
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "running",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 1,
+                "solutions": [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "run_id": solution_run_id,
+                        "task_kind": "solution-run",
+                        "expected_behavior": "accepted",
+                    },
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-001",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-generate-002",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-solution-001",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": solution_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "AC",
+                    "runtime_sec": 0.001,
+                    "cpu_sec": 0.001,
+                    "wall_sec": 0.001,
+                    "memory_kb": 1024,
+                },
+                {
+                    "id": "vt-solution-002",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": solution_run_id,
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 4,
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                },
+            ],
+            edges=[],
+        )
+        detail_ctx = workspace_impl.build_run_detail_context(
+            workspace_service.workspace_context("alice/sample", "alice", include_recent=False),
+            "pass-fail",
+            requested_verification_id=verification_id,
+        )
+        columns = {
+            str(col.get("title") or ""): col
+            for col in list(detail_ctx.get("detail_columns") or [])
+        }
+        accepted_col = dict(columns["accepted.cpp"])
+        tests_map = dict(accepted_col.get("tests_map") or {})
+        self.assertEqual(str(accepted_col.get("status") or ""), "queued")
+        self.assertEqual(str(tests_map["001.in"]["short"] or ""), "AC")
+        self.assertNotIn("002.in", tests_map)
+        self.assertNotIn("003.in", tests_map)
+
+    def test_run_details_task_graph_shows_generate_status_from_task_rows(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-task-generate-{uuid.uuid4().hex[:8]}"
+        solution_run_id = f"r-solution-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-task-generate"),
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-03-22T00:00:00Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": solution_run_id,
+                    "status": "running",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "verification_source": "verification.start",
+                        "tests": [{"test": "001.in", "verdict": "--", "feedback_files": []}],
+                        "tests_total": 1,
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "running",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 1,
+                "solutions": [
+                    {
+                        "source_path": "solutions/wa.cpp",
+                        "run_id": solution_run_id,
+                        "verification_source": "verification.start",
+                        "expected_behavior": "wrong_answer",
+                    },
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-1",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_LEASED,
+                },
+                {
+                    "id": "vt-solution-1",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": solution_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+            ],
+            edges=[("vt-generate-1", "vt-solution-1")],
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("running 1", html)
+        self.assertIn("Generate Input / gen.cpp / 001.in", html)
+        self.assertIn("generating", html)
+
+    def test_run_details_task_graph_shows_running_only_for_running_solution_test(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-task-solution-status-{uuid.uuid4().hex[:8]}"
+        solution_run_id = f"r-solution-status-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-task-solution-status"),
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-03-23T00:00:00Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": solution_run_id,
+                    "status": "running",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "task_kind": "solution-run",
+                        "tests_total": 2,
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "running",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 1,
+                "solutions": [
+                    {
+                        "source_path": "solutions/wa.cpp",
+                        "run_id": solution_run_id,
+                        "task_kind": "solution-run",
+                        "expected_behavior": "wrong_answer",
+                    },
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-001",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-generate-002",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-solution-001",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": solution_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_LEASED,
+                },
+                {
+                    "id": "vt-solution-002",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": solution_run_id,
+                    "test_name": "002.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 4,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+            ],
+            edges=[],
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("001.in", html)
+        self.assertIn("002.in", html)
+        self.assertIn("running", html)
+        self.assertIn("pending", html)
+
+    def test_run_details_task_graph_keeps_cancelled_solution_columns_visible_after_failed_cancel(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "cancelled.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-task-cancelled-column-{uuid.uuid4().hex[:8]}"
+        accepted_run_id = f"r-accepted-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-task-cancelled-column"),
+            kind=Kind.ALL,
+            status="failed",
+            created_at="2026-03-23T00:00:00Z",
+            finished_at="2026-03-23T00:00:10Z",
+            runs=[
+                {
+                    "id": accepted_run_id,
+                    "status": "ok",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "task_kind": "solution-run",
+                        "tests": [{"test": "001.in", "verdict": "AC", "feedback_files": []}],
+                        "tests_total": 2,
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "failed",
+                "error": "verification cancelled",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 2,
+                "solutions": [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "run_id": accepted_run_id,
+                        "task_kind": "solution-run",
+                        "expected_behavior": "accepted",
+                    },
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-001",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-generate-002",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-accepted-001",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": accepted_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-accepted-002",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": accepted_run_id,
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 4,
+                    "status": VerificationTaskStore.TASK_CANCELLED,
+                },
+                {
+                    "id": "vt-cancelled-001",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/cancelled.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 5,
+                    "status": VerificationTaskStore.TASK_CANCELLED,
+                },
+                {
+                    "id": "vt-cancelled-002",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/cancelled.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 6,
+                    "status": VerificationTaskStore.TASK_CANCELLED,
+                },
+            ],
+            edges=[],
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("cancelled.cpp", html)
+        self.assertIn("cancelled", html)
+        detail_ctx = workspace_impl.build_run_detail_context(
+            workspace_service.workspace_context("alice/sample", "alice", include_recent=False),
+            "pass-fail",
+            requested_verification_id=verification_id,
+        )
+        columns = {
+            str(col.get("title") or ""): col
+            for col in list(detail_ctx.get("detail_columns") or [])
+        }
+        cancelled_col = dict(columns["cancelled.cpp"])
+        self.assertEqual(str(cancelled_col.get("got_short") or ""), "--")
+        self.assertEqual(str(cancelled_col.get("result_kind") or ""), "neutral")
+        self.assertEqual(str(cancelled_col.get("result_tone_class") or ""), "tone-neutral")
+
+    def test_run_details_show_cancelled_main_correct_cells_for_failed_verification(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "cancelled.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-main-cancel-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-main-cancel"),
+            kind=Kind.ALL,
+            status="failed",
+            created_at="2026-03-24T00:00:00Z",
+            finished_at="2026-03-24T00:00:05Z",
+            runs=[],
+            summary_extra={
+                "mode": "pass-fail",
+                "task_graph": True,
+                "source_paths": ["solutions/accepted.cpp", "solutions/cancelled.cpp"],
+                "status": "failed",
+                "error": "verification cancelled by user",
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-generate-001",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-generate-002",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-main-001",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_CANCELLED,
+                },
+                {
+                    "id": "vt-main-002",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 4,
+                    "status": VerificationTaskStore.TASK_CANCELLED,
+                },
+                {
+                    "id": "vt-solution-001",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/cancelled.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 5,
+                    "status": VerificationTaskStore.TASK_CANCELLED,
+                },
+                {
+                    "id": "vt-solution-002",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/cancelled.cpp",
+                    "logical_run_id": "",
+                    "test_name": "002.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 6,
+                    "status": VerificationTaskStore.TASK_CANCELLED,
+                },
+            ],
+            edges=[],
+        )
+        detail_ctx = workspace_impl.build_run_detail_context(
+            workspace_service.workspace_context("alice/sample", "alice", include_recent=False),
+            "pass-fail",
+            requested_verification_id=verification_id,
+        )
+        columns = {
+            str(col.get("title") or ""): col
+            for col in list(detail_ctx.get("detail_columns") or [])
+        }
+        main_col = dict(columns["accepted.cpp"])
+        self.assertEqual(str(main_col.get("got_short") or ""), "--")
+        self.assertEqual(str(main_col.get("result_kind") or ""), "neutral")
+        rows = list(detail_ctx.get("detail_rows") or [])
+        self.assertEqual(str(rows[0]["cells"][0]["metrics"] or ""), "cancelled")
+        self.assertEqual(str(rows[1]["cells"][0]["metrics"] or ""), "cancelled")
+
+    def test_statement_sidebar_shows_running_for_task_graph_verification(self) -> None:
+        problem = f"alice/sidebar-running-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        commit_resp = git_commit(problem=problem, user="alice", message=f"sidebar-running-{uuid.uuid4().hex[:6]}")
+        self.assertEqual(commit_resp.status_code, 303)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-sidebar-running-{uuid.uuid4().hex[:8]}"
+        solution_run_id = f"r-sidebar-running-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-sidebar-running"),
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-03-22T00:00:00Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": solution_run_id,
+                    "status": "running",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "verification_source": "verification.start",
+                        "tests": [],
+                        "tests_total": 1,
+                    },
+                }
+            ],
+            summary_extra={
+                "status": "running",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solutions": [
+                    {
+                        "source_path": "solutions/wa.cpp",
+                        "run_id": solution_run_id,
+                        "verification_source": "verification.start",
+                        "expected_behavior": "wrong_answer",
+                        "matched": False,
+                        "completed": False,
+                        "passed_all_tests": False,
+                        "reason": "",
+                    }
+                ],
+                "task_counts": {
+                    "total": 3,
+                    "pending": 1,
+                    "running": 1,
+                    "done": 1,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "by_kind": {},
+                },
+                "running_tasks": [
+                    {
+                        "task_id": "vt-solution-1",
+                        "label": "Solution run: wa.cpp / 001.in",
+                    }
+                ],
+            },
+        )
+        page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertRegex(
+            html,
+            r'<strong class="submenu-status-heading">Verification</strong>\s*<span[^>]*>\s*running\s*</span>',
+        )
+
+    def test_verification_start_task_graph_uses_single_verification_record(self) -> None:
+        problem = f"alice/verify-single-record-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-single-{uuid.uuid4().hex[:8]}"
+        task_payloads: dict[str, dict[str, object]] = {}
+        artifact_blobs: dict[str, bytes] = {}
+
+        def _enqueue_task(**kwargs):
+            task_id = f"jt-single-{len(task_payloads) + 1}"
+            task_payloads[task_id] = dict(kwargs)
+            return task_id
+
+        def _wait_for_task_result(task_id: str, timeout_sec=None):
+            payload = task_payloads[task_id]
+            task_kind = str(payload.get("task_kind") or "")
+            prepared = dict(payload.get("prepared_payload") or {})
+            verification_payload = dict(prepared.get("verification_payload") or {})
+            tests = list(verification_payload.get("tests") or [])
+            test_name = str((tests[0] if tests else {}).get("name") or "")
+            run_id = str(payload.get("run_id") or "")
+            summary_test: dict[str, object] = {
+                "test": test_name,
+                "verdict": "OK",
+                "passes": [{"pass": 1, "verdict": "OK", "time_ms": 1, "time_user_ms": 1, "time_wall_ms": 1, "memory_kb": 1}],
+                "time_ms": 1,
+                "time_user_ms": 1,
+                "time_wall_ms": 1,
+                "memory_kb": 1,
+            }
+            if task_kind == "generate-input":
+                if not bool(prepared.get("manual_validate_only")):
+                    output_ref = f"cache://generated/{test_name}"
+                    artifact_blobs[output_ref] = b"7\n"
+                    summary_test["output_ref"] = output_ref
+                    pass_rows = list(summary_test["passes"])
+                    pass_rows[0]["output_ref"] = output_ref
+            elif task_kind == "main-correct":
+                output_ref = f"cache://answers/{test_name}"
+                artifact_blobs[output_ref] = b"7\n"
+                summary_test["output_ref"] = output_ref
+                pass_rows = list(summary_test["passes"])
+                pass_rows[0]["output_ref"] = output_ref
+            else:
+                summary_test["verdict"] = "WA"
+                pass_rows = list(summary_test["passes"])
+                pass_rows[0]["verdict"] = "WA"
+                summary_test["message"] = "expected 7 got 0"
+                pass_rows[0]["feedback"] = "expected 7 got 0"
+            return {
+                "status": "ok",
+                "run_id": run_id,
+                "summary": {
+                    "tests": [summary_test],
+                    "compile_diagnostics": [],
+                    "error": "",
+                },
+            }
+
+        targets = [
+            {"path": "solutions/accepted.cpp", "expected_behavior": "accepted", "run_id": f"r-main-{uuid.uuid4().hex[:8]}"},
+            {"path": "solutions/wa.cpp", "expected_behavior": "wrong_answer", "run_id": f"r-wa-{uuid.uuid4().hex[:8]}"},
+        ]
+        with (
+            patch.object(config.verification_service, "run_verification", side_effect=AssertionError("implicit verification should not run")),
+            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1, "fetch_batch_size": 1}),
+            patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_enqueue_task),
+            patch.object(config.judgehost_task_service, "wait_for_task_result", side_effect=_wait_for_task_result),
+            patch.object(config.judgehost_task_service, "resolve_artifact_blob", side_effect=lambda ref, work_root=None: artifact_blobs.get(str(ref))),
+        ):
+            workspace_context_job._run_verification_start_worker(
+                problem,
+                "alice",
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                workspace_head=str(ctx["workspace"]["head_commit"] or ""),
+                workspace_dirty=bool(ctx["workspace"]["dirty"]),
+                targets=targets,
+                verification_id=verification_id,
+            )
+
+        count_row = db_fetch_one("SELECT COUNT(*) AS c FROM verifications WHERE workspace_id=?", [workspace_id])
+        self.assertIsNotNone(count_row)
+        self.assertEqual(int(count_row["c"] or 0), 1)
+        verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
+        self.assertIsNotNone(verification_row)
+        summary = read_verification_summary(verification_id)
+        self.assertEqual(str(verification_row["status"] or ""), "ok")
+        self.assertEqual(str(summary.get("artifact_verification_id") or ""), verification_id)
+        self.assertEqual(str(summary.get("status") or ""), "ok")
+        self.assertEqual(
+            [str(item.get("source_path") or "") for item in summary.get("solutions") or []],
+            ["solutions/wa.cpp"],
+        )
+        artifact_root = Path(str(config.verification_service.artifact_path_for_verification(verification_id) or ""))
+        self.assertEqual((artifact_root / "tests" / "001.in").read_text(encoding="utf-8"), "7\n")
+        self.assertEqual((artifact_root / "tests" / "002.in").read_text(encoding="utf-8"), "7\n")
+        self.assertEqual((artifact_root / "ans" / "001.ans").read_text(encoding="utf-8"), "7\n")
+        self.assertEqual((artifact_root / "ans" / "002.ans").read_text(encoding="utf-8"), "7\n")
+
+    def test_verification_start_shows_running_on_first_statement_render(self) -> None:
+        problem = f"alice/verify-running-sidebar-{uuid.uuid4().hex[:8]}"
+        self._prepare_verification_workspace(problem)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        workspace_key = workspace_context_job._verification_workspace_key(problem_id, workspace_id)
+
+        class _FakeWorker:
+            def is_alive(self) -> bool:
+                return True
+
+        fake_worker = _FakeWorker()
+        try:
+            with patch.object(
+                config.worker_queue_service,
+                "submit",
+                return_value=(fake_worker, True, "queued"),
+            ):
+                start_resp = verification_start(problem=problem, user="alice", page="statement")
+            self.assertEqual(start_resp.status_code, 303)
+            page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
+            self.assertEqual(page.status_code, 200)
+            html = page.body.decode("utf-8", errors="replace")
+            self.assertRegex(
+                html,
+                r'<strong class="submenu-status-heading">Verification</strong>\s*<span[^>]*>\s*running\s*</span>',
+            )
+            row = config.verification_service.list_workspace_verification_rows(
+                problem_id,
+                workspace_id,
+                limit=1,
+            )
+            self.assertIsNotNone(row)
+            assert row
+            summary = config.verification_service.verification_metadata(str(row[0]["id"] or ""))
+            self.assertEqual(str(row[0]["status"] or ""), "running")
+            self.assertTrue(bool(summary.get("task_graph")))
+        finally:
+            with config.verification_lock:
+                config.verification_inflight.discard(workspace_key)
+                config.verification_workers.discard(fake_worker)
+
+    def test_run_details_renders_persisted_diagnostics_without_transient_run_files(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-truncated-diag-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-verif-truncated-diag-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-truncated-diag"),
+            kind=Kind.ALL,
+            status="failed",
+            created_at="2026-03-20T00:00:00Z",
+            finished_at="2026-03-20T00:00:02Z",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "failed",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "artifact_path": "",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "verification_source": "verification.start",
+                        "tests": [
+                            {"test": "001.in", "verdict": "CE", "feedback_files": [], "message": "compile failed"},
+                        ],
+                        "compile_diagnostics": [
+                            {
+                                "level": "error",
+                                "file": "wa.cpp",
+                                "line": 4,
+                                "column": 9,
+                                "message": "expected ';' before return",
+                                "can_link": False,
+                            }
+                        ],
+                        "compile_diagnostics_total": 1,
+                        "compile_diagnostics_truncated": False,
+                        "compile_diagnostics_limit": 64,
+                        "error": "wa.cpp:4:9: expected ';' before return",
+                    },
+                }
+            ],
+            summary_extra={
+                "status": "failed",
+                "verification_id": verification_id,
+                "task_counts": {
+                    "total": 3,
+                    "pending": 0,
+                    "running": 0,
+                    "done": 1,
+                    "failed": 2,
+                    "cancelled": 0,
+                    "by_kind": {},
+                },
+                "running_tasks": [],
+            },
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("Task Status", html)
+        self.assertIn("<h2>Diagnostics</h2>", html)
+        self.assertIn("wa.cpp:4:9", html)
+        self.assertIn("expected &#39;;&#39; before return", html)
+        self.assertNotIn("verification-lifecycle-tabs", html)
 
     def test_run_details_ignores_runner_build_step_log_entries_when_rendering_verification_lifecycle(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -3154,7 +3049,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-03-14T00:00:00Z",
             finished_at="",
@@ -3226,8 +3121,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
+            signature="deadbeef",
             status="ok",
             summary={},
             artifact_path=str(build_root),
@@ -3246,7 +3140,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-02-23T00:00:02Z",
             finished_at="",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -3302,8 +3196,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
+            signature="deadbeef",
             status="ok",
             summary={},
             artifact_path=str(build_root),
@@ -3316,7 +3209,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-03-17T00:00:02Z",
             finished_at="",
@@ -3380,74 +3273,6 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("test 2", html)
         self.assertNotIn("test 6", html)
 
-    def test_run_details_keeps_generating_placeholders_when_artifact_tests_are_partial(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"ver-partial-artifact-tests-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-partial-artifact-tests")
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        (build_root / "tests").mkdir(parents=True, exist_ok=True)
-        (build_root / "tests" / "001.in").write_text("1\n", encoding="utf-8")
-        run_id = f"r-partial-artifact-tests-{uuid.uuid4().hex[:8]}"
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="running",
-            summary={},
-            artifact_path=str(build_root),
-            created_at="2026-03-17T00:00:00Z",
-            finished_at=None,
-        )
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-17T00:00:02Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": run_id,
-                    "status": "running",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "solutions/accepted.cpp",
-                        "verification_source": "verification.solve-main",
-                        "tests_total": 9,
-                        "tests": [],
-                        "error": "",
-                    },
-                }
-            ],
-            summary_extra={
-                "mode": "pass-fail",
-                "status": "running",
-                "verification_source": "verification.start",
-                "artifact_verification_id": build_id,
-            },
-        )
-        page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("001.in", html)
-        self.assertGreater(html.count('<span class="vmeta">generating</span>'), 0)
-        self.assertNotIn("test 1", html)
-
     def test_run_details_shows_generated_count_while_build_running(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
@@ -3467,8 +3292,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
+            signature="deadbeef",
             status="running",
             summary={},
             artifact_path=str(build_root),
@@ -3480,7 +3304,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-03-03T00:00:01Z",
             finished_at="",
@@ -3512,335 +3336,6 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("Generated tests", html)
         self.assertNotIn("2 tests", html)
         self.assertIn("Waiting for input-stage testcase results.", html)
-
-    def test_run_details_marks_step2_done_once_outputs_ready_even_if_build_running(self) -> None:
-        import re
-
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        actor_user_id = int(ctx["user"]["id"] )
-        verification_id = f"inv-verif-step2-done-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-verif-step2-done-{uuid.uuid4().hex[:8]}"
-        build_id = f"ver-artifact-step2-done-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        tests_root = build_root / "tests"
-        ans_root = build_root / "ans"
-        tests_root.mkdir(parents=True, exist_ok=True)
-        ans_root.mkdir(parents=True, exist_ok=True)
-        for idx in range(1, 4):
-            name = f"{idx:03}.in"
-            (tests_root / name).write_text(f"{idx}\n", encoding="utf-8")
-            (ans_root / f"{idx:03}.ans").write_text(f"{idx}\n", encoding="utf-8")
-        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
-        run_root.mkdir(parents=True, exist_ok=True)
-        summary = {
-            "mode": "pass-fail",
-            "source": "solutions/accepted.cpp",
-            "tests": [
-                {
-                    "test": "001.in",
-                    "passes": [{"pass": 1, "verdict": "OK", "time_ms": 1, "memory_kb": 1}],
-                    "verdict": "OK",
-                    "time_ms": 1,
-                    "memory_kb": 1,
-                    "feedback_files": [],
-                }
-            ],
-            "tests_total": 3,
-            "usage": {"tests": 3},
-            "verification": {
-                "id": verification_id,
-                "source": "verification.start",
-                "run_ids": [run_id],
-                "matched": False,
-                "completed": False,
-                "passed_all_tests": False,
-            },
-        }
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="running",
-            summary={},
-            artifact_path=str(build_root),
-            created_at="2026-03-06T00:00:00Z",
-            finished_at=None,
-        )
-        self._insert_verification_run_row(
-            run_id=run_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            mode="pass-fail",
-            status="running",
-            summary=summary,
-            artifact_path=str(run_root),
-            created_at="2026-03-06T00:00:01Z",
-            finished_at="",
-            verification_id=verification_id,
-            kind=Kind.VERIFICATION,
-            verification_summary_extra={
-                "build_status": "running",
-            },
-        )
-        db_execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [
-                actor_user_id,
-                problem_id,
-                "verification.start",
-                json.dumps(
-                    {
-                        "status": "running",
-                        "steps": ["gen", "val", "run", "check"],
-                        "verification_id": verification_id,
-                        "run_id": run_id,
-                        "run_ids": [run_id],
-                        "run_count": 1,
-                        "build_id": build_id,
-                        "build_status": "running",
-                    }
-                ),
-                "2026-03-06T00:00:02Z",
-            ],
-        )
-        page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("1/3 tests finished", html)
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-3"[\s\S]*?verification-lifecycle-tab-status">In progress<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-2"[\s\S]*?verification-lifecycle-tab-status">Pending<', re.IGNORECASE),
-        )
-
-    def test_run_details_buildsolve_verification_stays_on_step2_while_running(self) -> None:
-        import re
-
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-buildsolve-{uuid.uuid4().hex[:12]}"
-        run_id = f"r-buildsolve-{uuid.uuid4().hex[:12]}"
-        build_id = self.random_id("b-buildsolve-step2")
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        tests_root = build_root / "tests"
-        ans_root = build_root / "ans"
-        tests_root.mkdir(parents=True, exist_ok=True)
-        ans_root.mkdir(parents=True, exist_ok=True)
-        for idx in range(1, 28):
-            (tests_root / f"{idx:03}.in").write_text(f"{idx}\n", encoding="utf-8")
-            (ans_root / f"{idx:03}.ans").write_text(f"{idx}\n", encoding="utf-8")
-        run_root = Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / run_id
-        run_root.mkdir(parents=True, exist_ok=True)
-        tests_payload = [
-            {
-                "test": f"{idx:03}.in",
-                "passes": [{"pass": 1, "verdict": "OK", "time_ms": 1, "memory_kb": 1}],
-                "verdict": "OK",
-                "time_ms": 1,
-                "memory_kb": 1,
-                "feedback_files": [],
-            }
-            for idx in range(1, 19)
-        ]
-        summary = {
-            "mode": "pass-fail",
-            "source": "solutions/accepted.cpp",
-            "verification_source": "verification.solve-main",
-            "tests": tests_payload,
-            "tests_total": 27,
-            "usage": {"tests": 27},
-            "verification": {
-                "id": verification_id,
-                "source": "verification.solve-main",
-                "run_ids": [run_id],
-                "expected_behavior": "accepted",
-                "matched": False,
-                "completed": False,
-                "passed_all_tests": False,
-            },
-        }
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="running",
-            summary={},
-            artifact_path=str(build_root),
-            created_at="2026-03-06T00:00:00Z",
-            finished_at=None,
-        )
-        self._insert_verification_run_row(
-            run_id=run_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            mode="pass-fail",
-            status="running",
-            summary=summary,
-            artifact_path=str(run_root),
-            created_at="2026-03-06T00:00:01Z",
-            finished_at="",
-            verification_id=verification_id,
-            kind=Kind.VERIFICATION,
-        )
-        page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Generate Outputs", html)
-        self.assertIn("18/27", html)
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-2"[\s\S]*?verification-lifecycle-tab-status">In progress<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-3"[\s\S]*?verification-lifecycle-tab-status">Skipped<', re.IGNORECASE),
-        )
-
-    def test_run_details_shows_persisted_buildsolve_results_during_generate_outputs(self) -> None:
-        import re
-
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-buildsolve-table-{uuid.uuid4().hex[:12]}"
-        build_id = self.random_id("b-buildsolve-table")
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        tests_root = build_root / "tests"
-        ans_root = build_root / "ans"
-        tests_root.mkdir(parents=True, exist_ok=True)
-        ans_root.mkdir(parents=True, exist_ok=True)
-        for idx in range(1, 4):
-            (tests_root / f"{idx:03}.in").write_text(f"{idx}\n", encoding="utf-8")
-            (ans_root / f"{idx:03}.ans").write_text(f"{idx}\n", encoding="utf-8")
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="running",
-            summary={},
-            artifact_path=str(build_root),
-            created_at="2026-03-13T00:00:00Z",
-            finished_at=None,
-        )
-        solve_stage_summary = {
-            "mode": "pass-fail",
-            "source": "solutions/accepted.cpp",
-            "verification_source": "verification.solve-main",
-            "status": "running",
-            "tests": [
-                {"test": "001.in", "verdict": "OK", "time_ms": 1, "memory_kb": 1, "passes": [{"pass": 1, "verdict": "OK", "time_ms": 1, "memory_kb": 1}]},
-                {"test": "002.in", "verdict": "OK", "time_ms": 1, "memory_kb": 1, "passes": [{"pass": 1, "verdict": "OK", "time_ms": 1, "memory_kb": 1}]},
-            ],
-            "tests_total": 3,
-            "usage": {"tests": 3},
-        }
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-13T00:00:01Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": "r-accepted-buildsolve",
-                    "status": "running",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "artifact_path": str(build_root),
-                    "summary": solve_stage_summary,
-                },
-                {
-                    "id": "r-wa-pending",
-                    "status": "queued",
-                    "source_label": "solutions/wa.cpp",
-                    "expected_behavior": "wrong_answer",
-                    "artifact_path": "",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "solutions/wa.cpp",
-                        "verification_source": "verification.start",
-                        "status": "queued",
-                        "tests": [],
-                        "tests_total": 3,
-                    },
-                }
-            ],
-            summary_extra={
-                "status": "running",
-                "build_status": "running",
-                "artifact_verification_id": build_id,
-                "verification_source": "verification.start",
-                "stage_results": {"solve_main": solve_stage_summary},
-            },
-        )
-        page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification status:", html)
-        self.assertRegex(html, re.compile(r"Verification status:\s*<span[^>]*>RUNNING</span>", re.IGNORECASE))
-        self.assertIn("Generate Outputs", html)
-        self.assertIn("2/3", html)
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-2"[\s\S]*?verification-lifecycle-tab-status">In progress<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-3"[\s\S]*?verification-lifecycle-tab-status">Pending<', re.IGNORECASE),
-        )
-        self.assertIn("Solutions finished</th>", html)
-        self.assertIn(">0/1<", html)
-        self.assertIn("accepted.cpp", html)
-        self.assertIn("wa.cpp", html)
-        self.assertIn("pending", html.lower())
-        self.assertIn("running", html.lower())
-        detail = run_details_test_fragment(
-            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(detail.status_code, 200)
-        detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("accepted.cpp", detail_html)
-        self.assertIn("AC", detail_html)
 
     def test_run_details_does_not_show_waiting_validation_note_when_val_completed(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -3881,7 +3376,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-03-04T00:00:00Z",
             finished_at="",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -3913,280 +3408,6 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("Completed", html)
         self.assertNotIn("Waiting for validation results.", html)
 
-    def test_run_details_cancel_during_step2_keeps_failure_on_generate_outputs(self) -> None:
-        import re
-
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-step2-cancel-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-verif-step2-cancel")
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        build_root.mkdir(parents=True, exist_ok=True)
-        manual_run_id = f"r-verif-step2-cancel-manual-{uuid.uuid4().hex[:8]}"
-        gen_run_id = f"r-verif-step2-cancel-gen-{uuid.uuid4().hex[:8]}"
-        main_run_id = f"r-verif-step2-cancel-main-{uuid.uuid4().hex[:8]}"
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=Kind.VERIFICATION,
-            status="failed",
-            created_at="2026-03-05T00:00:01Z",
-            finished_at="2026-03-05T00:00:01Z",
-            runs=[
-                {
-                    "id": manual_run_id,
-                    "status": "failed",
-                    "source_label": "manual_validate.cpp",
-                    "expected_behavior": "accepted",
-                    "artifact_path": str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / manual_run_id),
-                    "summary": {
-                        "source": "manual_validate.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests_total": 1,
-                        "tests": [
-                            {"test": "001.in", "verdict": "OK", "message": "validator ok"},
-                        ],
-                        "cancelled": True,
-                        "error": "verification cancelled by user",
-                    },
-                },
-                {
-                    "id": gen_run_id,
-                    "status": "failed",
-                    "source_label": "gen.cpp",
-                    "expected_behavior": "accepted",
-                    "artifact_path": str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / gen_run_id),
-                    "summary": {
-                        "source": "gen.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests_total": 2,
-                        "tests": [
-                            {"test": "002.in", "verdict": "OK", "message": "validator ok"},
-                            {"test": "003.in", "verdict": "OK", "message": "validator ok"},
-                        ],
-                        "cancelled": True,
-                        "error": "verification cancelled by user",
-                    },
-                },
-                {
-                    "id": main_run_id,
-                    "status": "running",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "artifact_path": str(Path(os.environ["POLYGON_REPLICA_RUN_ROOT"]) / main_run_id),
-                    "summary": {
-                        "source": "solutions/accepted.cpp",
-                        "verification_source": "verification.solve-main",
-                        "tests_total": 3,
-                        "tests": [
-                            {"test": "001.in", "verdict": "OK", "time_ms": 1, "memory_kb": 256},
-                        ],
-                        "cancelled": True,
-                        "error": "verification cancelled by user",
-                    },
-                },
-            ],
-            summary_extra={
-                "status": "failed",
-                "steps": ["gen", "val", "run", "check"],
-                "verification_id": verification_id,
-                "run_id": main_run_id,
-                "run_ids": [manual_run_id, gen_run_id, main_run_id],
-                "run_count": 3,
-                "build_id": build_id,
-                "error": "verification cancelled by user",
-                "cancelled": True,
-                "verification_source": "verification.start",
-            },
-        )
-
-        page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Generate Inputs", html)
-        self.assertIn("Generate Outputs", html)
-        self.assertIn("verification cancelled by user", html)
-        # Step 1 should stay completed and Step 2 should be marked failed.
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-1"[\s\S]*?verification-lifecycle-tab-status">Completed<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-2"[\s\S]*?verification-lifecycle-tab-status">Failed<', re.IGNORECASE),
-        )
-        self.assertIn("Prepared tests", html)
-        self.assertIn("3/3", html)
-        self.assertIn("Generated outputs", html)
-        self.assertIn("1/3", html)
-
-    def test_run_details_prefers_stage_results_when_generate_input_failed_before_outputs_start(self) -> None:
-        import re
-
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = f"inv-verif-gen-failed-{uuid.uuid4().hex[:8]}"
-        build_id = f"ver-artifact-gen-failed-{uuid.uuid4().hex[:8]}"
-        manual_run_id = f"r-verif-gen-manual-{uuid.uuid4().hex[:8]}"
-        gen_run_id = f"r-verif-gen-generator-{uuid.uuid4().hex[:8]}"
-        main_run_id = f"r-verif-gen-main-{uuid.uuid4().hex[:8]}"
-        other_run_id = f"r-verif-gen-other-{uuid.uuid4().hex[:8]}"
-
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=Kind.VERIFICATION,
-            status="failed",
-            created_at="2026-03-15T00:00:00Z",
-            finished_at="2026-03-15T00:00:10Z",
-            runs=[
-                {
-                    "id": manual_run_id,
-                    "status": "running",
-                    "source_label": "manual_validate.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "manual_validate.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests_total": 1,
-                        "tests": [{"test": "001.in", "verdict": "OK"}],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": gen_run_id,
-                    "status": "running",
-                    "source_label": "generators/gen.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "generators/gen.cpp",
-                        "verification_source": "verification.generate-input",
-                        "tests_total": 1,
-                        "tests": [{"test": "001.in", "verdict": ""}],
-                        "error": (
-                            "Compiling failed with exitcode 1, compiler output:\n"
-                            "/opt/domjudge/judgehost/judgings/judgedaemon-2-2/endpoint-default/executable/compare/123/"
-                            "b0e49bdbe272b5206d97ca5e888a7b00/build/validator.cpp: In function 'void EachTestCase()':\n"
-                            "/opt/domjudge/judgehost/judgings/judgedaemon-2-2/endpoint-default/executable/compare/123/"
-                            "b0e49bdbe272b5206d97ca5e888a7b00/build/validator.cpp:4:35: error: expected ';' before 'inf'"
-                        ),
-                        "compile_diagnostics": [
-                            {
-                                "level": "error",
-                                "file": "validator.cpp",
-                                "line": 4,
-                                "column": 35,
-                                "message": "expected ';' before 'inf'",
-                                "can_link": False,
-                            }
-                        ],
-                    },
-                },
-                {
-                    "id": main_run_id,
-                    "status": "queued",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "solutions/accepted.cpp",
-                        "verification_source": "verification.solve-main",
-                        "tests_total": 1,
-                        "tests": [],
-                        "error": "",
-                    },
-                },
-                {
-                    "id": other_run_id,
-                    "status": "queued",
-                    "source_label": "solutions/wa.cpp",
-                    "expected_behavior": "wrong_answer",
-                    "summary": {
-                        "source": "solutions/wa.cpp",
-                        "verification_source": "verification.start",
-                        "tests_total": 1,
-                        "tests": [],
-                        "error": "",
-                    },
-                },
-            ],
-            summary_extra={
-                "status": "failed",
-                "steps": ["gen", "val", "run", "check"],
-                "verification_id": verification_id,
-                "artifact_verification_id": build_id,
-                "error": "validator failed on tests/spec.json entry 1 (id=001): validator.cpp: missing ~ans~",
-                "source_paths": ["solutions/accepted.cpp", "solutions/wa.cpp"],
-                "stage_results": {
-                    "generate_input": {
-                        "verification_source": "verification.generate-input",
-                        "status": "failed",
-                        "tests": [
-                            {
-                                "test": "001.in",
-                                "verdict": "FL",
-                                "message": "validator.cpp: missing ~ans~",
-                            }
-                        ],
-                    },
-                    "solve_main": {
-                        "verification_source": "verification.solve-main",
-                        "status": "pending",
-                        "source": "solutions/accepted.cpp",
-                        "tests": [],
-                    },
-                },
-            },
-        )
-
-        page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("validator failed on tests/spec.json entry 1", html)
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-1"[\s\S]*?verification-lifecycle-tab-status">Failed<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-2"[\s\S]*?verification-lifecycle-tab-status">Skipped<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-3"[\s\S]*?verification-lifecycle-tab-status">Skipped<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-4"[\s\S]*?verification-lifecycle-tab-status">Skipped<', re.IGNORECASE),
-        )
-        self.assertIn("not executed (input generation failed)", html)
-        self.assertIn("not executed (verification stopped before checks)", html)
-        self.assertIn("<h2>Diagnostics</h2>", html)
-        self.assertIn("validator.cpp:4:35", html)
-        self.assertIn("expected &#39;;&#39; before &#39;inf&#39;", html)
-        diagnostics_html = html.split("<h2>Diagnostics</h2>", 1)[1]
-        self.assertNotIn("/opt/domjudge/judgehost/judgings/", diagnostics_html)
-
     def test_run_details_uses_top_level_error_when_verification_fails_before_any_stage_starts(self) -> None:
         import re
 
@@ -4207,7 +3428,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-16T00:00:00Z",
             finished_at="2026-03-16T00:00:05Z",
@@ -4301,7 +3522,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-16T00:00:00Z",
             finished_at="2026-03-16T00:00:05Z",
@@ -4411,8 +3632,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
+            signature="deadbeef",
             status="ok",
             summary={},
             artifact_path=str(build_root),
@@ -4448,7 +3668,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-02-23T00:00:02Z",
             finished_at="2026-02-23T00:00:03Z",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -4505,8 +3725,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
+            signature="deadbeef",
             status="ok",
             summary={},
             artifact_path=str(build_root),
@@ -4542,7 +3761,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-02-23T00:00:02Z",
             finished_at="2026-02-23T00:00:03Z",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -4610,7 +3829,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=int(ctx["workspace"]["id"]),
             build_id="",
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-02-23T00:00:03Z",
             finished_at="",
@@ -4649,7 +3868,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id="",
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at=created_at,
             finished_at="",
@@ -4679,7 +3898,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id="",
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-03-16T11:19:45+00:00",
             finished_at="",
@@ -4737,8 +3956,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
+            signature="deadbeef",
             status="failed",
             summary=json.dumps({"error": "compare script 173 crashed with exit code 1", "failed_step": "solve"}),
             artifact_path=str(build_root),
@@ -4778,7 +3996,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-02-23T00:00:02Z",
             finished_at="2026-02-23T00:00:03Z",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -4838,7 +4056,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-02-23T00:00:00Z",
             finished_at="2026-02-23T00:00:10Z",
@@ -4942,7 +4160,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-02-23T00:00:02Z",
             finished_at="2026-02-23T00:00:03Z",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         self._insert_verification_run_row(
             run_id=run_b,
@@ -4956,7 +4174,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-02-23T00:00:04Z",
             finished_at="2026-02-23T00:00:05Z",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -5071,7 +4289,7 @@ class TestUIRun(UIBaseSuite):
             run_export_impl.run_artifact_file("alice/sample", "alice", run_id, "compile.log")
         self.assertEqual(int(raised.exception.status_code), 403)
 
-    def test_run_artifact_file_missing_redirects_with_rerun_hint(self) -> None:
+    def test_run_artifact_file_missing_reports_unavailable(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         run_id = f"r-artifact-missing-{uuid.uuid4().hex[:8]}"
@@ -5080,20 +4298,16 @@ class TestUIRun(UIBaseSuite):
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             build_id=self.random_id("b-artifact-missing"),
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-03-07T00:00:00Z",
             finished_at="2026-03-07T00:00:01Z",
             runs=[{"id": run_id, "status": "ok", "summary": {}}],
         )
-        resp = run_export_impl.run_artifact_file("alice/sample", "alice", run_id, "feedback_dir/001/judgemessage.txt")
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(
-            str(resp.headers.get("location") or ""),
-            f"/problems/alice/sample/alice/run/details?verification_id=ver-{run_id}",
-        )
-        flashes = _flash_messages_from_response(resp)
-        self.assertTrue(any("rerun verification" in str(msg or "").lower() for msg in flashes))
+        with self.assertRaises(HTTPException) as raised:
+            run_export_impl.run_artifact_file("alice/sample", "alice", run_id, "feedback_dir/001/judgemessage.txt")
+        self.assertEqual(int(raised.exception.status_code), 404)
+        self.assertEqual(str(raised.exception.detail or ""), "artifact unavailable")
 
     def test_run_artifact_file_serves_cache_blob_token(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -5104,7 +4318,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             build_id=self.random_id("b-artifact-cache"),
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-03-11T00:00:00Z",
             finished_at="2026-03-11T00:00:01Z",
@@ -5471,7 +4685,7 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-03-02T00:00:00Z",
             finished_at="2026-03-02T00:00:01Z",
             verification_id=verification_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
         )
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
@@ -5621,7 +4835,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-03-03T00:00:00Z",
             finished_at="2026-03-03T00:00:01Z",
@@ -5678,7 +4892,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             build_id=self.random_id("b-detail-re-feedback"),
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-16T00:00:00Z",
             finished_at="2026-03-16T00:00:01Z",
@@ -5767,7 +4981,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="ok",
             created_at="2026-03-16T00:00:00Z",
             finished_at="2026-03-16T00:00:01Z",
@@ -5840,8 +5054,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="",
-            source_ref="main",
+            signature="",
             status="failed",
             summary=json.dumps(
                     {
@@ -5897,8 +5110,8 @@ class TestUIRun(UIBaseSuite):
         (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [
                 preview_id,
@@ -5907,12 +5120,12 @@ class TestUIRun(UIBaseSuite):
                 "",
                 "main",
                 "failed",
-                json.dumps({"statement_signature": statement_sig}),
                 str(preview_root),
                 "2026-02-23T00:01:00Z",
                 "2026-02-23T00:01:01Z",
             ],
         )
+        write_preview_summary(preview_id, {"statement_signature": statement_sig})
         preview_resp = preview_page(_request("/problems/alice/sample/alice/preview", f"preview_id={preview_id}"), "alice/sample", "alice")
         preview_html = preview_resp.body.decode("utf-8", errors="replace")
         self.assertIn("src=statement", preview_html)
@@ -5951,77 +5164,6 @@ class TestUIRun(UIBaseSuite):
         run_resp = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
         run_html = run_resp.body.decode("utf-8", errors="replace")
         self.assertIn(f"/problems/alice/sample/alice/run/details?verification_id=ver-{run_id}", run_html)
-    def test_verification_run_ids_reads_verification_summary(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = self.random_id("b-ver-runids")
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
-            status="ok",
-            summary=json.dumps({}),
-            artifact_path=str(Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice" / "sample" / build_id),
-            created_at="2026-03-12T00:00:00Z",
-            finished_at="2026-03-12T00:00:01Z",
-        )
-        verification_id = f"inv-ver-summary-{uuid.uuid4().hex[:8]}"
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-12T00:00:02Z",
-            finished_at="",
-            runs=[],
-            summary_extra={"status": "running", "runs_order": ["r-one", "r-two"]},
-        )
-        scope_run_ids = workspace_impl.verification_run_ids(problem_id, workspace_id, verification_id)
-        self.assertEqual(scope_run_ids, ["r-one", "r-two"])
-
-    def test_verification_run_ids_ignores_stale_runs_outside_runs_order(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = self.random_id("b-ver-runids-stale")
-        verification_id = f"inv-ver-runids-stale-{uuid.uuid4().hex[:8]}"
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=Kind.VERIFICATION,
-            status="running",
-            created_at="2026-03-19T00:00:02Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": "r-current",
-                    "status": "running",
-                    "source_label": "solutions/current.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {"source": "solutions/current.cpp", "status": "running"},
-                },
-                {
-                    "id": "r-stale",
-                    "status": "failed",
-                    "source_label": "solutions/stale.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {"source": "solutions/stale.cpp", "status": "failed"},
-                },
-            ],
-            summary_extra={"status": "running", "runs_order": ["r-current"]},
-        )
-        scope_run_ids = workspace_impl.verification_run_ids(problem_id, workspace_id, verification_id)
-        self.assertEqual(scope_run_ids, ["r-current"])
-
     def test_run_details_prefers_current_solution_run_over_stale_duplicate_run(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -6035,7 +5177,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id="",
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-19T01:00:00Z",
             finished_at="2026-03-19T01:00:30Z",
@@ -6106,8 +5248,7 @@ class TestUIRun(UIBaseSuite):
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            source_commit="deadbeef",
-            source_ref="main",
+            signature="deadbeef",
             status="ok",
             summary=json.dumps({}),
             artifact_path=str(Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice" / "sample" / build_id),
@@ -6120,7 +5261,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="running",
             created_at="2026-03-12T00:00:02Z",
             finished_at="",
@@ -6158,7 +5299,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-13T00:00:00Z",
             finished_at="2026-03-13T00:00:01Z",
@@ -6181,7 +5322,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(verification_id, html)
-        self.assertIn("FAILED", html)
+        self.assertIn("failed", html)
 
     def test_run_details_prefers_verification_row_status_over_stale_summary_status(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_snapshot
@@ -6197,7 +5338,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-13T00:00:00Z",
             finished_at="2026-03-13T00:00:01Z",
@@ -6226,8 +5367,6 @@ class TestUIRun(UIBaseSuite):
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        workspace_head = str(ctx["workspace"].get("head_commit") or "").strip()
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
         build_id = self.random_id("b-ver-sidebar-status")
         verification_id = f"ver-sidebar-stale-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
@@ -6235,7 +5374,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             build_id=build_id,
-            kind=Kind.VERIFICATION,
+            kind=Kind.ALL,
             status="failed",
             created_at="2026-03-13T00:00:00Z",
             finished_at="2026-03-13T00:00:01Z",
@@ -6254,8 +5393,6 @@ class TestUIRun(UIBaseSuite):
             summary_extra={
                 "status": "running",
                 "error": "cancelled on service startup",
-                "workspace_head": workspace_head,
-                "workspace_dirty": workspace_dirty,
             },
         )
 
@@ -6264,4 +5401,6 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(">Verification</span>", html)
         self.assertIn(">failed</strong>", html)
+
+
 

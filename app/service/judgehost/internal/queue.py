@@ -1,15 +1,48 @@
 from __future__ import annotations
 
-import json
 import time
 from datetime import datetime, timezone
 
 from app.db import now_iso
 from app.service.judgehost.runtime import now_iso_after, parse_iso_utc
-from app.service.verification.store import load_verification_run, save_verification_run_summary
+from app.service.verification.task_scheduler import notify_verification_task_terminal
+from app.service.verification.test_rows import build_verification_test_pass_row, build_verification_test_row
 
 
 class JudgehostQueueMixin:
+    def _lease_matching_group_task(self, *, hostname: str, group_key: str) -> dict[str, object] | None:
+        safe_host = self._normalize_hostname(hostname)
+        safe_group_key = str(group_key or "")
+        if not safe_group_key:
+            return None
+        lease_until = now_iso_after(self._lease_sec)
+        now_text = now_iso()
+        with self._state_lock:
+            queued = [
+                task
+                for task in self._tasks_by_id.values()
+                if task["status"] == self.STATUS_QUEUED
+                and str((task.get("payload") or {}).get("domjudge_group_key") or "") == safe_group_key
+            ]
+            queued.sort(key=lambda item: item["created_at"])
+            if not queued:
+                return None
+            task = queued[0]
+            task["status"] = self.STATUS_LEASED
+            task["lease_owner"] = safe_host
+            task["lease_expires_at"] = lease_until
+            task["updated_at"] = now_text
+            task["attempt_count"] = task["attempt_count"] + 1
+            return {
+                "task_id": task["id"],
+                "run_id": task["run_id"],
+                "problem": task["problem_slug"],
+                "username": task["username"],
+                "artifact_verification_id": task["artifact_verification_id"],
+                "mode": task["mode"],
+                "lease_expires_at": lease_until,
+                "payload": dict(task.get("payload") or {}),
+            }
 
     def _claim_lease_requeue_slot(self, *, interval_sec: float = 0.75) -> bool:
         now_mono = time.monotonic()
@@ -78,9 +111,8 @@ class JudgehostQueueMixin:
                 return True
             return bool(row.get("enabled", True))
 
-    def fetch_work(self, hostname: str, limit: int | None = None) -> list[dict[str, object]]:
+    def fetch_work(self, hostname: str) -> list[dict[str, object]]:
         hostname = self._normalize_hostname(hostname)
-        cap = self._fetch_batch_size if limit is None else max(1, min(256, int(limit)))
         tasks: list[dict[str, object]] = []
         self._requeue_expired_leases()
         event_action = "fetch"
@@ -100,7 +132,7 @@ class JudgehostQueueMixin:
                 queued.sort(key=lambda item: item["created_at"])
                 lease_until = now_iso_after(self._lease_sec)
                 now_text = now_iso()
-                for task in queued[:cap]:
+                for task in queued[:1]:
                     task_id = task["id"]
                     if task["status"] != self.STATUS_QUEUED:
                         continue
@@ -167,23 +199,6 @@ class JudgehostQueueMixin:
     def _load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
         if not run_id:
             return {}
-        if verification_id:
-            run_row = load_verification_run(
-                self.db,
-                verification_id=verification_id,
-                run_id=run_id,
-            )
-            summary = run_row.get("summary") or {}
-            if summary:
-                return dict(summary)
-        run_row = load_verification_run(
-            self.db,
-            verification_id=f"ver-{run_id}",
-            run_id=run_id,
-        )
-        summary = run_row.get("summary") or {}
-        if summary:
-            return dict(summary)
         task_run_id = ""
         task_verification_id = ""
         cached_summary: dict[str, object] | None = None
@@ -247,7 +262,6 @@ class JudgehostQueueMixin:
             prev_error_text = row["error_text"]
             prev_result = dict(row.get("result") or {})
             prev_summary = dict(row.get("summary") or {})
-            persist_verification_run = bool(row.get("persist_verification_run", True))
             row["status"] = self.STATUS_REPORTING
             row["updated_at"] = now_iso()
 
@@ -272,15 +286,6 @@ class JudgehostQueueMixin:
                 error_text = self._summary_error_text(summary_obj) or "judgehost task failed"
 
             finished_at = now_iso()
-            if persist_verification_run:
-                self._ensure_verification_result(
-                    row=row,
-                    verification_id=verification_id,
-                    run_id=run_id,
-                    run_status=run_status,
-                    summary_obj=summary_obj,
-                    error_text=error_text,
-                )
         except Exception:
             with self._state_lock:
                 row = self._tasks_by_id.get(task_id)
@@ -312,79 +317,16 @@ class JudgehostQueueMixin:
             task_id=task_id,
             run_id=run_id,
         )
-        run_artifact_path: str | None = None
-        if persist_verification_run:
-            try:
-                run_root = self._fs_manager.prepare_verification_run_root(
-                    verification_id,
-                    run_id,
-                ).resolve()
-                (run_root / "summary.json").write_text(
-                    json.dumps(summary_obj, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                run_artifact_path = str(run_root)
-            except Exception:
-                run_artifact_path = None
+        if verification_id:
+            notify_verification_task_terminal(verification_id, task_id)
         return {
             "task_id": task_id,
             "verification_id": verification_id,
             "run_id": run_id,
-            "artifact_path": run_artifact_path,
+            "artifact_path": "",
             "status": run_status,
             "summary": summary_obj,
         }
-
-    def _ensure_verification_result(
-        self,
-        *,
-        row: dict[str, object],
-        verification_id: str,
-        run_id: str,
-        run_status: str,
-        summary_obj: dict[str, object],
-        error_text: str,
-    ) -> None:
-        if not verification_id or not run_id:
-            raise RuntimeError("verification result requires verification_id and run_id")
-        problem_slug = row["problem_slug"]
-        username = row["username"]
-        ctx = self._workspace_service.workspace_context(problem_slug, username, include_recent=False)
-        run_root = self._fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()
-        run_root.mkdir(parents=True, exist_ok=True)
-        payload = row.get("payload") or {}
-        verification_source = payload.get("verification_source") or ""
-        if not verification_source:
-            raise RuntimeError("judgehost payload missing verification_source")
-        mode = row["mode"]
-        source_label = summary_obj.get("source") or ""
-        if not source_label:
-            raise RuntimeError("judgehost summary missing source")
-        expected_behavior = payload.get("expected_behavior") or ""
-        if not expected_behavior:
-            raise RuntimeError("judgehost payload missing expected_behavior")
-        task_kind = payload.get("task_kind") or ""
-        save_verification_run_summary(
-            self.db,
-            self._fs_manager,
-            verification_id=verification_id,
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            source_commit="",
-            source_ref="",
-            kind="verification",
-            mode=mode,
-            verification_source=verification_source,
-            source_paths=[source_label],
-            run_id=run_id,
-            run_status=run_status,
-            source_label=source_label,
-            expected_behavior=expected_behavior,
-            run_summary=summary_obj,
-            artifact_path=str(run_root),
-            task_kind=task_kind,
-            error_text=error_text,
-        )
 
     def wait_for_task_result(self, task_id: str, timeout_sec: float | None = None) -> dict[str, object]:
         if not task_id:
@@ -392,32 +334,172 @@ class JudgehostQueueMixin:
         timeout = self._wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
         deadline = time.monotonic() + timeout
         while True:
-            row = self._task_by_id(task_id)
-            if row is None:
-                raise RuntimeError("judgehost task disappeared")
-            status = row["status"]
-            if status in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
-                verification_id = row["verification_id"]
-                run_id = row["run_id"]
-                artifact_path = str(
-                    self._fs_manager.prepare_verification_run_root(
-                        verification_id,
-                        run_id,
-                    ).resolve()
-                )
-                return {
-                    "task_id": task_id,
-                    "verification_id": verification_id,
-                    "run_id": run_id,
-                    "artifact_path": artifact_path,
-                    "status": row["run_status"],
-                    "task_status": status,
-                    "error": row["error_text"],
-                    "summary": dict(row.get("summary") or {}),
-                }
+            result = self.poll_task_result(task_id)
+            if result is not None:
+                return result
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
             time.sleep(self._wait_poll_sec)
+
+    def poll_task_result(self, task_id: str) -> dict[str, object] | None:
+        if not task_id:
+            raise RuntimeError("judgehost task id is required")
+        row = self._task_by_id(task_id)
+        if row is None:
+            raise RuntimeError("judgehost task disappeared")
+        status = str(row["status"] or "")
+        if status not in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
+            return None
+        verification_id = str(row["verification_id"] or "")
+        run_id = str(row["run_id"] or "")
+        return {
+            "task_id": task_id,
+            "verification_id": verification_id,
+            "run_id": run_id,
+            "artifact_path": "",
+            "status": row["run_status"],
+            "task_status": status,
+            "error": row["error_text"],
+            "summary": dict(row.get("summary") or {}),
+        }
+
+    def task_case_state(self, task_id: str, test_name: str) -> str:
+        if not task_id:
+            raise RuntimeError("judgehost task id is required")
+        if not test_name:
+            raise RuntimeError("judgehost test name is required")
+        row = self._task_by_id(task_id)
+        if row is None:
+            raise RuntimeError("judgehost task disappeared")
+        case_row = self._judgehost_state_store.case_for_task(task_id, test_name)
+        if case_row is not None:
+            case_status = str(case_row["status"] or "")
+            if case_status:
+                return case_status
+        task_status = str(row["status"] or "")
+        if task_status == self.STATUS_FAILED:
+            return self.STATUS_FAILED
+        if task_status == self.STATUS_COMPLETED:
+            return self.STATUS_COMPLETED
+        if task_status == self.STATUS_LEASED:
+            return self.STATUS_QUEUED
+        return task_status
+
+    def wait_for_task_case_result(self, task_id: str, test_name: str, timeout_sec: float | None = None) -> dict[str, object]:
+        if not task_id:
+            raise RuntimeError("judgehost task id is required")
+        if not test_name:
+            raise RuntimeError("judgehost test name is required")
+        timeout = self._wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
+        deadline = time.monotonic() + timeout
+        while True:
+            result = self.poll_task_case_result(task_id, test_name)
+            if result is not None:
+                return result
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
+            time.sleep(self._wait_poll_sec)
+
+    def poll_task_case_result(self, task_id: str, test_name: str) -> dict[str, object] | None:
+        if not task_id:
+            raise RuntimeError("judgehost task id is required")
+        if not test_name:
+            raise RuntimeError("judgehost test name is required")
+        row = self._task_by_id(task_id)
+        if row is None:
+            raise RuntimeError("judgehost task disappeared")
+        case_row = self._judgehost_state_store.case_for_task(task_id, test_name)
+        if case_row is not None and str(case_row["status"] or "") == "reported":
+            verification_id = str(row["verification_id"] or "")
+            run_id = str(row["run_id"] or "")
+            summary = self._load_run_summary(run_id, verification_id)
+            tests = summary.get("tests")
+            selected_test_row = None
+            if isinstance(tests, list):
+                for item in tests:
+                    if isinstance(item, dict) and str(item.get("test") or "") == test_name:
+                        selected_test_row = dict(item)
+                        break
+            if selected_test_row is None:
+                cpu_ms = max(0, int(round(float(case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
+                wall_ms = max(0, int(round(float(case_row["wall_sec"] or case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
+                memory_kb = max(0, int(case_row["memory_kb"] or 0))
+                selected_test_row = build_verification_test_row(
+                    test_name=test_name,
+                    verdict=self._domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
+                    time_ms=cpu_ms,
+                    time_user_ms=cpu_ms,
+                    time_wall_ms=wall_ms,
+                    memory_kb=memory_kb,
+                    message="",
+                    output_ref=str(case_row["output_run_rel"] or ""),
+                    feedback_files=[],
+                    passes=[
+                        build_verification_test_pass_row(
+                            verdict=self._domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
+                            time_ms=cpu_ms,
+                            time_user_ms=cpu_ms,
+                            time_wall_ms=wall_ms,
+                            memory_kb=memory_kb,
+                            feedback="",
+                            output_ref=str(case_row["output_run_rel"] or ""),
+                            runresult=str(case_row["runresult"] or ""),
+                        )
+                    ],
+                    runresult=str(case_row["runresult"] or ""),
+                )
+            case_summary = {
+                "source": summary.get("source") or "",
+                "compile_diagnostics": list(summary.get("compile_diagnostics") or []),
+                "error": str(summary.get("error") or ""),
+                "tests": [selected_test_row],
+            }
+            task_kind = str((row.get("payload") or {}).get("task_kind") or "")
+            runresult = str(case_row["runresult"] or "")
+            verdict = self._domjudge_verdict_from_runresult(runresult)
+            if task_kind == self._TASK_KIND_MAIN_CORRECT:
+                run_status = "ok" if verdict == "OK" else "failed"
+            elif runresult in {"compiler-error", "checker-fail", "compare-error", "internal-error"}:
+                run_status = "failed"
+            else:
+                run_status = "ok"
+            return {
+                "task_id": task_id,
+                "verification_id": str(row["verification_id"] or ""),
+                "run_id": str(row["run_id"] or ""),
+                "artifact_path": "",
+                "status": run_status,
+                "task_status": row["status"],
+                "error": str(case_summary.get("error") or ""),
+                "summary": case_summary,
+            }
+        task_status = str(row["status"] or "")
+        if task_status in {self.STATUS_FAILED, self.STATUS_COMPLETED}:
+            verification_id = str(row["verification_id"] or "")
+            run_id = str(row["run_id"] or "")
+            task_summary = self._load_run_summary(run_id, verification_id)
+            source_label = str(task_summary.get("source") or "")
+            compile_diagnostics = list(task_summary.get("compile_diagnostics") or [])
+            detail = str(task_summary.get("error") or row.get("error_text") or "")
+            if not detail:
+                detail = f"judgehost case result missing for {test_name}"
+            return {
+                "task_id": task_id,
+                "verification_id": verification_id,
+                "run_id": run_id,
+                "artifact_path": "",
+                "status": "failed",
+                "task_status": task_status,
+                "missing_case_result": True,
+                "error": detail,
+                "summary": {
+                    "source": source_label,
+                    "compile_diagnostics": compile_diagnostics,
+                    "error": detail,
+                    "tests": [],
+                },
+            }
+        return None
 
     def wait_for_task(self, task_id: str, timeout_sec: float | None = None) -> str:
         result = self.wait_for_task_result(task_id, timeout_sec=timeout_sec)
@@ -577,12 +659,6 @@ class JudgehostQueueMixin:
         return {
             "enabled": bool(self._enabled),
             "auth_configured": bool(self._api_token),
-            "auth_username": self.api_username(),
-            "fetch_batch_size": self._fetch_batch_size,
-            "lease_sec": self._lease_sec,
-            "wait_timeout_sec": self._wait_timeout_sec,
-            "wait_poll_sec": self._wait_poll_sec,
-            "online_window_sec": self._online_window_sec,
             "hosts_total": len(host_rows),
             "hosts_online": int(online_count),
             "hosts": host_rows,
@@ -611,7 +687,10 @@ class JudgehostQueueMixin:
                 row = self._tasks_by_id.get(task_id)
                 if row is None:
                     continue
-                if row["status"] not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+                if row["status"] != self.STATUS_QUEUED:
+                    continue
+                case_rows = self._judgehost_state_store.cases_for_run(run_id)
+                if any(str(case_row.get("status") or "") == "leased" for case_row in case_rows):
                     continue
                 row["status"] = self.STATUS_FAILED
                 row["result"] = {"cancelled": True, "reason": reason, "error": reason}

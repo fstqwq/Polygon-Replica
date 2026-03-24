@@ -130,7 +130,6 @@ CREATE TABLE IF NOT EXISTS contest_jobs (
     actor_user_id INTEGER NOT NULL,
     job_type TEXT NOT NULL,
     status TEXT NOT NULL,
-    summary_json TEXT,
     created_at TEXT NOT NULL,
     finished_at TEXT,
     FOREIGN KEY(contest_id) REFERENCES contests(id),
@@ -183,28 +182,47 @@ CREATE TABLE IF NOT EXISTS previews (
     source_commit TEXT,
     source_ref TEXT,
     status TEXT NOT NULL,
-    summary_json TEXT,
     artifact_path TEXT NOT NULL,
     created_at TEXT NOT NULL,
     finished_at TEXT,
     FOREIGN KEY(problem_id) REFERENCES problems(id),
-    FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+    FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
+    FOREIGN KEY(verification_id) REFERENCES verifications(id)
 );
 
 CREATE TABLE IF NOT EXISTS verifications (
     id TEXT PRIMARY KEY,
     problem_id INTEGER NOT NULL,
     workspace_id INTEGER,
-    source_commit TEXT,
-    source_ref TEXT,
+    signature TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL,
     status TEXT NOT NULL,
-    summary_json TEXT,
-    artifact_path TEXT NOT NULL,
+    fail_reason TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     finished_at TEXT,
     FOREIGN KEY(problem_id) REFERENCES problems(id),
     FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_tasks (
+    id TEXT PRIMARY KEY,
+    verification_id TEXT NOT NULL,
+    predecessor_task_id TEXT,
+    task_kind TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    test_name TEXT NOT NULL,
+    expected_behavior TEXT NOT NULL,
+    final_status TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    runtime_sec REAL,
+    cpu_sec REAL,
+    wall_sec REAL,
+    memory_kb INTEGER,
+    result_bundle_ref TEXT NOT NULL DEFAULT '',
+    finished_at TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(verification_id) REFERENCES verifications(id),
+    FOREIGN KEY(predecessor_task_id) REFERENCES verification_tasks(id)
 );
 
 CREATE TABLE IF NOT EXISTS exports (
@@ -262,8 +280,13 @@ CREATE INDEX IF NOT EXISTS idx_previews_problem_source_status_created ON preview
 CREATE INDEX IF NOT EXISTS idx_previews_verification_created ON previews(verification_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_verifications_problem_created ON verifications(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_created ON verifications(problem_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_verifications_problem_signature_created ON verifications(problem_id, signature, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_signature_created ON verifications(problem_id, workspace_id, signature, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status);
 CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_task ON verification_tasks(verification_id, task_kind, source_path, test_name, id);
+CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON verification_tasks(verification_id, predecessor_task_id);
+CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_final ON verification_tasks(verification_id, final_status, task_kind);
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
@@ -303,7 +326,7 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     "contests": ("id", "slug", "title", "owner_user_id", "created_at"),
     "contest_members": ("id", "contest_id", "user_id", "role", "created_at"),
     "contest_problems": ("id", "contest_id", "idx", "problem_id", "added_by_user_id", "created_at"),
-    "contest_jobs": ("id", "contest_id", "actor_user_id", "job_type", "status", "summary_json", "created_at", "finished_at"),
+    "contest_jobs": ("id", "contest_id", "actor_user_id", "job_type", "status", "created_at", "finished_at"),
     "contest_artifacts": (
         "id",
         "contest_id",
@@ -325,7 +348,6 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "source_commit",
         "source_ref",
         "status",
-        "summary_json",
         "artifact_path",
         "created_at",
         "finished_at",
@@ -334,14 +356,30 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "id",
         "problem_id",
         "workspace_id",
-        "source_commit",
-        "source_ref",
+        "signature",
         "kind",
         "status",
-        "summary_json",
-        "artifact_path",
+        "fail_reason",
         "created_at",
         "finished_at",
+    ),
+    "verification_tasks": (
+        "id",
+        "verification_id",
+        "predecessor_task_id",
+        "task_kind",
+        "source_path",
+        "test_name",
+        "expected_behavior",
+        "final_status",
+        "verdict",
+        "runtime_sec",
+        "cpu_sec",
+        "wall_sec",
+        "memory_kb",
+        "result_bundle_ref",
+        "finished_at",
+        "created_at",
     ),
     "exports": (
         "id",
@@ -359,10 +397,7 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     "system_config": ("key", "value_json", "updated_at", "updated_by_user_id"),
 }
 
-LEGACY_SCHEMA_TABLES = ("runs", "builds")
-
-
-class _IncompatibleSchemaError(RuntimeError):
+class IncompatibleSchemaError(RuntimeError):
     pass
 
 
@@ -378,7 +413,7 @@ class DB:
     SQLITE_BUSY_TIMEOUT_MS = 5000
     SQL_TRACE_ENABLED = False
     SQL_TRACE_TEXT_LIMIT = 256
-    SQL_TRACE_JSON_FIELDS = ("summary_json", "details_json", "value_json")
+    SQL_TRACE_JSON_FIELDS = ("details_json", "value_json")
 
     @staticmethod
     def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -448,17 +483,6 @@ class DB:
         return cls._truncate_trace_text(text)
 
     @staticmethod
-    def _should_retry_after_init(exc: sqlite3.OperationalError) -> bool:
-        msg = str(exc or "").strip().lower()
-        if not msg:
-            return False
-        return (
-            "no such table" in msg
-            or "unable to open database file" in msg
-            or "disk i/o error" in msg
-        )
-
-    @staticmethod
     def _is_locked_error(exc: sqlite3.OperationalError) -> bool:
         msg = str(exc or "").strip().lower()
         if not msg:
@@ -479,31 +503,12 @@ class DB:
 
     def _init_current_schema(self) -> None:
         if self._db_file_exists():
-            try:
-                with sqlite3.connect(self.path) as conn:
-                    self._prepare_connection(conn)
-                    self._validate_existing_schema(conn)
-                    conn.executescript(SCHEMA_INDEXES)
-                    conn.commit()
-                    return
-            except _IncompatibleSchemaError as exc:
-                backup_path = self._backup_bad_db()
-                logger.warning(
-                    "db.init replaced incompatible db path=%s backup=%s error=%s",
-                    self.path,
-                    backup_path,
-                    exc,
-                )
-            except sqlite3.DatabaseError as exc:
-                if self._is_locked_error(exc):
-                    raise
-                backup_path = self._backup_bad_db()
-                logger.warning(
-                    "db.init replaced incompatible db path=%s backup=%s error=%s",
-                    self.path,
-                    backup_path,
-                    exc,
-                )
+            with sqlite3.connect(self.path) as conn:
+                self._prepare_connection(conn)
+                self._validate_existing_schema(conn)
+                conn.executescript(SCHEMA_INDEXES)
+                conn.commit()
+                return
         with sqlite3.connect(self.path) as conn:
             self._prepare_connection(conn)
             conn.executescript(SCHEMA)
@@ -523,9 +528,6 @@ class DB:
     def _validate_existing_schema(self, conn: sqlite3.Connection) -> None:
         table_rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         tables = {str(row[0]) for row in table_rows}
-        legacy_tables = sorted(table for table in LEGACY_SCHEMA_TABLES if table in tables)
-        if legacy_tables:
-            raise _IncompatibleSchemaError(f"legacy tables present: {', '.join(legacy_tables)}")
         missing_tables: list[str] = []
         missing_columns: list[str] = []
         for table_name, expected_columns in CURRENT_SCHEMA_COLUMNS.items():
@@ -542,30 +544,11 @@ class DB:
                 parts.append(f"missing tables: {', '.join(missing_tables)}")
             if missing_columns:
                 parts.append(f"missing columns: {', '.join(missing_columns)}")
-            raise _IncompatibleSchemaError("; ".join(parts))
-
-    def _backup_bad_db(self) -> Path:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = self._unique_backup_path(self.path, timestamp)
-        self.path.replace(backup_path)
-        for suffix in ("-wal", "-shm"):
-            sidecar_path = Path(f"{self.path}{suffix}")
-            if sidecar_path.exists():
-                sidecar_backup = self._unique_backup_path(sidecar_path, timestamp)
-                sidecar_path.replace(sidecar_backup)
-        return backup_path
-
-    @staticmethod
-    def _unique_backup_path(path: Path, timestamp: str) -> Path:
-        candidate = path.with_name(f"{path.name}.{timestamp}.backup")
-        seq = 1
-        while candidate.exists():
-            candidate = path.with_name(f"{path.name}.{timestamp}.{seq}.backup")
-            seq += 1
-        return candidate
+            raise IncompatibleSchemaError("; ".join(parts))
 
     @contextmanager
     def conn(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
         self._prepare_connection(conn)
         try:
@@ -610,9 +593,6 @@ class DB:
                     conn.commit()
                     return result
             except sqlite3.OperationalError as exc:
-                if attempt == 0 and self._should_retry_after_init(exc):
-                    self.init()
-                    continue
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
@@ -628,9 +608,6 @@ class DB:
                     conn.commit()
                     return
             except sqlite3.OperationalError as exc:
-                if attempt == 0 and self._should_retry_after_init(exc):
-                    self.init()
-                    continue
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
@@ -643,9 +620,6 @@ class DB:
                 with self.conn() as conn:
                     return conn.execute(sql, values).fetchone()
             except sqlite3.OperationalError as exc:
-                if attempt == 0 and self._should_retry_after_init(exc):
-                    self.init()
-                    continue
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
@@ -659,9 +633,6 @@ class DB:
                 with self.conn() as conn:
                     return conn.execute(sql, values).fetchall()
             except sqlite3.OperationalError as exc:
-                if attempt == 0 and self._should_retry_after_init(exc):
-                    self.init()
-                    continue
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue

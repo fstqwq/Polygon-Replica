@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import mimetypes
 import os
@@ -16,7 +16,7 @@ from app.impl.problem.shared import _looks_like_binary_file
 from app.impl.workspace.context_operation import audit, build_line_focus_context, build_repo_browser_entries, default_files_selected_path, files_back_target, files_browse_query_tail, files_source_query_tail, kind_for_path, normalize_files_source, normalize_source_id, parse_line_param, template_for_kind
 from app.impl.workspace.solution import ensure_solution_metadata_for_source
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 from app.main_util import normalize_workspace_rel_path, safe_workspace_path
 
 _C = config.constants
@@ -304,6 +304,7 @@ def files_download(problem: str, user: str, path: str):
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail='file not found')
     return FileResponse(file_path, filename=file_path.name)
+
 
 
 

@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
 
 
 class GitService:
@@ -124,7 +124,7 @@ class GitService:
         return text[:max_chars], True
 
     def status(self, workspace: Path) -> dict:
-        proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"])
+        proc = run_git(["git", "-C", str(workspace), "status", "--short", "--branch"])
         filtered_lines: list[str] = []
         status_truncated = False
         need_diff = False
@@ -162,7 +162,7 @@ class GitService:
                 fd, tmp_name = tempfile.mkstemp(prefix="git-diff-", suffix=".patch")
                 os.close(fd)
                 tmp_path = Path(tmp_name)
-                diff_proc = run_cmd(
+                diff_proc = run_git(
                     [
                         "git",
                         "-C",
@@ -180,7 +180,7 @@ class GitService:
                     if diff_truncated:
                         diff_text = self._append_truncation_marker(diff_text, diff_limit)
                 else:
-                    raw_diff = run_cmd(["git", "-C", str(workspace), "diff", "--", "."]).stdout
+                    raw_diff = run_git(["git", "-C", str(workspace), "diff", "--", "."]).stdout
                     filtered_diff = self._filter_reserved_diff(raw_diff)
                     diff_text, diff_truncated = self._truncate_text(filtered_diff, diff_limit)
             finally:
@@ -233,7 +233,7 @@ class GitService:
             parsed = int(limit)
             if parsed > 0:
                 cap = parsed
-        proc = run_cmd(["git", "-C", str(workspace), "status", "--short", "--untracked-files=all"])
+        proc = run_git(["git", "-C", str(workspace), "status", "--short", "--untracked-files=all"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
 
@@ -293,7 +293,7 @@ class GitService:
     def history(self, workspace: Path, limit: int = 80) -> list[dict]:
         cap = max(1, min(self.HISTORY_MAX_ITEMS, int(limit)))
         fmt = "%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1e"
-        proc = run_cmd(
+        proc = run_git(
             [
                 "git",
                 "-C",
@@ -343,11 +343,11 @@ class GitService:
         if self._rebase_active(workspace):
             raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
         self._assert_on_main(workspace)
-        run_cmd(["git", "-C", str(workspace), "config", "user.name", name])
-        run_cmd(["git", "-C", str(workspace), "config", "user.email", email])
-        run_cmd(["git", "-C", str(workspace), "add", "."])
+        run_git(["git", "-C", str(workspace), "config", "user.name", name])
+        run_git(["git", "-C", str(workspace), "config", "user.email", email])
+        run_git(["git", "-C", str(workspace), "add", "."])
         # Never allow internal workspace lock files to enter repository history.
-        run_cmd(
+        run_git(
             [
                 "git",
                 "-C",
@@ -359,10 +359,10 @@ class GitService:
                 ":(glob)**/.polygonlike.lock",
             ]
         )
-        proc = run_cmd(["git", "-C", str(workspace), "commit", "-m", message])
+        proc = run_git(["git", "-C", str(workspace), "commit", "-m", message])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
-        head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
+        head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])
         if head.returncode != 0:
             raise RuntimeError(head.stderr or head.stdout or "unable to resolve committed head")
         resolved_head = head.stdout.strip()
@@ -375,19 +375,19 @@ class GitService:
             raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
         self._assert_on_main(workspace)
         expected = str(expected_head or "").strip()
-        current_head_proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
+        current_head_proc = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])
         if current_head_proc.returncode != 0:
             raise RuntimeError(current_head_proc.stderr or current_head_proc.stdout)
         current_head = current_head_proc.stdout.strip()
         if expected and current_head != expected:
             raise RuntimeError("head changed; cannot rollback commit safely")
-        parent_proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD^"])
+        parent_proc = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD^"])
         if parent_proc.returncode != 0:
             raise RuntimeError(parent_proc.stderr or parent_proc.stdout)
-        proc = run_cmd(["git", "-C", str(workspace), "reset", "--mixed", "HEAD^"])
+        proc = run_git(["git", "-C", str(workspace), "reset", "--mixed", "HEAD^"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
-        new_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
+        new_head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])
         if new_head.returncode != 0:
             raise RuntimeError(new_head.stderr or new_head.stdout)
         return new_head.stdout.strip()
@@ -396,7 +396,7 @@ class GitService:
         if str(branch or "main") != "main":
             raise RuntimeError("only main is supported")
         self._assert_on_main(workspace)
-        proc = run_cmd(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
+        proc = run_git(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
@@ -405,16 +405,16 @@ class GitService:
         if str(branch or "main") != "main":
             raise RuntimeError("only main is supported")
         self._assert_on_main(workspace)
-        proc = run_cmd(["git", "-C", str(workspace), "pull", "--rebase", "--autostash", "origin", "main"])
+        proc = run_git(["git", "-C", str(workspace), "pull", "--rebase", "--autostash", "origin", "main"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
 
     def _discard_local_changes(self, workspace: Path) -> None:
-        reset = run_cmd(["git", "-C", str(workspace), "reset", "--hard", "HEAD"])
+        reset = run_git(["git", "-C", str(workspace), "reset", "--hard", "HEAD"])
         if reset.returncode != 0:
             raise RuntimeError(reset.stderr or reset.stdout or "failed to discard local changes")
-        clean = run_cmd(["git", "-C", str(workspace), "clean", "-fd"])
+        clean = run_git(["git", "-C", str(workspace), "clean", "-fd"])
         if clean.returncode != 0:
             raise RuntimeError(clean.stderr or clean.stdout or "failed to clean untracked files")
 
@@ -428,18 +428,18 @@ class GitService:
         self._discard_local_changes(workspace)
         self.pull(workspace, "main")
 
-        resolved = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
+        resolved = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
         if resolved.returncode != 0:
             raise RuntimeError(resolved.stderr or resolved.stdout or "invalid revision")
         commit = resolved.stdout.strip()
         if not commit:
             raise RuntimeError("invalid revision")
 
-        restore = run_cmd(["git", "-C", str(workspace), "restore", "--source", commit, "--staged", "--worktree", ":/"])
+        restore = run_git(["git", "-C", str(workspace), "restore", "--source", commit, "--staged", "--worktree", ":/"])
         if restore.returncode != 0:
             raise RuntimeError(restore.stderr or restore.stdout or "failed to restore revision")
 
-        run_cmd(
+        run_git(
             [
                 "git",
                 "-C",
@@ -454,13 +454,13 @@ class GitService:
         return commit
 
     def _current_branch(self, workspace: Path) -> str:
-        proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "--abbrev-ref", "HEAD"])
+        proc = run_git(["git", "-C", str(workspace), "rev-parse", "--abbrev-ref", "HEAD"])
         branch = proc.stdout.strip()
         if proc.returncode == 0 and branch and branch != "HEAD":
             return branch
 
         # For unborn branches (v0), rev-parse fails; resolve symbolic HEAD instead.
-        symbolic = run_cmd(["git", "-C", str(workspace), "symbolic-ref", "--quiet", "--short", "HEAD"])
+        symbolic = run_git(["git", "-C", str(workspace), "symbolic-ref", "--quiet", "--short", "HEAD"])
         symbolic_branch = symbolic.stdout.strip()
         if symbolic.returncode == 0 and symbolic_branch:
             return symbolic_branch
@@ -478,7 +478,7 @@ class GitService:
         return (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists()
 
     def _conflicted_files(self, workspace: Path) -> list[str]:
-        proc = run_cmd(["git", "-C", str(workspace), "diff", "--name-only", "--diff-filter=U"])
+        proc = run_git(["git", "-C", str(workspace), "diff", "--name-only", "--diff-filter=U"])
         if proc.returncode != 0:
             return []
         return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
@@ -486,7 +486,7 @@ class GitService:
     def rebase_continue(self, workspace: Path) -> str:
         if not self._rebase_active(workspace):
             raise RuntimeError("no rebase in progress")
-        proc = run_cmd(["git", "-C", str(workspace), "rebase", "--continue"])
+        proc = run_git(["git", "-C", str(workspace), "rebase", "--continue"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
@@ -494,7 +494,7 @@ class GitService:
     def rebase_abort(self, workspace: Path) -> str:
         if not self._rebase_active(workspace):
             raise RuntimeError("no rebase in progress")
-        proc = run_cmd(["git", "-C", str(workspace), "rebase", "--abort"])
+        proc = run_git(["git", "-C", str(workspace), "rebase", "--abort"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
@@ -627,19 +627,19 @@ class GitService:
 
         pieces: list[str] = []
 
-        unstaged = run_cmd(["git", "-C", str(workspace), "diff", "--", normalized])
+        unstaged = run_git(["git", "-C", str(workspace), "diff", "--", normalized])
         if unstaged.returncode != 0:
             raise RuntimeError(unstaged.stderr or unstaged.stdout)
         if unstaged.stdout:
             pieces.append(unstaged.stdout)
 
-        staged = run_cmd(["git", "-C", str(workspace), "diff", "--cached", "--", normalized])
+        staged = run_git(["git", "-C", str(workspace), "diff", "--cached", "--", normalized])
         if staged.returncode != 0:
             raise RuntimeError(staged.stderr or staged.stdout)
         if staged.stdout:
             pieces.append(staged.stdout)
 
-        status = run_cmd(["git", "-C", str(workspace), "status", "--short", "--untracked-files=all", "--", normalized])
+        status = run_git(["git", "-C", str(workspace), "status", "--short", "--untracked-files=all", "--", normalized])
         if status.returncode != 0:
             raise RuntimeError(status.stderr or status.stdout)
 
@@ -659,13 +659,13 @@ class GitService:
         target = str(revision or "").strip()
         if not target:
             raise ValueError("revision is required")
-        resolved = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
+        resolved = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", f"{target}^{{commit}}"])
         if resolved.returncode != 0:
             raise RuntimeError(resolved.stderr or resolved.stdout or "invalid revision")
         commit = resolved.stdout.strip()
         if not commit:
             raise RuntimeError("invalid revision")
-        show = run_cmd(
+        show = run_git(
             [
                 "git",
                 "-C",

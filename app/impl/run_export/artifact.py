@@ -2,12 +2,10 @@
 
 from pathlib import Path
 from typing import cast
-from urllib.parse import quote_plus
 
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, Response
 
-from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.artifact import (
     assert_workspace_artifact_access,
@@ -16,10 +14,8 @@ from app.impl.workspace.artifact import (
     safe_artifact_path,
     safe_run_artifact_path,
     workspace_run_artifact_root,
-    workspace_verification_id_for_run,
 )
-from app.impl.workspace.context_job import page_ctx
-from app.impl.workspace.context_run_detail import normalize_run_id_token
+from app.impl.workspace.context_ui import page_ctx
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
 
@@ -110,10 +106,10 @@ def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
         workspace_run_artifact_root(ctx, run_id)
         service = getattr(config, "judgehost_task_service", None)
         if service is None:
-            raise HTTPException(status_code=404, detail="run artifact file not found")
+            raise HTTPException(status_code=404, detail="artifact unavailable")
         blob = service.resolve_artifact_blob(rel_norm)
         if blob is None:
-            raise HTTPException(status_code=404, detail="run artifact file not found")
+            raise HTTPException(status_code=404, detail="artifact unavailable")
         return _browser_blob_response(blob, Path(rel_norm).name)
     try:
         file_path = safe_run_artifact_path(ctx, run_id, rel_path)
@@ -133,17 +129,9 @@ def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
                 raise
             except Exception:
                 pass
-            run_id = normalize_run_id_token(run_id)
-            verification_id = workspace_verification_id_for_run(ctx, run_id)
-            if not verification_id:
-                raise
-            target = f"/problems/{problem}/{user}/run/details?verification_id={quote_plus(verification_id)}"
-            return redirect_response(
-                target,
-                status_code=303,
-                message="Run artifact is not persisted; rerun verification to regenerate downloadable files.",
-            )
+            raise HTTPException(status_code=404, detail="artifact unavailable")
         raise
     return browser_file_response(file_path)
+
 
 

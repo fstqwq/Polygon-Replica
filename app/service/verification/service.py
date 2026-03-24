@@ -4,49 +4,33 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
-from app.service.platform.hashing import sha256_file
 from app.service.problem.test_spec import (
-    load_tests_spec,
     parse_gen_command_tokens,
 )
-from app.service.runtime.toolchain import current_cpp_command_digest
 from app.service.repository.workspace import WorkspaceService
-from app.service.verification.types import Kind, Status
+from app.service.verification.types import Kind
 
-from app.service.verification.cache import (
-    verification_cache_key,
-    canonical_digest,
-)
 from app.service.verification.pipeline import effective_compile_jobs
 from app.service.verification.pipeline import wait_build_terminal_status
-from app.service.verification.store import (
-    VerificationRunRow,
-    VerificationSummary,
-    create_verification_record,
-    default_verification_run,
-    default_verification_summary,
-    load_verification_run,
-    save_verification_run_summary,
-    save_verification_summary,
-    verification_run_ids,
-    verification_source_paths,
-    verification_stage_results,
+from app.service.verification.read_model import (
+    logical_run_ids,
+    running_tasks,
+    solution_source_paths,
+    task_counts,
 )
-from app.service.verification.runner import run_verification_job
 from app.service.verification.runtime import coerce_int, effective_run_timeout_ms, effective_run_timeout_sec, load_problem_runtime_config
+from app.service.verification.signature import verification_signature
 from app.service.verification.source import resolve_standard_checker_source, select_checker_source, select_source
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
 
-if TYPE_CHECKING:
-    from app.service.platform.async_task_cache import AsyncTaskCacheService
-    from app.service.judgehost.api import Judgehost
+from app.service.judgehost.api import Judgehost
 
 
 CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
@@ -64,8 +48,6 @@ class VerificationService:
     DB_SUMMARY_DIAGNOSTICS_LIMIT = 512
     DB_SUMMARY_FEEDBACK_FILES_LIMIT = 16
     DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
-    VERIFICATION_CACHE_NAMESPACE = "verification.run"
-    VERIFICATION_CACHE_SCHEMA = "v3"
     VERIFICATION_JOIN_WAIT_TIMEOUT_SEC = 180
     VERIFICATION_JOIN_POLL_SEC = 0.25
 
@@ -76,13 +58,10 @@ class VerificationService:
         artifacts: ArtifactService,
         judgehost_task_service: Judgehost,
         constants: RuntimeValues | None = None,
-        async_task_cache_service: AsyncTaskCacheService | None = None,
     ):
         self.db = db
-        self._verification_store = VerificationStore(db)
         self.workspace_service = workspace_service
         self.artifacts = artifacts
-        self.execution_backend_name = "domjudge-judgehost"
         self.default_exec_memory_mb = 1024
         self.default_exec_process_limit = 64
         self.default_exec_output_kb = 65536
@@ -90,13 +69,13 @@ class VerificationService:
         self.wall_time_slack_multi_pass_sec = 15
         self.wall_time_slack_interactive_sec = 15
         self.judgehost_task_service = judgehost_task_service
-        self._async_task_cache_service = async_task_cache_service
         self._verification_inflight_lock = threading.RLock()
         self._verification_inflight: dict[str, str] = {}
         self.fs_manager = FsManager(self.workspace_service.settings.artifacts_root, self.workspace_service.settings.run_root)
+        self._verification_store = VerificationStore(db, self.fs_manager)
         self.apply_runtime_values(constants or build_runtime_values())
 
-    def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, str] | None:
+    def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
         row = self._verification_store.get_runtime_row(int(problem_id), verification_id)
         if row is None:
             return None
@@ -107,7 +86,7 @@ class VerificationService:
         problem_id: int,
         workspace_id: int | None,
         verification_id: str,
-    ) -> dict[str, str] | None:
+    ) -> dict[str, object] | None:
         row = self._verification_store.get_workspace_runtime_row(int(problem_id), int(workspace_id), verification_id)
         if row is None:
             return None
@@ -129,27 +108,19 @@ class VerificationService:
         token = run_id
         if not token:
             return ""
+        task_store = VerificationTaskStore(self.db)
         for row in self._verification_store.list_rows(
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
             limit=512,
-            kinds=(Kind.VERIFICATION,),
+            kinds=(Kind.ALL, Kind.SAMPLE, Kind.CUSTOM),
         ):
-            text = row["summary_json"]
-            if not text:
-                continue
-            try:
-                payload = json.loads(text)
-            except Exception:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            runs = payload.get("runs")
-            if isinstance(runs, dict) and token in runs:
-                return row["id"]
-            order = payload.get("runs_order")
-            if isinstance(order, list) and token in order:
-                return row["id"]
+            verification_id = str(row["id"])
+            for task_row in task_store.list_rows(verification_id):
+                if str(task_row["logical_run_id"] or "") == token:
+                    return verification_id
+                if str(task_row["run_id"] or "") == token:
+                    return verification_id
         return ""
 
     def workspace_verification_exists(self, problem_id: int, workspace_id: int, verification_id: str) -> bool:
@@ -169,15 +140,23 @@ class VerificationService:
             return None
         return row
 
-    def latest_problem_verification_id_for_source_commit(self, problem_id: int, source_commit: str) -> str:
-        return self._verification_store.latest_problem_verification_id_for_source_commit(int(problem_id), source_commit)
+    def latest_problem_verification_id_for_signature(self, problem_id: int, signature: str) -> str:
+        return self._verification_store.latest_problem_verification_id_for_signature(int(problem_id), signature)
 
-    def verification_summary(self, verification_id: str) -> dict[str, object]:
-        return self._verification_store.runtime_summary(verification_id)
-
-    def verification_stage_summary(self, verification_id: str, stage_key: str) -> VerificationSummary:
-        stage_results = self.verification_stage_results(verification_id)
-        return dict(stage_results.get(stage_key) or {})
+    def latest_workspace_verification_id_for_signature(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        signature: str,
+        *,
+        ok_only: bool = False,
+    ) -> str:
+        return self._verification_store.latest_workspace_verification_id_for_signature(
+            int(problem_id),
+            int(workspace_id),
+            signature,
+            ok_only=bool(ok_only),
+        )
 
     def verification_record(self, verification_id: str) -> dict[str, object] | None:
         row = self._verification_store.record_row(verification_id)
@@ -185,21 +164,32 @@ class VerificationService:
             return None
         return dict(row)
 
-    def verification_run(self, verification_id: str, run_id: str) -> VerificationRunRow:
-        return load_verification_run(
-            self.db,
-            verification_id=verification_id,
-            run_id=run_id,
-        )
+    def verification_metadata(self, verification_id: str) -> dict[str, object]:
+        return self._verification_store.metadata(verification_id)
+
+    def persist_verification_metadata(self, verification_id: str, metadata: dict[str, object]) -> None:
+        self._verification_store.save_metadata(verification_id, metadata)
+
+    def verification_runtime_snapshot(self, verification_id: str) -> dict[str, object]:
+        rows = VerificationTaskStore(self.db).list_rows_for_list(verification_id)
+        counts = task_counts(rows)
+        return {
+            "task_graph": bool(rows),
+            "task_counts": counts,
+            "running_tasks": running_tasks(rows),
+            "source_paths": solution_source_paths(rows),
+            "logical_run_ids": logical_run_ids(rows, include_main_correct=True),
+            "has_running": bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"])),
+            "test_names": [str(row["test_name"] or "") for row in rows if str(row["test_name"] or "")],
+        }
 
     def verification_run_ids(self, verification_id: str) -> list[str]:
-        return verification_run_ids(self.verification_summary(verification_id))
+        snapshot = self.verification_runtime_snapshot(verification_id)
+        return list(snapshot["logical_run_ids"])
 
     def verification_source_paths(self, verification_id: str) -> list[str]:
-        return verification_source_paths(self.verification_summary(verification_id))
-
-    def verification_stage_results(self, verification_id: str) -> dict[str, VerificationSummary]:
-        return verification_stage_results(self.verification_summary(verification_id))
+        snapshot = self.verification_runtime_snapshot(verification_id)
+        return list(snapshot["source_paths"])
 
     def list_workspace_verification_rows(
         self,
@@ -207,7 +197,7 @@ class VerificationService:
         workspace_id: int,
         *,
         limit: int = 40,
-        kinds: tuple[str, ...] = (Kind.VERIFICATION,),
+        kinds: tuple[str, ...] = (Kind.ALL, Kind.SAMPLE, Kind.CUSTOM),
     ) -> list[dict[str, object]]:
         rows = self._verification_store.list_rows(
             problem_id=int(problem_id),
@@ -223,127 +213,44 @@ class VerificationService:
         verification_id: str,
         problem_id: int,
         workspace_id: int | None,
-        source_commit: str = "",
-        source_ref: str = "",
+        signature: str = "",
         kind: str,
         status: str,
-        summary: dict[str, object] | None = None,
-        artifact_path: str | Path | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> str:
-        return create_verification_record(
-            self.db,
+        root = self._verification_store.create_or_update_record(
             self.fs_manager,
             verification_id=verification_id,
             problem_id=int(problem_id),
             workspace_id=None if workspace_id is None else int(workspace_id),
-            source_commit=source_commit,
-            source_ref=source_ref,
+            signature=signature,
             kind=kind,
             status=status,
-            summary=summary,
-            artifact_path=artifact_path,
         )
-
-    def persist_verification_summary(
-        self,
-        *,
-        verification_id: str,
-        status: str,
-        summary: VerificationSummary,
-        finished: bool = False,
-    ) -> None:
-        save_verification_summary(
-            self.db,
-            verification_id=verification_id,
-            status=status,
-            summary=summary,
-            finished=bool(finished),
-        )
-
-    def persist_run_summary(
-        self,
-        *,
-        verification_id: str,
-        problem_id: int,
-        workspace_id: int,
-        kind: str,
-        mode: str,
-        verification_source: str,
-        source_paths: list[str],
-        run_id: str,
-        run_status: str,
-        source_label: str,
-        expected_behavior: str,
-        run_summary: dict[str, object],
-        artifact_path: str,
-        task_kind: str = "",
-        error_text: str = "",
-        finished: bool = False,
-    ) -> None:
-        save_verification_run_summary(
-            self.db,
-            self.fs_manager,
-            verification_id=verification_id,
-            problem_id=int(problem_id),
-            workspace_id=None if workspace_id is None else int(workspace_id),
-            kind=kind,
-            mode=mode,
-            verification_source=verification_source,
-            source_paths=source_paths,
-            run_id=run_id,
-            run_status=run_status,
-            source_label=source_label,
-            expected_behavior=expected_behavior,
-            run_summary=run_summary,
-            artifact_path=artifact_path,
-            task_kind=task_kind,
-            error_text=error_text,
-            finished=bool(finished),
-        )
-
-    def new_verification_summary(
-        self,
-        *,
-        kind: str,
-        mode: str,
-        source_commit: str = "",
-        source_ref: str = "",
-        source_paths: list[str] | None = None,
-        verification_source: str = "",
-    ) -> VerificationSummary:
-        return default_verification_summary(
-            kind=kind,
-            mode=mode,
-            source_commit=source_commit,
-            source_ref=source_ref,
-            source_paths=source_paths,
-            verification_source=verification_source,
-        )
-
-    def new_verification_run(
-        self,
-        *,
-        run_id: str,
-        source_label: str,
-        expected_behavior: str,
-        run_status: str = Status.RUNNING.value,
-        artifact_path: str = "",
-        task_kind: str = "",
-    ) -> VerificationRunRow:
-        return default_verification_run(
-            run_id=run_id,
-            source_label=source_label,
-            expected_behavior=expected_behavior,
-            run_status=run_status,
-            artifact_path=artifact_path,
-            task_kind=task_kind,
-        )
+        if metadata is not None:
+            self._verification_store.save_metadata(verification_id, metadata)
+        return root
 
     def cancel_verification_if_active(self, verification_id: str, *, reason: str, now_text: str) -> bool:
         return self._verification_store.cancel_active_verification(
             verification_id,
             reason=reason,
             now_text=now_text,
+        )
+
+    def update_verification_record_status(
+        self,
+        verification_id: str,
+        *,
+        status: str,
+        fail_reason: str,
+        finished: bool,
+    ) -> None:
+        self._verification_store.update_record_status(
+            verification_id,
+            status=status,
+            fail_reason=fail_reason,
+            finished=finished,
         )
 
     def wait_for_terminal_status(self, verification_id: str, *, timeout_sec: float) -> str:
@@ -354,52 +261,6 @@ class VerificationService:
             poll_sec=self.VERIFICATION_JOIN_POLL_SEC,
         )
         return waited or ""
-
-    def latest_workspace_stage_rows(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        *,
-        limit: int,
-        ok_only: bool = False,
-    ) -> list[dict[str, str]]:
-        return self._verification_store.workspace_stage_rows(
-            int(problem_id),
-            int(workspace_id),
-            limit=max(1, int(limit)),
-            ok_only=bool(ok_only),
-        )
-
-    def latest_workspace_committed_stage_rows(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        *,
-        source_commit: str,
-        source_ref: str,
-        limit: int,
-        ok_only: bool = False,
-    ) -> list[dict[str, str]]:
-        return self._verification_store.workspace_committed_stage_rows(
-            int(problem_id),
-            int(workspace_id),
-            source_commit=source_commit,
-            source_ref=source_ref,
-            limit=max(1, int(limit)),
-            ok_only=bool(ok_only),
-        )
-
-    def workspace_stage_row(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        verification_id: str,
-    ) -> dict[str, str] | None:
-        return self._verification_store.workspace_stage_row(
-            int(problem_id),
-            int(workspace_id),
-            verification_id,
-        )
 
     def apply_runtime_values(self, values: RuntimeValues) -> None:
         self.default_exec_memory_mb = coerce_int(
@@ -574,147 +435,6 @@ class VerificationService:
     def _effective_compile_jobs(self, configured: object, target_count: int) -> int:
         return effective_compile_jobs(configured, target_count)
 
-    def _build_source_tree_entries(self, source_root: Path) -> list[dict[str, object]]:
-        include_dirs = (
-            "checkers",
-            "generators",
-            "interactors",
-            "solutions",
-            "tests",
-            "validators",
-            "third_party/testlib",
-        )
-        entries: list[dict[str, object]] = []
-        seen: set[str] = set()
-
-        def _add_file(path: Path) -> None:
-            try:
-                rel = path.relative_to(source_root).as_posix()
-            except Exception:
-                return
-            if rel in seen:
-                return
-            seen.add(rel)
-            try:
-                stat = path.stat()
-            except OSError:
-                return
-            entries.append(
-                {
-                    "path": rel,
-                    "size": int(stat.st_size),
-                    "sha256": sha256_file(path),
-                }
-            )
-
-        for rel_dir in include_dirs:
-            root = (source_root / rel_dir).resolve()
-            if not root.exists() or not root.is_dir():
-                continue
-            for path in sorted(p for p in root.rglob("*") if p.is_file()):
-                _add_file(path)
-        return entries
-
-    def _generation_params_digest(self, source_root: Path, *, sample_only: bool) -> str:
-        build_cfg = self._load_build_config(source_root)
-        runtime_cfg = self._load_problem_runtime_config(source_root)
-        tests_spec_rows: list[dict[str, object]] = []
-        try:
-            tests_spec_rows = [dict(row) for row in load_tests_spec(source_root / "tests" / "spec.json")]
-        except Exception:
-            tests_spec_rows = []
-        return canonical_digest(
-            {
-                "schema": "v2",
-                "sample_only": bool(sample_only),
-                "build_config": build_cfg,
-                "runtime_config": runtime_cfg,
-                "tests_spec_rows": tests_spec_rows,
-                "source_tree": self._build_source_tree_entries(source_root),
-            }
-        )
-
-    def _toolchain_cmd_digest(self) -> str:
-        try:
-            token = current_cpp_command_digest()
-        except Exception:
-            token = ""
-        return token
-
-    def _cached_verification_id_for_source(
-        self,
-        *,
-        problem_id: int,
-        workspace_id: int,
-        source_commit: str,
-        source_ref: str,
-        generation_params_digest: str,
-        toolchain_cmd_digest: str,
-        sample_only: bool = False,
-    ) -> str:
-        service = self._async_task_cache_service
-        if service is None:
-            return ""
-        if not source_commit:
-            return ""
-        cache_key = verification_cache_key(
-            schema=self.VERIFICATION_CACHE_SCHEMA,
-            problem_id=int(problem_id),
-            workspace_id=int(workspace_id),
-            source_commit=source_commit,
-            source_ref=source_ref,
-            generation_params_digest=generation_params_digest,
-            toolchain_cmd_digest=toolchain_cmd_digest,
-            sample_only=bool(sample_only),
-        )
-        entry = service.get(
-            self.VERIFICATION_CACHE_NAMESPACE,
-            cache_key,
-        )
-        if entry is None:
-            return ""
-        value = entry["value"]
-        cached_verification_id = value["verification_id"]
-        if not cached_verification_id:
-            return ""
-        row = self._verification_store.get_workspace_runtime_row(
-            int(problem_id),
-            int(workspace_id),
-            cached_verification_id,
-        )
-        if row is None:
-            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
-            return ""
-        if row["status"] != Status.OK.value:
-            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
-            return ""
-        try:
-            summary_obj = dict(json.loads(row["summary_json"]))
-        except Exception:
-            summary_obj = {}
-        generation_params = summary_obj.get("generation_params") or {}
-        if bool(generation_params.get("sample_only", False)) != bool(sample_only):
-            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
-            return ""
-        generation_toolchain_digest = generation_params.get("toolchain_cmd_digest")
-        if generation_toolchain_digest != toolchain_cmd_digest:
-            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
-            return ""
-        stored_generation_params_digest = generation_params.get("generation_params_digest")
-        if stored_generation_params_digest != generation_params_digest:
-            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
-            return ""
-        artifact_root = Path(row["artifact_path"]).resolve()
-        tests_dir = artifact_root / "tests"
-        ans_dir = artifact_root / "ans"
-        if not tests_dir.exists() or (not tests_dir.is_dir()) or tests_dir.is_symlink():
-            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
-            return ""
-        if not ans_dir.exists() or (not ans_dir.is_dir()) or ans_dir.is_symlink():
-            service.delete(self.VERIFICATION_CACHE_NAMESPACE, cache_key)
-            return ""
-        return cached_verification_id
-
     def run_verification(
         self,
         problem: str,
@@ -725,12 +445,46 @@ class VerificationService:
         sample_only: bool = False,
         verification_id: str = "",
     ) -> str:
-        return run_verification_job(
-            self,
+        from app.impl.workspace.verification_dag import run_workspace_verification_dag
+
+        ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
+        workspace_path = Path(str(ctx["workspace"]["path"])).resolve()
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        actor_user_id = int(self.workspace_service.global_user_context(username)["id"])
+        status = self.workspace_service.read_workspace_status(workspace_path)
+        workspace_head = str(status.get("head_commit") or "")
+        workspace_dirty = bool(status.get("dirty"))
+        snapshot_root: Path | None = None
+        signature_root = workspace_path
+        if commit:
+            resolved_commit = self.workspace_service.resolve_commit(workspace_path, commit)
+            snapshot_root = self.workspace_service.create_snapshot(workspace_path, resolved_commit)
+            workspace_dirty = False
+            signature_root = snapshot_root
+        elif workspace_dirty or (not workspace_head):
+            snapshot_root = self.workspace_service.create_snapshot(
+                workspace_path,
+                None,
+                workspace_head=workspace_head,
+                workspace_dirty=workspace_dirty,
+            )
+            signature_root = snapshot_root
+        signature = verification_signature(signature_root)
+        target_verification_id = verification_id or self._verification_store.allocate_id()
+        run_workspace_verification_dag(
             problem,
             username,
-            commit=commit,
-            ref=ref,
-            sample_only=sample_only,
-            verification_id=verification_id,
+            actor_user_id=actor_user_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            workspace_head=workspace_head,
+            workspace_dirty=workspace_dirty,
+            targets=[],
+            verification_id=target_verification_id,
+            signature=signature,
+            kind=Kind.SAMPLE.value if sample_only else Kind.ALL.value,
+            sample_only=bool(sample_only),
+            snapshot_root_override=snapshot_root,
         )
+        return target_verification_id

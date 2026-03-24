@@ -20,7 +20,6 @@ class WorkerJobRecord:
     name: str
     job_type: str
     queue_name: str
-    backend: str
     dedupe_key: str
     status: str
     created_at: float
@@ -236,8 +235,6 @@ class WorkerQueueService:
         name = str(name_obj).strip() if name_obj is not None else ""
         queue_name_obj = event.get("queue_name")
         queue_name = str(queue_name_obj).strip() if queue_name_obj is not None else ""
-        backend_obj = event.get("backend")
-        backend = str(backend_obj).strip() if backend_obj is not None else ""
         dedupe_key_obj = event.get("dedupe_key")
         dedupe_key = str(dedupe_key_obj).strip() if dedupe_key_obj is not None else ""
         status_obj = event.get("status")
@@ -249,7 +246,6 @@ class WorkerQueueService:
             name=name if name else "job",
             job_type=self._normalize_job_type(event.get("job_type")),
             queue_name=queue_name if queue_name else "default",
-            backend=backend if backend else "domjudge-judgehost",
             dedupe_key=dedupe_key,
             status=status if status else default_status,
             created_at=created,
@@ -279,10 +275,6 @@ class WorkerQueueService:
                 queue_name = str(event["queue_name"]).strip()
                 if queue_name:
                     record.queue_name = queue_name
-            if "backend" in event:
-                backend = str(event["backend"]).strip()
-                if backend:
-                    record.backend = backend
             if "dedupe_key" in event:
                 record.dedupe_key = str(event["dedupe_key"]).strip()
             record.status = "queued"
@@ -363,7 +355,6 @@ class WorkerQueueService:
         fn: WorkerFunc,
         job_type: str = "generic",
         queue_name: str = "default",
-        backend: str = "domjudge-judgehost",
         dedupe_key: str = "",
     ) -> tuple[WorkerFuture, bool, str]:
         if not callable(fn):
@@ -373,7 +364,6 @@ class WorkerQueueService:
         safe_name = safe_name_text if (safe_name_text := str(name).strip() if name is not None else "") else "job"
         safe_job_type = self._normalize_job_type(job_type)
         safe_queue_name = safe_queue_name_text if (safe_queue_name_text := str(queue_name).strip() if queue_name is not None else "") else "default"
-        safe_backend = safe_backend_text if (safe_backend_text := str(backend).strip() if backend is not None else "") else "domjudge-judgehost"
         safe_dedupe_key = str(dedupe_key).strip() if dedupe_key is not None else ""
         with self._lock:
             if safe_dedupe_key:
@@ -391,7 +381,6 @@ class WorkerQueueService:
                     name=safe_name,
                     job_type=safe_job_type,
                     queue_name=safe_queue_name,
-                    backend=safe_backend,
                     dedupe_key=safe_dedupe_key,
                     status="rejected",
                     created_at=time.time(),
@@ -409,7 +398,6 @@ class WorkerQueueService:
                         "name": record.name,
                         "job_type": record.job_type,
                         "queue_name": record.queue_name,
-                        "backend": record.backend,
                         "dedupe_key": record.dedupe_key,
                         "created_at": record.created_at,
                         "ts": record.created_at,
@@ -436,7 +424,6 @@ class WorkerQueueService:
                 name=safe_name,
                 job_type=safe_job_type,
                 queue_name=safe_queue_name,
-                backend=safe_backend,
                 dedupe_key=safe_dedupe_key,
                 status="queued",
                 created_at=time.time(),
@@ -456,7 +443,6 @@ class WorkerQueueService:
                     "name": safe_name,
                     "job_type": safe_job_type,
                     "queue_name": safe_queue_name,
-                    "backend": safe_backend,
                     "dedupe_key": safe_dedupe_key,
                     "created_at": record.created_at,
                     "ts": record.created_at,
@@ -693,7 +679,6 @@ class WorkerQueueService:
                         "name": record.name,
                         "job_type": record.job_type,
                         "queue": record.queue_name,
-                        "backend": record.backend,
                         "dedupe_key": record.dedupe_key,
                         "status": record.status,
                         "created_at": record.created_at,

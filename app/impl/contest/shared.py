@@ -14,12 +14,13 @@ from .common import _contest_problem_slug_file_token
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required, normalize_problem_name_required
 from app.impl.workspace.problem_config import coerce_int, normalize_problem_mode, read_problem_config
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_verification import latest_workspace_committed_stage_verification
+from app.impl.workspace.context_verification import latest_workspace_signature_verification
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.revision import workspace_revision_info
 from app.service.sandbox.base import ExecSpec, ExecResult
 from app.service.statement.render import render_statement_problem_assets_for_language
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
+from app.service.verification.signature import verification_signature
 
 _C = config.constants
 
@@ -452,7 +453,7 @@ def _run_problem_general_update(
             _C.GENERAL_MEMORY_LIMIT_MAX_MB,
         )
         with config.workspace_service.workspace_lock(workspace):
-            has_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
+            has_head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
             before = config.git_service.status_change_summary(workspace, limit=1)
             if int(before.get("total", 0)) > 0 and has_head:
                 raise RuntimeError("workspace has uncommitted changes")
@@ -745,15 +746,17 @@ def _run_contest_package_job_worker(
             config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True)
             ws_ctx = config.workspace_service.workspace_context(problem_slug, actor_username, include_recent=False)
             workspace_id = int(ws_ctx["workspace"]["id"])
+            workspace_path = Path(str(ws_ctx["workspace"]["path"] or "")).resolve()
             head_commit_obj = ws_ctx["workspace"].get("head_commit")
             head_commit = str(head_commit_obj).strip() if head_commit_obj is not None else ""
             item["head_commit"] = head_commit
             if not head_commit:
                 raise RuntimeError("no committed revision; commit changes first")
-            committed_verification = latest_workspace_committed_stage_verification(
+            workspace_signature = verification_signature(workspace_path)
+            committed_verification = latest_workspace_signature_verification(
                 problem_id,
                 workspace_id,
-                head_commit,
+                workspace_signature,
                 ok_only=True,
             )
             verification_id = (
@@ -777,12 +780,11 @@ def _run_contest_package_job_worker(
             if verification_row is None:
                 raise RuntimeError(f"verification metadata not found: {verification_id}")
             verification_status = str(verification_row["status"] or "").strip().lower()
-            source_commit = str(verification_row["source_commit"] or "").strip()
-            source_ref = str(verification_row["source_ref"] or "").strip()
+            recorded_signature = str(verification_row["signature"] or "").strip()
             if verification_status != "ok":
                 raise RuntimeError(f"verification status is {verification_status}")
-            if source_commit != head_commit or source_ref != head_commit:
-                raise RuntimeError("verification is not from latest committed revision")
+            if recorded_signature != workspace_signature:
+                raise RuntimeError("verification is not from current workspace inputs")
             export_path = Path(
                 config.export_service.create_export(problem_slug, verification_id, "icpc")
             ).resolve()
@@ -920,7 +922,6 @@ def _queue_contest_job(
         name=f"contest-{job_type}-{contest_id}",
         fn=_runner,
         queue_name=f"contest-{job_type}",
-        backend=config.judgehost_task_service.backend_name(),
         dedupe_key=f"contest:{contest_id}:{job_type}",
         job_type=f"contest-{job_type}",
     )

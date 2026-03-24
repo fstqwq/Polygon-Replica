@@ -16,29 +16,29 @@ from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
 _C = config.constants
 
-_RUNTIME_BACKEND_CACHE: dict[str, str] | None = None
-_RUNTIME_BACKEND_CACHE_TS = 0.0
+_RUNTIME_JUDGEHOST_HEALTH_CACHE: dict[str, str] | None = None
+_RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = 0.0
 
 
-def _runtime_backend_profile() -> dict[str, str]:
-    global _RUNTIME_BACKEND_CACHE, _RUNTIME_BACKEND_CACHE_TS
-    runtime._RUNTIME_BACKEND_CACHE = (
-        dict(_RUNTIME_BACKEND_CACHE) if isinstance(_RUNTIME_BACKEND_CACHE, dict) else None
+def _runtime_judgehost_health_profile() -> dict[str, str]:
+    global _RUNTIME_JUDGEHOST_HEALTH_CACHE, _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS
+    runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE = (
+        dict(_RUNTIME_JUDGEHOST_HEALTH_CACHE) if isinstance(_RUNTIME_JUDGEHOST_HEALTH_CACHE, dict) else None
     )
     try:
-        runtime._RUNTIME_BACKEND_CACHE_TS = float(_RUNTIME_BACKEND_CACHE_TS)
+        runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = float(_RUNTIME_JUDGEHOST_HEALTH_CACHE_TS)
     except Exception:
-        runtime._RUNTIME_BACKEND_CACHE_TS = 0.0
-    profile = runtime._runtime_backend_profile()
-    _RUNTIME_BACKEND_CACHE = (
-        dict(runtime._RUNTIME_BACKEND_CACHE)
-        if isinstance(runtime._RUNTIME_BACKEND_CACHE, dict)
+        runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = 0.0
+    profile = runtime._runtime_judgehost_health_profile()
+    _RUNTIME_JUDGEHOST_HEALTH_CACHE = (
+        dict(runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE)
+        if isinstance(runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE, dict)
         else None
     )
     try:
-        _RUNTIME_BACKEND_CACHE_TS = float(runtime._RUNTIME_BACKEND_CACHE_TS)
+        _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = float(runtime._RUNTIME_JUDGEHOST_HEALTH_CACHE_TS)
     except Exception:
-        _RUNTIME_BACKEND_CACHE_TS = 0.0
+        _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = 0.0
     return dict(profile)
 
 def parse_iso_utc(raw: str) -> datetime | None:
@@ -266,23 +266,23 @@ def redirect_response(url: str, status_code: int = 303, message: str = "") -> Re
 
 def template_response(request: Request, template_name: str, context: dict | None = None):
     payload = dict(context or {})
-    runtime_backend = _runtime_backend_profile()
-    if "runtime_judgehost_backend_summary" not in payload:
-        payload["runtime_judgehost_backend_summary"] = runtime_backend.get(
-            "runtime_judgehost_backend_summary",
+    runtime_judgehost = _runtime_judgehost_health_profile()
+    if "runtime_judgehost_health_summary" not in payload:
+        payload["runtime_judgehost_health_summary"] = runtime_judgehost.get(
+            "runtime_judgehost_health_summary",
             "disabled",
         )
-    if "runtime_judgehost_backend_danger" not in payload:
-        payload["runtime_judgehost_backend_danger"] = runtime_backend.get(
-            "runtime_judgehost_backend_danger",
+    if "runtime_judgehost_health_danger" not in payload:
+        payload["runtime_judgehost_health_danger"] = runtime_judgehost.get(
+            "runtime_judgehost_health_danger",
             "1",
         )
     if "runtime_judgehost_enabled" not in payload:
-        payload["runtime_judgehost_enabled"] = runtime_backend.get("runtime_judgehost_enabled", "0")
+        payload["runtime_judgehost_enabled"] = runtime_judgehost.get("runtime_judgehost_enabled", "0")
     if "runtime_judgehost_hosts_online" not in payload:
-        payload["runtime_judgehost_hosts_online"] = runtime_backend.get("runtime_judgehost_hosts_online", "0")
+        payload["runtime_judgehost_hosts_online"] = runtime_judgehost.get("runtime_judgehost_hosts_online", "0")
     if "runtime_judgehost_hosts_total" not in payload:
-        payload["runtime_judgehost_hosts_total"] = runtime_backend.get("runtime_judgehost_hosts_total", "0")
+        payload["runtime_judgehost_hosts_total"] = runtime_judgehost.get("runtime_judgehost_hosts_total", "0")
     backend_render_ms: int | None = None
     started = getattr(request.state, "request_started_at", None)
     if isinstance(started, (int, float)):

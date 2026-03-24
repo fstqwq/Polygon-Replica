@@ -88,7 +88,7 @@ def tests_spec_row(
         payload["sample_input"] = safe_sample_input
     if safe_sample_output:
         payload["sample_output"] = safe_sample_output
-    if not bool(sample_output_validate):
+    if bool(sample) and safe_sample_output and (not bool(sample_output_validate)):
         payload["sample_output_validate"] = False
     return normalize_tests_spec_entry(payload, index=index)
 

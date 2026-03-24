@@ -57,9 +57,9 @@ class ContestSelectedProblemRecord(TypedDict):
 
 class ContestJobRecord(TypedDict):
     id: str
+    contest_slug: str
     job_type: str
     status: str
-    summary_json: str
     created_at: str
     finished_at: str
 
@@ -177,6 +177,13 @@ class ContestDiskStore:
         row = self.db.fetch_one(
             "SELECT id,slug,title,owner_user_id,created_at FROM contests WHERE slug=?",
             [contest_slug],
+        )
+        return None if row is None else dict(row)
+
+    def contest_context_by_id(self, contest_id: int) -> ContestContextRecord | None:
+        row = self.db.fetch_one(
+            "SELECT id,slug,title,owner_user_id,created_at FROM contests WHERE id=?",
+            [int(contest_id)],
         )
         return None if row is None else dict(row)
 
@@ -466,16 +473,15 @@ class ContestDiskStore:
         actor_user_id: int,
         job_type: str,
         status: str,
-        summary: dict[str, object],
         created_at: str,
         finished_at: str | None,
     ) -> None:
         self.db.execute(
             """
-            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,summary_json,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?)
             """,
-            [job_id, int(contest_id), int(actor_user_id), job_type, status, json.dumps(summary, ensure_ascii=False), created_at, finished_at],
+            [job_id, int(contest_id), int(actor_user_id), job_type, status, created_at, finished_at],
         )
 
     def update_job(
@@ -484,21 +490,25 @@ class ContestDiskStore:
         contest_id: int,
         job_id: str,
         status: str,
-        summary: dict[str, object],
         finished_at: str | None,
     ) -> None:
         self.db.execute(
             """
             UPDATE contest_jobs
-            SET status=?, summary_json=?, finished_at=?
+            SET status=?, finished_at=?
             WHERE contest_id=? AND id=?
             """,
-            [status, json.dumps(summary, ensure_ascii=False), finished_at, int(contest_id), job_id],
+            [status, finished_at, int(contest_id), job_id],
         )
 
     def job_row(self, contest_id: int, job_id: str) -> ContestJobRecord | None:
         row = self.db.fetch_one(
-            "SELECT id,job_type,status,summary_json,created_at,finished_at FROM contest_jobs WHERE contest_id=? AND id=?",
+            """
+            SELECT cj.id,c.slug AS contest_slug,cj.job_type,cj.status,cj.created_at,cj.finished_at
+            FROM contest_jobs cj
+            JOIN contests c ON c.id=cj.contest_id
+            WHERE cj.contest_id=? AND cj.id=?
+            """,
             [int(contest_id), job_id],
         )
         return None if row is None else dict(row)
@@ -506,10 +516,11 @@ class ContestDiskStore:
     def latest_job_row(self, contest_id: int) -> ContestJobRecord | None:
         row = self.db.fetch_one(
             """
-            SELECT id,job_type,status,summary_json,created_at,finished_at
-            FROM contest_jobs
-            WHERE contest_id=?
-            ORDER BY created_at DESC, id DESC
+            SELECT cj.id,c.slug AS contest_slug,cj.job_type,cj.status,cj.created_at,cj.finished_at
+            FROM contest_jobs cj
+            JOIN contests c ON c.id=cj.contest_id
+            WHERE cj.contest_id=?
+            ORDER BY cj.created_at DESC, cj.id DESC
             LIMIT 1
             """,
             [int(contest_id)],
@@ -519,10 +530,11 @@ class ContestDiskStore:
     def job_rows(self, contest_id: int, *, limit: int) -> list[ContestJobRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT id,job_type,status,summary_json,created_at,finished_at
-            FROM contest_jobs
-            WHERE contest_id=?
-            ORDER BY created_at DESC, id DESC
+            SELECT cj.id,c.slug AS contest_slug,cj.job_type,cj.status,cj.created_at,cj.finished_at
+            FROM contest_jobs cj
+            JOIN contests c ON c.id=cj.contest_id
+            WHERE cj.contest_id=?
+            ORDER BY cj.created_at DESC, cj.id DESC
             LIMIT ?
             """,
             [int(contest_id), max(1, int(limit))],

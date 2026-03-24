@@ -10,7 +10,8 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import dedupe_preserve_order
 from app.impl.workspace.context_verification import normalize_run_id_token
 from app.main_util import normalize_optional_component_source_path_safe
-from app.service.platform.process import is_canonical_artifact_id, run_cmd
+from app.service.platform.git_process import run_git
+from app.service.platform.process import is_canonical_artifact_id
 
 
 class RuntimeProgress(TypedDict):
@@ -28,17 +29,6 @@ def _count_label(count: int, singular: str, plural: str | None = None) -> str:
     count_value = max(0, int(count))
     token = singular if count_value == 1 else (plural if plural is not None else f"{singular}s")
     return f"{count_value} {token}"
-
-def _summary_object(raw: str | None) -> dict[str, object]:
-    if raw is None:
-        return {}
-    text = raw.strip()
-    if not text:
-        return {}
-    try:
-        return cast(dict[str, object], json.loads(text))
-    except Exception:
-        return {}
 
 def _count_files_with_suffix(directory: Path, suffix: str) -> int:
     count = 0
@@ -115,13 +105,13 @@ def _verification_runtime_progress(
         return result
     verification_row = config.verification_service.export_runtime_verification(int(problem_id), verification_id)
     verification_status = ""
-    verification_summary: VerificationDetailSummary = {}
+    verification_metadata: dict[str, object] = {}
     artifact_path = ""
     if verification_row is not None:
         status_value = cast(str | None, verification_row["status"])
         if status_value is not None:
             verification_status = status_value
-        verification_summary = cast(VerificationDetailSummary, _summary_object(cast(str | None, verification_row["summary_json"])))
+        verification_metadata = dict(cast(dict[str, object], verification_row["metadata"]))
         artifact_path_value = cast(str | None, verification_row["artifact_path"])
         if artifact_path_value is not None:
             artifact_path = artifact_path_value
@@ -164,6 +154,12 @@ def _verification_runtime_progress(
         if verification_status == "ok":
             result["detail"] = "packaging export bundle"
             return result
+        sanity_status = str(verification_metadata.get("sanity_status") or "")
+        if sanity_status in {"pending", "running"}:
+            result["detail"] = "sanity checks running"
+            if validate_log.exists() and validate_log.is_file() and (not validate_log.is_symlink()):
+                result["log_href"] = _log_href("validate.log")
+            return result
         if solve_log.exists() and solve_log.is_file() and (not solve_log.is_symlink()):
             if tests_total > 0:
                 completed_outputs = min(outputs_generated, tests_total)
@@ -197,16 +193,13 @@ def _verification_runtime_progress(
         return result
 
     if event_status == "failed":
-        detail = verification_summary.get("error")
-        if detail is None:
-            detail = ""
-        else:
-            detail = detail.strip()
+        record = config.verification_service.verification_record(verification_id)
+        detail = str((record or {}).get("fail_reason") or verification_metadata.get("error") or "").strip()
         if not detail:
-            failed_step = verification_summary.get("failed_step")
+            failed_step = cast(str | None, verification_metadata.get("failed_step"))
             if failed_step is None:
                 failed_step = ""
-            failed_test = verification_summary.get("failed_test")
+            failed_test = cast(str | None, verification_metadata.get("failed_test"))
             if failed_test is None:
                 failed_test = ""
             if failed_step and failed_test:
@@ -217,6 +210,11 @@ def _verification_runtime_progress(
             result["detail"] = detail
         if failure_log.exists() and failure_log.is_file() and (not failure_log.is_symlink()):
             result["log_href"] = _log_href("failure.log")
+    if event_status == "failed":
+        record = config.verification_service.verification_record(verification_id)
+        detail = str((record or {}).get("fail_reason") or verification_metadata.get("error") or "").strip()
+        if detail:
+            result["detail"] = detail
     return result
 
 def _verification_href(
@@ -242,9 +240,6 @@ def _rerun_solution_paths_from_verification(
 ) -> list[str]:
     verification_id = normalize_run_id_token(verification_id)
     if not verification_id:
-        return []
-    verification_summary = config.verification_service.verification_summary(verification_id)
-    if not verification_summary:
         return []
     out: list[str] = []
     for source_rel in config.verification_service.verification_source_paths(verification_id):
@@ -276,7 +271,7 @@ def _bare_repo_head_commit(bare_repo: Path) -> str:
             raise ValueError("import target bare repository path is invalid")
     except OSError:
         raise ValueError("import target bare repository path is invalid")
-    proc = run_cmd(["git", "-C", str(bare_repo), "rev-parse", "--verify", "HEAD"])
+    proc = run_git(["git", "-C", str(bare_repo), "rev-parse", "--verify", "HEAD"])
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 def _workspace_problem_mode(workspace: Path) -> str:

@@ -24,7 +24,6 @@ class TestWorkerQueueService(unittest.TestCase):
                 name="slow",
                 fn=_slow_job,
                 queue_name="test",
-                backend="domjudge-judgehost",
                 job_type="run",
             )
             self.assertTrue(first_queued, msg=first_reason)
@@ -33,7 +32,6 @@ class TestWorkerQueueService(unittest.TestCase):
                 name="queued",
                 fn=lambda: None,
                 queue_name="test",
-                backend="domjudge-judgehost",
                 job_type="run",
             )
             self.assertTrue(second_queued, msg=second_reason)
@@ -41,7 +39,6 @@ class TestWorkerQueueService(unittest.TestCase):
                 name="overflow",
                 fn=lambda: None,
                 queue_name="test",
-                backend="domjudge-judgehost",
                 job_type="run",
             )
             self.assertFalse(queued)
@@ -70,7 +67,6 @@ class TestWorkerQueueService(unittest.TestCase):
                                 "name": "old-job",
                                 "job_type": "preview",
                                 "queue_name": "preview",
-                                "backend": "domjudge-judgehost",
                                 "created_at": 100.0,
                                 "ts": 100.0,
                             }
@@ -117,7 +113,6 @@ class TestWorkerQueueService(unittest.TestCase):
                 name="compile-fail",
                 fn=_failing_compile_job,
                 queue_name="verification",
-                backend="domjudge-judgehost",
                 job_type="verification",
             )
             self.assertTrue(queued, msg=reason)

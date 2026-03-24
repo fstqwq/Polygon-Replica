@@ -12,9 +12,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from .common import SmokeBase
+from app.impl.run_export import export as export_page_module
 from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.runtime.config import config
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
 
 db = config.db
 export_service = config.export_service
@@ -37,14 +38,11 @@ class TestExport(SmokeBase):
         )
         return tracked
 
-    def _insert_exportable_verification(self, verification_id: str, source_commit: str) -> None:
+    def _insert_exportable_verification(self, verification_id: str, signature: str) -> None:
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
-        build_ref = config.fs_manager.compute_artifact_ref(
-            {"suite": "export", "problem": self.problem, "verification_id": str(verification_id or "").strip()}
-        )
-        artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
+        artifact_root = config.fs_manager.prepare_verification_root(str(verification_id or "").strip()).resolve()
         logs = artifact_root / "logs"
         tests = artifact_root / "tests"
         ans = artifact_root / "ans"
@@ -59,19 +57,17 @@ class TestExport(SmokeBase):
 
         db_execute(
             """
-            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [
                 verification_id,
                 problem_id,
                 workspace_id,
-                source_commit,
-                "main",
-                "verification",
+                signature,
+                "all",
                 "ok",
-                "{}",
-                str(artifact_root),
+                "",
                 "2026-02-23T00:00:00Z",
                 "2026-02-23T00:00:01Z",
             ],
@@ -88,11 +84,11 @@ class TestExport(SmokeBase):
             "statement-sections/english/output.tex",
             "statement-sections/english/notes.tex",
         ]
-        add = run_cmd(["git", "-C", str(workspace), "add", *(baseline + list(paths))])
+        add = run_git(["git", "-C", str(workspace), "add", *(baseline + list(paths))])
         self.assertEqual(add.returncode, 0, add.stderr)
-        commit = run_cmd(["git", "-C", str(workspace), "commit", "-m", message])
+        commit = run_git(["git", "-C", str(workspace), "commit", "-m", message])
         self.assertEqual(commit.returncode, 0, commit.stderr or commit.stdout)
-        head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"])
+        head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])
         self.assertEqual(head.returncode, 0, head.stderr)
         return head.stdout.strip()
 
@@ -112,6 +108,66 @@ class TestExport(SmokeBase):
         self._insert_exportable_verification(verification_id, head)
         with self.assertRaisesRegex(ValueError, "unsupported export type"):
             export_service.create_export(self.problem, verification_id, "kattis")
+
+    def test_export_persists_requested_verification_id(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_export_vid_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export verification id {token}",
+        )
+        verification_id = f"ver-exp-bind-{token}"
+        self._insert_exportable_verification(verification_id, head)
+        workspace_id = int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"])
+        archive = export_service.create_export(
+            self.problem,
+            verification_id,
+            "icpc",
+            workspace_id=workspace_id,
+            source_commit=head,
+        )
+        self.assertTrue(archive.exists())
+        row = db_fetch_one(
+            "SELECT verification_id FROM exports WHERE source_commit=? ORDER BY created_at DESC LIMIT 1",
+            [head],
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["verification_id"] or ""), verification_id)
+
+    def test_export_validation_fallback_requires_explicit_verification_id(self) -> None:
+        resolved = export_page_module._resolve_export_verification_id(
+            problem_id=1,
+            workspace_id=1,
+            verification_id="",
+            source_commit="abc123def456",
+        )
+        self.assertEqual(resolved, "")
+
+    def test_build_validation_status_respects_explicit_unknown_metadata(self) -> None:
+        status = export_page_module._build_validation_status(
+            {
+                "status": "ok",
+                "metadata": {
+                    "validation_status": "unknown",
+                },
+            }
+        )
+        self.assertEqual(status, "validation unknown")
+
+    def test_build_validation_status_prefers_sanity_metadata(self) -> None:
+        status = export_page_module._build_validation_status(
+            {
+                "status": "running",
+                "metadata": {
+                    "sanity_status": "failed",
+                },
+            }
+        )
+        self.assertEqual(status, "validation failed")
 
     def test_icpc_export_can_be_imported_as_new_problem(self) -> None:
         ws = Path(self._workspace_path())
@@ -177,10 +233,10 @@ class TestExport(SmokeBase):
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertIn(str(imported_problem_cfg.get("mode") or ""), {"pass-fail", "interactive"})
         self.assertGreaterEqual(int(imported_problem_cfg.get("pass_limit") or 0), 1)
-        imported_head = run_cmd(["git", "-C", str(imported_ws), "rev-parse", "HEAD"])
+        imported_head = run_git(["git", "-C", str(imported_ws), "rev-parse", "HEAD"])
         self.assertEqual(imported_head.returncode, 0, imported_head.stderr)
         self.assertRegex(imported_head.stdout.strip(), r"^[0-9a-f]{40}$")
-        self.assertEqual(run_cmd(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
+        self.assertEqual(run_git(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
 
     def test_interactive_icpc_export_reimports_with_configured_nested_interactor(self) -> None:
         ws = Path(self._workspace_path())
@@ -258,7 +314,7 @@ class TestExport(SmokeBase):
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(imported_problem_cfg.get("mode"), "interactive")
         self.assertEqual(imported_problem_cfg.get("pass_limit"), 2)
-        self.assertEqual(run_cmd(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
+        self.assertEqual(run_git(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
 
     def test_icpc_export_emits_domjudge_reference_metadata(self) -> None:
         ws = Path(self._workspace_path())
@@ -381,7 +437,7 @@ class TestExport(SmokeBase):
         )
         head = self._commit_workspace_paths(ws, tracked, f"test native export roundtrip {token}")
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        baseline_status = run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip()
+        baseline_status = run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip()
         archive = export_service.create_export(
             self.problem,
             "",
@@ -389,7 +445,7 @@ class TestExport(SmokeBase):
             workspace_id=int(ctx["workspace"]["id"]),
             source_commit=head,
         )
-        self.assertEqual(run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), baseline_status)
+        self.assertEqual(run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), baseline_status)
         actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"imp-native-{token}"
@@ -411,10 +467,10 @@ class TestExport(SmokeBase):
             json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8")).get("pass_limit"),
             1,
         )
-        imported_head = run_cmd(["git", "-C", str(imported_ws), "rev-parse", "HEAD"])
+        imported_head = run_git(["git", "-C", str(imported_ws), "rev-parse", "HEAD"])
         self.assertEqual(imported_head.returncode, 0, imported_head.stderr)
         self.assertRegex(imported_head.stdout.strip(), r"^[0-9a-f]{40}$")
-        self.assertEqual(run_cmd(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
+        self.assertEqual(run_git(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
 
     def test_icpc_export_uses_committed_snapshot_without_verification(self) -> None:
         ws = Path(self._workspace_path())
@@ -428,7 +484,7 @@ class TestExport(SmokeBase):
             f"test export without verification {token}",
         )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        baseline_status = run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip()
+        baseline_status = run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip()
         archive = export_service.create_export(
             self.problem,
             "",
@@ -438,11 +494,11 @@ class TestExport(SmokeBase):
         )
         self.assertTrue(archive.exists())
         self.assertEqual(
-            run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip(),
+            run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip(),
             baseline_status,
         )
 
-    def test_polygon_import_builds_missing_sample_answers_via_verification(self) -> None:
+    def test_polygon_import_does_not_run_sample_answer_verification(self) -> None:
         payload = io.BytesIO()
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <problem short-name="sample-backfill">
@@ -491,41 +547,7 @@ class TestExport(SmokeBase):
         actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor_row)
         target_slug = f"poly-backfill-{uuid.uuid4().hex[:8]}"
-        target_problem = f"{self.user}/{target_slug}"
-
-        def _fake_run_build(problem: str, username: str, *args, **kwargs) -> str:
-            self.assertEqual(problem, target_problem)
-            self.assertEqual(username, self.user)
-            verification_id = f"ver-backfill-{uuid.uuid4().hex[:8]}"
-            target_ctx = workspace_service.workspace_context(target_problem, self.user, include_recent=False)
-            build_ref = config.fs_manager.compute_artifact_ref(
-                {"suite": "export-backfill", "problem": target_problem, "verification_id": verification_id}
-            )
-            artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
-            (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
-            (artifact_root / "ans" / "001.ans").write_text("7\n", encoding="utf-8")
-            db_execute(
-                """
-                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    verification_id,
-                    int(target_ctx["problem"]["id"]),
-                    int(target_ctx["workspace"]["id"]),
-                    "",
-                    "main",
-                    "verification",
-                    "ok",
-                    "{}",
-                    str(artifact_root),
-                    "2026-02-23T00:00:00Z",
-                    "2026-02-23T00:00:01Z",
-                ],
-            )
-            return verification_id
-
-        with patch("app.impl.run_export.import_source.config.verification_service.run_verification", side_effect=_fake_run_build):
+        with patch("app.impl.run_export.import_source.config.verification_service.run_verification") as run_verification:
             imported = import_package_as_new_problem(
                 actor_user_id=int(actor_row["id"]),
                 actor_user=str(actor_row["username"]),
@@ -534,49 +556,15 @@ class TestExport(SmokeBase):
                 requested_slug=target_slug,
                 source_problem=self.problem,
             )
+        run_verification.assert_not_called()
         target_problem = str(imported.get("target_problem") or "")
         imported_ws = Path(workspace_service.ensure_workspace(target_problem, self.user))
         answer_path = imported_ws / "tests" / "answers" / "001.ans"
-        self.assertTrue(answer_path.is_file())
-        self.assertEqual(answer_path.read_text(encoding="utf-8"), "7\n")
+        self.assertFalse(answer_path.exists())
         tests_summary = imported.get("result", {}).get("tests", {})
-        self.assertEqual(int(tests_summary.get("sample_answers_built") or 0), 1)
-
-    def test_polygon_import_fails_when_sample_answer_build_verification_fails(self) -> None:
-        payload = io.BytesIO()
-        xml = """<?xml version="1.0" encoding="UTF-8"?>
-<problem short-name="sample-backfill-fail">
-  <names>
-    <name language="english" value="Sample Answer Backfill Fail"/>
-  </names>
-  <judging run-count="1">
-    <testset>
-      <time-limit>1000</time-limit>
-      <memory-limit>268435456</memory-limit>
-      <input-path-pattern>tests/%02d</input-path-pattern>
-      <tests>
-        <test method="manual" sample="true"/>
-      </tests>
-    </testset>
-  </judging>
-</problem>
-"""
-        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("problem.xml", xml)
-            zf.writestr("tests/01", "1\n")
-
-        actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
-        self.assertIsNotNone(actor_row)
-        target_slug = f"poly-backfail-{uuid.uuid4().hex[:8]}"
-        with self.assertRaisesRegex(ValueError, "sample answer verification failed"):
-            import_package_as_new_problem(
-                actor_user_id=int(actor_row["id"]),
-                actor_user=str(actor_row["username"]),
-                package_name="sample-backfill-fail.zip",
-                package_content=payload.getvalue(),
-                requested_slug=target_slug,
-                source_problem=self.problem,
-            )
+        self.assertNotIn("sample_answers_built", tests_summary)
+        self.assertNotIn("sample_answers_missing", tests_summary)
+        self.assertNotIn("sample_manual_total", tests_summary)
 
     def test_import_refuses_target_with_existing_revision_history(self) -> None:
         actor_row = db_fetch_one("SELECT id,username FROM users WHERE username=?", [self.user])
@@ -585,19 +573,19 @@ class TestExport(SmokeBase):
         target_problem = f"{self.user}/{target_slug}"
         target_bare = (config.settings.bare_root / f"{target_problem}.git").resolve()
         target_bare.parent.mkdir(parents=True, exist_ok=True)
-        init = run_cmd(["git", "init", "--bare", str(target_bare)])
+        init = run_git(["git", "init", "--bare", str(target_bare)])
         self.assertEqual(init.returncode, 0, init.stderr or init.stdout)
 
         with tempfile.TemporaryDirectory() as td:
             seed = Path(td)
-            self.assertEqual(run_cmd(["git", "-C", str(seed), "init"]).returncode, 0)
-            self.assertEqual(run_cmd(["git", "-C", str(seed), "config", "user.name", "seed"]).returncode, 0)
-            self.assertEqual(run_cmd(["git", "-C", str(seed), "config", "user.email", "seed@example.local"]).returncode, 0)
+            self.assertEqual(run_git(["git", "-C", str(seed), "init"]).returncode, 0)
+            self.assertEqual(run_git(["git", "-C", str(seed), "config", "user.name", "seed"]).returncode, 0)
+            self.assertEqual(run_git(["git", "-C", str(seed), "config", "user.email", "seed@example.local"]).returncode, 0)
             (seed / "README.md").write_text("seed\n", encoding="utf-8")
-            self.assertEqual(run_cmd(["git", "-C", str(seed), "add", "README.md"]).returncode, 0)
-            self.assertEqual(run_cmd(["git", "-C", str(seed), "commit", "-m", "seed"]).returncode, 0)
-            self.assertEqual(run_cmd(["git", "-C", str(seed), "remote", "add", "origin", str(target_bare)]).returncode, 0)
-            self.assertEqual(run_cmd(["git", "-C", str(seed), "push", "origin", "HEAD:main"]).returncode, 0)
+            self.assertEqual(run_git(["git", "-C", str(seed), "add", "README.md"]).returncode, 0)
+            self.assertEqual(run_git(["git", "-C", str(seed), "commit", "-m", "seed"]).returncode, 0)
+            self.assertEqual(run_git(["git", "-C", str(seed), "remote", "add", "origin", str(target_bare)]).returncode, 0)
+            self.assertEqual(run_git(["git", "-C", str(seed), "push", "origin", "HEAD:main"]).returncode, 0)
 
         package = io.BytesIO()
         with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as zf:

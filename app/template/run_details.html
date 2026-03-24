@@ -5,11 +5,11 @@
   {% if detail_status %}
   <div class="page-title-status muted">
     {% if detail_status == "ok" %}
-    <span class="ok">{{ detail_status_upper }}</span>
+    <span class="ok">{{ detail_status }}</span>
     {% elif detail_status == "failed" %}
-    <span class="danger">{{ detail_status_upper }}</span>
+    <span class="danger">{{ detail_status }}</span>
     {% else %}
-    <span>{{ detail_status_upper }}</span>
+    <span>{{ detail_status }}</span>
     {% endif %}
   </div>
   {% endif %}
@@ -40,86 +40,37 @@
     <div class="muted verification-detail-meta">Last updated: {{ detail_last_updated | local_time }}</div>
     {% endif %}
   </div>
-  {% if detail_lifecycle_cards %}
-  {% set lifecycle_ns = namespace(primary=None) %}
-  {% for card in detail_lifecycle_cards %}
-    {% if card.id == "verification" %}
-      {% set lifecycle_ns.primary = card %}
-    {% endif %}
-  {% endfor %}
-  {% if lifecycle_ns.primary is none and detail_lifecycle_cards %}
-    {% set lifecycle_ns.primary = detail_lifecycle_cards[0] %}
-  {% endif %}
-  {% if lifecycle_ns.primary %}
-  <div class="verification-lifecycle-tabs" data-lifecycle-tabs="1">
-    <div class="verification-lifecycle-head verification-lifecycle-head-full">
-      <strong>{{ lifecycle_ns.primary.title }}</strong>
+  {% if detail_task_counts or detail_running_tasks or detail_fail_flag %}
+  <div class="preview-card">
+    <div class="preview-head">
+      <strong>Task Status</strong>
     </div>
-    <aside class="verification-lifecycle-tab-list" role="tablist" aria-label="{{ lifecycle_ns.primary.title }} steps">
-      {% for step in lifecycle_ns.primary.steps %}
-      {% set active_tab = step.index == lifecycle_ns.primary.current_step_index %}
-      <button
-        type="button"
-        class="verification-lifecycle-tab verification-lifecycle-tab-{{ step.status }} {{ 'is-active' if active_tab else '' }}"
-        data-lifecycle-tab-button="{{ step.index }}"
-        role="tab"
-        aria-selected="{{ 'true' if active_tab else 'false' }}"
-        aria-controls="verification-step-panel-{{ step.index }}"
-        id="verification-step-tab-{{ step.index }}"
-      >
-        <span class="verification-lifecycle-tab-index">{{ step.index }}</span>
-        <span class="verification-lifecycle-tab-main">
-          <span class="verification-lifecycle-tab-title">{{ step.title }}</span>
-          <span class="verification-lifecycle-tab-status">{{ step.status_label }}</span>
-        </span>
-      </button>
-      {% endfor %}
-      {% if lifecycle_ns.primary.summary %}
-      <p class="muted verification-lifecycle-summary">{{ lifecycle_ns.primary.summary }}</p>
-      {% endif %}
-    </aside>
-    <section class="verification-lifecycle-tab-panels">
-      {% for step in lifecycle_ns.primary.steps %}
-      {% set active_tab = step.index == lifecycle_ns.primary.current_step_index %}
-      <article
-        id="verification-step-panel-{{ step.index }}"
-        class="verification-lifecycle-tab-panel verification-lifecycle-step verification-lifecycle-step-{{ step.status }} {{ '' if active_tab else 'is-hidden' }}"
-        data-lifecycle-tab-panel="{{ step.index }}"
-        role="tabpanel"
-        aria-labelledby="verification-step-tab-{{ step.index }}"
-      >
-        <span class="verification-lifecycle-step-index">{{ step.index }}</span>
-        <div class="verification-lifecycle-step-main">
-          <span class="verification-lifecycle-step-title">{{ step.title }}</span>
-          <span class="verification-lifecycle-step-status">{{ step.status_label }}</span>
-          {% if step.detail %}
-          <span class="verification-lifecycle-step-detail">{{ step.detail }}</span>
-          {% endif %}
-          {% if step.facts %}
-          <table class="verification-lifecycle-step-facts">
-            <tbody>
-              {% for fact in step.facts %}
-              <tr>
-                <th>{{ fact.label }}</th>
-                <td class="{{ 'danger' if fact.tone == 'danger' else 'ok' if fact.tone == 'ok' else 'muted' }}">{{ fact.value }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-          {% endif %}
-          {% if step.notes %}
-          <ul class="verification-lifecycle-step-notes">
-            {% for note in step.notes %}
-            <li>{{ note }}</li>
-            {% endfor %}
-          </ul>
-          {% endif %}
-        </div>
-      </article>
-      {% endfor %}
-    </section>
+    {% if detail_fail_flag %}
+    <p class="danger">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
+    {% endif %}
+    {% if detail_task_counts %}
+    <p class="muted">
+      pending {{ detail_task_counts.pending or 0 }},
+      queued {{ detail_task_counts.queued or 0 }},
+      running {{ detail_task_counts.running or 0 }},
+      done {{ detail_task_counts.done or 0 }},
+      failed {{ detail_task_counts.failed or 0 }},
+      cancelled {{ detail_task_counts.cancelled or 0 }}
+    </p>
+    {% endif %}
+    {% if detail_running_tasks %}
+    <div>
+      <strong>Running Now</strong>
+      <ul>
+        {% for task in detail_running_tasks %}
+        <li>{{ task.label }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% elif detail_running %}
+    <p class="muted">Waiting for running-task updates.</p>
+    {% endif %}
   </div>
-  {% endif %}
   {% endif %}
 </section>
 
@@ -177,6 +128,7 @@
           <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}">{{ test_cell.text or row.display_name or row.test_name }}</a>
           {% else %}
           {{ test_cell.text or row.display_name or row.test_name }}
+          {% if test_cell.meta %}<span class="vmeta">{{ test_cell.meta }}</span>{% endif %}
           {% endif %}
         </td>
         {% for cell in row.cells %}
@@ -337,7 +289,7 @@
 <section>
   {% if detail_running or detail_status == "running" %}
   <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
-  {% elif verification_id or detail_lifecycle_cards %}
+  {% elif verification_id or detail_task_counts %}
   <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
   {% else %}
   <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Verification</a> and choose one.</p>

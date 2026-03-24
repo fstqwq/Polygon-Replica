@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_all, db_fetch_one
+from .db_helpers import db_execute, db_fetch_all, db_fetch_one, write_preview_summary
 
 import asyncio
 import io
@@ -16,7 +16,7 @@ from fastapi import HTTPException
 
 from app.service.importing.contest import PolygonContestImportService
 from app.service.problem.test_spec import TESTS_SPEC_MANUAL_MAX_CHARS, normalize_imported_manual_input, normalize_manual_input
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
 from app.impl.run_export.import_source import import_package_as_new_problem
 
 from .ui_support import (
@@ -66,7 +66,7 @@ SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
 class TestUIWorkspace(UIBaseSuite):
     def _ensure_committed_head(self, problem: str, user: str) -> tuple[Path, str]:
         ws = Path(workspace_service.ensure_workspace(problem, user))
-        head_res = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"])
+        head_res = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"])
         head = head_res.stdout.strip() if head_res.returncode == 0 else ""
         if re.fullmatch(r"[0-9a-f]{40}", head):
             return ws, head
@@ -74,16 +74,16 @@ class TestUIWorkspace(UIBaseSuite):
         marker = ws / marker_rel
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("seed\n", encoding="utf-8")
-        self.assertEqual(run_cmd(["git", "-C", str(ws), "config", "user.name", user]).returncode, 0)
-        self.assertEqual(run_cmd(["git", "-C", str(ws), "config", "user.email", f"{user}@polygonlike.local"]).returncode, 0)
+        self.assertEqual(run_git(["git", "-C", str(ws), "config", "user.name", user]).returncode, 0)
+        self.assertEqual(run_git(["git", "-C", str(ws), "config", "user.email", f"{user}@polygonlike.local"]).returncode, 0)
         # Seed commit should include the default workspace skeleton to avoid pull conflicts in sibling workspaces.
-        self.assertEqual(run_cmd(["git", "-C", str(ws), "add", "-A"]).returncode, 0)
-        commit = run_cmd(["git", "-C", str(ws), "commit", "-m", f"ui-seed-{uuid.uuid4().hex[:6]}"])
+        self.assertEqual(run_git(["git", "-C", str(ws), "add", "-A"]).returncode, 0)
+        commit = run_git(["git", "-C", str(ws), "commit", "-m", f"ui-seed-{uuid.uuid4().hex[:6]}"])
         self.assertEqual(commit.returncode, 0, commit.stderr or commit.stdout)
-        push = run_cmd(["git", "-C", str(ws), "push", "origin", "HEAD:main"])
+        push = run_git(["git", "-C", str(ws), "push", "origin", "HEAD:main"])
         self.assertEqual(push.returncode, 0, push.stderr or push.stdout)
         workspace_service.ensure_workspace(problem, user, refresh_status=True)
-        refreshed = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"])
+        refreshed = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"])
         refreshed_head = refreshed.stdout.strip() if refreshed.returncode == 0 else ""
         self.assertRegex(refreshed_head, r"^[0-9a-f]{40}$")
         return ws, refreshed_head
@@ -448,8 +448,8 @@ class TestUIWorkspace(UIBaseSuite):
         (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [
                 preview_id,
@@ -458,12 +458,12 @@ class TestUIWorkspace(UIBaseSuite):
                 "",
                 "main",
                 "failed",
-                "{}",
                 str(preview_root),
                 "2026-02-23T00:59:00Z",
                 "2026-02-23T01:00:00Z",
             ],
         )
+        write_preview_summary(preview_id, {})
 
         resp = workspace_page(_request("/problems/alice/sample/alice/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
@@ -505,7 +505,7 @@ class TestUIWorkspace(UIBaseSuite):
         target = ws / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("atomic-check\n", encoding="utf-8")
-        head_before = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+        head_before = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertTrue(head_before)
 
         with patch.object(git_service, "push", side_effect=RuntimeError("non-fast-forward")):
@@ -517,9 +517,9 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertTrue(messages)
         self.assertIn("commit rolled back", messages[0])
 
-        head_after = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+        head_after = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertEqual(head_after, head_before)
-        status_text = run_cmd(["git", "-C", str(ws), "status", "--short", "--untracked-files=all"]).stdout
+        status_text = run_git(["git", "-C", str(ws), "status", "--short", "--untracked-files=all"]).stdout
         self.assertIn(rel, status_text)
 
     def test_update_working_copy_shows_only_when_upstream_is_newer(self) -> None:
@@ -531,15 +531,15 @@ class TestUIWorkspace(UIBaseSuite):
 
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         bob_ws = Path(workspace_service.ensure_workspace("alice/sample", "bob"))
-        self.assertEqual(run_cmd(["git", "config", "user.name", "Bob"], cwd=bob_ws).returncode, 0)
-        self.assertEqual(run_cmd(["git", "config", "user.email", "bob@example.com"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "config", "user.name", "Bob"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "config", "user.email", "bob@example.com"], cwd=bob_ws).returncode, 0)
         # Keep this test deterministic when bob workspace already exists from earlier cases.
-        self.assertEqual(run_cmd(["git", "pull", "--rebase", "origin", "main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "pull", "--rebase", "origin", "main"], cwd=bob_ws).returncode, 0)
         marker = f"upstream-{uuid.uuid4().hex[:8]}.txt"
         (bob_ws / marker).write_text("upstream update\n", encoding="utf-8")
-        self.assertEqual(run_cmd(["git", "add", marker], cwd=bob_ws).returncode, 0)
-        self.assertEqual(run_cmd(["git", "commit", "-m", "upstream update"], cwd=bob_ws).returncode, 0)
-        self.assertEqual(run_cmd(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "add", marker], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "commit", "-m", "upstream update"], cwd=bob_ws).returncode, 0)
+        self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
 
         refreshed = general_page(_request("/problems/alice/sample/alice/general"), "alice/sample", "alice")
         self.assertEqual(refreshed.status_code, 200)
@@ -835,10 +835,10 @@ class TestUIWorkspace(UIBaseSuite):
         ws = Path(workspace_service.ensure_workspace(f"alice/{target_slug}", "alice"))
         self.assertTrue((ws / "statement" / "statements.ftl").is_file())
         self.assertTrue((ws / "statement-sections" / "english" / "legend.tex").is_file())
-        head = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"])
+        head = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"])
         self.assertEqual(head.returncode, 0, head.stderr)
         self.assertRegex(head.stdout.strip(), r"^[0-9a-f]{40}$")
-        self.assertEqual(run_cmd(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), "")
+        self.assertEqual(run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), "")
 
     def test_problems_root_import_recovers_from_stale_user_cache(self) -> None:
         class _Upload:
@@ -1107,22 +1107,12 @@ class TestUIWorkspace(UIBaseSuite):
             "problem_slug_3": custom_problem_slugs[3],
             "problem_slug_4": custom_problem_slugs[4],
         }
-        with patch(
-            "app.impl.run_export.import_source._build_polygon_sample_answers",
-            return_value={
-                "sample_manual_total": 0,
-                "sample_answers_missing": 0,
-                "sample_answers_built": 0,
-                "build_id": "",
-            },
-        ) as build_sample_answers:
-            confirm_resp = asyncio.run(
-                contests_root_import_confirm(
-                    _post_form_request("/contests/import/confirm", confirm_form),
-                    user="alice",
-                )
+        confirm_resp = asyncio.run(
+            contests_root_import_confirm(
+                _post_form_request("/contests/import/confirm", confirm_form),
+                user="alice",
             )
-        build_sample_answers.assert_not_called()
+        )
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertIn(f"/contests/{target_slug}/alice/overview", str(confirm_resp.headers.get("location", "")))
         confirm_messages = _flash_messages_from_response(confirm_resp)
@@ -1269,22 +1259,12 @@ class TestUIWorkspace(UIBaseSuite):
         for seq, row in enumerate(rows, start=1):
             confirm_form[f"problem_slug_{seq}"] = str(row["source_slug"])
 
-        with patch(
-            "app.impl.run_export.import_source._build_polygon_sample_answers",
-            return_value={
-                "sample_manual_total": 0,
-                "sample_answers_missing": 0,
-                "sample_answers_built": 0,
-                "build_id": "",
-            },
-        ) as build_sample_answers:
-            confirm_resp = asyncio.run(
-                contests_root_import_confirm(
-                    _post_form_request("/contests/import/confirm", confirm_form),
-                    user="alice",
-                )
+        confirm_resp = asyncio.run(
+            contests_root_import_confirm(
+                _post_form_request("/contests/import/confirm", confirm_form),
+                user="alice",
             )
-        build_sample_answers.assert_not_called()
+        )
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertIn(f"/contests/{target_slug}/alice/overview", str(confirm_resp.headers.get("location", "")))
         messages = _flash_messages_from_response(confirm_resp)
@@ -1413,7 +1393,7 @@ class TestUIWorkspace(UIBaseSuite):
         p.write_text("before\nafter\n", encoding="utf-8")
         marker = f"ui-history-diff-{uuid.uuid4().hex[:6]}"
         git_service.commit(ws, marker, "alice", "alice@polygonlike.local")
-        selected = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+        selected = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertTrue(selected)
 
         resp = history_page(_request("/problems/alice/sample/alice/history", f"revision={selected}"), "alice/sample", "alice")
@@ -1434,7 +1414,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         p.write_text("old-version\n", encoding="utf-8")
         git_service.commit(ws, f"ui-restore-old-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        old_commit = run_cmd(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+        old_commit = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertTrue(old_commit)
 
         p.write_text("new-version\n", encoding="utf-8")
@@ -1471,7 +1451,7 @@ class TestUIWorkspace(UIBaseSuite):
                     git_service.rebase_abort(ws)
                 except Exception:
                     pass
-            switched = run_cmd(["git", "-C", str(ws), "switch", "main"])
+            switched = run_git(["git", "-C", str(ws), "switch", "main"])
             if switched.returncode != 0:
                 raise RuntimeError(switched.stderr or switched.stdout or "unable to switch workspace to main")
             git_service.pull(ws, "main")

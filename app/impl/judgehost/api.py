@@ -43,18 +43,34 @@ def _extract_basic_credentials(request: Request) -> tuple[str, str]:
     return (user, password)
 
 
-def _extract_hostname(payload: JudgehostPayload, request: Request) -> str:
+def _hostname_from_payload(payload: JudgehostPayload, *, required: bool = False) -> str:
     hostname = (payload.get("hostname") or "").strip()
-    if hostname:
-        return hostname
-    peer = request.client.host if request.client is not None else ""
-    return peer or "judgehost"
-
-
-def _hostname_from_payload(payload: JudgehostPayload, request: Request, *, required: bool = False) -> str:
-    hostname = _extract_hostname(payload, request)
     if required and not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
+    return hostname
+
+
+def _request_peer_addr(request: Request) -> str:
+    client = request.client
+    if client is None:
+        return ""
+    return str(client.host or "").strip()
+
+
+def _bind_request_peer(service, request: Request, hostname: str) -> None:
+    peer_addr = _request_peer_addr(request)
+    if not peer_addr:
+        return
+    service.bind_request_peer_hostname(peer_addr, hostname)
+
+
+def _resolve_request_hostname(service, request: Request) -> str:
+    peer_addr = _request_peer_addr(request)
+    if not peer_addr:
+        raise HTTPException(status_code=400, detail="request peer is missing")
+    hostname = service.hostname_for_request_peer(peer_addr)
+    if not hostname:
+        raise HTTPException(status_code=400, detail="judgehost peer is not registered")
     return hostname
 
 
@@ -256,6 +272,7 @@ async def domjudge_judgehosts_post(request: Request):
     hostname = (payload.get("hostname") or "").strip()
     if not hostname:
         raise HTTPException(status_code=400, detail="hostname is required")
+    _bind_request_peer(service, request, hostname)
     rows = await _run_service_call(service.domjudge_register_host, hostname)
     return JSONResponse(rows)
 
@@ -263,7 +280,8 @@ async def domjudge_judgehosts_post(request: Request):
 async def domjudge_fetch_work(request: Request):
     service = _require_judgehost_auth(request)
     payload = await _request_payload(request)
-    hostname = _hostname_from_payload(payload, request)
+    hostname = _hostname_from_payload(payload, required=True)
+    _bind_request_peer(service, request, hostname)
     max_batchsize = _int_or_none(payload.get("max_batchsize"))
     try:
         tasks = await _run_service_call(service.domjudge_fetch_work, hostname, max_batchsize=max_batchsize)
@@ -313,7 +331,8 @@ async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: 
             test_id = _int_or_none(item_id)
             if test_id is None:
                 raise RuntimeError("invalid testcase id")
-            rows = await _run_service_call(service.domjudge_get_testcase_files, test_id)
+            hostname = _resolve_request_hostname(service, request)
+            rows = await _run_service_call(service.domjudge_get_testcase_files, test_id, hostname=hostname)
         elif token in {"compile", "run", "compare"}:
             rows = await _run_service_call(service.domjudge_get_executable_files, token, item_id)
         else:
@@ -331,7 +350,8 @@ async def domjudge_get_version_commands(request: Request, judgetask_id: int):
 async def domjudge_check_versions(request: Request, judgetask_id: int):
     service = _require_judgehost_auth(request)
     payload = await _request_payload(request)
-    hostname = _hostname_from_payload(payload, request)
+    hostname = _hostname_from_payload(payload, required=True)
+    _bind_request_peer(service, request, hostname)
     result = await _run_service_call(
         service.domjudge_check_versions,
         judgetask_id,
@@ -344,6 +364,7 @@ async def domjudge_check_versions(request: Request, judgetask_id: int):
 
 async def domjudge_update_judging(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
+    _bind_request_peer(service, request, hostname)
     payload = await _request_payload(request)
     try:
         await _run_service_call(service.domjudge_update_judging, hostname, judgetask_id, payload)
@@ -354,6 +375,7 @@ async def domjudge_update_judging(request: Request, hostname: str, judgetask_id:
 
 async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
+    _bind_request_peer(service, request, hostname)
     payload = await _request_payload(request)
     try:
         result = await _run_service_call(service.domjudge_add_judging_run, hostname, judgetask_id, payload)
@@ -382,6 +404,7 @@ async def domjudge_internal_error(request: Request):
 
 async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id: int):
     service = _require_judgehost_auth(request)
+    _bind_request_peer(service, request, hostname)
     payload = await _request_payload(request)
     await _run_service_call(
         service.domjudge_add_debug_info,

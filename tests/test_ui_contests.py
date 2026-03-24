@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_all, db_fetch_one
+from .db_helpers import (
+    db_execute,
+    db_fetch_all,
+    db_fetch_one,
+    read_contest_job_summary,
+    write_contest_job_summary,
+)
 
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
 from app.service.sandbox.base import ExecResult
 
 from .ui_support import (
@@ -179,11 +185,11 @@ class TestUIContests(UIBaseSuite):
         self.assertIn(f"/contests/{contest_slug}/alice/problems", update_resp.headers.get("location", ""))
 
         job_row = db_fetch_one(
-            "SELECT id,status,summary_json FROM contest_jobs WHERE contest_id=? ORDER BY created_at DESC LIMIT 1",
+            "SELECT id,status FROM contest_jobs WHERE contest_id=? ORDER BY created_at DESC LIMIT 1",
             [contest_id],
         )
         self.assertIsNotNone(job_row)
-        summary = json.loads(str(job_row["summary_json"] or "{}"))
+        summary = read_contest_job_summary(contest_id, str(job_row["id"]))
         self.assertEqual(str(summary.get("job_type") or ""), "change-general")
         results = summary.get("results") or []
         self.assertEqual(len(results), 1)
@@ -201,7 +207,7 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(int(cfg.get("time_limit_ms") or 0), 3500)
         self.assertEqual(int(cfg.get("memory_limit_mb") or 0), 512)
 
-        last_subject = run_cmd(["git", "-C", str(ws), "log", "-1", "--pretty=%s"]).stdout.strip()
+        last_subject = run_git(["git", "-C", str(ws), "log", "-1", "--pretty=%s"]).stdout.strip()
         self.assertEqual(last_subject, f"contest {contest_slug}: bulk update name/TL/ML")
 
     def test_contest_properties_access_and_packages_pages(self) -> None:
@@ -442,19 +448,16 @@ class TestUIContests(UIBaseSuite):
             artifact_root.mkdir(parents=True, exist_ok=True)
             db_execute(
                 """
-                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?)
                 """,
                 [
                     verification_id,
                     int(problem_row["id"]),
                     workspace_id,
-                    str(commit or "").strip(),
-                    str(ref or "").strip(),
-                    "verification",
+                    "",
+                    "all",
                     "ok",
-                    json.dumps({"status": "ok"}),
-                    str(artifact_root.resolve()),
                     "2026-02-28T00:00:00+00:00",
                     "2026-02-28T00:00:00+00:00",
                 ],
@@ -534,11 +537,11 @@ class TestUIContests(UIBaseSuite):
         disposition = str(download_resp.headers.get("content-disposition") or "").lower()
         self.assertIn("attachment", disposition)
         preview_job = db_fetch_one(
-            "SELECT summary_json FROM contest_jobs WHERE id=? AND contest_id=?",
+            "SELECT id FROM contest_jobs WHERE id=? AND contest_id=?",
             [preview_job_id, contest_id],
         )
         self.assertIsNotNone(preview_job)
-        preview_summary = json.loads(str(preview_job["summary_json"] or "{}"))
+        preview_summary = read_contest_job_summary(contest_id, preview_job_id)
         self.assertEqual(str(preview_summary.get("job_type") or ""), "pdf")
         self.assertEqual(str(preview_summary.get("language") or ""), "english")
         self.assertTrue(str(preview_summary.get("pdf_file") or "").endswith("statements.pdf"))
@@ -626,8 +629,8 @@ class TestUIContests(UIBaseSuite):
         running_job_id = f"cj-{uuid.uuid4().hex[:10]}"
         db_execute(
             """
-            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,summary_json,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?)
             """,
             [
                 running_job_id,
@@ -635,11 +638,11 @@ class TestUIContests(UIBaseSuite):
                 actor_user_id,
                 "pdf",
                 "running",
-                json.dumps({"job_type": "pdf", "results": [], "language": "english"}),
                 "2026-03-01T10:00:00+00:00",
                 "2026-03-01T10:00:10+00:00",
             ],
         )
+        write_contest_job_summary(contest_id, running_job_id, {"job_type": "pdf", "results": [], "language": "english"})
 
         overview = contest_overview_page(
             _request(f"/contests/{contest_slug}/alice/overview"),
@@ -664,8 +667,8 @@ class TestUIContests(UIBaseSuite):
         change_job_id = f"cj-{uuid.uuid4().hex[:10]}"
         db_execute(
             """
-            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,summary_json,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO contest_jobs(id,contest_id,actor_user_id,job_type,status,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?)
             """,
             [
                 change_job_id,
@@ -673,22 +676,24 @@ class TestUIContests(UIBaseSuite):
                 actor_user_id,
                 "change-general",
                 "success",
-                json.dumps(
-                    {
-                        "job_type": "change-general",
-                        "results": [
-                            {
-                                "problem_slug": "alice/sample",
-                                "status": "failed",
-                                "commit_id": "",
-                                "error": "mock error",
-                            }
-                        ],
-                    }
-                ),
                 "2026-03-01T10:01:00+00:00",
                 "2026-03-01T10:01:05+00:00",
             ],
+        )
+        write_contest_job_summary(
+            contest_id,
+            change_job_id,
+            {
+                "job_type": "change-general",
+                "results": [
+                    {
+                        "problem_slug": "alice/sample",
+                        "status": "failed",
+                        "commit_id": "",
+                        "error": "mock error",
+                    }
+                ],
+            },
         )
 
         problems_page = contest_problems_page(

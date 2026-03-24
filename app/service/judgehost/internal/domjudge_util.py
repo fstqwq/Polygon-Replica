@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import shlex
@@ -17,7 +18,6 @@ from app.service.judgehost.domjudge.cache import (
     domjudge_set_hash_from_blobs,
     domjudge_solve_output_cache_ref,
 )
-from app.service.judgehost.domjudge.client import domjudge_script_provider_job_id
 from app.service.judgehost.internal.shared import (
     _DOMJUDGE_CACHE_NAME_RE,
     _DOMJUDGE_CONTEST_ID_RE,
@@ -39,9 +39,15 @@ logger = logging.getLogger(__name__)
 
 class JudgehostDomjudgeUtilsMixin:
     _TASK_KIND_COMPILE_ONLY = "compile-only"
-    _TASK_KIND_GENERATE = "generate"
-    _TASK_KIND_SOLVE = "solve"
-    _TASK_KIND_SET = {_TASK_KIND_COMPILE_ONLY, _TASK_KIND_GENERATE, _TASK_KIND_SOLVE}
+    _TASK_KIND_GENERATE_INPUT = "generate-input"
+    _TASK_KIND_MAIN_CORRECT = "main-correct"
+    _TASK_KIND_SOLUTION_RUN = "solution-run"
+    _TASK_KIND_SET = {
+        _TASK_KIND_COMPILE_ONLY,
+        _TASK_KIND_GENERATE_INPUT,
+        _TASK_KIND_MAIN_CORRECT,
+        _TASK_KIND_SOLUTION_RUN,
+    }
 
 
 
@@ -66,7 +72,7 @@ class JudgehostDomjudgeUtilsMixin:
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", domjudge_text(task_id)).strip("-")
         if not safe:
             safe = f"task-{uuid.uuid4().hex[:8]}"
-        return (self._settings.run_root / "judgehost-domjudge" / safe).resolve()
+        return (self._settings.cache_root / "judgehost-domjudge-runs" / safe).resolve()
 
     @staticmethod
     def _domjudge_b64_decode(text: str | bytes | bytearray | memoryview | None) -> bytes:
@@ -490,9 +496,7 @@ class JudgehostDomjudgeUtilsMixin:
 
     def clear_testcase_registry(self) -> None:
         with self._testcase_registry_lock:
-            self._testcase_registry_next_id = 1
             self._testcase_registry_by_hash.clear()
-            self._testcase_registry_by_id.clear()
 
     def _domjudge_testcase_cache_paths(self, testcase_hash: str) -> tuple[Path, Path]:
         token = domjudge_lower_text(testcase_hash)
@@ -507,7 +511,7 @@ class JudgehostDomjudgeUtilsMixin:
         testcase_hash: str,
         in_bytes: bytes,
         ans_bytes: bytes,
-    ) -> tuple[int, str, str]:
+    ) -> tuple[str, str]:
         safe_hash = domjudge_lower_text(testcase_hash)
         if not re.fullmatch(r"[0-9a-f]{64}", safe_hash):
             safe_hash = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
@@ -516,31 +520,18 @@ class JudgehostDomjudgeUtilsMixin:
         self._domjudge_ensure_bytes_file(in_path, in_bytes, executable=False)
         self._domjudge_ensure_bytes_file(ans_path, ans_bytes, executable=False)
         with self._testcase_registry_lock:
-            entry = self._testcase_registry_by_hash.get(safe_hash, {})
-            testcase_id = 0
-            try:
-                testcase_id = int(entry.get("id", 0))
-            except Exception:
-                testcase_id = 0
-            if testcase_id <= 0:
-                testcase_id = max(1, int(self._testcase_registry_next_id))
-                while testcase_id in self._testcase_registry_by_id:
-                    testcase_id += 1
-                self._testcase_registry_next_id = int(testcase_id + 1)
             record = {
-                "id": int(testcase_id),
                 "hash": safe_hash,
                 "input_path": str(in_path),
                 "answer_path": str(ans_path),
                 "updated_at": now_text,
             }
             self._testcase_registry_by_hash[safe_hash] = dict(record)
-            self._testcase_registry_by_id[int(testcase_id)] = dict(record)
             marker_dir = self._domjudge_testcase_cache_root()
             marker = (marker_dir / safe_hash).resolve()
             if marker.parent == marker_dir:
                 marker.write_bytes(b"")
-        return (int(testcase_id), str(in_path), str(ans_path))
+        return (str(in_path), str(ans_path))
 
     @staticmethod
     def _domjudge_language_extensions(source_name: str) -> tuple[str, list[str]]:
@@ -715,9 +706,72 @@ class JudgehostDomjudgeUtilsMixin:
         )
         if legacy_compile_only:
             return self._TASK_KIND_COMPILE_ONLY
-        if source.startswith("build.generate") or source == "build.validate-tests":
-            return self._TASK_KIND_GENERATE
-        return self._TASK_KIND_SOLVE
+        if source == self._TASK_KIND_GENERATE_INPUT:
+            return self._TASK_KIND_GENERATE_INPUT
+        if source == self._TASK_KIND_MAIN_CORRECT:
+            return self._TASK_KIND_MAIN_CORRECT
+        return self._TASK_KIND_SOLUTION_RUN
+
+    def _domjudge_group_key(self, payload: dict[str, object] | None = None) -> str:
+        payload_obj = {} if payload is None else payload
+        task_kind = self._domjudge_task_kind(payload_obj)
+        verification_source = domjudge_lower_text(payload_obj.get("verification_source"))
+        if verification_source not in {
+            self._TASK_KIND_GENERATE_INPUT,
+            self._TASK_KIND_MAIN_CORRECT,
+            self._TASK_KIND_SOLUTION_RUN,
+        }:
+            return ""
+        if task_kind not in {
+            self._TASK_KIND_GENERATE_INPUT,
+            self._TASK_KIND_MAIN_CORRECT,
+            self._TASK_KIND_SOLUTION_RUN,
+        }:
+            return ""
+        precomputed_raw = payload_obj.get("domjudge_precomputed")
+        if not isinstance(precomputed_raw, dict):
+            return ""
+        compile_hash = domjudge_lower_text(precomputed_raw.get("compile_hash"))
+        run_hash = domjudge_lower_text(precomputed_raw.get("run_hash"))
+        compare_hash = domjudge_lower_text(precomputed_raw.get("compare_hash"))
+        source_hash = domjudge_lower_text(precomputed_raw.get("source_hash"))
+        if (not compile_hash) or (not run_hash) or (not compare_hash) or (not source_hash):
+            return ""
+        compile_config = precomputed_raw.get("compile_config") or {}
+        run_config = precomputed_raw.get("run_config") or {}
+        compare_config = precomputed_raw.get("compare_config") or {}
+        compile_config_hash = sha256_hex_text(
+            json.dumps(compile_config, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        )
+        run_config_hash = sha256_hex_text(
+            json.dumps(run_config, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        )
+        compare_config_hash = sha256_hex_text(
+            json.dumps(compare_config, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        )
+        group_payload = {
+            "task_kind": task_kind,
+            "verification_source": verification_source,
+            "expected_behavior": domjudge_lower_text(payload_obj.get("expected_behavior")),
+            "force_recompile": domjudge_bool(payload_obj.get("force_recompile"), default=False),
+            "source_hash": source_hash,
+            "compile_hash": compile_hash,
+            "run_hash": run_hash,
+            "compare_hash": compare_hash,
+            "compile_config_hash": compile_config_hash,
+            "run_config_hash": run_config_hash,
+            "compare_config_hash": compare_config_hash,
+            "toolchain_cmd_digest": domjudge_lower_text(
+                compile_config.get("toolchain_cmd_digest") if isinstance(compile_config, dict) else ""
+            ),
+        }
+        digest = sha256_hex_text(
+            json.dumps(group_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        )
+        return f"jg-{digest[:32]}"
+
+    def _domjudge_is_grouped_verification_task(self, payload: dict[str, object] | None = None) -> bool:
+        return bool(self._domjudge_group_key(payload))
 
     def _domjudge_execution_modes(
         self,
@@ -727,36 +781,27 @@ class JudgehostDomjudgeUtilsMixin:
         compile_only: object | None = None,
     ) -> tuple[bool, bool, bool]:
         payload_obj = {} if payload is None else payload
-        source = str(
-            verification_source
-            if verification_source is not None
-            else (
-                str(payload_obj.get("verification_source"))
-                if payload_obj.get("verification_source") is not None
-                else ""
-            )
-        ).strip().lower()
         kind = self._domjudge_task_kind(
             payload_obj,
             verification_source=verification_source,
             compile_only=compile_only,
         )
-        solve_main_mode = source in {"verification.solve-main", "solve.main"}
         return (
             kind == self._TASK_KIND_COMPILE_ONLY,
-            kind == self._TASK_KIND_GENERATE,
-            solve_main_mode,
+            kind == self._TASK_KIND_GENERATE_INPUT,
+            kind == self._TASK_KIND_MAIN_CORRECT,
         )
 
     def _domjudge_run_script(
         self,
         interactive: bool,
         *,
-        solve_mode: bool = False,
+        main_correct: bool = False,
         compile_only: bool = False,
         generate_mode: bool = False,
         manual_validate_only: bool = False,
     ) -> bytes:
+        _ = main_correct
         if interactive:
             return self._domjudge_load_script_asset("interactive.run").encode("utf-8")
         if compile_only or manual_validate_only:
@@ -770,11 +815,11 @@ class JudgehostDomjudgeUtilsMixin:
     def _domjudge_compare_script(
         self,
         *,
-        solve_mode: bool = False,
+        main_correct: bool = False,
         generate_mode: bool = False,
     ) -> bytes:
-        if solve_mode:
-            script_name = "skip.compare"
+        if main_correct:
+            script_name = "main.compare"
         elif generate_mode:
             script_name = "generate.compare"
         else:
@@ -791,15 +836,4 @@ class JudgehostDomjudgeUtilsMixin:
     def domjudge_list_hosts(self) -> list[dict[str, object]]:
         with self._state_lock:
             return domjudge_hosts_payload(self._hosts_state)
-
-    def _domjudge_script_provider_job_id(self, *, kind: str, script_hash: str, default_job_id: int) -> int:
-        return domjudge_script_provider_job_id(
-            kind=kind,
-            script_hash=script_hash,
-            default_job_id=default_job_id,
-            fetch_rows=lambda field, safe_hash: self._judgehost_state_store.jobs_for_script_hash(
-                kind=field.replace("_hash", ""),
-                script_hash=safe_hash,
-            ),
-        )
 

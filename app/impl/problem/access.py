@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from fastapi import Form
 
@@ -6,7 +6,7 @@ from app.impl.auth.shared import normalize_username_required, redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import normalize_transferable_repo_role, require_manage_access
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 
 
 def workspace_access_grant(problem: str, user: str, target_user: str = Form(...), role: str = Form("read")):
@@ -42,3 +42,4 @@ def workspace_access_revoke(problem: str, user: str, target_user: str = Form(...
     if redirect_to_problems:
         return redirect_response("/problems", status_code=303, message=msg)
     return redirect_response(f"/problems/{problem}/{user}/access", status_code=303, message=msg)
+

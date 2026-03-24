@@ -443,7 +443,6 @@ def _verification_status_summary(entries: list[dict[str, object]]) -> dict[str, 
         status_text = 'ok' if total_count > 0 and matched_count == total_count else 'failed'
     return {
         'status': status_text,
-        'status_upper': status_text.upper(),
         'is_failed': status_text == 'failed',
         'has_running': has_running,
         'matched_count': matched_count,

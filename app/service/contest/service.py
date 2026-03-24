@@ -115,9 +115,7 @@ class ContestPreviewResult(TypedDict):
 class ContestVerificationStage(TypedDict):
     id: str
     status: str
-    source_commit: str
-    source_ref: str
-    summary: dict[str, object]
+    signature: str
     created_at: str
     finished_at: str
 
@@ -156,17 +154,26 @@ class ContestService:
             return raw_role
         return "read"
 
-    def _parse_summary(self, raw_summary: str) -> dict[str, object]:
-        text = str(raw_summary).strip()
+    def _job_summary_path(self, contest_slug: str, job_id: str) -> Path:
+        return (self.job_root(contest_slug, job_id) / "summary.json").resolve()
+
+    def _read_job_summary(self, contest_slug: str, job_id: str) -> dict[str, object]:
+        try:
+            text = self._job_summary_path(contest_slug, job_id).read_text(encoding="utf-8")
+        except OSError:
+            return {}
         if not text:
             return {}
         try:
             payload = json.loads(text)
         except Exception:
             return {}
-        if isinstance(payload, dict):
-            return payload
-        return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _write_job_summary(self, contest_slug: str, job_id: str, summary: dict[str, object]) -> None:
+        path = self._job_summary_path(contest_slug, job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
     def _property_text(self, raw_json: str) -> str:
         text = str(raw_json).strip()
@@ -216,7 +223,7 @@ class ContestService:
             "id": str(row["id"]),
             "job_type": str(row["job_type"]),
             "status": str(row["status"]),
-            "summary": self._parse_summary(str(row["summary_json"])),
+            "summary": self._read_job_summary(str(row["contest_slug"]), str(row["id"])),
             "created_at": str(row["created_at"]),
             "finished_at": str(row["finished_at"]),
         }
@@ -621,16 +628,19 @@ class ContestService:
         resolved_finished_at = finished_at
         if resolved_finished_at is None and safe_status not in {"running", "queued"}:
             resolved_finished_at = created_at
+        contest_row = self._store.contest_context_by_id(int(contest_id))
+        if contest_row is None:
+            raise ValueError("contest not found")
         self._store.insert_job(
             job_id=job_id,
             contest_id=int(contest_id),
             actor_user_id=int(actor_user_id),
             job_type=str(job_type).strip(),
             status=safe_status,
-            summary=summary,
             created_at=created_at,
             finished_at=resolved_finished_at,
         )
+        self._write_job_summary(str(contest_row["slug"]), job_id, summary)
         return job_id
 
     def update_job(
@@ -645,13 +655,16 @@ class ContestService:
         safe_job_id = str(job_id).strip()
         if not safe_job_id:
             return
+        contest_row = self._store.contest_context_by_id(int(contest_id))
+        if contest_row is None:
+            return
         self._store.update_job(
             contest_id=int(contest_id),
             job_id=safe_job_id,
             status=str(status).strip().lower() or "failed",
-            summary=summary,
             finished_at=now_iso() if finished else None,
         )
+        self._write_job_summary(str(contest_row["slug"]), safe_job_id, summary)
 
     def load_job(self, contest_id: int, job_id: str) -> ContestJob | None:
         safe_job_id = str(job_id).strip()
@@ -755,20 +768,18 @@ class ContestService:
             return None
         return {
             "status": str(row["status"]).strip().lower(),
-            "summary": self._parse_summary(str(row["summary_json"])),
+            "summary": dict(row["summary"]),
             "artifact_path": str(row["artifact_path"]),
         }
 
     def verification_stage(self, problem_id: int, workspace_id: int, verification_id: str) -> ContestVerificationStage | None:
-        row = self._verification_store.workspace_stage_row(int(problem_id), int(workspace_id), verification_id)
+        row = self._verification_store.workspace_verification_row(int(problem_id), int(workspace_id), verification_id)
         if row is None:
             return None
         return {
             "id": str(row["id"]),
             "status": str(row["status"]).strip().lower(),
-            "source_commit": str(row["source_commit"]),
-            "source_ref": str(row["source_ref"]),
-            "summary": self._parse_summary(str(row["summary_json"])),
+            "signature": str(row["signature"] or ""),
             "created_at": str(row["created_at"]),
             "finished_at": str(row["finished_at"]),
         }

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -12,7 +12,7 @@ from app.impl.problem.shared import _normalize_component_create_path
 from app.impl.workspace.context_operation import audit, generator_sources_from_build_cfg, normalize_optional_component_source_path_safe, read_build_config, template_for_kind, workspace_rel_file_exists, write_build_config
 from app.impl.workspace.context_component_status import generator_status_context
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
 _C = config.constants
@@ -127,6 +127,7 @@ def generator_save_source(problem: str, user: str, path: str=Form('generators/ge
     except HTTPException as exc:
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/{user}/generators?path={quote_plus(target)}', status_code=303, message=msg)
+
 
 
 

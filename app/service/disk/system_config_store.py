@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from app.db import DB
 
@@ -51,5 +52,10 @@ class SystemConfigStore:
         self.db.write_transaction(_tx)
 
     def override_rows(self) -> list[dict[str, str]]:
-        rows = self.db.fetch_all("SELECT key, value_json FROM system_config ORDER BY key ASC")
+        try:
+            rows = self.db.fetch_all("SELECT key, value_json FROM system_config ORDER BY key ASC")
+        except sqlite3.OperationalError as exc:
+            if "no such table: system_config" in str(exc).lower():
+                return []
+            raise
         return [{"key": str(row["key"]), "value_json": str(row["value_json"])} for row in rows]

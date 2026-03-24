@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -17,7 +17,7 @@ from app.impl.problem.shared import (
 from app.impl.workspace.context_operation import audit, list_solution_entries, normalize_optional_component_source_path_safe, read_build_config, read_text_safe_limited, resolve_build_accepted_solution_source, solution_metadata_entry, workspace_rel_file_exists, write_build_config
 from app.impl.workspace.solution import ensure_solution_metadata_for_source, normalize_solution_source_path_required, solution_behavior_options
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 from app.service.problem.solution_metadata import (
     desc_rel_path_for_source,
     normalize_expected_behavior,
@@ -308,6 +308,7 @@ def solutions_delete(problem: str, user: str, source_path: str=Form(...)):
     except HTTPException as exc:
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/{user}/solutions', status_code=303, message=msg)
+
 
 
 

@@ -15,7 +15,7 @@ PREVIEW_LOG_REF_LIST_LIMIT = 200
 STATEMENT_EDITOR_CHAR_LIMIT = 262144
 API_PROBLEMS_LIST_LIMIT = 200
 DIAGNOSTIC_MESSAGE_CHAR_LIMIT = 4096
-SUMMARY_JSON_UI_CHAR_LIMIT = 1048576
+UI_JSON_CHAR_LIMIT = 1048576
 WORKSPACE_HISTORY_LIMIT = 120
 SOLUTION_LIST_LIMIT = 256
 SOLUTION_NOTE_CHAR_LIMIT = 4096
@@ -252,7 +252,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "STATEMENT_EDITOR_CHAR_LIMIT": {"type": "int", "min": 2048, "max": 4194304, "description": "Statement editor content limit."},
     "API_PROBLEMS_LIST_LIMIT": {"type": "int", "min": 1, "max": 10000, "description": "Max problems/contests returned per list API."},
     "DIAGNOSTIC_MESSAGE_CHAR_LIMIT": {"type": "int", "min": 256, "max": 65536, "description": "Diagnostic message truncation limit."},
-    "SUMMARY_JSON_UI_CHAR_LIMIT": {"type": "int", "min": 1024, "max": 16777216, "description": "summary_json parse limit in UI."},
+    "UI_JSON_CHAR_LIMIT": {"type": "int", "min": 1024, "max": 16777216, "description": "json parse limit in UI."},
     "WORKSPACE_HISTORY_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max commit rows shown on history page."},
     "SOLUTION_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max solution files listed."},
     "SOLUTION_NOTE_CHAR_LIMIT": {"type": "int", "min": 0, "max": 65536, "description": "Max solution metadata note length."},

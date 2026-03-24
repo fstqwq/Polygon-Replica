@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import time
 import warnings
@@ -8,13 +7,14 @@ from pathlib import Path
 
 from app.db import now_iso
 from app.impl.runtime.config import config
+from app.service.verification.task_store import VerificationTaskStore
 
 _C = config.constants
 
-_RUNTIME_BACKEND_CACHE: dict[str, str] | None = None
-_RUNTIME_BACKEND_CACHE_TS = 0.0
+_RUNTIME_JUDGEHOST_HEALTH_CACHE: dict[str, str] | None = None
+_RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = 0.0
 _RUNTIME_PROFILE_MAX_LEN = 160
-_RUNTIME_BACKEND_CACHE_TTL_SEC = 2.0
+_RUNTIME_JUDGEHOST_HEALTH_CACHE_TTL_SEC = 2.0
 
 
 def _sanitize_runtime_profile_value(raw: object, default: str = "n/a") -> str:
@@ -32,14 +32,14 @@ def _safe_int(value: object, default: int = 0) -> int:
         return int(default)
 
 
-def _runtime_backend_profile() -> dict[str, str]:
-    global _RUNTIME_BACKEND_CACHE, _RUNTIME_BACKEND_CACHE_TS
+def _runtime_judgehost_health_profile() -> dict[str, str]:
+    global _RUNTIME_JUDGEHOST_HEALTH_CACHE, _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS
     now = time.monotonic()
     if (
-        isinstance(_RUNTIME_BACKEND_CACHE, dict)
-        and (now - float(_RUNTIME_BACKEND_CACHE_TS)) <= _RUNTIME_BACKEND_CACHE_TTL_SEC
+        isinstance(_RUNTIME_JUDGEHOST_HEALTH_CACHE, dict)
+        and (now - float(_RUNTIME_JUDGEHOST_HEALTH_CACHE_TS)) <= _RUNTIME_JUDGEHOST_HEALTH_CACHE_TTL_SEC
     ):
-        return dict(_RUNTIME_BACKEND_CACHE)
+        return dict(_RUNTIME_JUDGEHOST_HEALTH_CACHE)
     judgehost_enabled = False
     hosts_online = 0
     hosts_total = 0
@@ -76,14 +76,14 @@ def _runtime_backend_profile() -> dict[str, str]:
         judgehost_summary = "disabled"
     judgehost_danger = (not judgehost_enabled) or (hosts_online <= 0)
     profile = {
-        "runtime_judgehost_backend_summary": _sanitize_runtime_profile_value(judgehost_summary),
-        "runtime_judgehost_backend_danger": "1" if judgehost_danger else "0",
+        "runtime_judgehost_health_summary": _sanitize_runtime_profile_value(judgehost_summary),
+        "runtime_judgehost_health_danger": "1" if judgehost_danger else "0",
         "runtime_judgehost_enabled": "1" if judgehost_enabled else "0",
         "runtime_judgehost_hosts_online": str(hosts_online),
         "runtime_judgehost_hosts_total": str(hosts_total),
     }
-    _RUNTIME_BACKEND_CACHE = dict(profile)
-    _RUNTIME_BACKEND_CACHE_TS = now
+    _RUNTIME_JUDGEHOST_HEALTH_CACHE = dict(profile)
+    _RUNTIME_JUDGEHOST_HEALTH_CACHE_TS = now
     return profile
 
 
@@ -108,12 +108,11 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
             warnings.warn(f"startup judgehost job/case cancel failed: {exc}", RuntimeWarning)
     if not inflight_entries:
         return
+    task_store = VerificationTaskStore(config.db)
     for item in inflight_entries:
         verification_id_raw = item.get("verification_id")
-        run_id_raw = item.get("run_id")
         verification_id = verification_id_raw.strip() if isinstance(verification_id_raw, str) else ""
-        run_id = run_id_raw.strip() if isinstance(run_id_raw, str) else ""
-        if not verification_id or not run_id:
+        if not verification_id:
             continue
         verification_row_raw = config.verification_service.verification_record(verification_id)
         verification_row = dict(verification_row_raw) if verification_row_raw is not None else None
@@ -123,78 +122,34 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
         status = status_raw.strip().lower() if isinstance(status_raw, str) else ""
         if status not in {"running", "queued", "pending"}:
             continue
-        verification_summary = config.verification_service.verification_summary(verification_id)
-        run_row = config.verification_service.verification_run(verification_id, run_id)
-        run_summary = run_row.get("summary") if isinstance(run_row, dict) else None
-        summary_obj = dict(run_summary) if isinstance(run_summary, dict) else {}
-        summary_obj["cancelled"] = True
-        summary_obj["cancel_reason"] = reason
-        summary_error = summary_obj.get("error")
-        if not (summary_error.strip() if isinstance(summary_error, str) else ""):
-            summary_obj["error"] = reason
-        source_raw = summary_obj.get("source")
-        source_label = source_raw.strip() if isinstance(source_raw, str) and source_raw.strip() else run_id
-        source_paths_obj = verification_summary.get("source_paths")
-        source_paths = list(source_paths_obj) if isinstance(source_paths_obj, list) else ([source_label] if source_label else [])
-        kind_raw = verification_row.get("kind")
-        kind = kind_raw.strip() if isinstance(kind_raw, str) and kind_raw.strip() else "verification"
-        mode_raw = summary_obj.get("mode")
-        verification_mode_raw = verification_summary.get("mode")
-        mode = (
-            mode_raw.strip()
-            if isinstance(mode_raw, str) and mode_raw.strip()
-            else verification_mode_raw.strip()
-            if isinstance(verification_mode_raw, str) and verification_mode_raw.strip()
-            else "pass-fail"
-        )
-        verification_source_raw = verification_summary.get("verification_source")
-        verification_source = (
-            verification_source_raw.strip()
-            if isinstance(verification_source_raw, str) and verification_source_raw.strip()
-            else "run.execute"
-        )
-        run_expected_raw = run_row.get("expected_behavior") if isinstance(run_row, dict) else None
-        summary_expected_raw = summary_obj.get("expected_behavior")
-        expected_behavior = (
-            run_expected_raw.strip()
-            if isinstance(run_expected_raw, str) and run_expected_raw.strip()
-            else summary_expected_raw.strip()
-            if isinstance(summary_expected_raw, str) and summary_expected_raw.strip()
-            else "unknown"
-        )
-        artifact_path_raw = run_row.get("artifact_path") if isinstance(run_row, dict) else None
-        artifact_path = artifact_path_raw.strip() if isinstance(artifact_path_raw, str) else ""
-        error_text_raw = summary_obj.get("error")
-        error_text = error_text_raw.strip() if isinstance(error_text_raw, str) else ""
+        task_store.cancel_unfinished_tasks(verification_id, reason=reason)
         try:
-            problem_id_value = verification_row.get("problem_id")
-            if not isinstance(problem_id_value, int):
-                raise RuntimeError("verification row missing problem_id")
-            workspace_id_value = verification_row.get("workspace_id")
-            if workspace_id_value is not None and not isinstance(workspace_id_value, int):
-                raise RuntimeError("verification row has invalid workspace_id")
-            config.verification_service.persist_run_summary(
+            config.verification_service.update_verification_record_status(
                 verification_id=verification_id,
-                problem_id=problem_id_value,
-                workspace_id=workspace_id_value,
-                kind=kind,
-                mode=mode,
-                verification_source=verification_source,
-                source_paths=source_paths,
-                run_id=run_id,
-                run_status="failed",
-                source_label=source_label,
-                expected_behavior=expected_behavior,
-                run_summary=summary_obj,
-                artifact_path=artifact_path,
-                error_text=error_text,
+                status="failed",
+                fail_reason=reason,
                 finished=True,
             )
         except Exception as exc:
             warnings.warn(
-                f"startup verification cancel failed for {verification_id}/{run_id}: {exc}",
+                f"startup verification cancel failed for {verification_id}: {exc}",
                 RuntimeWarning,
             )
+
+
+def _startup_cancel_task_graph_verifications(reason: str) -> None:
+    task_store = VerificationTaskStore(config.db)
+    for verification_id in task_store.verification_ids_with_unfinished_tasks():
+        task_store.cancel_unfinished_tasks(verification_id, reason=reason)
+        try:
+            config.verification_service.update_verification_record_status(
+                verification_id,
+                status="failed",
+                fail_reason=reason,
+                finished=True,
+            )
+        except Exception as exc:
+            warnings.warn(f"startup task-graph verification reconciliation failed for {verification_id}: {exc}", RuntimeWarning)
 
 
 def _startup_clear_all_caches() -> None:
@@ -207,6 +162,7 @@ def _startup_clear_all_caches() -> None:
     except Exception as exc:
         warnings.warn(f"startup judge fs index clear failed: {exc}", RuntimeWarning)
     testcase_cache_root = (config.settings.cache_root / "judgehost-domjudge-testcases").resolve()
+    judgehost_runs_cache_root = (config.settings.cache_root / "judgehost-domjudge-runs").resolve()
     try:
         if testcase_cache_root.exists() and testcase_cache_root.is_dir() and (not testcase_cache_root.is_symlink()):
             shutil.rmtree(testcase_cache_root, ignore_errors=True)
@@ -214,6 +170,15 @@ def _startup_clear_all_caches() -> None:
         warnings.warn(f"startup testcase cache clear failed: {exc}", RuntimeWarning)
     try:
         testcase_cache_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if judgehost_runs_cache_root.exists() and judgehost_runs_cache_root.is_dir() and (not judgehost_runs_cache_root.is_symlink()):
+            shutil.rmtree(judgehost_runs_cache_root, ignore_errors=True)
+    except Exception as exc:
+        warnings.warn(f"startup judgehost transient run cache clear failed: {exc}", RuntimeWarning)
+    try:
+        judgehost_runs_cache_root.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
     try:
@@ -237,6 +202,7 @@ def _startup_reset_runtime_state() -> None:
     _startup_cancel_summary_rows("contest_jobs", cancel_reason, now_text=now_text)
     _startup_cancel_judgehost_inflight(cancel_reason, now_text=now_text)
     _startup_cancel_summary_rows("verifications", cancel_reason, now_text=now_text)
+    _startup_cancel_task_graph_verifications(cancel_reason)
     _startup_clear_all_caches()
 
 

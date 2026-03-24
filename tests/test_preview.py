@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_one
+from .db_helpers import (
+    db_execute,
+    db_fetch_one,
+    read_preview_summary,
+    write_preview_summary,
+)
 
 import json
 import fcntl
@@ -17,9 +22,12 @@ from app.service.statement.constant import (
     WF_STYLE_OLYMP_REL,
     WF_STYLE_STATEMENTS_REL,
 )
+from app.impl.workspace.sample_output_validation import validate_custom_sample_outputs
+from app.impl.workspace.verification_dag_plan import VerificationTestPlan
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
+from app.service.verification.signature import verification_signature
 from .common import SmokeBase
 from app.impl.runtime.config import config
 
@@ -210,9 +218,13 @@ class TestPreview(SmokeBase):
         self.assertEqual((statement / "rendered" / "english" / "sample.001.in").read_text(encoding="utf-8"), "custom-input\n")
         self.assertEqual((statement / "rendered" / "english" / "sample.001.ans").read_text(encoding="utf-8"), "custom-output\n")
 
-    def test_sample_rows_from_spec_only_requires_sync_when_custom_is_blank(self) -> None:
+    def test_sample_verification_rows_include_validate_only_custom_output(self) -> None:
         ws = self._workspace_path()
-        (ws / "tests").mkdir(parents=True, exist_ok=True)
+        (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
+        (ws / "tests" / "manual" / "001.in").write_text("base-input-1\n", encoding="utf-8")
+        (ws / "tests" / "manual" / "002.in").write_text("base-input-2\n", encoding="utf-8")
+        (ws / "tests" / "answers" / "001.ans").write_text("base-answer-1\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
             dumps_tests_spec(
                 [
@@ -227,26 +239,36 @@ class TestPreview(SmokeBase):
                         "id": "002",
                         "kind": "manual",
                         "sample": True,
-                        "sample_output": "custom-output-only\n",
+                        "sample_input": "custom-input-only\n",
                     },
                 ]
             ),
             encoding="utf-8",
         )
 
-        rows = preview_service._sample_rows_from_spec(ws)
-        self.assertEqual(rows, [(2, "002", "manual")])
+        rows = preview_service._sample_verification_rows_from_spec(ws)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].index, 1)
+        self.assertEqual(rows[0].test_id, "001")
+        self.assertFalse(rows[0].needs_input_copy)
+        self.assertFalse(rows[0].needs_output_copy)
+        self.assertTrue(rows[0].validate_custom_output)
+        self.assertEqual(rows[1].index, 2)
+        self.assertEqual(rows[1].test_id, "002")
+        self.assertFalse(rows[1].needs_input_copy)
+        self.assertTrue(rows[1].needs_output_copy)
+        self.assertFalse(rows[1].validate_custom_output)
 
     def test_generation_params_digest_changes_when_build_sources_change(self) -> None:
         ws = self._workspace_path()
-        digest_before = config.verification_service._generation_params_digest(ws, sample_only=False)
+        digest_before = verification_signature(ws)
 
         testlib_path = ws / "third_party" / "testlib" / "testlib.h"
         testlib_path.write_text(
             testlib_path.read_text(encoding="utf-8") + "\n// digest probe\n",
             encoding="utf-8",
         )
-        digest_after_testlib = config.verification_service._generation_params_digest(ws, sample_only=False)
+        digest_after_testlib = verification_signature(ws)
         self.assertNotEqual(digest_before, digest_after_testlib)
 
         validator_path = ws / "validators" / "validator.cpp"
@@ -254,7 +276,7 @@ class TestPreview(SmokeBase):
             '#include "testlib.h"\nint main(int argc, char* argv[]) { registerValidation(argc, argv); inf.readEof(); }\n',
             encoding="utf-8",
         )
-        digest_after_validator = config.verification_service._generation_params_digest(ws, sample_only=False)
+        digest_after_validator = verification_signature(ws)
         self.assertNotEqual(digest_after_testlib, digest_after_validator)
 
     def test_preview_sample_sync_builds_manual_and_generator_from_verification(self) -> None:
@@ -280,19 +302,16 @@ class TestPreview(SmokeBase):
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         db_execute(
             """
-            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?)
             """,
             [
                 verification_id,
                 int(ctx["problem"]["id"]),
                 int(ctx["workspace"]["id"]),
                 "",
-                "main",
-                "build",
+                "all",
                 "ok",
-                "{}",
-                str(artifact_root),
                 "2026-03-02T00:00:00Z",
                 "2026-03-02T00:00:01Z",
             ],
@@ -326,6 +345,73 @@ class TestPreview(SmokeBase):
         self.assertEqual((ws / "tests" / "answers" / "901.ans").read_text(encoding="utf-8"), "build-manual-answer\n")
         self.assertEqual((ws / "tests" / "generator" / "902.in").read_text(encoding="utf-8"), "build-gen-input\n")
         self.assertEqual((ws / "tests" / "answers" / "902.ans").read_text(encoding="utf-8"), "build-gen-answer\n")
+
+    def test_preview_sample_sync_keeps_manual_payload_when_custom_sample_input_present(self) -> None:
+        ws = self._workspace_path()
+        (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
+        (ws / "tests" / "manual" / "901.in").write_text("base-manual-input\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            dumps_tests_spec(
+                [
+                    {
+                        "id": "901",
+                        "kind": "manual",
+                        "sample": True,
+                        "sample_input": "custom-sample-input\n",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        verification_id = self.random_id("ver-preview-custom-sample")
+        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        (artifact_root / "tests").mkdir(parents=True, exist_ok=True)
+        (artifact_root / "ans").mkdir(parents=True, exist_ok=True)
+        (artifact_root / "tests" / "001.in").write_text("custom-sample-input\n", encoding="utf-8")
+        (artifact_root / "ans" / "001.ans").write_text("custom-sample-answer\n", encoding="utf-8")
+
+        ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        db_execute(
+            """
+            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            [
+                verification_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "",
+                "all",
+                "ok",
+                "2026-03-02T00:00:00Z",
+                "2026-03-02T00:00:01Z",
+            ],
+        )
+
+        class _FakeVerificationService:
+            def run_verification(
+                self,
+                problem: str,
+                username: str,
+                commit=None,
+                ref=None,
+                *,
+                sample_only: bool = False,
+            ):
+                _ = (problem, username, commit, ref, sample_only)
+                return verification_id
+
+        old_verification_service = preview_service.verification_service
+        try:
+            preview_service.verification_service = _FakeVerificationService()
+            summary = preview_service._copy_sample_payloads_from_verification("alice/sample", "alice", ws)
+        finally:
+            preview_service.verification_service = old_verification_service
+
+        self.assertEqual(int(summary.get("copied") or 0), 1)
+        self.assertEqual((ws / "tests" / "manual" / "901.in").read_text(encoding="utf-8"), "base-manual-input\n")
+        self.assertEqual((ws / "tests" / "answers" / "901.ans").read_text(encoding="utf-8"), "custom-sample-answer\n")
 
     def test_compile_preview_with_samples_skips_cache_and_syncs_samples(self) -> None:
         ws = self._workspace_path()
@@ -367,7 +453,20 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service, "_sample_rows_from_spec", return_value=[(1, "901", "manual")]), patch.object(
+        with patch.object(
+            preview_service,
+            "_sample_verification_rows_from_spec",
+            return_value=[
+                preview_service._SampleVerificationRow(
+                    index=1,
+                    test_id="901",
+                    kind="manual",
+                    needs_input_copy=True,
+                    needs_output_copy=True,
+                    validate_custom_output=False,
+                )
+            ],
+        ), patch.object(
             preview_service,
             "find_cached_preview_id",
             side_effect=_fake_find_cached,
@@ -380,10 +479,106 @@ class TestPreview(SmokeBase):
 
         self.assertEqual(int(calls["find_cached"]), 0)
         self.assertEqual(int(calls["sync"]), 1)
-        row = db_fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
-        self.assertIn("sample_sync", str(row["summary_json"] or ""))
+        self.assertIn("sample_sync", json.dumps(read_preview_summary(preview_id)))
+
+    def test_validate_custom_sample_outputs_uses_exact_diff_without_checker(self) -> None:
+        verification_id = self.random_id("ver-validate-sample")
+        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        logs_root = artifact_root / "logs"
+        logs_root.mkdir(parents=True, exist_ok=True)
+        plan = VerificationTestPlan(
+            test_name="001.in",
+            source_kind="manual",
+            display_source_path="manual_validate.cpp",
+            execution_source_name="manual_validate.cpp",
+            execution_source_bytes=b"int main(){return 0;}\n",
+            execution_input_bytes=b"1\n",
+            extra_sources_b64={},
+            tests_meta={},
+            sample=True,
+            sample_input_custom=False,
+            uses_custom_sample_input=False,
+            sample_output_text="ok\n",
+            sample_output_validate=True,
+        )
+        calls: list[tuple[str, list[str]]] = []
+
+        def _fake_enqueue_task(**kwargs):
+            calls.append((str(kwargs["upload_filename"]), list(kwargs["selected_tests"])))
+            return "jt-sanity-ok"
+
+        def _fake_wait_for_task_case_result(task_id: str, test_name: str) -> dict[str, object]:
+            self.assertEqual(task_id, "jt-sanity-ok")
+            self.assertEqual(test_name, "001.in")
+            return {
+                "status": "ok",
+                "error": "",
+                "summary": {
+                    "tests": [
+                        {
+                            "test": "001.in",
+                            "verdict": "OK",
+                            "message": "",
+                        }
+                    ]
+                },
+            }
+
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "wait_for_task_case_result",
+            side_effect=_fake_wait_for_task_case_result,
+        ):
+            result = validate_custom_sample_outputs(
+                problem="alice/sample",
+                user="alice",
+                verification_id=verification_id,
+                mode="pass-fail",
+                logs_dir=logs_root,
+                test_plans=[plan],
+            )
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.validated_count, 1)
+        self.assertEqual(calls, [("custom_sample_output.py", ["001.in"])])
+        self.assertEqual((logs_root / "validate.log").read_text(encoding="utf-8"), "001.in: ok\n")
+
+    def test_validate_custom_sample_outputs_skips_custom_input_without_sample_only(self) -> None:
+        verification_id = self.random_id("ver-validate-sample-skip")
+        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        logs_root = artifact_root / "logs"
+        logs_root.mkdir(parents=True, exist_ok=True)
+        plan = VerificationTestPlan(
+            test_name="001.in",
+            source_kind="manual",
+            display_source_path="manual_validate.cpp",
+            execution_source_name="manual_validate.cpp",
+            execution_source_bytes=b"int main(){return 0;}\n",
+            execution_input_bytes=b"base\n",
+            extra_sources_b64={},
+            tests_meta={},
+            sample=True,
+            sample_input_custom=True,
+            uses_custom_sample_input=False,
+            sample_output_text="custom-answer\n",
+            sample_output_validate=True,
+        )
+        with patch.object(config.judgehost_task_service, "enqueue_task") as enqueue_task:
+            result = validate_custom_sample_outputs(
+                problem="alice/sample",
+                user="alice",
+                verification_id=verification_id,
+                mode="pass-fail",
+                logs_dir=logs_root,
+                test_plans=[plan],
+            )
+        enqueue_task.assert_not_called()
+        self.assertEqual(result.status, "unknown")
+        self.assertEqual(result.validated_count, 0)
+        self.assertIn("sample-only verification", result.error)
+        self.assertIn("skip 001.in:", (logs_root / "validate.log").read_text(encoding="utf-8"))
 
     def test_render_ftl_strips_standalone_directive_lines(self) -> None:
         rendered = render_ftl_template(
@@ -491,6 +686,29 @@ class TestPreview(SmokeBase):
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
 
+    def test_compile_preview_stores_null_verification_id_without_sample_sync(self) -> None:
+        def _fake_run(spec):
+            cwd = Path(spec.cwd or ".")
+            stem = Path(str(spec.command[-1])).stem
+            (cwd / f"{stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+            (cwd / f"{stem}.log").write_text("ok\n", encoding="utf-8")
+            return ExecResult(
+                backend="fake",
+                status="ok",
+                returncode=0,
+                elapsed_ms=1,
+                timed_out=False,
+                stdout="",
+                stderr="",
+            )
+
+        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+            preview_id = preview_service.compile_preview("alice/sample", "alice")
+
+        row = db_fetch_one("SELECT verification_id FROM previews WHERE id=?", [preview_id])
+        self.assertIsNotNone(row)
+        self.assertIsNone(row["verification_id"])
+
     def test_compile_preview_success_summary_contract_fields_stable(self) -> None:
         def _fake_run(spec):
             cwd = Path(spec.cwd or ".")
@@ -510,10 +728,10 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = db_fetch_one("SELECT status,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "ok")
-        summary = json.loads(str(row["summary_json"] or "{}"))
+        summary = read_preview_summary(preview_id)
         self.assertEqual(str(summary.get("pdf") or ""), "statement_preview/statement.pdf")
         self.assertTrue(str(summary.get("statement_signature") or "").strip())
         self.assertTrue(str(summary.get("preview_ref") or "").strip())
@@ -539,10 +757,10 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = db_fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
-        summary = json.loads(str(row["summary_json"] or "{}"))
+        summary = read_preview_summary(preview_id)
         self.assertTrue(str(summary.get("error") or "").strip())
         self.assertEqual(int(summary.get("returncode") or 0), 1)
         self.assertTrue(str(summary.get("statement_signature") or "").strip())
@@ -588,7 +806,7 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = db_fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         artifact_root = Path(str(row["artifact_path"] or ""))
@@ -621,7 +839,7 @@ class TestPreview(SmokeBase):
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice")
 
-        row = db_fetch_one("SELECT status,artifact_path,summary_json FROM previews WHERE id=?", [preview_id])
+        row = db_fetch_one("SELECT status,artifact_path FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")
         artifact_root = Path(str(row["artifact_path"] or ""))
@@ -650,7 +868,7 @@ class TestPreview(SmokeBase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(RuntimeError, "invalid tests/spec.json"):
-            preview_service._sample_rows_from_spec(ws)
+            preview_service._sample_verification_rows_from_spec(ws)
 
     def test_prune_workspace_preview_history_keeps_running_rows(self) -> None:
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -667,25 +885,28 @@ class TestPreview(SmokeBase):
         done_root.mkdir(parents=True, exist_ok=True)
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+            VALUES(?,?,?,?,?,?,?,?)
             """,
-            [keep_id, problem_id, workspace_id, "", "main", "ok", "{}", str(keep_root), "2026-03-05T00:00:00Z"],
+            [keep_id, problem_id, workspace_id, "", "main", "ok", str(keep_root), "2026-03-05T00:00:00Z"],
         )
+        write_preview_summary(keep_id, {})
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+            VALUES(?,?,?,?,?,?,?,?)
             """,
-            [running_id, problem_id, workspace_id, "", "main", "running", "{}", str(running_root), "2026-03-05T00:00:00Z"],
+            [running_id, problem_id, workspace_id, "", "main", "running", str(running_root), "2026-03-05T00:00:00Z"],
         )
+        write_preview_summary(running_id, {})
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+            VALUES(?,?,?,?,?,?,?,?)
             """,
-            [done_id, problem_id, workspace_id, "", "main", "failed", "{}", str(done_root), "2026-03-05T00:00:00Z"],
+            [done_id, problem_id, workspace_id, "", "main", "failed", str(done_root), "2026-03-05T00:00:00Z"],
         )
+        write_preview_summary(done_id, {})
 
         preview_service.prune_workspace_preview_history("alice/sample", problem_id, workspace_id, keep_id)
 
@@ -708,11 +929,12 @@ class TestPreview(SmokeBase):
         for preview_id, status in ((keep_id, "ok"), (done_id, "failed")):
             db_execute(
                 """
-                INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,artifact_path,created_at)
-                VALUES(?,?,?,?,?,?,?,?,?)
+                INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at)
+                VALUES(?,?,?,?,?,?,?,?)
                 """,
-                [preview_id, problem_id, workspace_id, "", "main", status, "{}", str(shared_root), "2026-03-05T00:00:00Z"],
+                [preview_id, problem_id, workspace_id, "", "main", status, str(shared_root), "2026-03-05T00:00:00Z"],
             )
+            write_preview_summary(preview_id, {})
 
         preview_service.prune_workspace_preview_history("alice/sample", problem_id, workspace_id, keep_id)
 

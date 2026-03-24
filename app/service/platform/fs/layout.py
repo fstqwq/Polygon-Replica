@@ -21,10 +21,20 @@ class ArtifactPaths:
     statement_preview: Path
 
 
+@dataclass(frozen=True)
+class VerificationLayout:
+    root: Path
+    tests: Path
+    ans: Path
+    logs: Path
+    bin: Path
+
+
 class FsManager:
     def __init__(self, artifacts_root: Path, run_root: Path):
         self.artifacts_root = artifacts_root
         self.run_root = run_root
+        self.verification_cache_root = self.artifacts_root / "cache" / "verifications"
 
     def compute_artifact_ref(self, payload: dict[str, object]) -> str:
         return sha256_hex_json(payload, ensure_ascii=True)
@@ -54,9 +64,26 @@ class FsManager:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def verification_layout(self, verification_id: str) -> VerificationLayout:
+        root = self.resolve_verification_root(verification_id)
+        return VerificationLayout(
+            root=root,
+            tests=root / "tests",
+            ans=root / "ans",
+            logs=root / "logs",
+            bin=root / "bin",
+        )
+
+    def prepare_verification_layout(self, verification_id: str) -> VerificationLayout:
+        layout = self.verification_layout(verification_id)
+        layout.root.mkdir(parents=True, exist_ok=True)
+        for directory in (layout.tests, layout.ans, layout.logs, layout.bin):
+            directory.mkdir(parents=True, exist_ok=True)
+        return layout
+
     def resolve_verification_root(self, verification_id: str) -> Path:
         safe_verification_id = self._normalize_token(verification_id, field_name="verification_id")
-        base = self.run_root.resolve()
+        base = self.verification_cache_root.resolve()
         target = (base / safe_verification_id).resolve()
         if target != base and base not in target.parents:
             raise ValueError("verification_id escapes run_root")
@@ -86,4 +113,3 @@ class FsManager:
         if not _TOKEN_RE.fullmatch(token):
             raise ValueError(f"{field_name} has invalid format")
         return token
-

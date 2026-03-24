@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -8,7 +8,7 @@ from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 
 
 def git_commit(problem: str, user: str, message: str=Form(...)):
@@ -114,5 +114,6 @@ def git_rebase_abort(problem: str, user: str):
     except Exception as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/workspace', status_code=303, message=msg)
+
 
 

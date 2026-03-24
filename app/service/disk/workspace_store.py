@@ -5,6 +5,7 @@ import sqlite3
 from typing import TypedDict
 
 from app.db import DB, now_iso
+from app.service.verification.task_store import VerificationTaskStore
 
 
 class ProblemAclEntry(TypedDict):
@@ -447,7 +448,7 @@ class WorkspaceDiskStore:
                 SELECT 'verification' AS kind,id,status,created_at
                 FROM verifications
                 WHERE workspace_id=?
-                  AND kind='verification'
+                  AND kind IN ('all','custom')
                 ORDER BY created_at DESC
                 LIMIT 1
             )
@@ -483,7 +484,7 @@ class WorkspaceDiskStore:
             )
         elif kind == "verification":
             row = self.db.fetch_one(
-                "SELECT status FROM verifications WHERE workspace_id=? AND kind='verification' ORDER BY created_at DESC LIMIT 1",
+                "SELECT status FROM verifications WHERE workspace_id=? AND kind IN ('all','custom') ORDER BY created_at DESC LIMIT 1",
                 [int(workspace_id)],
             )
         else:
@@ -499,16 +500,14 @@ class WorkspaceDiskStore:
         rows = self.db.fetch_all(
             """
             SELECT kind,id,status FROM (
-                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=? AND kind='verification'
+                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=?
                 UNION ALL
                 SELECT 'preview' AS kind,id,status,created_at FROM previews WHERE problem_id=?
-                UNION ALL
-                SELECT 'verification' AS kind,id,status,created_at FROM verifications WHERE problem_id=?
             )
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            [int(problem_id), int(problem_id), int(problem_id), max(1, int(limit))],
+            [int(problem_id), int(problem_id), max(1, int(limit))],
         )
         items: list[dict[str, str]] = []
         for row in rows:
@@ -580,34 +579,31 @@ class WorkspaceDiskStore:
         return result
 
 
-    def delete_problem_metadata(self, problem_id: int, *, collect_run_ids) -> list[str]:
+    def delete_problem_metadata(self, problem_id: int) -> list[str]:
         def _tx(conn: sqlite3.Connection) -> list[str]:
             verification_rows = conn.execute(
-                "SELECT id,summary_json FROM verifications WHERE problem_id=?",
+                "SELECT id FROM verifications WHERE problem_id=?",
                 [int(problem_id)],
             ).fetchall()
             collected_run_ids: list[str] = []
+            task_store = VerificationTaskStore(self.db)
             for row in verification_rows:
                 if row is None:
                     continue
-                raw = str(row["summary_json"] or "").strip()
-                if not raw:
+                verification_id = str(row["id"] or "").strip()
+                if not verification_id:
                     continue
-                try:
-                    parsed = json.loads(raw)
-                except Exception:
-                    parsed = {}
-                if not isinstance(parsed, dict):
-                    continue
-                for token in collect_run_ids(parsed):
-                    safe_token = str(token or "").strip()
-                    if safe_token and safe_token not in collected_run_ids:
-                        collected_run_ids.append(safe_token)
+                for task_row in task_store.list_rows(verification_id):
+                    for token in (
+                        str(task_row.get("run_id") or "").strip(),
+                        str(task_row.get("logical_run_id") or "").strip(),
+                    ):
+                        if token and token not in collected_run_ids:
+                            collected_run_ids.append(token)
             conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM verifications WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
-            conn.execute("DELETE FROM verifications WHERE problem_id=? AND kind='verification'", [int(problem_id)])
             conn.execute("DELETE FROM workspaces WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM audit_log WHERE problem_id=?", [int(problem_id)])

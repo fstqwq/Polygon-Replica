@@ -143,16 +143,6 @@ def normalize_page_target(page: str) -> str:
     }
     return raw if raw in allowed else 'tests'
 
-def parse_summary_json(raw: str | None, label: str) -> dict[str, object]:
-    if not raw:
-        return {}
-    if len(raw) > _C.SUMMARY_JSON_UI_CHAR_LIMIT:
-        return {'error': f'summary_json for {label} exceeds UI parse limit ({_C.SUMMARY_JSON_UI_CHAR_LIMIT} chars)', 'summary_json_too_large': True, 'summary_json_chars': len(raw), 'summary_json_char_limit': _C.SUMMARY_JSON_UI_CHAR_LIMIT}
-    try:
-        return json.loads(raw)
-    except Exception:
-        return {'error': f'invalid summary_json for {label}'}
-
 def read_text_safe_limited(path: Path, max_chars: int) -> tuple[str, bool]:
     cap = max(1, int(max_chars))
     with path.open('r', encoding='utf-8', errors='replace') as fh:
@@ -743,7 +733,7 @@ def _run_test_options_from_verification(problem: str, verification_id: str, limi
     tests_meta_path = root / 'logs' / 'tests_meta.json'
     try:
         if tests_meta_path.exists() and tests_meta_path.is_file() and (not tests_meta_path.is_symlink()):
-            tests_meta_text, _ = read_text_safe_limited(tests_meta_path, _C.SUMMARY_JSON_UI_CHAR_LIMIT)
+            tests_meta_text, _ = read_text_safe_limited(tests_meta_path, _C.UI_JSON_CHAR_LIMIT)
             payload = json.loads(tests_meta_text)
             for item in payload:
                 index = coerce_int(item.get('index'), 0, 1, 10 ** 7)

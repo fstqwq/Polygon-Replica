@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-import json
+﻿from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
@@ -11,8 +9,8 @@ from app.db import now_iso
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.artifact import assert_workspace_verification_access
-from app.impl.workspace.context_job import page_ctx, start_run_execute_batch
+from app.impl.workspace.context_job import start_verification_job
+from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
 from app.impl.workspace.context_operation import (
     audit,
@@ -25,7 +23,7 @@ from app.impl.workspace.context_run_detail import (
     parse_run_test_names,
     parse_verification_detail_id,
 )
-from app.impl.workspace.context_verification import latest_workspace_stage_verification, normalize_run_id_token
+from app.impl.workspace.context_verification import latest_workspace_verification, normalize_run_id_token
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.impl.workspace.run_view_list import run_list_rows
@@ -34,79 +32,50 @@ from app.service.problem.solution_metadata import infer_expected_behavior_from_n
 from app.impl.run_export.query import (
     _rerun_solution_paths_from_verification,
     _run_detail_use_compact_layout,
-    _summary_object,
 )
-from app.service.verification.store import (
-    load_verification_run,
-    load_verification_record,
-    load_verification_summary,
-    verification_run_ids as verification_summary_run_ids,
-    save_verification_run_summary,
-)
-from app.service.verification.types import ACTIVE, Kind, Status
+from app.service.verification.task_scheduler import notify_verification_cancelled
+from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import Status
 
 _C = config.constants
 
 
+def _empty_task_counts() -> dict[str, object]:
+    return {
+        "total": 0,
+        "pending": 0,
+        "queued": 0,
+        "running": 0,
+        "done": 0,
+        "failed": 0,
+        "cancelled": 0,
+        "by_kind": {
+            "generate-input": {"pending": 0, "queued": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
+            "main-correct": {"pending": 0, "queued": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
+            "solution-run": {"pending": 0, "queued": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
+        },
+    }
+
+
+def _upload_filename_token(raw: str) -> str:
+    token = Path(str(raw or "").strip()).name
+    if token:
+        return token
+    return "upload.cpp"
+
+
+def _uploaded_target_path(run_id: str, upload_filename: str) -> str:
+    return f"uploads/{run_id}/{_upload_filename_token(upload_filename)}"
+
+
 def _verification_record_run_ids(verification_id: str) -> list[str]:
-    summary = load_verification_summary(config.db, verification_id)
-    return verification_summary_run_ids(summary)
-def _mark_run_cancelled(
-    problem_id: int,
-    workspace_id: int,
-    verification_id: str,
-    run_id: str,
-    reason: str,
-) -> None:
-    safe_run_id = normalize_run_id_token(run_id)
-    safe_verification_id = normalize_run_id_token(verification_id)
-    if (not safe_run_id) or (not safe_verification_id):
-        return
-    verification_row_raw = load_verification_record(config.db, safe_verification_id)
-    verification_row = dict(verification_row_raw) if verification_row_raw is not None else None
-    if verification_row is None:
-        return
-    verification_summary = load_verification_summary(config.db, safe_verification_id)
-    run_row = load_verification_run(
-        config.db,
-        verification_id=safe_verification_id,
-        run_id=safe_run_id,
-    )
-    if run_row is None:
-        return
-    summary = dict(run_row.get("summary") or {})
-    cancel_reason = reason or ""
-    summary["cancelled"] = True
-    summary["cancel_reason"] = cancel_reason
-    if not summary.get("error"):
-        summary["error"] = cancel_reason
-    mode = summary.get("mode") or verification_summary.get("mode") or "pass-fail"
-    verification_source = verification_summary.get("verification_source") or "run.execute"
-    source_label = summary.get("source") or safe_run_id
-    source_paths = verification_summary.get("source_paths") or ([source_label] if source_label else [])
-    verification_kind = verification_row.get("kind") or Kind.VERIFICATION.value
-    expected_behavior = normalize_expected_behavior(run_row.get("expected_behavior") or summary.get("expected_behavior"))
-    artifact_path = run_row.get("artifact_path") or ""
-    error_text = summary.get("error") or ""
-    save_verification_run_summary(
-        config.db,
-        config.fs_manager,
-        verification_id=safe_verification_id,
-        problem_id=int(problem_id),
-        workspace_id=int(workspace_id),
-        kind=verification_kind,
-        mode=mode,
-        verification_source=verification_source,
-        source_paths=source_paths,
-        run_id=safe_run_id,
-        run_status=Status.FAILED,
-        source_label=source_label,
-        expected_behavior=expected_behavior,
-        run_summary=summary,
-        artifact_path=artifact_path,
-        error_text=error_text,
-        finished=True,
-    )
+    values: list[str] = []
+    task_store = VerificationTaskStore(config.db)
+    for row in task_store.list_rows(verification_id):
+        run_id = normalize_run_id_token(row.get("run_id"))
+        if run_id and run_id not in values:
+            values.append(run_id)
+    return values
 
 def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
     safe_ids: list[str] = []
@@ -133,38 +102,6 @@ def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
             pass
 
     return affected
-
-def _finalize_cancelled_verifications(verification_ids: list[str], reason: str) -> int:
-    safe_verification_ids = dedupe_preserve_order(
-        [
-            token
-            for item in verification_ids
-            if (token := normalize_run_id_token(item))
-        ]
-    )
-    safe_verification_ids = [token for token in safe_verification_ids if token != _C.RUN_PLACEHOLDER_VERIFICATION_ID]
-    if not safe_verification_ids:
-        return 0
-    now_text = now_iso()
-    cancelled_count = 0
-    service = getattr(config, "judgehost_task_service", None)
-    cancel_reason = reason or "verification cancelled by user"
-    for verification_id in safe_verification_ids:
-        active_task_count = 0
-        if service is not None:
-            try:
-                active_task_count = int(service.active_task_count_for_verification(verification_id))
-            except Exception:
-                active_task_count = 0
-        if active_task_count > 0:
-            continue
-        if config.verification_service.cancel_verification_if_active(
-            verification_id,
-            reason=cancel_reason,
-            now_text=now_text,
-        ):
-            cancelled_count += 1
-    return cancelled_count
 
 def run_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
@@ -195,7 +132,7 @@ def run_new_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
     workspace = Path(ctx['workspace']['path'])
     workspace_id = int(ctx['workspace']['id'])
-    active_verification = latest_workspace_stage_verification(int(ctx['problem']['id']), workspace_id, ok_only=True)
+    active_verification = latest_workspace_verification(int(ctx['problem']['id']), workspace_id, ok_only=True)
     solution_options, default_submission_path, solution_options_truncated = run_solution_options_context(workspace)
     test_options, test_options_truncated, test_options_source = run_test_options_context(problem, workspace, active_verification)
     selected_solution_paths: list[str] = []
@@ -308,8 +245,6 @@ def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] 
             status_code=303,
             message="verification id is required",
         )
-    problem_id = int(ctx["problem"]["id"])
-    workspace_id = int(ctx["workspace"]["id"])
     actor_user_id = int(ctx["user"]["id"])
     verification_run_ids = _verification_record_run_ids(safe_verification_id)
     normalized_run_ids: list[str] = []
@@ -322,58 +257,39 @@ def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] 
     if not verification_run_ids:
         return redirect_response(details_url, status_code=303, message="verification not found")
     reason = "verification cancelled by user"
-    cancelled_runs = 0
-    verification_summary = load_verification_summary(config.db, safe_verification_id)
-    artifact_verification_ids: list[str] = []
-    top_artifact_verification_id = verification_summary.get("artifact_verification_id") or ""
-    if top_artifact_verification_id:
-        artifact_verification_ids.append(top_artifact_verification_id)
-    for run_token in verification_run_ids:
-        run_row = load_verification_run(
-            config.db,
-            verification_id=safe_verification_id,
-            run_id=run_token,
-        )
-        if run_row is None:
-            continue
-        summary_obj = dict(run_row.get("summary") or {})
-        status_text = run_row["status"] or "missing"
-        if status_text in {Status.OK.value, Status.FAILED.value}:
-            if not bool(summary_obj.get("cancelled")):
-                continue
-        artifact_verification_id = summary_obj.get("artifact_verification_id") or ""
-        if not artifact_verification_id:
-            artifact_verification_id = _C.RUN_PLACEHOLDER_VERIFICATION_ID
-        source_label = summary_obj.get("source") or ""
-        if not source_label:
-            source_label = run_row.get("source_label") or ""
-        if not source_label:
-            source_label = "verification"
-        if (
-            artifact_verification_id
-            and artifact_verification_id != _C.RUN_PLACEHOLDER_VERIFICATION_ID
-            and artifact_verification_id not in artifact_verification_ids
-        ):
-            artifact_verification_ids.append(artifact_verification_id)
-        _mark_run_cancelled(problem_id, workspace_id, safe_verification_id, run_token, reason)
-        cancelled_runs += 1
-
+    task_store = VerificationTaskStore(config.db)
+    config.verification_service.cancel_verification_if_active(
+        safe_verification_id,
+        reason=reason,
+        now_text=now_iso(),
+    )
+    notify_verification_cancelled(safe_verification_id, reason)
     cancelled_tasks = _cancel_judgehost_tasks(verification_run_ids, reason)
-    cancelled_verifications = _finalize_cancelled_verifications(artifact_verification_ids, reason)
+    run_progress = config.judgehost_task_service.domjudge_case_progress_for_runs(verification_run_ids)
+    protected_run_ids = {
+        run_id
+        for run_id, progress in run_progress.items()
+        if int(progress.get("total") or 0) > int(progress.get("reported") or 0)
+    }
+    task_store.cancel_not_started_tasks(
+        safe_verification_id,
+        reason=reason,
+        protected_run_ids=protected_run_ids,
+    )
     cancel_details: dict[str, object] = {
         "verification_id": safe_verification_id,
         "run_ids": verification_run_ids,
         "run_count": len(verification_run_ids),
-        "cancelled_runs": cancelled_runs,
+        "cancelled_runs": 0,
         "cancelled_tasks": cancelled_tasks,
-        "cancelled_verifications": cancelled_verifications,
         "reason": reason,
     }
+    problem_id = int(ctx["problem"]["id"])
     audit(actor_user_id, problem_id, "run.cancel", cancel_details)
-    if cancelled_runs > 0 or cancelled_tasks > 0:
-        msg = f"cancel requested ({cancelled_runs}/{len(verification_run_ids)} runs)"
+    if cancelled_tasks > 0:
+        msg = f"cancel requested ({cancelled_tasks} active tasks)"
     else:
-        msg = "verification already finished"
+        msg = "verification cancelled"
     return redirect_response(details_url, status_code=303, message=msg)
 
 def run_execute(
@@ -390,7 +306,7 @@ def run_execute(
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
     run_mode = general_cfg['mode']
-    solution_options, _, _ = run_solution_options_context(workspace)
+    solution_options, accepted_solution_path, _ = run_solution_options_context(workspace)
     solution_expected_map = {
         row["path"]: row["expected_behavior"]
         for row in solution_options
@@ -430,66 +346,91 @@ def run_execute(
             seen_targets.add(key)
             deduped_targets.append((target_submission_path, target_is_upload))
         execution_targets = deduped_targets
-        if artifact_verification_id:
-            assert_workspace_verification_access(ctx, artifact_verification_id)
         run_ids: list[str] = []
         resolved_submission_paths: list[str] = []
-        background_targets: list[dict[str, object]] = []
         verification_id = allocate_verification_id()
-        for target_submission_path, target_is_upload in execution_targets:
+        if not accepted_solution_path:
+            raise ValueError("main correct solution is required")
+        dag_targets: list[dict[str, object]] = []
+        target_paths = list(selected_solution_paths)
+        if accepted_solution_path not in target_paths:
+            target_paths = [accepted_solution_path, *target_paths]
+        for target_path in target_paths:
             run_id = allocate_run_id()
             run_ids.append(run_id)
-            source_label = target_submission_path or upload_filename or 'upload'
-            expected_behavior = 'unknown'
-            if target_submission_path:
-                resolved_submission_paths.append(target_submission_path)
-                expected_behavior = solution_expected_map.get(target_submission_path, 'unknown')
-                if expected_behavior == 'unknown':
-                    expected_behavior = infer_expected_behavior_from_name(target_submission_path)
-            background_targets.append({'run_id': run_id, 'submission_path': target_submission_path or '', 'upload_content': upload_content if target_is_upload else None, 'upload_filename': upload_filename if target_is_upload else '', 'source_label': source_label, 'expected_behavior': expected_behavior})
+            expected_behavior = solution_expected_map.get(target_path, "unknown")
+            if target_path == accepted_solution_path:
+                expected_behavior = "accepted"
+            if expected_behavior == "unknown":
+                expected_behavior = infer_expected_behavior_from_name(target_path)
+            dag_targets.append(
+                {
+                    "path": target_path,
+                    "expected_behavior": normalize_expected_behavior(expected_behavior),
+                    "run_id": run_id,
+                }
+            )
+            resolved_submission_paths.append(target_path)
+        if uploaded:
+            uploaded_run_id = allocate_run_id()
+            run_ids.append(uploaded_run_id)
+            dag_targets.append(
+                {
+                    "path": _uploaded_target_path(uploaded_run_id, upload_filename),
+                    "expected_behavior": normalize_expected_behavior(infer_expected_behavior_from_name(upload_filename)),
+                    "run_id": uploaded_run_id,
+                    "upload_filename": _upload_filename_token(upload_filename),
+                    "upload_content": bytes(upload_content or b""),
+                }
+            )
         primary_run_id = run_ids[0]
+        workspace_head = str(ctx["workspace"].get("head_commit") or "")
+        workspace_dirty = bool(ctx["workspace"].get("dirty"))
         run_execute_details: dict[str, object] = {
-            'verification_id': verification_id,
-            'run_id': primary_run_id,
-            'run_ids': run_ids,
-            'run_count': len(run_ids),
-            'artifact_verification_id': artifact_verification_id,
-            'submission_paths': resolved_submission_paths,
-            'solution_paths': selected_solution_paths,
-            'selected_test_names': selected_test_names,
-            'uploaded': uploaded,
-            'mode': run_mode,
-            'implicit_verification_generated': not artifact_verification_id,
-            'verification_backend': config.judgehost_task_service.backend_name(),
-            'async': True,
-            'status': Status.QUEUED.value,
-            'force_recompile': force_recompile_flag,
+            "verification_id": verification_id,
+            "run_id": primary_run_id,
+            "run_ids": run_ids,
+            "run_count": len(run_ids),
+            "artifact_verification_id": verification_id,
+            "submission_paths": resolved_submission_paths,
+            "solution_paths": selected_solution_paths,
+            "selected_test_names": selected_test_names,
+            "uploaded": uploaded,
+            "upload_filename": _upload_filename_token(upload_filename) if uploaded else "",
+            "mode": run_mode,
+            "execution_model": "task-dag",
+            "async": True,
+            "status": Status.QUEUED.value,
+            "force_recompile": force_recompile_flag,
         }
-        audit(ctx['user']['id'], ctx['problem']['id'], 'run.execute', run_execute_details)
+        audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", run_execute_details)
         try:
-            started = start_run_execute_batch(
+            started = start_verification_job(
                 problem,
                 user,
-                requested_verification_id=artifact_verification_id,
-                run_mode=run_mode,
-                targets=background_targets,
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                workspace_head=workspace_head,
+                workspace_dirty=workspace_dirty,
+                targets=dag_targets,
                 verification_id=verification_id,
-                verification_run_ids=run_ids,
+                initial_details=run_execute_details,
+                workspace_path=workspace,
                 selected_test_names=selected_test_names,
-                force_recompile=force_recompile_flag,
             )
         except Exception as exc:
             failed_details = dict(run_execute_details)
-            failed_details['status'] = Status.FAILED.value
-            failed_details['error'] = str(exc)
-            audit(ctx['user']['id'], ctx['problem']['id'], 'run.execute', failed_details)
-            return redirect_response(f'/problems/{problem}/{user}/run', status_code=303, message=str(exc))
+            failed_details["status"] = Status.FAILED.value
+            failed_details["error"] = str(exc)
+            audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", failed_details)
+            return redirect_response(f"/problems/{problem}/{user}/run", status_code=303, message=str(exc))
         if not started:
             failed_details = dict(run_execute_details)
-            failed_details['status'] = Status.FAILED.value
-            failed_details['error'] = 'verification queue rejected'
-            audit(ctx['user']['id'], ctx['problem']['id'], 'run.execute', failed_details)
-            return redirect_response(f'/problems/{problem}/{user}/run', status_code=303, message='verification queue rejected')
+            failed_details["status"] = Status.FAILED.value
+            failed_details["error"] = "verification already running"
+            audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", failed_details)
+            return redirect_response(f"/problems/{problem}/{user}/run", status_code=303, message="verification already running")
         message_parts: list[str] = []
         if selected_test_names:
             message_parts.append(f'tests selected ({len(selected_test_names)})')
@@ -503,3 +444,4 @@ def run_execute(
     finally:
         if submission_upload is not None:
             submission_upload.file.close()
+

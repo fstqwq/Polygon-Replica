@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -11,10 +11,9 @@ from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.artifact import artifact_root, safe_artifact_path
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import (
     audit,
-    parse_summary_json,
     read_text_safe_limited,
     read_workspace_source_with_default,
 )
@@ -276,7 +275,7 @@ def preview_page(request: Request, problem: str, user: str):
                 has_pdf_output = False
             if not has_pdf_output:
                 return {'text': 'missing', 'danger': True, 'warn': False}
-            summary_obj = parse_summary_json(row['summary_json'], f'preview/{candidate_id}') or {}
+            summary_obj = dict(row['summary'])
             preview_signature = summary_obj.get("statement_signature", "")
             preview_source_commit = row["source_commit"]
             workspace_head = ctx["workspace"].get("head_commit")
@@ -297,7 +296,7 @@ def preview_page(request: Request, problem: str, user: str):
             preview_id = ''
         else:
             selected_preview_status = preview_row['status']
-            summary_obj = parse_summary_json(preview_row['summary_json'], f'preview/{preview_id}') or {}
+            summary_obj = dict(preview_row['summary'])
             selected_preview_summary = summary_obj
             preview_signature = summary_obj.get("statement_signature", "")
             if (not requested_preview_id) and (preview_signature != current_statement_signature):
@@ -436,7 +435,7 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
         details['preview_status'] = preview_status
         details['source_commit'] = row["source_commit"]
         details['source_ref'] = row["source_ref"]
-        summary_obj = parse_summary_json(row['summary_json'], f"preview/{details['preview_id']}") or {}
+        summary_obj = dict(row['summary'])
         if preview_status == 'ok':
             details['status'] = 'ok'
             msg = 'preview compiled'
@@ -559,3 +558,4 @@ def statement_attachment_delete(problem: str, user: str, path: str=Form(...), pa
     except HTTPException as exc:
         message = str(exc.detail)
     return redirect_response(f'/problems/{problem}/{user}/{target_page}', status_code=303, message=message)
+

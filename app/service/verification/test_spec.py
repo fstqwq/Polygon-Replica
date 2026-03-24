@@ -113,27 +113,6 @@ def tests_spec_payload_text(snapshot: Path, row: dict, index: int) -> tuple[str,
         raise RuntimeError(f"cannot read tests payload for id {test_id}: {exc}") from exc
     raise RuntimeError(f"missing tests payload file for id {test_id}: {rel}")
 
-
-def tests_spec_answer_source(snapshot: Path, test_id: str) -> Path | None:
-    safe_test_id = test_id.strip()
-    if not safe_test_id:
-        return None
-    candidate = snapshot / "tests" / "answers" / f"{safe_test_id}.ans"
-    try:
-        resolved_snapshot = snapshot.resolve()
-        resolved = candidate.resolve()
-    except OSError:
-        return None
-    if resolved_snapshot not in resolved.parents:
-        return None
-    try:
-        if resolved.is_symlink() or (not resolved.exists()) or (not resolved.is_file()):
-            return None
-    except OSError:
-        return None
-    return resolved
-
-
 def generator_source_catalog(snapshot: Path, generator_source_extensions: tuple[str, ...]) -> list[tuple[str, Path]]:
     generators_root = snapshot / "generators"
     try:

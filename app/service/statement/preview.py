@@ -1,9 +1,8 @@
 from __future__ import annotations
-
-import json
 import re
 import shutil
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,7 +18,8 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
-from app.service.platform.process import is_canonical_artifact_id, run_cmd
+from app.service.platform.git_process import run_git
+from app.service.platform.process import is_canonical_artifact_id
 from app.service.repository.workspace import WorkspaceService
 
 if TYPE_CHECKING:
@@ -29,6 +29,15 @@ if TYPE_CHECKING:
 
 class PreviewService:
     PREVIEW_CACHE_NAMESPACE = "preview.compile"
+
+    @dataclass(frozen=True)
+    class _SampleVerificationRow:
+        index: int
+        test_id: str
+        kind: str
+        needs_input_copy: bool
+        needs_output_copy: bool
+        validate_custom_output: bool
 
     def __init__(
         self,
@@ -79,13 +88,13 @@ class PreviewService:
             return None
         return row
 
-    def _sample_rows_from_spec(self, workspace: Path) -> list[tuple[int, str, str]]:
+    def _sample_verification_rows_from_spec(self, workspace: Path) -> list[_SampleVerificationRow]:
         spec_path = workspace / TESTS_SPEC_REL
         try:
             entries = load_tests_spec(spec_path)
         except Exception as exc:
             raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
-        rows: list[tuple[int, str, str]] = []
+        rows: list[PreviewService._SampleVerificationRow] = []
         for index, entry in enumerate(entries, start=1):
             if not isinstance(entry, dict):
                 continue
@@ -103,31 +112,46 @@ class PreviewService:
             sample_input = str(sample_input_obj) if sample_input_obj is not None else ""
             sample_output_obj = entry.get("sample_output")
             sample_output = str(sample_output_obj) if sample_output_obj is not None else ""
-            needs_sync = False
+            sample_output_validate = bool(entry.get("sample_output_validate", True))
+            needs_input_copy = False
+            needs_output_copy = False
             if not sample_input:
                 if kind == "gen":
-                    needs_sync = True
+                    needs_input_copy = True
                 else:
                     try:
                         input_rel = Path(payload_rel_path_for_test(test_id, kind))
                         input_path = workspace / input_rel
                         if input_path.is_symlink() or (not input_path.exists()) or (not input_path.is_file()):
-                            needs_sync = True
+                            needs_input_copy = True
                     except Exception:
-                        needs_sync = True
-            if (not sample_output) and (not needs_sync):
-                answer_path = workspace / "tests" / "answers" / f"{test_id}.ans"
-                try:
-                    if answer_path.is_symlink() or (not answer_path.exists()) or (not answer_path.is_file()):
-                        needs_sync = True
-                except Exception:
-                    needs_sync = True
-            if needs_sync:
-                rows.append((index, test_id, kind))
+                        needs_input_copy = True
+            if not sample_output:
+                if sample_input:
+                    needs_output_copy = True
+                else:
+                    answer_path = workspace / "tests" / "answers" / f"{test_id}.ans"
+                    try:
+                        if answer_path.is_symlink() or (not answer_path.exists()) or (not answer_path.is_file()):
+                            needs_output_copy = True
+                    except Exception:
+                        needs_output_copy = True
+            validate_custom_output = bool(sample_output) and sample_output_validate
+            if needs_input_copy or needs_output_copy or validate_custom_output:
+                rows.append(
+                    PreviewService._SampleVerificationRow(
+                        index=index,
+                        test_id=test_id,
+                        kind=kind,
+                        needs_input_copy=needs_input_copy,
+                        needs_output_copy=needs_output_copy,
+                        validate_custom_output=validate_custom_output,
+                    )
+                )
         return rows
 
     def _copy_sample_payloads_from_verification(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
-        rows = self._sample_rows_from_spec(snapshot)
+        rows = self._sample_verification_rows_from_spec(snapshot)
         if not rows:
             return {"sample_count": 0, "copied": 0, "verification_id": ""}
         if self.verification_service is None:
@@ -142,18 +166,12 @@ class PreviewService:
             raise RuntimeError(f"sample verification missing: {verification_id}")
         verification_status = str(verification_row["status"]).strip().lower()
         if verification_status != "ok":
-            error_text = ""
-            try:
-                payload = json.loads(str(verification_row["summary_json"]))
-                if isinstance(payload, dict):
-                    error_obj = payload.get("error")
-                    error_text = str(error_obj).strip() if error_obj is not None else ""
-            except Exception:
-                error_text = ""
+            metadata_payload = self._verification_store.metadata(verification_id)
+            error_text = str(verification_row["fail_reason"] or metadata_payload.get("error") or "").strip()
             if error_text:
                 raise RuntimeError(f"sample verification failed ({verification_id}): {error_text}")
             raise RuntimeError(f"sample verification failed ({verification_id})")
-        artifact_path = str(verification_row["artifact_path"]).strip()
+        artifact_path = self._verification_store.artifact_path_for_verification(verification_id).strip()
         if not artifact_path:
             raise RuntimeError(f"sample verification has no artifact path: {verification_id}")
         artifact_root = Path(artifact_path)
@@ -165,24 +183,33 @@ class PreviewService:
             raise RuntimeError(f"sample verification missing ans directory: {verification_id}")
         copied = 0
         snapshot_root = snapshot.resolve()
-        for index, test_id, kind in rows:
+        for row in rows:
+            index = int(row.index)
+            test_id = str(row.test_id)
+            kind = str(row.kind)
             source_in = tests_dir / f"{int(index):03d}.in"
             source_ans = ans_dir / f"{int(index):03d}.ans"
-            if source_in.is_symlink() or (not source_in.exists()) or (not source_in.is_file()):
-                raise RuntimeError(f"sample input missing from verification for test id {test_id} (row {index})")
-            if source_ans.is_symlink() or (not source_ans.exists()) or (not source_ans.is_file()):
-                raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
             input_rel = Path(payload_rel_path_for_test(test_id, kind))
             answer_rel = Path("tests") / "answers" / f"{test_id}.ans"
             input_target = (snapshot / input_rel).resolve()
             answer_target = (snapshot / answer_rel).resolve()
             if snapshot_root not in input_target.parents or snapshot_root not in answer_target.parents:
                 raise RuntimeError(f"invalid sample target path for test id {test_id}")
-            input_target.parent.mkdir(parents=True, exist_ok=True)
-            answer_target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_in, input_target)
-            shutil.copy2(source_ans, answer_target)
-            copied += 1
+            copied_row = False
+            if row.needs_input_copy:
+                if source_in.is_symlink() or (not source_in.exists()) or (not source_in.is_file()):
+                    raise RuntimeError(f"sample input missing from verification for test id {test_id} (row {index})")
+                input_target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_in, input_target)
+                copied_row = True
+            if row.needs_output_copy:
+                if source_ans.is_symlink() or (not source_ans.exists()) or (not source_ans.is_file()):
+                    raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
+                answer_target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_ans, answer_target)
+                copied_row = True
+            if copied_row:
+                copied += 1
         return {"sample_count": len(rows), "copied": copied, "verification_id": verification_id}
 
     def sync_sample_payloads_for_snapshot(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
@@ -311,7 +338,7 @@ class PreviewService:
             if row["status"].strip().lower() != "ok":
                 return False
             if signature:
-                cached_signature = self._summary_statement_signature(row["summary_json"])
+                cached_signature = self._summary_statement_signature(row["summary"])
                 if cached_signature != signature:
                     return False
             return True
@@ -336,7 +363,7 @@ class PreviewService:
         for row in rows:
             preview_id = str(row["id"] or "").strip()
             if signature:
-                cached_signature = self._summary_statement_signature(row["summary_json"])
+                cached_signature = self._summary_statement_signature(row["summary"])
                 if cached_signature != signature:
                     continue
             root = self._preview_artifact_root(
@@ -366,17 +393,8 @@ class PreviewService:
             return preview_id
         return None
 
-    def _summary_statement_signature(self, raw: object) -> str:
-        text = str(raw).strip() if raw is not None else ""
-        if not text:
-            return ""
-        try:
-            payload = json.loads(text)
-        except Exception:
-            return ""
-        if not isinstance(payload, dict):
-            return ""
-        signature_obj = payload.get("statement_signature")
+    def _summary_statement_signature(self, summary: dict[str, object]) -> str:
+        signature_obj = summary.get("statement_signature")
         return str(signature_obj).strip() if signature_obj is not None else ""
 
     def _preview_artifact_root(
@@ -453,7 +471,7 @@ class PreviewService:
         dynamic_samples = False
         preview_ref = ""
         preview_id = ""
-        sample_verification_id = ""
+        sample_verification_id: str | None = None
         artifacts = None
         with self.workspace_service.workspace_lock(workspace):
             ws_status = self.workspace_service.read_workspace_status(workspace)
@@ -465,9 +483,9 @@ class PreviewService:
                 branch = source_ref
             dirty = bool(ws_status.get("dirty"))
             statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
-            dynamic_samples = bool(self._sample_rows_from_spec(workspace))
+            dynamic_samples = bool(self._sample_verification_rows_from_spec(workspace))
             if not head:
-                head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+                head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
             if head:
                 source_commit = "" if dirty else head
                 source_ref = branch
@@ -538,7 +556,9 @@ class PreviewService:
             if dynamic_samples:
                 sample_sync = self._copy_sample_payloads_from_verification(problem, username, snapshot)
                 sample_verification_id_obj = sample_sync.get("verification_id")
-                sample_verification_id = str(sample_verification_id_obj).strip() if sample_verification_id_obj is not None else ""
+                if sample_verification_id_obj is not None:
+                    sample_verification_id_text = str(sample_verification_id_obj).strip()
+                    sample_verification_id = sample_verification_id_text if sample_verification_id_text else None
                 summary["sample_sync"] = sample_sync
             tex = render_statement_main(snapshot / "statement", problem_title=problem_title)
 
@@ -666,7 +686,7 @@ class PreviewService:
                 source_commit=source_commit,
                 source_ref=source_ref,
                 status=status,
-                summary_json=json.dumps(summary),
+                summary=summary,
             )
             if status == "ok" and self._async_task_cache_service is not None:
                 self._async_task_cache_service.put(

@@ -8,10 +8,11 @@
 {% if runs %}
 <table class="verification-list-table">
   <tr>
-    <th>Run time</th>
-    <th>Solutions</th>
-    <th>Tests</th>
+    <th>Created</th>
+    <th>Finished</th>
+    <th>Kind</th>
     <th>Status</th>
+    <th>Reason</th>
     <th>Actions</th>
   </tr>
   {% for r in runs %}
@@ -20,21 +21,27 @@
       <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?verification_id={{ r.id }}">{{ r.created_at | local_time }}</a>
     </td>
     <td>
-      {{ r.source_display }}
-      {% if r.has_running and r.completed_count > 0 %}
-      <div class="muted">{{ r.matched_completed_count }}/{{ r.completed_count }} completed matched{% if r.completed_count != r.run_count %} ({{ r.run_count }} total){% endif %}</div>
+      {% if r.finished_at %}
+      {{ r.finished_at | local_time }}
       {% else %}
-      <div class="muted">{{ r.matched_count }}/{{ r.run_count }} expected</div>
+      <span class="muted">-</span>
       {% endif %}
     </td>
-    <td>{{ r.tests_label }}</td>
+    <td>{{ r.kind }}</td>
     <td>
       {% if r.status == "ok" %}
-      <span class="ok">{{ r.status_upper }}</span>
+      <span class="ok">{{ r.status }}</span>
       {% elif r.is_failed %}
-      <span class="danger">{{ r.status_upper }}</span>
+      <span class="danger">{{ r.status }}</span>
       {% else %}
-      <span>{{ r.status_upper }}</span>
+      <span>{{ r.status }}</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if r.fail_reason %}
+      {{ r.fail_reason }}
+      {% else %}
+      <span class="muted">-</span>
       {% endif %}
     </td>
     <td class="verification-actions">
@@ -45,7 +52,7 @@
         <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
       </form>
       {% endif %}
-      {% if r.rerun_solution_paths and not r.has_running %}
+      {% if not r.has_running %}
       <a class="verification-inline-action linkish" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
       {% endif %}
     </td>

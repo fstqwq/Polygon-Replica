@@ -8,14 +8,14 @@ from typing import TypedDict
 
 from app.db import DB, now_iso
 from app.service.platform.fs.layout import FsManager
-from app.service.verification.summary import sanitize_verification_summary
 from app.service.verification.types import ACTIVE, Kind, Status
+from app.setting import load_settings
 
 
 class VerificationRuntimeRow(TypedDict):
     id: str
     status: str
-    summary_json: str
+    metadata: dict[str, object]
     artifact_path: str
 
 
@@ -26,42 +26,42 @@ class VerificationStatusRow(TypedDict):
 
 class WorkspaceVerificationListRow(TypedDict):
     id: str
-    summary_json: str
 
 
 class WorkspaceVerificationMetaRow(TypedDict):
     id: str
     status: str
-    summary_json: str
+    metadata: dict[str, object]
 
 
 class VerificationRecordRow(TypedDict):
     id: str
     problem_id: int
     workspace_id: int | None
-    source_commit: str
-    source_ref: str
+    signature: str
     kind: str
     status: str
-    summary_json: str
-    artifact_path: str
+    fail_reason: str
     created_at: str
     finished_at: str
 
 
-class WorkspaceVerificationStageRow(TypedDict):
+class WorkspaceVerificationRow(TypedDict):
     id: str
     status: str
-    source_commit: str
-    source_ref: str
-    summary_json: str
+    signature: str
+    kind: str
     created_at: str
     finished_at: str
 
 
 class VerificationStore:
-    def __init__(self, db: DB):
+    def __init__(self, db: DB, fs_manager: FsManager | None = None):
         self.db = db
+        if fs_manager is None:
+            settings = load_settings()
+            fs_manager = FsManager(settings.artifacts_root, settings.run_root)
+        self._fs_manager = fs_manager
 
     def allocate_id(self) -> str:
         for _ in range(8):
@@ -70,10 +70,58 @@ class VerificationStore:
                 return candidate
         return f"ver-{secrets.token_hex(8)}"
 
+    def _verification_root(self, verification_id: str) -> Path:
+        return self._fs_manager.resolve_verification_root(verification_id)
+
+    def _metadata_path(self, verification_id: str) -> Path:
+        return (self._verification_root(verification_id) / "metadata.json").resolve()
+
+    def _read_metadata_text(self, verification_id: str) -> str:
+        path = self._metadata_path(verification_id)
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def _read_metadata(self, verification_id: str) -> dict[str, object]:
+        text = self._read_metadata_text(verification_id)
+        if not text:
+            return {}
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return {}
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def save_metadata(self, verification_id: str, metadata: dict[str, object]) -> None:
+        root = self._verification_root(verification_id)
+        root.mkdir(parents=True, exist_ok=True)
+        self._metadata_path(verification_id).write_text(
+            json.dumps(dict(metadata), ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    def metadata(self, verification_id: str) -> dict[str, object]:
+        return self._read_metadata(verification_id)
+
+    def _record_row(self, row: dict[str, object]) -> VerificationRecordRow:
+        workspace_id_raw = row["workspace_id"]
+        return {
+            "id": str(row["id"] or ""),
+            "problem_id": int(row["problem_id"]),
+            "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
+            "signature": str(row["signature"] or ""),
+            "kind": str(row["kind"] or ""),
+            "status": str(row["status"] or ""),
+            "fail_reason": str(row["fail_reason"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "finished_at": str(row["finished_at"] or ""),
+        }
+
     def get_runtime_row(self, problem_id: int, verification_id: str) -> VerificationRuntimeRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,summary_json,artifact_path
+            SELECT id,status
             FROM verifications
             WHERE id=? AND problem_id=?
             """,
@@ -84,8 +132,8 @@ class VerificationStore:
         return {
             "id": str(row["id"]),
             "status": str(row["status"]),
-            "summary_json": str(row["summary_json"] or ""),
-            "artifact_path": str(row["artifact_path"] or ""),
+            "metadata": self._read_metadata(verification_id),
+            "artifact_path": str(self._verification_root(verification_id)),
         }
 
     def get_status_row(self, problem_id: int, verification_id: str) -> VerificationStatusRow | None:
@@ -122,7 +170,7 @@ class VerificationStore:
         deadline = time.monotonic() + max(0.5, float(timeout_sec))
         while time.monotonic() < deadline:
             status = self.status(verification_id)
-            if status in {Status.OK.value, Status.FAILED.value, Status.CANCELLED.value}:
+            if status in {Status.OK.value, Status.FAILED.value}:
                 return status
             time.sleep(max(0.01, float(poll_sec)))
         return ""
@@ -130,7 +178,7 @@ class VerificationStore:
     def record_row(self, verification_id: str) -> VerificationRecordRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
+            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at
             FROM verifications
             WHERE id=?
             """,
@@ -138,69 +186,49 @@ class VerificationStore:
         )
         if row is None:
             return None
-        workspace_id_raw = row["workspace_id"]
-        return {
-            "id": str(row["id"]),
-            "problem_id": int(row["problem_id"]),
-            "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
-            "source_commit": str(row["source_commit"] or ""),
-            "source_ref": str(row["source_ref"] or ""),
-            "kind": str(row["kind"] or ""),
-            "status": str(row["status"] or ""),
-            "summary_json": str(row["summary_json"] or ""),
-            "artifact_path": str(row["artifact_path"] or ""),
-            "created_at": str(row["created_at"] or ""),
-            "finished_at": str(row["finished_at"] or ""),
-        }
+        return self._record_row(dict(row))
 
     def create_or_update_record(
         self,
-        fs_manager: FsManager,
+        _fs_manager: FsManager,
         *,
         verification_id: str,
         problem_id: int,
         workspace_id: int | None,
-        source_commit: str,
-        source_ref: str,
+        signature: str,
         kind: str,
         status: str,
-        summary_json: str,
-        artifact_path: str | Path | None,
     ) -> str:
-        existing = self.db.fetch_one("SELECT id,artifact_path FROM verifications WHERE id=?", [verification_id])
-        if artifact_path is None:
-            if existing is None:
-                root = fs_manager.prepare_verification_root(verification_id).resolve()
-            else:
-                current_artifact_path = str(existing["artifact_path"] or "")
-                root = fs_manager.prepare_verification_root(verification_id).resolve() if not current_artifact_path else Path(current_artifact_path).resolve()
-        else:
-            root = Path(artifact_path).resolve()
+        root = self._verification_root(verification_id)
         root.mkdir(parents=True, exist_ok=True)
         now_text = now_iso()
+        existing = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
         params = [
             int(problem_id),
             int(workspace_id) if workspace_id is not None else None,
-            source_commit,
-            source_ref,
-            kind or Kind.VERIFICATION.value,
+            signature,
+            kind or Kind.ALL.value,
             status or Status.RUNNING.value,
-            summary_json,
-            str(root),
         ]
         if existing is None:
             self.db.execute(
                 """
-                INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?)
                 """,
-                [verification_id, *params, now_text, None],
+                [
+                    verification_id,
+                    *params,
+                    "",
+                    now_text,
+                    None,
+                ],
             )
         else:
             self.db.execute(
                 """
                 UPDATE verifications
-                SET problem_id=?,workspace_id=?,source_commit=?,source_ref=?,kind=?,status=?,summary_json=?,artifact_path=?
+                SET problem_id=?,workspace_id=?,signature=?,kind=?,status=?
                 WHERE id=?
                 """,
                 [*params, verification_id],
@@ -213,68 +241,31 @@ class VerificationStore:
         def _tx(conn) -> int:
             verification_row = conn.execute(
                 """
-                SELECT summary_json
+                SELECT id,status
                 FROM verifications
-                WHERE id=? AND kind=? AND status IN (?,?,?)
+                WHERE id=? AND status IN (?,?,?)
                 """,
-                [verification_id, Kind.VERIFICATION.value, *ACTIVE],
+                [verification_id, *ACTIVE],
             ).fetchone()
             if verification_row is None:
                 return 0
-            summary_text = str(verification_row["summary_json"] or "")
-            try:
-                summary_payload = json.loads(summary_text) if summary_text else {}
-            except Exception:
-                summary_payload = {}
-            if not isinstance(summary_payload, dict):
-                summary_payload = {}
-            summary_payload["cancelled"] = True
-            summary_payload["cancel_reason"] = cancel_reason
-            if not summary_payload.get("error"):
-                summary_payload["error"] = cancel_reason
             cursor = conn.execute(
                 """
                 UPDATE verifications
-                SET status=?, summary_json=?, finished_at=COALESCE(finished_at, ?)
-                WHERE id=? AND kind=? AND status IN (?,?,?)
+                SET status=?, fail_reason=?, finished_at=COALESCE(finished_at, ?)
+                WHERE id=? AND status IN (?,?,?)
                 """,
                 [
                     Status.FAILED.value,
-                    json.dumps(summary_payload),
+                    cancel_reason,
                     now_text,
                     verification_id,
-                    Kind.VERIFICATION.value,
                     *ACTIVE,
                 ],
             )
             return int(cursor.rowcount or 0)
 
         return int(self.db.write_transaction(_tx)) > 0
-
-    def save_summary_record(
-        self,
-        *,
-        verification_id: str,
-        status: str,
-        summary_json: str,
-        finished: bool,
-    ) -> None:
-        if finished:
-            self.db.execute(
-                "UPDATE verifications SET status=?, summary_json=?, finished_at=? WHERE id=?",
-                [status or Status.FAILED.value, summary_json, now_iso(), verification_id],
-            )
-            return
-        self.db.execute(
-            "UPDATE verifications SET status=?, summary_json=?, finished_at=NULL WHERE id=?",
-            [status or Status.RUNNING.value, summary_json, verification_id],
-        )
-
-    def update_source_identity(self, verification_id: str, *, source_commit: str, source_ref: str) -> None:
-        self.db.execute(
-            "UPDATE verifications SET source_commit=?, source_ref=? WHERE id=?",
-            [source_commit, source_ref, verification_id],
-        )
 
     def get_workspace_runtime_row(
         self,
@@ -284,9 +275,9 @@ class VerificationStore:
     ) -> VerificationRuntimeRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,summary_json,artifact_path
+            SELECT id,status
             FROM verifications
-            WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'
+            WHERE id=? AND problem_id=? AND workspace_id=?
             """,
             [verification_id, problem_id, workspace_id],
         )
@@ -295,8 +286,8 @@ class VerificationStore:
         return {
             "id": str(row["id"]),
             "status": str(row["status"]),
-            "summary_json": str(row["summary_json"] or ""),
-            "artifact_path": str(row["artifact_path"] or ""),
+            "metadata": self._read_metadata(verification_id),
+            "artifact_path": str(self._verification_root(verification_id)),
         }
 
     def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
@@ -305,45 +296,34 @@ class VerificationStore:
                 "SELECT artifact_path FROM previews WHERE id=? AND problem_id=?",
                 [artifact_id, problem_id],
             )
-        else:
-            row = self.db.fetch_one(
-                """
-                SELECT artifact_path FROM (
-                    SELECT artifact_path
-                    FROM verifications
-                    WHERE id=? AND problem_id=?
-                    UNION ALL
-                    SELECT artifact_path
-                    FROM previews
-                    WHERE id=? AND problem_id=?
-                )
-                LIMIT 1
-                """,
-                [artifact_id, problem_id, artifact_id, problem_id],
-            )
+            return "" if row is None else str(row["artifact_path"] or "")
+        row = self.db.fetch_one(
+            "SELECT id FROM verifications WHERE id=? AND problem_id=?",
+            [artifact_id, problem_id],
+        )
         if row is None:
             return ""
-        return str(row["artifact_path"] or "")
+        return str(self._verification_root(artifact_id))
 
     def artifact_path_for_verification(self, verification_id: str) -> str:
-        row = self.db.fetch_one("SELECT artifact_path FROM verifications WHERE id=?", [verification_id])
+        row = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
         if row is None:
             return ""
-        return str(row["artifact_path"] or "")
+        return str(self._verification_root(verification_id))
 
-    def workspace_verification_rows(
+    def workspace_verification_list_rows(
         self,
         problem_id: int,
         workspace_id: int,
         *,
         limit: int,
-        kinds: tuple[str, ...] = (Kind.VERIFICATION.value,),
+        kinds: tuple[str, ...] = (Kind.ALL.value, Kind.SAMPLE.value, Kind.CUSTOM.value),
     ) -> list[WorkspaceVerificationListRow]:
-        kind_tokens = list(kinds) or [Kind.VERIFICATION.value]
+        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.SAMPLE.value, Kind.CUSTOM.value]
         placeholders = ",".join(("?" for _ in kind_tokens))
         rows = self.db.fetch_all(
             f"""
-            SELECT id,summary_json
+            SELECT id
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
             ORDER BY created_at DESC
@@ -351,15 +331,7 @@ class VerificationStore:
             """,
             [problem_id, workspace_id, *kind_tokens, max(1, int(limit))],
         )
-        items: list[WorkspaceVerificationListRow] = []
-        for row in rows:
-            items.append(
-                {
-                    "id": str(row["id"]),
-                    "summary_json": str(row["summary_json"] or ""),
-                }
-            )
-        return items
+        return [{"id": str(row["id"])} for row in rows]
 
     def list_rows(
         self,
@@ -369,11 +341,11 @@ class VerificationStore:
         limit: int,
         kinds: tuple[str, ...],
     ) -> list[VerificationRecordRow]:
-        kind_tokens = list(kinds) or [Kind.VERIFICATION.value]
+        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.SAMPLE.value, Kind.CUSTOM.value]
         placeholders = ",".join(("?" for _ in kind_tokens))
         rows = self.db.fetch_all(
             f"""
-            SELECT id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
+            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
             ORDER BY created_at DESC
@@ -381,107 +353,53 @@ class VerificationStore:
             """,
             [int(problem_id), int(workspace_id), *kind_tokens, max(1, int(limit))],
         )
-        items: list[VerificationRecordRow] = []
-        for row in rows:
-            workspace_id_raw = row["workspace_id"]
-            items.append(
-                {
-                    "id": str(row["id"]),
-                    "problem_id": int(row["problem_id"]),
-                    "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
-                    "source_commit": str(row["source_commit"] or ""),
-                    "source_ref": str(row["source_ref"] or ""),
-                    "kind": str(row["kind"] or ""),
-                    "status": str(row["status"] or ""),
-                    "summary_json": str(row["summary_json"] or ""),
-                    "artifact_path": str(row["artifact_path"] or ""),
-                    "created_at": str(row["created_at"] or ""),
-                    "finished_at": str(row["finished_at"] or ""),
-                }
-            )
-        return items
+        return [self._record_row(dict(row)) for row in rows]
 
-    def workspace_stage_rows(
+    def workspace_verification_rows(
         self,
         problem_id: int,
         workspace_id: int,
         *,
         limit: int,
+        kinds: tuple[str, ...] = (Kind.ALL.value, Kind.CUSTOM.value),
         ok_only: bool = False,
-    ) -> list[WorkspaceVerificationStageRow]:
-        sql = """
-            SELECT id,status,source_commit,source_ref,summary_json,created_at,finished_at
+    ) -> list[WorkspaceVerificationRow]:
+        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.CUSTOM.value]
+        placeholders = ",".join(("?" for _ in kind_tokens))
+        sql = f"""
+            SELECT id,status,signature,kind,created_at,finished_at
             FROM verifications
-            WHERE problem_id=? AND workspace_id=? AND kind!='sample'
+            WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
         """
-        params: list[object] = [problem_id, workspace_id]
+        params: list[object] = [problem_id, workspace_id, *kind_tokens]
         if ok_only:
             sql += " AND status='ok'"
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(max(1, int(limit)))
         rows = self.db.fetch_all(sql, params)
-        items: list[WorkspaceVerificationStageRow] = []
-        for row in rows:
-            items.append(
-                {
-                    "id": str(row["id"]),
-                    "status": str(row["status"] or ""),
-                    "source_commit": str(row["source_commit"] or ""),
-                    "source_ref": str(row["source_ref"] or ""),
-                    "summary_json": str(row["summary_json"] or ""),
-                    "created_at": str(row["created_at"] or ""),
-                    "finished_at": str(row["finished_at"] or ""),
-                }
-            )
-        return items
+        return [
+            {
+                "id": str(row["id"]),
+                "status": str(row["status"] or ""),
+                "signature": str(row["signature"] or ""),
+                "kind": str(row["kind"] or ""),
+                "created_at": str(row["created_at"] or ""),
+                "finished_at": str(row["finished_at"] or ""),
+            }
+            for row in rows
+        ]
 
-    def workspace_committed_stage_rows(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        *,
-        source_commit: str,
-        source_ref: str,
-        limit: int,
-        ok_only: bool = False,
-    ) -> list[WorkspaceVerificationStageRow]:
-        sql = """
-            SELECT id,status,source_commit,source_ref,summary_json,created_at,finished_at
-            FROM verifications
-            WHERE problem_id=? AND workspace_id=? AND source_commit=? AND source_ref=? AND kind!='sample'
-        """
-        params: list[object] = [problem_id, workspace_id, source_commit, source_ref]
-        if ok_only:
-            sql += " AND status='ok'"
-        sql += " ORDER BY created_at DESC LIMIT ?"
-        params.append(max(1, int(limit)))
-        rows = self.db.fetch_all(sql, params)
-        items: list[WorkspaceVerificationStageRow] = []
-        for row in rows:
-            items.append(
-                {
-                    "id": str(row["id"]),
-                    "status": str(row["status"] or ""),
-                    "source_commit": str(row["source_commit"] or ""),
-                    "source_ref": str(row["source_ref"] or ""),
-                    "summary_json": str(row["summary_json"] or ""),
-                    "created_at": str(row["created_at"] or ""),
-                    "finished_at": str(row["finished_at"] or ""),
-                }
-            )
-        return items
-
-    def workspace_stage_row(
+    def workspace_verification_row(
         self,
         problem_id: int,
         workspace_id: int,
         verification_id: str,
-    ) -> WorkspaceVerificationStageRow | None:
+    ) -> WorkspaceVerificationRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,source_commit,source_ref,summary_json,created_at,finished_at
+            SELECT id,status,signature,kind,created_at,finished_at
             FROM verifications
-            WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'
+            WHERE id=? AND problem_id=? AND workspace_id=?
             """,
             [verification_id, problem_id, workspace_id],
         )
@@ -490,16 +408,15 @@ class VerificationStore:
         return {
             "id": str(row["id"]),
             "status": str(row["status"] or ""),
-            "source_commit": str(row["source_commit"] or ""),
-            "source_ref": str(row["source_ref"] or ""),
-            "summary_json": str(row["summary_json"] or ""),
+            "signature": str(row["signature"] or ""),
+            "kind": str(row["kind"] or ""),
             "created_at": str(row["created_at"] or ""),
             "finished_at": str(row["finished_at"] or ""),
         }
 
     def workspace_verification_exists(self, problem_id: int, workspace_id: int, verification_id: str) -> bool:
         row = self.db.fetch_one(
-            "SELECT id FROM verifications WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'",
+            "SELECT id FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
             [verification_id, problem_id, workspace_id],
         )
         return row is not None
@@ -510,22 +427,11 @@ class VerificationStore:
                 "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
                 [artifact_id, problem_id, workspace_id],
             )
-        else:
-            row = self.db.fetch_one(
-                """
-                SELECT id FROM (
-                    SELECT id
-                    FROM verifications
-                    WHERE id=? AND problem_id=? AND workspace_id=?
-                    UNION ALL
-                    SELECT id
-                    FROM previews
-                    WHERE id=? AND problem_id=? AND workspace_id=?
-                )
-                LIMIT 1
-                """,
-                [artifact_id, problem_id, workspace_id, artifact_id, problem_id, workspace_id],
-            )
+            return row is not None
+        row = self.db.fetch_one(
+            "SELECT id FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
+            [artifact_id, problem_id, workspace_id],
+        )
         return row is not None
 
     def workspace_verification_meta(
@@ -536,9 +442,9 @@ class VerificationStore:
     ) -> WorkspaceVerificationMetaRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,summary_json
+            SELECT id,status
             FROM verifications
-            WHERE id=? AND problem_id=? AND workspace_id=? AND kind='verification'
+            WHERE id=? AND problem_id=? AND workspace_id=?
             """,
             [verification_id, problem_id, workspace_id],
         )
@@ -547,33 +453,61 @@ class VerificationStore:
         return {
             "id": str(row["id"]),
             "status": str(row["status"]),
-            "summary_json": str(row["summary_json"] or ""),
+            "metadata": self._read_metadata(verification_id),
         }
 
-    def latest_problem_verification_id_for_source_commit(self, problem_id: int, source_commit: str) -> str:
+    def latest_problem_verification_id_for_signature(self, problem_id: int, signature: str) -> str:
         row = self.db.fetch_one(
             """
             SELECT id
             FROM verifications
-            WHERE problem_id=? AND source_commit=? AND kind='verification'
+            WHERE problem_id=? AND signature=?
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            [problem_id, source_commit],
+            [problem_id, signature],
         )
         if row is None:
             return ""
         return str(row["id"])
 
-    def runtime_summary(self, verification_id: str) -> dict[str, object]:
-        row = self.db.fetch_one("SELECT summary_json FROM verifications WHERE id=?", [verification_id])
+    def latest_workspace_verification_id_for_signature(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        signature: str,
+        *,
+        ok_only: bool = False,
+    ) -> str:
+        sql = """
+            SELECT id
+            FROM verifications
+            WHERE problem_id=? AND workspace_id=? AND signature=?
+        """
+        params: list[object] = [int(problem_id), int(workspace_id), signature]
+        if ok_only:
+            sql += " AND status='ok'"
+        sql += " ORDER BY created_at DESC LIMIT 1"
+        row = self.db.fetch_one(sql, params)
         if row is None:
-            return {}
-        text = str(row["summary_json"] or "")
-        if not text:
-            return {}
-        try:
-            payload = json.loads(text)
-        except Exception:
-            return {}
-        return sanitize_verification_summary(payload) if isinstance(payload, dict) else {}
+            return ""
+        return str(row["id"] or "")
+
+    def update_record_status(
+        self,
+        verification_id: str,
+        *,
+        status: str,
+        fail_reason: str,
+        finished: bool,
+    ) -> None:
+        if finished:
+            self.db.execute(
+                "UPDATE verifications SET status=?, fail_reason=?, finished_at=? WHERE id=?",
+                [status, fail_reason, now_iso(), verification_id],
+            )
+            return
+        self.db.execute(
+            "UPDATE verifications SET status=?, fail_reason=?, finished_at=NULL WHERE id=?",
+            [status, fail_reason, verification_id],
+        )

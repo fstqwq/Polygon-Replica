@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
 from app.impl.workspace.context_component_status import checker_status_context
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
 _C = config.constants
@@ -158,6 +158,7 @@ def checker_save_source(problem: str, user: str, path: str=Form('checkers/checke
     except HTTPException as exc:
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message=msg)
+
 
 
 

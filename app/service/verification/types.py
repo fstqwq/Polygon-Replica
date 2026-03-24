@@ -4,7 +4,9 @@ from enum import StrEnum
 
 
 class Kind(StrEnum):
-    VERIFICATION = "verification"
+    ALL = "all"
+    SAMPLE = "sample"
+    CUSTOM = "custom"
 
 
 class Status(StrEnum):
@@ -13,8 +15,18 @@ class Status(StrEnum):
     RUNNING = "running"
     OK = "ok"
     FAILED = "failed"
-    CANCELLED = "cancelled"
 
 
 ACTIVE = frozenset((Status.QUEUED.value, Status.PENDING.value, Status.RUNNING.value))
-FAILED = frozenset((Status.FAILED.value, Status.CANCELLED.value))
+
+_CANCEL_REASONS = frozenset(
+    (
+        "verification cancelled",
+        "verification cancelled by user",
+        "cancelled on service startup",
+    )
+)
+
+
+def is_cancel_reason(reason: str) -> bool:
+    return reason in _CANCEL_REASONS

@@ -2466,16 +2466,6 @@ section.verification-header-section {
   font-style: italic;
 }
 
-.output-preview {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  max-height: 120px;
-  border: none;
-  background: transparent;
-  padding: 0;
-}
-
 .compile-diagnostics-card {
   border: 1px solid var(--line);
   background: #fff;

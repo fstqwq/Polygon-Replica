@@ -129,6 +129,21 @@ class JudgehostCoreMixin:
                 self._hosts_state[safe_host] = row
             return row
 
+    def bind_request_peer_hostname(self, peer_addr: str, hostname: str) -> None:
+        safe_peer = str(peer_addr or "").strip()
+        safe_host = self._normalize_hostname(hostname)
+        if (not safe_peer) or (not safe_host):
+            return
+        with self._state_lock:
+            self._peer_hostname_by_client_addr[safe_peer] = safe_host
+
+    def hostname_for_request_peer(self, peer_addr: str) -> str:
+        safe_peer = str(peer_addr or "").strip()
+        if not safe_peer:
+            return ""
+        with self._state_lock:
+            return str(self._peer_hostname_by_client_addr.get(safe_peer) or "")
+
     def _safe_workspace_source(self, workspace_root: Path, submission_path: str) -> Path:
         workspace_resolved = workspace_root.resolve()
         rel = str(submission_path or "").strip().replace("\\", "/")

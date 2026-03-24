@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -59,7 +59,7 @@ def extract_git_archive(workspace: Path, commit: str, target: Path, timeout: int
     target.mkdir(parents=True, exist_ok=True)
     tmp_tar = target.parent / f".archive-{uuid.uuid4().hex[:12]}.tar"
     try:
-        proc = run_cmd(
+        proc = run_git(
             [
                 "git",
                 "-C",

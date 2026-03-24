@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import re
-import shutil
 import zipfile
 from pathlib import Path
 from typing import TypedDict, cast
@@ -10,23 +9,19 @@ from typing import TypedDict, cast
 from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
-from .artifact import _is_safe_regular_file
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import audit
 from app.impl.run_export.query import (
     _bare_repo_head_commit,
     _count_label,
-    _summary_object,
-    _workspace_problem_mode,
 )
 from app.service.importing.icpc import ICPCPackageImportService
 from app.service.importing.native import NATIVE_MARKER, NativePackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
-from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
 
 _C = config.constants
 _POLYGON_IMPORTER = PolygonPackageImportService()
@@ -41,9 +36,6 @@ ImportedTestsSummary = TypedDict(
     {
         "total": int,
         "answers": int,
-        "sample_answers_built": int,
-        "sample_answers_missing": int,
-        "sample_manual_total": int,
     },
     total=False,
 )
@@ -64,7 +56,6 @@ ImportedPackageResult = TypedDict(
         "statement": ImportedStatementSummary,
         "components": dict[str, object],
         "solutions": dict[str, object],
-        "sample_answers": dict[str, object],
     },
     total=False,
 )
@@ -188,94 +179,6 @@ def _resolve_import_problem_slug(owner: str, requested_slug: str, package_name: 
     base = _import_slug_base_from_package_name(package_name)
     return _problem_full_slug(owner, _next_available_problem_slug(owner, base))
 
-def _sample_manual_rows_missing_answers(workspace: Path) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
-    try:
-        entries = cast(list[dict[str, object]], load_tests_spec(workspace / TESTS_SPEC_REL))
-    except Exception as exc:
-        raise ValueError(f"invalid tests/spec.json after import: {exc}") from exc
-
-    rows: list[tuple[int, str]] = []
-    missing: list[tuple[int, str]] = []
-    for index, row in enumerate(entries, start=1):
-        if not row["sample"]:
-            continue
-        if row["kind"] != "manual":
-            continue
-        test_id = row["id"]
-        rows.append((index, test_id))
-        answer_path = workspace / "tests" / "answers" / f"{test_id}.ans"
-        if not _is_safe_regular_file(answer_path):
-            missing.append((index, test_id))
-    return rows, missing
-
-def _build_polygon_sample_answers(problem: str, user: str, workspace: Path) -> dict[str, object]:
-    sample_rows, missing_rows = _sample_manual_rows_missing_answers(workspace)
-    if not sample_rows:
-        return {"sample_manual_total": 0, "sample_answers_missing": 0, "sample_answers_built": 0, "verification_id": ""}
-    if not missing_rows:
-        return {"sample_manual_total": len(sample_rows), "sample_answers_missing": 0, "sample_answers_built": 0, "verification_id": ""}
-    mode = _workspace_problem_mode(workspace)
-    if mode != "pass-fail":
-        return {
-            "sample_manual_total": len(sample_rows),
-            "sample_answers_missing": len(missing_rows),
-            "sample_answers_built": 0,
-            "verification_id": "",
-            "skipped_mode": mode,
-        }
-
-    verification_id = config.verification_service.run_verification(problem, user)
-    problem_id = config.workspace_service.known_problem_id(problem)
-    verification_row = (
-        None
-        if problem_id is None
-        else config.verification_service.export_runtime_verification(problem_id, verification_id)
-    )
-    if verification_row is None:
-        raise ValueError(f"sample answer verification missing: {verification_id}")
-    verification_status = verification_row["status"]
-    if verification_status != "ok":
-        summary = _summary_object(verification_row["summary_json"])
-        error_text = cast(str | None, summary.get("error")) or ""
-        if error_text:
-            raise ValueError(f"sample answer verification failed ({verification_id}): {error_text}")
-        raise ValueError(f"sample answer verification failed ({verification_id})")
-    artifact_path = verification_row["artifact_path"]
-    if not artifact_path:
-        raise ValueError(f"sample answer verification has no artifact path: {verification_id}")
-    try:
-        artifact_root = Path(artifact_path).resolve()
-    except Exception as exc:
-        raise ValueError(f"sample answer verification has invalid artifact_path: {verification_id}") from exc
-    ans_dir = artifact_root / "ans"
-    if not ans_dir.exists() or not ans_dir.is_dir() or ans_dir.is_symlink():
-        raise ValueError(f"sample answer verification missing ans directory: {verification_id}")
-
-    built = 0
-    for index, test_id in missing_rows:
-        source_name = f"{int(index):03d}.ans"
-        source_answer = ans_dir / source_name
-        if not _is_safe_regular_file(source_answer):
-            raise ValueError(
-                f"sample answer missing from verification output for test id {test_id} (case {source_name})"
-            )
-        target_answer = workspace / "tests" / "answers" / f"{test_id}.ans"
-        target_answer.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_answer, target_answer)
-        built += 1
-
-    _sample_rows_after, still_missing = _sample_manual_rows_missing_answers(workspace)
-    if still_missing:
-        first_idx, first_id = still_missing[0]
-        raise ValueError(f"sample answer still missing after verification: test id {first_id} (spec row {first_idx})")
-
-    return {
-        "sample_manual_total": len(sample_rows),
-        "sample_answers_missing": len(missing_rows),
-        "sample_answers_built": built,
-        "verification_id": verification_id,
-    }
-
 def _is_package_marker(names: list[str], marker: str) -> bool:
     safe_marker = marker.replace("\\", "/").strip().strip("/")
     if not safe_marker:
@@ -324,7 +227,6 @@ def import_package_as_new_problem(
     requested_slug: str = "",
     source_problem: str = "",
     normalize_test_data_newlines: bool = False,
-    build_polygon_sample_answers: bool = True,
 ) -> dict[str, object]:
     safe_actor_user = actor_user.strip()
     if not safe_actor_user:
@@ -349,10 +251,9 @@ def import_package_as_new_problem(
         created_problem = True
         config.workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
         target_workspace = Path(config.workspace_service.ensure_workspace(target_problem, safe_actor_user))
-        workspace_head = run_cmd(["git", "-C", str(target_workspace), "rev-parse", "--verify", "HEAD"])
+        workspace_head = run_git(["git", "-C", str(target_workspace), "rev-parse", "--verify", "HEAD"])
         if workspace_head.returncode == 0 and workspace_head.stdout.strip():
             raise ValueError(f"import target already has revision history: {target_problem}")
-        sample_answer_summary: dict[str, object] = {}
         with config.workspace_service.workspace_lock(target_workspace):
             importer = _select_importer(package_format)
             result = cast(
@@ -369,18 +270,6 @@ def import_package_as_new_problem(
                 imported_title = ""
             if imported_title:
                 config.workspace_service.set_problem_name(target_problem, imported_title)
-        if package_format == "polygon" and bool(build_polygon_sample_answers):
-            sample_answer_summary = _build_polygon_sample_answers(target_problem, safe_actor_user, target_workspace)
-            tests_summary = result.get("tests")
-            if tests_summary is not None:
-                tests_summary = cast(dict[str, object], tests_summary)
-                tests_summary["sample_answers_built"] = int(sample_answer_summary.get("sample_answers_built", 0))
-                tests_summary["sample_answers_missing"] = int(sample_answer_summary.get("sample_answers_missing", 0))
-                tests_summary["sample_manual_total"] = int(sample_answer_summary.get("sample_manual_total", 0))
-                current_answers = int(tests_summary.get("answers", 0))
-                tests_summary["answers"] = current_answers + int(sample_answer_summary.get("sample_answers_built", 0))
-        if sample_answer_summary:
-            result["sample_answers"] = sample_answer_summary
         with config.workspace_service.workspace_lock(target_workspace):
             imported_commit = _finalize_imported_problem(target_problem, safe_actor_user, target_workspace, package_format)
         config.workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
@@ -467,3 +356,4 @@ def export_import_slug_hint(problem: str, user: str, filename: str = "", request
     actor_user = ctx["user"]["username"]
     payload = build_import_slug_hint(actor_user, filename, requested_slug)
     return JSONResponse(payload)
+

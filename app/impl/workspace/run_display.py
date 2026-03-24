@@ -21,7 +21,7 @@ def run_verdict_short(verdict: str) -> str:
         return "RE"
     if verdict in {"FAIL", "FAILED", "FL"}:
         return "FL"
-    if verdict in {"", "-"}:
+    if verdict in {"", "-", "--"}:
         return "--"
     return "FL"
 
@@ -33,6 +33,8 @@ def run_error_display(error: str) -> str:
 
 
 def run_actual_failed_codes(run_status: str, summary: dict | None) -> list[str]:
+    if run_status == "cancelled":
+        return []
     if run_status in {"running", "queued", "pending"}:
         return []
     if summary is not None:
@@ -60,6 +62,8 @@ def run_actual_short(run_status: str, summary: dict | None) -> str:
     failed_codes = run_actual_failed_codes(run_status, summary)
     if failed_codes:
         return failed_codes[0]
+    if run_status == "cancelled":
+        return "--"
     if run_status in {"running", "queued", "pending"}:
         return "--"
     return "AC"

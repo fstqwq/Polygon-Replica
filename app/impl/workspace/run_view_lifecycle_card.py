@@ -76,11 +76,9 @@ def load_verification_detail_snapshot(problem_id: int, verification_id: str) -> 
     verification_row = config.verification_service.verification_record(safe_verification_id)
     if verification_row is None or int(verification_row['problem_id']) != int(problem_id):
         return {}
-    details = config.verification_service.verification_summary(safe_verification_id)
-    if not details:
-        return {}
     snapshot = {
-        **details,
+        **config.verification_service.verification_metadata(safe_verification_id),
+        **config.verification_service.verification_runtime_snapshot(safe_verification_id),
         'verification_id': safe_verification_id,
         'finished_at': verification_row['finished_at'],
     }

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from fastapi import Form, Request
 
@@ -9,7 +9,7 @@ from app.impl.problem.shared import _has_destructive_sudo_for_ctx, _sudo_redirec
 from app.impl.workspace.context_operation import audit, normalize_page_target
 from app.impl.workspace.problem_config import form_text
 from app.impl.workspace.access import require_manage_access, require_write_access, workspace_access_context
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 
 _C = config.constants
 
@@ -116,6 +116,7 @@ def problem_delete(request: Request, problem: str, user: str, confirm_problem: s
         msg = f"problem delete failed: {exc}"
         return redirect_response(next_path, status_code=303, message=msg)
     return redirect_response("/problems", status_code=303, message=msg)
+
 
 
 

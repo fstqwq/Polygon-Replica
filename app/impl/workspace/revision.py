@@ -1,10 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
 
 _WORKSPACE_ORIGIN_CACHE_TTL_SEC = 10.0
 _WORKSPACE_ORIGIN_CACHE: dict[str, tuple[float, Path | None]] = {}
@@ -12,7 +12,7 @@ _WORKSPACE_ORIGIN_CACHE: dict[str, tuple[float, Path | None]] = {}
 
 def git_commit_count(workspace: Path, rev: str) -> int | None:
     try:
-        proc = run_cmd(["git", "-C", str(workspace), "rev-list", "--count", str(rev)])
+        proc = run_git(["git", "-C", str(workspace), "rev-list", "--count", str(rev)])
         if proc.returncode != 0:
             return None
         value = int(str(proc.stdout or "").strip())
@@ -23,7 +23,7 @@ def git_commit_count(workspace: Path, rev: str) -> int | None:
 
 def git_commit_sha(workspace: Path, rev: str) -> str | None:
     try:
-        proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", str(rev)])
+        proc = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", str(rev)])
         if proc.returncode != 0:
             return None
         value = str(proc.stdout or "").strip()
@@ -39,7 +39,7 @@ def workspace_origin_local_repo(workspace: Path) -> Path | None:
     if cached is not None and (now - float(cached[0])) <= _WORKSPACE_ORIGIN_CACHE_TTL_SEC:
         return cached[1]
     try:
-        proc = run_cmd(["git", "-C", str(workspace), "remote", "get-url", "origin"], timeout=5)
+        proc = run_git(["git", "-C", str(workspace), "remote", "get-url", "origin"], timeout=5)
     except Exception:
         _WORKSPACE_ORIGIN_CACHE[key] = (now, None)
         return None
@@ -118,7 +118,7 @@ def workspace_revision_info(
     ahead_count: int | None = None
     behind_count: int | None = None
     try:
-        proc = run_cmd(["git", "-C", str(workspace), "rev-list", "--left-right", "--count", f"HEAD...{upstream_ref}"], timeout=30)
+        proc = run_git(["git", "-C", str(workspace), "rev-list", "--left-right", "--count", f"HEAD...{upstream_ref}"], timeout=30)
         if proc.returncode == 0:
             parts = str(proc.stdout or "").strip().split()
             if len(parts) >= 2:

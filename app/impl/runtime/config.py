@@ -131,7 +131,6 @@ class RuntimeConfig:
             self.artifact_service,
             self.judgehost_task_service,
             constants=self.constants,
-            async_task_cache_service=self.async_task_cache_service,
         )
         self.preview_service = PreviewService(
             self.db,
@@ -156,5 +155,4 @@ class RuntimeConfig:
         )
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
 config = RuntimeConfig()
-
 

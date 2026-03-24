@@ -5,24 +5,21 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.db import DB
-from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction
+from app.db import DB, IncompatibleSchemaError
+from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import preview_page, preview_run
 from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_job import _run_export_create_worker
-from app.impl.workspace.context_job_helper import _ensure_implicit_verification
-from app.service.verification.store import load_verification_record
-from app.service.verification.judge_solve import solve_with_judge_backend
+from app.service.disk.verification_store import VerificationStore
 
 
 class TestBackendMinimal(SmokeBase):
-    def test_db_init_backs_up_incompatible_schema_and_rebuilds_current_db(self) -> None:
+    def test_db_init_fails_fast_on_incompatible_schema(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "legacy-schema.db"
             with sqlite3.connect(db_path) as conn:
@@ -89,8 +86,8 @@ class TestBackendMinimal(SmokeBase):
                         workspace_id INTEGER,
                         mode TEXT NOT NULL,
                         status TEXT NOT NULL,
-                        summary_json TEXT,
-                        artifact_path TEXT NOT NULL,
+                        legacy_payload TEXT,
+                        legacy_root TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         finished_at TEXT
                     )
@@ -104,8 +101,8 @@ class TestBackendMinimal(SmokeBase):
                         workspace_id INTEGER,
                         kind TEXT NOT NULL,
                         status TEXT NOT NULL,
-                        summary_json TEXT,
-                        artifact_path TEXT NOT NULL,
+                        legacy_payload TEXT,
+                        legacy_root TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         finished_at TEXT
                     )
@@ -114,7 +111,7 @@ class TestBackendMinimal(SmokeBase):
                 conn.execute(
                     """
                     INSERT INTO verifications(
-                        id,problem_id,workspace_id,kind,status,summary_json,artifact_path,created_at,finished_at
+                        id,problem_id,workspace_id,kind,status,legacy_payload,legacy_root,created_at,finished_at
                     ) VALUES(?,?,?,?,?,?,?,?,?)
                     """,
                     [
@@ -146,37 +143,10 @@ class TestBackendMinimal(SmokeBase):
                 conn.commit()
 
             probe = DB(db_path)
-            probe.init()
-
+            with self.assertRaises(IncompatibleSchemaError):
+                probe.init()
             backup_candidates = sorted(db_path.parent.glob(f"{db_path.name}.*.backup"))
-            self.assertEqual(len(backup_candidates), 1)
-            backup_path = backup_candidates[0]
-            with sqlite3.connect(backup_path) as conn:
-                backup_runs_row = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
-                ).fetchone()
-                self.assertIsNotNone(backup_runs_row)
-                backup_verification = conn.execute(
-                    "SELECT id FROM verifications WHERE id=?",
-                    ["ver-current"],
-                ).fetchone()
-                self.assertIsNotNone(backup_verification)
-
-            with probe.conn() as conn:
-                runs_row = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
-                ).fetchone()
-                self.assertIsNone(runs_row)
-                current_verification = conn.execute(
-                    "SELECT id FROM verifications WHERE id=?",
-                    ["ver-current"],
-                ).fetchone()
-                self.assertIsNone(current_verification)
-                current_columns = {
-                    str(row[1]) for row in conn.execute("PRAGMA table_info(verifications)").fetchall()
-                }
-                self.assertIn("source_commit", current_columns)
-                self.assertIn("source_ref", current_columns)
+            self.assertEqual(backup_candidates, [])
 
     def test_judgehost_compile_check_reads_full_diagnostics_from_transient_task_result(self) -> None:
         with (
@@ -214,189 +184,50 @@ class TestBackendMinimal(SmokeBase):
     def test_load_verification_record_returns_plain_dict(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = self.random_id("ver-record-dict")
-        artifact_path = self._artifact_root(verification_id)
-        artifact_path.mkdir(parents=True, exist_ok=True)
-        db_execute(
-            """
-            INSERT INTO verifications(
-                id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,datetime('now'),NULL)
-            """,
-            [
-                verification_id,
-                int(ctx["problem"]["id"]),
-                int(ctx["workspace"]["id"]),
-                "",
-                "main",
-                "verification",
-                "running",
-                json.dumps({"status": "running", "runs": {}, "runs_order": []}),
-                str(artifact_path),
-            ],
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="",
+            kind="all",
+            status="running",
         )
-        row = load_verification_record(config.db, verification_id)
+        row = VerificationStore(config.db).record_row(verification_id)
         self.assertIsInstance(row, dict)
         assert row is not None
         self.assertEqual(str(row.get("status") or ""), "running")
 
-    def test_create_verification_record_preserves_existing_artifact_path_when_updating_summary(self) -> None:
+    def test_create_verification_record_uses_canonical_verification_root(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = self.random_id("ver-artifact-path")
-        original_artifact_path = self._artifact_root(f"{verification_id}-artifact")
-        original_artifact_path.mkdir(parents=True, exist_ok=True)
-        from app.service.verification.store import create_verification_record
-
-        create_verification_record(
-            config.db,
-            config.fs_manager,
+        config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
-            source_commit="",
-            source_ref="main",
-            kind="verification",
+            signature="",
+            kind="all",
             status="running",
-            summary={"status": "running", "runs": {}, "runs_order": []},
-            artifact_path=original_artifact_path,
         )
 
-        create_verification_record(
-            config.db,
-            config.fs_manager,
+        config.verification_service.begin_verification_record(
             verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
-            source_commit="",
-            source_ref="main",
-            kind="verification",
+            signature="",
+            kind="all",
             status="running",
-            summary={"status": "running", "runs": {}, "runs_order": []},
         )
 
-        row = load_verification_record(config.db, verification_id)
+        row = VerificationStore(config.db).record_row(verification_id)
         assert row is not None
-        self.assertEqual(Path(str(row.get("artifact_path") or "")).resolve(), original_artifact_path.resolve())
-
-    def test_solve_with_judge_backend_recovers_output_from_judgehost_case_row(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            artifact_root = (root / "artifact").resolve()
-            artifact_root.mkdir(parents=True, exist_ok=True)
-            ans_dir = (root / "ans").resolve()
-            ans_dir.mkdir(parents=True, exist_ok=True)
-            expected_work_root = (root / "judgehost-domjudge" / "job-abc").resolve()
-            result_root = (expected_work_root / "results" / "7").resolve()
-            result_root.mkdir(parents=True, exist_ok=True)
-            expected_output = b"42\n"
-            (result_root / "program.out").write_bytes(expected_output)
-
-            class _FakeJudgehost:
-                STATUS_FAILED = "failed"
-
-                def __init__(self) -> None:
-                    self.resolve_calls: list[tuple[str, Path | None]] = []
-
-                def status(self) -> dict[str, int]:
-                    return {"hosts_online": 1, "hosts_total": 1, "fetch_batch_size": 1}
-
-                def enqueue_task(self, **_kwargs) -> str:
-                    return "jt-recover-output"
-
-                def wait_for_task_result(self, task_id: str, timeout_sec: int | None = None) -> dict[str, object]:
-                    return {
-                        "task_status": "completed",
-                        "run_id": "r-solve-main-case-row",
-                        "status": "ok",
-                        "artifact_path": str(artifact_root),
-                        "summary": {
-                            "judgehost": {"task_id": task_id},
-                            "tests": [
-                                {
-                                    "test": "001.in",
-                                    "verdict": "OK",
-                                    "passes": [{"verdict": "OK"}],
-                                }
-                            ],
-                        },
-                    }
-
-                def resolve_artifact_blob(self, token: str, *, work_root: Path | None = None) -> bytes | None:
-                    self.resolve_calls.append((token, work_root))
-                    if token == "results/7/program.out" and work_root == expected_work_root:
-                        return expected_output
-                    return None
-
-                def domjudge_work_root_for_task(self, task_id: str) -> Path | None:
-                    if task_id == "jt-recover-output":
-                        return expected_work_root
-                    return None
-
-                def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
-                    if task_id == "jt-recover-output" and test_name == "001.in":
-                        return ("results/7/program.out", expected_work_root, 7)
-                    return ("", None, 0)
-
-            fake_service = _FakeJudgehost()
-            fake_self = SimpleNamespace(judgehost_task_service=fake_service, db=SimpleNamespace())
-
-            with patch("app.service.verification.judge_solve.load_verification_summary", return_value={}):
-                result = solve_with_judge_backend(
-                    fake_self,
-                    problem=self.problem,
-                    username=self.user,
-                    artifact_verification_id="ver-recover-output",
-                    accepted_source_rel="solutions/ac.cpp",
-                    mode="pass-fail",
-                    test_files=[Path("001.in")],
-                    ans_dir=ans_dir,
-                )
-
-            self.assertEqual(result["001.in"]["rc"], 0)
-            self.assertEqual((ans_dir / "001.ans").read_bytes(), expected_output)
-            self.assertEqual(fake_service.resolve_calls, [("results/7/program.out", expected_work_root)])
-
-    def test_ensure_implicit_verification_accepts_in_place_build_stages_while_status_running(self) -> None:
-        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        verification_id = self.random_id("ver-implicit-ready")
-        artifact_path = self._artifact_root(verification_id)
-        artifact_path.mkdir(parents=True, exist_ok=True)
-        db_execute(
-            """
-            INSERT INTO verifications(
-                id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,datetime('now'),NULL)
-            """,
-            [
-                verification_id,
-                int(ctx["problem"]["id"]),
-                int(ctx["workspace"]["id"]),
-                "",
-                "main",
-                "verification",
-                "running",
-                json.dumps(
-                    {
-                        "status": "running",
-                        "stage_results": {
-                            "generate_input": {"status": "ok", "verification_source": "verification.generate-input"},
-                            "solve_main": {"status": "ok", "verification_source": "verification.solve-main"},
-                        },
-                    }
-                ),
-                str(artifact_path),
-            ],
+        self.assertEqual(
+            config.verification_service.artifact_path_for_verification(verification_id),
+            str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
         )
-        with patch.object(config.verification_service, "run_verification", return_value=verification_id):
-            resolved_id, created = _ensure_implicit_verification(
-                self.problem,
-                self.user,
-                ctx=ctx,
-                force=True,
-                for_verification=True,
-                verification_id=verification_id,
-            )
-        self.assertEqual(resolved_id, verification_id)
-        self.assertTrue(created)
+        self.assertEqual(
+            config.fs_manager.prepare_verification_root(verification_id).resolve(),
+            Path(config.verification_service.artifact_path_for_verification(verification_id)).resolve(),
+        )
 
     def test_judgehost_compile_check_surfaces_backend_failure_when_result_is_missing(self) -> None:
         with (
@@ -428,8 +259,8 @@ class TestBackendMinimal(SmokeBase):
         db_execute(
             (
                 "INSERT INTO previews("
-                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,artifact_path,created_at,finished_at"
-                ") VALUES(?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+                "id,problem_id,workspace_id,status,source_commit,source_ref,artifact_path,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
             ),
             [
                 preview_id,
@@ -438,14 +269,15 @@ class TestBackendMinimal(SmokeBase):
                 "failed",
                 "",
                 "",
-                json.dumps(
-                    {
-                        "error": "sample verification failed (ver-sample-123): validator failed",
-                        "failed_stage": "sample_sync",
-                    }
-                ),
                 str(artifact_path),
             ],
+        )
+        write_preview_summary(
+            preview_id,
+            {
+                "error": "sample verification failed (ver-sample-123): validator failed",
+                "failed_stage": "sample_sync",
+            },
         )
         with patch.object(config.preview_service, "compile_preview", return_value=preview_id):
             resp = preview_run(self.problem, self.user, page="statement")
@@ -469,8 +301,8 @@ class TestBackendMinimal(SmokeBase):
         db_execute(
             (
                 "INSERT INTO previews("
-                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,artifact_path,created_at,finished_at"
-                ") VALUES(?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+                "id,problem_id,workspace_id,status,source_commit,source_ref,artifact_path,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
             ),
             [
                 preview_id,
@@ -479,14 +311,15 @@ class TestBackendMinimal(SmokeBase):
                 "failed",
                 "",
                 "",
-                json.dumps(
-                    {
-                        "error": "sample verification failed (ver-sample-123): main correct solution RE on 001.in: judge verdict RE",
-                        "failed_stage": "sample_sync",
-                    }
-                ),
                 str(artifact_path),
             ],
+        )
+        write_preview_summary(
+            preview_id,
+            {
+                "error": "sample verification failed (ver-sample-123): main correct solution RE on 001.in: judge verdict RE",
+                "failed_stage": "sample_sync",
+            },
         )
         resp = preview_page(
             _request(

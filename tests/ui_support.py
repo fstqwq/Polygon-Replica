@@ -44,12 +44,12 @@ import app.impl.run_export.run as run_export_run_module
 import app.impl.tests_spec.routes as tests_spec_module
 import app.impl.tests_spec.verification as tests_spec_verification_module
 import app.impl.workspace.context_job as workspace_job_module
+import app.impl.workspace.context_job_helper as workspace_job_helper_module
 import app.impl.workspace.context_ui as workspace_ui_module
 import app.impl.workspace.context_verification as workspace_verification_module
 import app.impl.workspace.run_view_detail as workspace_run_view_detail_module
 import app.impl.workspace.run_view_list as workspace_run_view_list_module
 from app.impl.runtime.config import config
-from app.service.verification.store import load_verification_summary, verification_run_ids as verification_summary_run_ids
 _API_MODULES = (
     auth_api_module,
     tests_spec_module,
@@ -82,14 +82,12 @@ _API_MODULES = (
 )
 
 def _verification_record_run_ids(problem_id: int, workspace_id: int, verification_id: str) -> list[str]:
-    summary = load_verification_summary(config.db, verification_id)
-    if not isinstance(summary, dict):
-        return []
-    return verification_summary_run_ids(summary)
+    del problem_id
+    del workspace_id
+    return list(config.verification_service.verification_run_ids(verification_id))
 
 
 run_export_impl = SimpleNamespace(
-    _finalize_cancelled_verifications=run_export_run_module._finalize_cancelled_verifications,
     _run_detail_use_compact_layout=run_export_query_module._run_detail_use_compact_layout,
     run_artifact_file=run_export_artifact_module.run_artifact_file,
     run_cancel=run_export_run_module.run_cancel,
@@ -98,9 +96,8 @@ workspace_impl = SimpleNamespace(
     _run_cell_kind=workspace_run_view_list_module._run_cell_kind,
     _verification_solution_match=workspace_verification_module._verification_solution_match,
     _verification_sources_signature=workspace_verification_module._verification_sources_signature,
-    _verification_sources_signature_details=workspace_verification_module._verification_sources_signature_details,
     build_run_detail_context=workspace_run_view_detail_module.build_run_detail_context,
-    record_async_run_failure=workspace_job_module.record_async_run_failure,
+    record_async_run_failure=workspace_job_helper_module.record_async_run_failure,
     run_list_rows=workspace_run_view_list_module.run_list_rows,
     verification_detail_context=workspace_run_view_detail_module.build_run_detail_context,
     verification_run_ids=_verification_record_run_ids,

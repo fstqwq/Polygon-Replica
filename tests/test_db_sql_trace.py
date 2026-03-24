@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -51,51 +50,6 @@ class TestDBSqlTrace(TestCase):
         self.assertIsNotNone(row)
         sql_texts = self._trace_sql_texts(info)
         self.assertTrue(any(text == "SELECT 1 AS value" for text in sql_texts), sql_texts)
-
-    def test_db_trace_redacts_summary_json_sql(self) -> None:
-        db = self._make_db()
-        db.init()
-        db.apply_runtime_values(_TraceValues(True))
-        problem_slug = f"alice/{uuid.uuid4().hex[:8]}"
-        summary_payload = {
-            "tests": [{"test": "001.in", "feedback": "line one\nline two"}],
-            "blob": "X" * 2048,
-        }
-        db.execute(
-            "INSERT INTO problems(slug,name,repo_name,created_at) VALUES(?,?,?,?)",
-            [problem_slug, "Sample", "sample", now_iso()],
-        )
-        problem_row = db.fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
-        self.assertIsNotNone(problem_row)
-        db.execute(
-            """
-            INSERT INTO verifications(id,problem_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                "ver-trace",
-                int(problem_row["id"] or 0),
-                "",
-                "main",
-                "build",
-                "ok",
-                json.dumps({"seed": True}),
-                str(Path("/tmp/verification")),
-                now_iso(),
-            ],
-        )
-        with patch("app.db.logger.info") as info:
-            db.execute(
-                "UPDATE verifications SET summary_json=? WHERE id=?",
-                [json.dumps(summary_payload), "ver-trace"],
-            )
-        sql_texts = self._trace_sql_texts(info)
-        trace_text = next((text for text in sql_texts if "json_fields=summary_json" in text), "")
-        self.assertTrue(trace_text, sql_texts)
-        self.assertIn("UPDATE verifications", trace_text)
-        self.assertIn("<redacted-json>", trace_text)
-        self.assertNotIn('"blob": "', trace_text)
-        self.assertNotIn("line one", trace_text)
 
     def test_db_trace_redacts_details_and_value_json_sql(self) -> None:
         db = self._make_db()

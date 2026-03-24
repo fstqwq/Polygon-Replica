@@ -4,6 +4,7 @@ import base64
 import logging
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -14,7 +15,7 @@ from app.service.judgehost.internal.shared import (
 )
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_json_hash, domjudge_source_hash
-from app.service.judgehost.domjudge.client import domjudge_parse_script_id
+from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domjudge_script_hash_field, domjudge_script_id
 from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_feedback_line_from_bytes,
@@ -30,6 +31,9 @@ from app.service.verification.test_rows import (
     build_verification_test_row,
     upsert_verification_test_row,
 )
+from app.service.verification.task_result_finalize import finalize_verification_task_result
+from app.service.verification.task_scheduler import notify_verification_case_reported
+from app.service.verification.task_store import VerificationTaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +119,8 @@ class JudgehostDomjudgeResultsMixin:
         task_row = self._task_by_id(task_id)
         if task_row is None:
             return
-        payload = task_row["payload"]
-        verification_id = payload.get("artifact_verification_id") or payload.get("verification_id") or task_row["artifact_verification_id"]
-        target_run_id = payload.get("verification_target_run_id") or task_row["run_id"] or payload.get("run_id")
-        if (not verification_id) or (not target_run_id):
-            return
-        summary = self._load_run_summary(target_run_id, verification_id)
+        payload = cast(dict[str, object], task_row["payload"])
+        summary = dict(cast(dict[str, object], task_row.get("summary") or {}))
         verdict_token = verdict.upper() or "FL"
         time_ms = max(0, int(round(runtime_sec * 1000.0)))
         time_user_ms = max(0, int(round((cpu_sec if cpu_sec > 0.0 else runtime_sec) * 1000.0)))
@@ -157,15 +157,15 @@ class JudgehostDomjudgeResultsMixin:
         )
         summary["source"] = summary.get("source") or source_path
         summary["verification_source"] = payload.get("verification_source") or summary.get("verification_source") or "verification.start"
-        summary["artifact_verification_id"] = verification_id
-        self._ensure_verification_result(
-            row=task_row,
-            verification_id=verification_id,
-            run_id=target_run_id,
-            run_status=run_status,
-            summary_obj=summary,
-            error_text="",
-        )
+        summary["status"] = run_status
+        judgehost_block = dict(cast(dict[str, object], summary.get("judgehost") or {}))
+        judgehost_block["task_id"] = task_id
+        summary["judgehost"] = judgehost_block
+        with self._state_lock:
+            row = self._tasks_by_id.get(task_id)
+            if row is not None:
+                row["summary"] = summary
+                row["updated_at"] = now_iso()
     def domjudge_get_source_files(self, submit_id: str, contest_id: str | None = None) -> list[dict[str, object]]:
         safe_submit = domjudge_text(submit_id)
         if not safe_submit:
@@ -204,27 +204,24 @@ class JudgehostDomjudgeResultsMixin:
             out = [{"filename": source_name, "content": base64.b64encode(source_path.read_bytes()).decode("ascii")}]
         return out
 
-    def domjudge_get_testcase_files(self, testcase_id: int) -> list[dict[str, object]]:
+    def domjudge_get_testcase_files(self, testcase_id: int, *, hostname: str) -> list[dict[str, object]]:
         token = int(testcase_id)
-        row, resolution_source = self._judgehost_state_store.testcase_paths(token)
+        safe_host = self._normalize_hostname(hostname)
+        row, resolution_source = self._judgehost_state_store.testcase_paths(token, hostname=safe_host)
         if row is None:
-            with self._testcase_registry_lock:
-                record = self._testcase_registry_by_id.get(token)
-                if record is not None:
-                    resolution_source = "registry"
-                    row = {
-                        "input_path": record["input_path"],
-                        "answer_path": record["answer_path"],
-                    }
-        if row is None:
-            _diag_logger.warning("judgehost.get_testcase_files testcase_id=%s resolved=missing", token)
+            _diag_logger.warning(
+                "judgehost.get_testcase_files testcase_id=%s host=%s resolved=missing",
+                token,
+                safe_host,
+            )
             raise RuntimeError("testcase files not found")
         in_path = Path(row["input_path"]).resolve()
         ans_path = Path(row["answer_path"]).resolve()
         if not in_path.exists() or not ans_path.exists():
             _diag_logger.warning(
-                "judgehost.get_testcase_files testcase_id=%s resolved=%s exists=%s input=%s answer=%s",
+                "judgehost.get_testcase_files testcase_id=%s host=%s resolved=%s exists=%s input=%s answer=%s",
                 token,
+                safe_host,
                 resolution_source,
                 False,
                 in_path,
@@ -232,8 +229,9 @@ class JudgehostDomjudgeResultsMixin:
             )
             raise RuntimeError("testcase files not found")
         _diag_logger.warning(
-            "judgehost.get_testcase_files testcase_id=%s resolved=%s exists=%s input=%s answer=%s",
+            "judgehost.get_testcase_files testcase_id=%s host=%s resolved=%s exists=%s input=%s answer=%s",
             token,
+            safe_host,
             resolution_source,
             True,
             in_path,
@@ -245,15 +243,29 @@ class JudgehostDomjudgeResultsMixin:
         ]
 
     def domjudge_get_executable_files(self, kind: str, script_id: object) -> list[dict[str, object]]:
-        job_id, offset = domjudge_parse_script_id(script_id)
-        expected = {"compile": 1, "run": 2, "compare": 3}
+        requested_id = domjudge_parse_script_id(script_id)
         token = domjudge_lower_text(kind)
-        if token not in expected or expected[token] != offset:
-            raise RuntimeError("script id/type mismatch")
-        work_root_text = self._judgehost_state_store.work_root_for_job(job_id)
-        if not work_root_text:
+        _ = domjudge_script_hash_field(token)
+        candidates = self._judgehost_state_store.jobs_for_script_kind(token)
+        matching_roots: list[Path] = []
+        matching_hashes: set[str] = set()
+        for row in candidates:
+            script_hash = domjudge_lower_text(row["script_hash"])
+            if not script_hash:
+                continue
+            if domjudge_script_id(script_hash) != requested_id:
+                continue
+            matching_hashes.add(script_hash)
+            work_root_text = domjudge_text(row["work_root"])
+            if not work_root_text:
+                continue
+            matching_roots.append(Path(work_root_text).resolve())
+        if not matching_roots:
             raise RuntimeError("script files not found")
-        base = (Path(work_root_text).resolve() / "scripts" / token).resolve()
+        unique_roots = {str(root) for root in matching_roots}
+        if len(unique_roots) > 1 and len(matching_hashes) > 1:
+            raise RuntimeError("ambiguous script id")
+        base = (matching_roots[0] / "scripts" / token).resolve()
         if not base.exists() or not base.is_dir():
             raise RuntimeError("script files not found")
         rows: list[dict[str, object]] = []
@@ -310,6 +322,44 @@ class JudgehostDomjudgeResultsMixin:
     def _domjudge_task_lease_owner(self, task_id: str) -> str:
         return domjudge_task_lease_owner(self._task_by_id(task_id), default="judgehost")
 
+    def _domjudge_finalize_case_task(self, *, task_id: str, test_name: str, hostname: str) -> None:
+        safe_task_id = domjudge_text(task_id)
+        safe_test_name = domjudge_text(test_name)
+        if (not safe_task_id) or (not safe_test_name):
+            return
+        task_row = self._task_by_id(safe_task_id)
+        if task_row is None:
+            return
+        task_status = domjudge_lower_text(task_row["status"])
+        if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+            return
+        case_result = self.poll_task_case_result(safe_task_id, safe_test_name)
+        if case_result is None:
+            return
+        self.report_result(
+            task_id=safe_task_id,
+            hostname=self._normalize_hostname(hostname),
+            payload={
+                "run_status": str(case_result.get("status") or "failed"),
+                "error": str(case_result.get("error") or ""),
+                "summary": dict(case_result.get("summary") or {}),
+            },
+        )
+        verification_task_store = VerificationTaskStore(self.db)
+        verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
+            safe_task_id,
+            safe_test_name,
+        )
+        if verification_task_row is None:
+            return
+        final_result = finalize_verification_task_result(verification_task_row, result=case_result)
+        notify_verification_case_reported(
+            str(verification_task_row["verification_id"] or ""),
+            safe_task_id,
+            safe_test_name,
+            final_result,
+        )
+
     def _domjudge_finalize_if_ready(self, job_id: int, *, force_failed: bool = False, error_text: str = "") -> None:
         job_row = self._judgehost_state_store.job_finalize_row(int(job_id))
         if job_row is None:
@@ -333,18 +383,51 @@ class JudgehostDomjudgeResultsMixin:
                 compile_success = None
         ready = force_failed or compile_success == 0
         if not ready:
-            ready = all(domjudge_lower_text(row["status"]) == "reported" for row in cases)
+            ready = all(domjudge_lower_text(row["status"]) in {"reported", "cancelled"} for row in cases)
         if not ready:
+            return
+        grouped_job = bool(domjudge_text(job_row["group_key"]))
+        if grouped_job:
+            if force_failed and compile_success != 0:
+                forced_at = now_iso()
+                self._judgehost_state_store.mark_job_cases_reported(
+                    int(job_id),
+                    runresult="internal-error",
+                    updated_at=forced_at,
+                )
+                cases = self._judgehost_state_store.cases_for_job(int(job_id))
+            has_cancelled_cases = False
+            for row in cases:
+                if domjudge_lower_text(row["status"]) == "cancelled":
+                    has_cancelled_cases = True
+                    continue
+                self._domjudge_finalize_case_task(
+                    task_id=domjudge_text(row["task_id"]),
+                    test_name=domjudge_text(row["test_name"]),
+                    hostname=self._domjudge_task_lease_owner(domjudge_text(row["task_id"])),
+                )
+            finished_at = now_iso()
+            self._judgehost_state_store.set_job_terminal_status(
+                int(job_id),
+                status="failed" if (force_failed or compile_success == 0 or has_cancelled_cases) else "completed",
+                completed_at=finished_at,
+                updated_at=finished_at,
+            )
+            shutil.rmtree(Path(domjudge_text(job_row["work_root"])).resolve(), ignore_errors=True)
             return
 
         tests: list[dict[str, object]] = []
         internal_failure_error = ""
+        cancelled_cases = 0
         usage_time_user = 0
         usage_time_wall = 0
         usage_mem_peak = 0
         work_root = Path(domjudge_text(job_row["work_root"])).resolve()
 
         for row in cases:
+            if domjudge_lower_text(row["status"]) == "cancelled":
+                cancelled_cases += 1
+                continue
             test_name = domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in")
             runresult = domjudge_text(row["runresult"])
             runresult_token = domjudge_lower_text(runresult)
@@ -402,6 +485,8 @@ class JudgehostDomjudgeResultsMixin:
                 if not detail:
                     detail = runresult_token.replace("-", " ")
                 internal_failure_error = f"{test_name}: {detail}" if test_name else detail
+        if cancelled_cases > 0 and (not internal_failure_error):
+            internal_failure_error = "judgehost task cancelled"
 
         compile_log = ""
         compile_diag: list[dict[str, object]] = []
@@ -473,10 +558,11 @@ class JudgehostDomjudgeResultsMixin:
         finished_at = now_iso()
         self._judgehost_state_store.set_job_terminal_status(
             int(job_id),
-            status="failed" if force_failed else "completed",
+            status="failed" if (force_failed or cancelled_cases > 0) else "completed",
             completed_at=finished_at,
             updated_at=finished_at,
         )
+        shutil.rmtree(work_root, ignore_errors=True)
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
         safe_host = self._normalize_hostname(hostname)
@@ -544,6 +630,7 @@ class JudgehostDomjudgeResultsMixin:
             logger.info("ignoring add_judging_run for non-leased DOMjudge case id: %s", case_id)
             return case_id
         job_id = int(row["job_id"])
+        grouped_job = bool(domjudge_text(row["group_key"]))
         safe_task_id = domjudge_text(row["task_id"])
         if not self._domjudge_task_accepts_case_updates(safe_task_id):
             logger.info("ignoring add_judging_run for cancelled DOMjudge task id: %s", case_id)
@@ -654,7 +741,7 @@ class JudgehostDomjudgeResultsMixin:
         testcase_input_hash = domjudge_sha256_bytes(input_bytes)
         testcase_answer_hash = domjudge_sha256_bytes(answer_bytes)
         if not re.fullmatch(r"[0-9a-f]{64}", testcase_hash):
-            if verification_source in {"verification.solve-main", "solve.main"}:
+            if task_kind == self._TASK_KIND_MAIN_CORRECT:
                 testcase_hash = testcase_input_hash
             else:
                 testcase_hash = self._domjudge_set_hash_from_blobs([input_bytes, answer_bytes])
@@ -782,7 +869,7 @@ class JudgehostDomjudgeResultsMixin:
         # Prefer cache refs for summary output_ref so build/run consumers can still
         # resolve artifacts after judgehost temp work directories are cleaned.
 
-        if verification_source in {"verification.solve-main", "solve.main"} and runresult == "correct":
+        if task_kind == self._TASK_KIND_MAIN_CORRECT and runresult == "correct":
             solve_key_hash, solve_signature = self._domjudge_solve_output_cache_ref(
                 source_hash=source_hash,
                 compile_hash=compile_hash,
@@ -861,6 +948,42 @@ class JudgehostDomjudgeResultsMixin:
                     safe_task_id,
                     case_id,
                 )
+        if grouped_job:
+            try:
+                self._domjudge_finalize_case_task(
+                    task_id=safe_task_id,
+                    test_name=str(row["test_name"] or ""),
+                    hostname=safe_host,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to finalize grouped DOMjudge case task_id=%s case_id=%s",
+                    safe_task_id,
+                    case_id,
+                )
+        else:
+            verification_task_store = VerificationTaskStore(self.db)
+            verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
+                safe_task_id,
+                str(row["test_name"] or ""),
+            )
+            if verification_task_row is not None:
+                try:
+                    case_result = self.poll_task_case_result(safe_task_id, str(row["test_name"] or ""))
+                    if case_result is not None:
+                        final_result = finalize_verification_task_result(verification_task_row, result=case_result)
+                        notify_verification_case_reported(
+                            str(verification_task_row["verification_id"] or ""),
+                            safe_task_id,
+                            str(row["test_name"] or ""),
+                            final_result,
+                        )
+                except Exception:
+                    logger.exception(
+                        "failed to publish verification task result event task_id=%s case_id=%s",
+                        safe_task_id,
+                        case_id,
+                    )
 
         self._domjudge_finalize_if_ready(job_id)
         return 1
@@ -906,6 +1029,33 @@ class JudgehostDomjudgeResultsMixin:
     def _domjudge_debug_payload_text(self, payload: dict[str, object]) -> str:
         if not payload:
             return ""
+        interesting_markers = (
+            "fail",
+            "error",
+            "exception",
+            "trace",
+            "crash",
+            "compare",
+            "expected",
+            "unexpected",
+        )
+        handled_keys = {
+            "judgehostlog",
+            "description",
+            "message",
+            "error",
+            "detail",
+            "details",
+            "stderr",
+            "stdout",
+            "output_error",
+            "output_system",
+            "output_diff",
+            "compare_output",
+            "compare_error",
+            "judgemessage",
+            "team_message",
+        }
 
         def _decode_maybe_b64(text: str) -> str:
             if not text:
@@ -923,6 +1073,10 @@ class JudgehostDomjudgeResultsMixin:
                         if printable >= int(len(decoded) * 0.9):
                             return decoded
             return text
+
+        def _looks_like_raw_b64(text: str) -> bool:
+            compact = "".join(text.split())
+            return bool(compact) and len(compact) >= 64 and (len(compact) % 4 == 0) and bool(re.fullmatch(r"[A-Za-z0-9+/=]+", compact))
 
         lines: list[str] = []
         seen: set[str] = set()
@@ -976,49 +1130,38 @@ class JudgehostDomjudgeResultsMixin:
                 if len(lines) >= 16:
                     return
 
-        def _walk_scalars(value: object) -> list[str]:
-            compact = json.dumps(value, ensure_ascii=False, default=str)
+        def _walk_scalars(value: object, *, key_name: str="") -> list[str]:
             out: list[str] = []
-            for raw_line in compact.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            key_token = domjudge_lower_text(key_name)
+            if key_token in handled_keys or key_token == "disabled":
+                return out
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    out.extend(_walk_scalars(sub_value, key_name=domjudge_text(sub_key)))
+                    if len(out) >= 32:
+                        break
+                return out
+            if isinstance(value, list):
+                for item in value:
+                    out.extend(_walk_scalars(item, key_name=key_name))
+                    if len(out) >= 32:
+                        break
+                return out
+            decoded = _decode_maybe_b64("" if value is None else str(value))
+            if not decoded or _looks_like_raw_b64(decoded):
+                return out
+            for raw_line in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
                 text = domjudge_text(raw_line)
                 if not text:
                     continue
                 low = text.lower()
-                if any(
-                    marker in low
-                    for marker in (
-                        "fail",
-                        "error",
-                        "exception",
-                        "trace",
-                        "crash",
-                        "compare",
-                        "expected",
-                        "unexpected",
-                    )
-                ):
+                if any(marker in low for marker in interesting_markers):
                     out.append(text)
                 if len(out) >= 32:
                     break
             return out
 
-        for key in (
-            "judgehostlog",
-            "description",
-            "message",
-            "error",
-            "detail",
-            "details",
-            "stderr",
-            "stdout",
-            "output_error",
-            "output_system",
-            "output_diff",
-            "compare_output",
-            "compare_error",
-            "judgemessage",
-            "team_message",
-        ):
+        for key in handled_keys:
             if key not in payload:
                 continue
             value = payload[key]

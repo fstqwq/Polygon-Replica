@@ -631,7 +631,6 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
                 requested_slug=requested_problem_slug,
                 source_problem="",
                 normalize_test_data_newlines=True,
-                build_polygon_sample_answers=False,
             )
             imported_problem_slug_obj = imported.get("target_problem")
             imported_problem_slug = imported_problem_slug_obj.strip() if isinstance(imported_problem_slug_obj, str) else ""

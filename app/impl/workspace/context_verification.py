@@ -1,13 +1,10 @@
 from __future__ import annotations
-import os
 import re
 from pathlib import Path
-from typing import cast
 from app.impl.runtime.config import config
 from app.main_util import preserve_error_text
-from app.service.platform.hashing import quick_fp_digest
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.verification.summary import verification_run_ids
+from app.service.verification.signature import verification_signature
 from .run_display import run_actual_failed_codes, run_actual_short
 _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     # Each expected behavior is evaluated by:
@@ -48,184 +45,32 @@ def _source_basename_label(path: str) -> str:
     name = Path(raw).name
     return name or raw
 
-def _verification_has_stage_results(verification_id: str) -> bool:
-    if not verification_id:
-        return False
-    stage_results = cast(dict[str, object] | None, config.verification_service.verification_summary(verification_id).get("stage_results"))
-    return bool(stage_results)
-
-
-def latest_workspace_stage_verification(problem_id: int, workspace_id: int, *, ok_only: bool=False):
-    rows = config.verification_service.latest_workspace_stage_rows(
+def latest_workspace_verification(problem_id: int, workspace_id: int, *, ok_only: bool=False):
+    rows = config.verification_service._verification_store.workspace_verification_rows(
         int(problem_id),
         int(workspace_id),
         limit=40,
         ok_only=bool(ok_only),
     )
-    fallback: dict | None = None
-    for row in rows:
-        if fallback is None:
-            fallback = row
-        if _verification_has_stage_results(row["id"]):
-            return row
-    return fallback
+    return rows[0] if rows else None
 
 
-def latest_workspace_committed_stage_verification(problem_id: int, workspace_id: int, head_commit: str, *, ok_only: bool=False):
-    commit = head_commit
-    if not commit:
+def latest_workspace_signature_verification(problem_id: int, workspace_id: int, signature: str, *, ok_only: bool=False):
+    safe_signature = signature
+    if not safe_signature:
         return None
-    rows = config.verification_service.latest_workspace_committed_stage_rows(
+    rows = config.verification_service._verification_store.workspace_verification_rows(
         int(problem_id),
         int(workspace_id),
-        source_commit=commit,
-        source_ref=commit,
         limit=40,
+        kinds=("all", "custom"),
         ok_only=bool(ok_only),
     )
-    fallback: dict | None = None
-    for row in rows:
-        if fallback is None:
-            fallback = row
-        if _verification_has_stage_results(row["id"]):
-            return row
-    return fallback
-
-_VERIFICATION_SIGNATURE_FILE_TARGETS: tuple[str, ...] = (
-    'config/problem.json',
-    'config/build.json',
-    'tests/spec.json',
-)
-_VERIFICATION_SIGNATURE_DIR_TARGETS: tuple[str, ...] = (
-    'generators',
-    'validators',
-    'checkers',
-    'solutions',
-    'tests/manual',
-    'tests/generator',
-)
-_VERIFICATION_SIGNATURE_DETAIL_TARGETS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
-    ('general info', ('config/problem.json',), ()),
-    ('build config', ('config/build.json',), ()),
-    ('generators', (), ('generators',)),
-    ('validator', (), ('validators',)),
-    ('checker', (), ('checkers',)),
-    ('solutions', (), ('solutions',)),
-    ('tests', ('tests/spec.json',), ('tests/manual', 'tests/generator')),
-)
-def _stat_mtime_ns(stat_obj: os.stat_result) -> int:
-    return int(getattr(stat_obj, 'st_mtime_ns', int(float(stat_obj.st_mtime) * 1_000_000_000)))
-
-
-def _verification_sources_signature_from_targets(workspace: Path, file_targets: tuple[str, ...], dir_targets: tuple[str, ...]) -> str:
-    entries: list[dict[str, object]] = []
-    try:
-        workspace_resolved = workspace.resolve()
-    except OSError:
-        workspace_resolved = workspace
-
-    def _is_within_workspace(path: Path) -> bool:
-        return workspace_resolved == path or workspace_resolved in path.parents
-
-    def _safe_file(rel_path: str) -> Path | None:
-        target = workspace / rel_path
-        try:
-            if target.is_symlink() or not target.exists() or not target.is_file():
-                return None
-            resolved = target.resolve()
-        except OSError:
-            return None
-        if not _is_within_workspace(resolved):
-            return None
-        return target
-
-    def _hash_file(rel_path: str, target: Path | None) -> None:
-        if target is None:
-            entries.append({'kind': 'file', 'target': rel_path, 'state': 'missing'})
-            return
-        try:
-            stat_obj = target.stat()
-            entries.append({'kind': 'file', 'target': rel_path, 'state': 'ok', 'size': int(stat_obj.st_size), 'mtime_ns': _stat_mtime_ns(stat_obj)})
-        except OSError:
-            entries.append({'kind': 'file', 'target': rel_path, 'state': 'unreadable'})
-
-    def _hash_dir(rel_dir: str) -> None:
-        root = workspace / rel_dir
-        try:
-            if root.is_symlink() or not root.exists() or not root.is_dir():
-                entries.append({'kind': 'dir', 'target': rel_dir, 'state': 'missing'})
-                return
-            root_resolved = root.resolve()
-        except OSError:
-            entries.append({'kind': 'dir', 'target': rel_dir, 'state': 'missing'})
-            return
-        if not _is_within_workspace(root_resolved):
-            entries.append({'kind': 'dir', 'target': rel_dir, 'state': 'invalid'})
-            return
-        entries.append({'kind': 'dir', 'target': rel_dir, 'state': 'ok'})
-        files: list[tuple[str, Path]] = []
-        for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
-            dir_root = Path(dirpath)
-            try:
-                dir_root_resolved = dir_root.resolve()
-            except OSError:
-                dirnames[:] = []
-                continue
-            if not _is_within_workspace(dir_root_resolved):
-                dirnames[:] = []
-                continue
-            safe_dirs: list[str] = []
-            for name in dirnames:
-                child = dir_root / name
-                try:
-                    if child.is_symlink() or not child.exists() or not child.is_dir():
-                        continue
-                except OSError:
-                    continue
-                safe_dirs.append(name)
-            dirnames[:] = sorted(safe_dirs)
-            for name in sorted(filenames):
-                path = dir_root / name
-                try:
-                    if path.is_symlink() or not path.exists() or not path.is_file():
-                        continue
-                    path_resolved = path.resolve()
-                except OSError:
-                    continue
-                if not _is_within_workspace(path_resolved):
-                    continue
-                try:
-                    rel = path.relative_to(workspace).as_posix()
-                except ValueError:
-                    continue
-                files.append((rel, path))
-        files.sort(key=lambda item: item[0])
-        for rel, path in files:
-            try:
-                stat_obj = path.stat()
-                entries.append({'kind': 'dir-file', 'target': rel_dir, 'path': rel, 'state': 'ok', 'size': int(stat_obj.st_size), 'mtime_ns': _stat_mtime_ns(stat_obj)})
-            except OSError:
-                entries.append({'kind': 'dir-file', 'target': rel_dir, 'path': rel, 'state': 'unreadable'})
-
-    for rel_path in file_targets:
-        _hash_file(rel_path, _safe_file(rel_path))
-    for rel_dir in dir_targets:
-        _hash_dir(rel_dir)
-    return quick_fp_digest(entries, schema='verification-signature')
-
-def _verification_sources_signature_details(workspace: Path) -> dict[str, str]:
-    details: dict[str, str] = {}
-    for label, file_targets, dir_targets in _VERIFICATION_SIGNATURE_DETAIL_TARGETS:
-        details[label] = _verification_sources_signature_from_targets(workspace, file_targets, dir_targets)
-    return details
-
+    rows = [row for row in rows if str(row["signature"] or "") == safe_signature]
+    return rows[0] if rows else None
 
 def _verification_sources_signature(workspace: Path) -> str:
-    return _verification_sources_signature_from_targets(
-        workspace,
-        _VERIFICATION_SIGNATURE_FILE_TARGETS,
-        _VERIFICATION_SIGNATURE_DIR_TARGETS,
-    )
+    return verification_signature(workspace)
 
 def _verification_run_passed(run_status: str, summary: dict[str, object] | None) -> bool:
     if run_status != 'ok' or summary is None:
@@ -359,45 +204,28 @@ def _verification_first_unmatched_hint(solutions: list[dict[str, object]] | None
     for item in solutions:
         if bool(item.get('matched')):
             continue
-        source_path = item['source_path']
-        reason = item['reason']
-        error_text = item['error']
+        if not bool(item.get('completed')):
+            continue
+        source_path = str(item.get('source_path') or '')
+        reason = str(item.get('reason') or '')
+        error_text = str(item.get('error') or '')
         hint = _verification_solution_failure_hint(source_path, reason, error_text)
         if hint:
             return hint
     return ''
 
-def _verification_stale_reason(changed_components: list[str], *, head_changed: bool, dirty_changed: bool) -> str:
-    parts: list[str] = [name for name in changed_components if name]
-    if not parts:
-        if head_changed:
-            parts.append('workspace revision')
-        if dirty_changed:
-            parts.append('working copy')
-    if not parts:
-        return 'changed: verification inputs'
-    return 'changed: ' + ', '.join(parts)
-
-
-def _changed_signature_components(recorded_details: dict[str, str], current_details: dict[str, str]) -> list[str]:
-    if not recorded_details or not current_details:
-        return []
-    return [
-        label
-        for label, _file_targets, _dir_targets in _VERIFICATION_SIGNATURE_DETAIL_TARGETS
-        if recorded_details.get(label, '') != current_details.get(label, '')
-    ]
+def _verification_stale_reason() -> str:
+    return "changed: verification inputs"
 
 def _verification_status_context(
     problem_id: int,
     actor_user_id: int,
     workspace_id: int,
-    workspace_head: str,
     workspace_dirty: bool,
     workspace_path: Path | str | None=None,
 ) -> dict[str, object]:
     _ = actor_user_id
-    rows = config.verification_service.latest_workspace_stage_rows(
+    rows = config.verification_service._verification_store.workspace_verification_rows(
         int(problem_id),
         int(workspace_id),
         limit=1,
@@ -406,7 +234,7 @@ def _verification_status_context(
     if row is None:
         return {'mode': 'none', 'display': 'none', 'last_status': 'none', 'run_id': '', 'run_ids': '', 'verification_id': '', 'error': '', 'created_at': '', 'stale': False, 'stale_reason': ''}
     verification_id = row['id']
-    details = config.verification_service.verification_summary(verification_id)
+    metadata = config.verification_service.verification_metadata(verification_id)
     status_token = row['status']
     if status_token == 'ok':
         last_status = 'pass'
@@ -414,41 +242,22 @@ def _verification_status_context(
         last_status = 'running'
     else:
         last_status = 'failed'
-    run_ids = dedupe_preserve_order(verification_run_ids(details))
-    run_id = run_ids[0] if run_ids else ''
+    run_ids: list[str] = []
+    run_id = ''
     verification_created_at = row['created_at']
-    recorded_signature = cast(str | None, details.get("verification_signature")) or ""
-    recorded_signature_details = cast(dict[str, str] | None, details.get('verification_signature_details')) or {}
+    recorded_signature = str(row.get("signature") or "")
     current_signature = ''
-    current_signature_details: dict[str, str] = {}
     if workspace_path:
         try:
             workspace_obj = Path(workspace_path)
             current_signature = _verification_sources_signature(workspace_obj)
-            current_signature_details = _verification_sources_signature_details(workspace_obj)
         except Exception:
             current_signature = ''
-            current_signature_details = {}
-    recorded_head = cast(str | None, details.get("workspace_head")) or ""
-    recorded_dirty = bool(details.get('workspace_dirty'))
-    stale = False
-    head_changed = False
-    dirty_changed = bool(workspace_dirty) != recorded_dirty
-    if recorded_signature and current_signature:
-        stale = recorded_signature != current_signature
-    else:
-        if recorded_head and workspace_head and (recorded_head != workspace_head):
-            stale = True
-            head_changed = True
-        if dirty_changed:
-            stale = True
-    changed_components = _changed_signature_components(recorded_signature_details, current_signature_details) if stale else []
-    error_text = cast(str | None, details.get("error")) or ""
-    unmatched_hint = _verification_first_unmatched_hint(cast(list[dict[str, object]] | None, details.get('solutions')) or [])
-    if unmatched_hint and (last_status == 'failed' or not error_text):
-        error_text = unmatched_hint
+    stale = bool(recorded_signature and current_signature and (recorded_signature != current_signature))
+    record = config.verification_service.verification_record(verification_id) or {}
+    error_text = str(record.get("fail_reason") or metadata.get("error") or "")
     mode = 'stale' if stale else last_status
-    stale_reason = _verification_stale_reason(changed_components, head_changed=head_changed, dirty_changed=dirty_changed) if stale else ''
+    stale_reason = _verification_stale_reason() if stale else ''
     return {
         'mode': mode,
         'display': mode,

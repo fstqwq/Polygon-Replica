@@ -189,7 +189,7 @@
       cpuIds.forEach(function (daemonId) {
         lines.push(
           commandPrefix +
-            "docker run -it --privileged --cgroupns=host --storage-opt size=10G -v /sys/fs/cgroup:/sys/fs/cgroup:rw --add-host=host.docker.internal:host-gateway --name judgehost-" +
+            "docker run -d --privileged --cgroupns=host --storage-opt size=10G -v /sys/fs/cgroup:/sys/fs/cgroup:rw --add-host=host.docker.internal:host-gateway --name judgehost-" +
             String(daemonId) +
             " --hostname judgedaemon-" +
             String(daemonId) +

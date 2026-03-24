@@ -20,7 +20,6 @@ from .artifact import artifact_version_number, safe_artifact_path
 from .context import count_label
 from .context_operation import (
     _normalize_standard_checker_name,
-    parse_summary_json,
     _solutions_status_context,
     _tests_spec_status_context,
 )
@@ -140,7 +139,6 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
             int(ctx['problem']['id']),
             int(ctx['user']['id']),
             int(ctx['workspace']['id']),
-            workspace_head,
             workspace_dirty,
             workspace_path=workspace_path,
         )
@@ -234,7 +232,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
                 preview_danger = True
             else:
                 preview_source_commit = cast(str | None, _row_value(preview_row, 'source_commit', '')) or ''
-                summary_obj = parse_summary_json(_row_value(preview_row, 'summary_json', None), f'preview/{preview_id}')
+                summary_obj = dict(cast(dict[str, object], _row_value(preview_row, 'summary', {})))
                 preview_signature = cast(str | None, summary_obj.get('statement_signature')) or ''
                 workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
                 workspace_path_text = cast(str | None, workspace_path_raw) or ''

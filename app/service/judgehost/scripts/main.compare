@@ -1,0 +1,105 @@
+#!/bin/sh
+set -e
+TESTIN="$1"
+TESTANS="$2"
+FEEDBACK="$3"
+shift 3
+
+HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+mkdir -p "$FEEDBACK"
+TEAMOUT="$FEEDBACK/team.out"
+# Main-correct verification validates the produced output with the checker
+# against itself. This lets custom checkers reject malformed output without
+# requiring a pre-existing answer file.
+cat >"$TEAMOUT" || true
+TESTANS="$TEAMOUT"
+
+CHECKER_BIN="$HERE/checker"
+CHECKER_SRC="$HERE/checker.cpp"
+
+compile_checker() {
+  [ -f "$CHECKER_SRC" ] || return 1
+  command -v g++ >/dev/null 2>&1 || return 1
+  CACHE_ROOT="${TMPDIR:-/tmp}/checker-cache"
+  mkdir -p "$CACHE_ROOT" 2>/dev/null || true
+  HASH_HDR="$HERE/testlib.h"
+  CHECKER_KEY=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    if [ -f "$HASH_HDR" ]; then
+      CHECKER_KEY="$(cat "$CHECKER_SRC" "$HASH_HDR" | sha256sum | awk '{print $1}')"
+    else
+      CHECKER_KEY="$(sha256sum "$CHECKER_SRC" | awk '{print $1}')"
+    fi
+  fi
+  if [ -z "$CHECKER_KEY" ]; then
+    CHECKER_KEY="checker-$(basename "$CHECKER_SRC")"
+  fi
+  TARGET="$CACHE_ROOT/$CHECKER_KEY"
+  if [ -x "$TARGET" ]; then
+    CHECKER_BIN="$TARGET"
+    return 0
+  fi
+  TMP_TARGET="$TARGET.tmp.$$"
+  g++ -O2 -std=gnu++20 -pipe -DDOMJUDGE -I"$HERE" "$CHECKER_SRC" -o "$TMP_TARGET" >"$FEEDBACK/checker.build.log" 2>&1 || {
+    rm -f "$TMP_TARGET"
+    return 1
+  }
+  chmod +x "$TMP_TARGET" || true
+  mv -f "$TMP_TARGET" "$TARGET" 2>/dev/null || cp -f "$TMP_TARGET" "$TARGET"
+  rm -f "$TMP_TARGET" 2>/dev/null || true
+  CHECKER_BIN="$TARGET"
+  return 0
+}
+
+run_checker() {
+  set +e
+  FEEDBACK_DIR="$FEEDBACK" "$CHECKER_BIN" "$TESTIN" "$TESTANS" "$FEEDBACK" "$@" <"$TEAMOUT" >"$FEEDBACK/checker.log" 2>&1
+  CHECKER_RC=$?
+  set -e
+}
+
+if [ ! -x "$CHECKER_BIN" ] && [ -f "$CHECKER_SRC" ]; then
+  if ! compile_checker; then
+    if [ -f "$FEEDBACK/checker.build.log" ] && [ -s "$FEEDBACK/checker.build.log" ]; then
+      cat "$FEEDBACK/checker.build.log" >"$FEEDBACK/judgemessage.txt"
+    else
+      echo "checker compile failed" >"$FEEDBACK/judgemessage.txt"
+    fi
+    exit 43
+  fi
+fi
+
+if [ -x "$CHECKER_BIN" ]; then
+  run_checker "$@"
+  RC=$CHECKER_RC
+  if [ "$RC" -ne 42 ] && [ "$RC" -ne 43 ] && [ -f "$CHECKER_SRC" ] && grep -Eq "GLIBC_|GLIBCXX_" "$FEEDBACK/checker.log" 2>/dev/null; then
+    if compile_checker; then
+      run_checker "$@"
+      RC=$CHECKER_RC
+    fi
+  fi
+  if [ "$RC" -ne 42 ] && [ "$RC" -ne 43 ]; then
+    if [ -f "$FEEDBACK/judgemessage.txt" ] && [ -s "$FEEDBACK/judgemessage.txt" ]; then
+      cat "$FEEDBACK/judgemessage.txt" >&2 || true
+    elif [ -f "$FEEDBACK/checker.log" ] && [ -s "$FEEDBACK/checker.log" ]; then
+      cat "$FEEDBACK/checker.log" >"$FEEDBACK/judgemessage.txt"
+      cat "$FEEDBACK/checker.log" >&2 || true
+    else
+      MSG="checker returned unexpected exit code: $RC"
+      echo "$MSG" >"$FEEDBACK/judgemessage.txt"
+      echo "$MSG" >&2
+    fi
+    exit "$RC"
+  fi
+  if [ -f "$FEEDBACK/checker.log" ] && [ -s "$FEEDBACK/checker.log" ]; then
+    cat "$FEEDBACK/checker.log" >"$FEEDBACK/judgemessage.txt"
+  fi
+  exit "$RC"
+fi
+
+if diff -q "$TEAMOUT" "$TESTANS" >/dev/null 2>&1; then
+  echo "ok" >"$FEEDBACK/judgemessage.txt"
+  exit 42
+fi
+echo "wrong answer" >"$FEEDBACK/judgemessage.txt"
+exit 43

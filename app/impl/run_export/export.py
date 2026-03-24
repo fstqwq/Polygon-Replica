@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import zipfile
@@ -11,7 +11,8 @@ from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.artifact import git_commit_count
-from app.impl.workspace.context_job import page_ctx, start_export_job
+from app.impl.workspace.context_job import start_export_job
+from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import audit
 from app.impl.run_export.query import (
     _verification_runtime_progress,
@@ -54,18 +55,6 @@ def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
     }
 
 
-def _parse_verification_summary(raw: str | None) -> dict[str, object]:
-    if raw is None:
-        return {}
-    text = raw.strip()
-    if not text:
-        return {}
-    try:
-        return cast(dict[str, object], json.loads(text))
-    except Exception:
-        return {}
-
-
 def _parse_step_status(raw: object) -> str:
     status = cast(str | None, raw)
     if status is None:
@@ -84,22 +73,13 @@ def _export_recent_events(
     cap = max(1, min(100, int(limit)))
     rows = config.export_service.export_audit_rows(int(problem_id), int(actor_user_id), limit=cap)
     result: list[dict[str, object]] = []
-    resolved_commit_keys: set[tuple[str, str]] = set()
     for row in rows:
         item = dict(row)
         details = _parse_export_audit_details(cast(str | None, item.get("details_json")))
         status = details["status"]
         export_type = details["export_type"]
         source_commit = details["source_commit"]
-        commit_key = (export_type, source_commit) if source_commit else ("", "")
-        if status == "running" and source_commit and commit_key in resolved_commit_keys:
-            continue
         verification_id = details["verification_id"]
-        if (not verification_id) and status == "running" and source_commit:
-            verification_id = config.verification_service.latest_problem_verification_id_for_source_commit(
-                int(problem_id),
-                source_commit,
-            )
         filename = details["filename"]
         error_text = details["error"]
         detail = filename if filename else (error_text if error_text else "-")
@@ -124,7 +104,6 @@ def _export_recent_events(
             {
                 "created_at": item.get("created_at"),
                 "status": status,
-                "status_upper": status.upper(),
                 "source_commit": source_commit,
                 "source_commit_short": source_commit[:8] if source_commit else "-",
                 "verification_id": verification_id or "-",
@@ -134,8 +113,6 @@ def _export_recent_events(
                 "log_href": log_href,
             }
         )
-        if status in {"ok", "failed"} and source_commit:
-            resolved_commit_keys.add(commit_key)
     return result
 
 def _build_validation_status(verification_row: dict[str, object] | None) -> str:
@@ -144,25 +121,43 @@ def _build_validation_status(verification_row: dict[str, object] | None) -> str:
     status = cast(str | None, verification_row.get("status"))
     if status is None:
         status = ""
-    summary = _parse_verification_summary(cast(str | None, verification_row.get("summary_json")))
-    steps = cast(list[dict[str, object]] | None, summary.get("steps"))
-    if steps is not None:
-        for raw in steps:
-            step_name = _parse_step_status(raw.get("step"))
-            if step_name != "validate":
-                continue
-            step_status = _parse_step_status(raw.get("status"))
-            if step_status == "ok":
-                return "validation passed"
-            if step_status in {"error", "failed"}:
-                return "validation failed"
-            break
-    failed_step = _parse_step_status(summary.get("failed_step"))
-    if failed_step == "validate":
+    metadata = dict(cast(dict[str, object], verification_row.get("metadata") or {}))
+    sanity_status = _parse_step_status(metadata.get("sanity_status"))
+    if sanity_status == "passed":
+        return "validation passed"
+    if sanity_status == "failed":
+        return "validation failed"
+    if sanity_status == "unknown":
+        return "validation unknown"
+    validation_status = _parse_step_status(metadata.get("validation_status"))
+    if validation_status == "passed":
+        return "validation passed"
+    if validation_status == "failed":
+        return "validation failed"
+    if validation_status == "unknown":
+        return "validation unknown"
+    failed_step = _parse_step_status(metadata.get("failed_step"))
+    if failed_step in {"validate", "sanity"}:
         return "validation failed"
     if status == "ok":
         return "validation passed"
     return "validation unknown"
+
+
+def _resolve_export_verification_id(
+    *,
+    problem_id: int,
+    workspace_id: int,
+    verification_id: str,
+    source_commit: str,
+) -> str:
+    safe_verification_id = str(verification_id or "")
+    if safe_verification_id:
+        return safe_verification_id
+    _ = problem_id
+    _ = workspace_id
+    _ = source_commit
+    return ""
 
 def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict[str, object]:
     result: dict[str, object] = {
@@ -302,9 +297,12 @@ def export_page(request: Request, problem: str, user: str):
         if not fallback_stem:
             fallback_stem = "problem"
         item['display_filename'] = stored_filename or f"{fallback_stem}-{item['revision_display']}.zip"
-        verification_id = cast(str | None, item.get("verification_id"))
-        if verification_id is None:
-            verification_id = ""
+        verification_id = _resolve_export_verification_id(
+            problem_id=problem_id,
+            workspace_id=int(workspace_id),
+            verification_id=cast(str | None, item.get("verification_id")) or "",
+            source_commit=source_commit,
+        )
         verification_meta = verification_meta_cache.get(verification_id)
         if verification_id and (verification_meta is None) and (verification_id not in verification_meta_cache):
             verification_meta = config.verification_service.workspace_verification_meta(
@@ -397,3 +395,4 @@ def export_create(problem: str, user: str, verification_id: str=Form(''), export
         audit(ctx['user']['id'], ctx['problem']['id'], 'export.create', initial_details)
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/export', status_code=303, message=msg)
+

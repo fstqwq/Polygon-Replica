@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+from typing import cast
 from urllib.parse import quote_plus
 from fastapi import HTTPException
 from app.impl.runtime.config import config
@@ -11,7 +12,6 @@ from .artifact import (
 from .context import count_label
 from .problem_config import read_problem_config
 from .context_operation import (
-    parse_summary_json,
     solution_metadata_entry,
     workspace_rel_file_exists,
 )
@@ -32,7 +32,6 @@ from .context_run_detail import (
     _run_source_from_summary,
 )
 from app.service.platform.error_text import (
-    compact_error_text,
     preserve_error_text,
 )
 from app.service.platform.workspace_path import (
@@ -48,10 +47,9 @@ from app.service.problem.solution_metadata import (
     infer_expected_behavior_from_name,
     normalize_expected_behavior,
 )
+from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.platform.process import is_canonical_artifact_id
-from app.impl.workspace.run_view_lifecycle_builder import _build_verification_lifecycle_card
 from app.impl.workspace.run_view_lifecycle_card import (
-    _run_domjudge_case_cells,
     load_verification_detail_snapshot,
     _verification_tests_meta_stats,
 )
@@ -60,18 +58,12 @@ from app.impl.workspace.context_verification import (
     _status_rule_expected_display,
     _verification_solution_match,
 )
-from app.service.verification.summary import (
-    verification_run,
-    verification_run_ids,
-    verification_source_paths,
-)
 from app.impl.workspace.run_view_list import (
     _latest_iso_timestamp,
     _run_cell_kind,
     _run_expected_behavior_from_summary,
-    _verification_source_from_summary,
-    _is_main_correct_verification_source,
-    _solution_run_ids_from_summary,
+    _run_task_kind_from_summary,
+    _is_main_correct_task_kind,
     _run_test_answer_name,
     _run_test_sort_key,
     _run_timeout_ms_from_summary,
@@ -86,6 +78,9 @@ from app.impl.workspace.run_display import (
 )
 
 _C = config.constants
+_TASK_KIND_GENERATE_INPUT = "generate-input"
+_TASK_KIND_MAIN_CORRECT = "main-correct"
+_TASK_KIND_SOLUTION_RUN = "solution-run"
 
 def build_run_detail_context(
     ctx: dict,
@@ -95,6 +90,290 @@ def build_run_detail_context(
     include_row_details: bool = False,
     detail_test_name: str = '',
 ) -> dict:
+    def _task_graph_column_key(task_kind: str, source_path: str, logical_run_id: str) -> str:
+        run_token = normalize_run_id_token(logical_run_id)
+        if run_token:
+            return run_token
+        source_token = normalize_optional_component_source_path_safe(source_path, 'solutions', 'solution path')
+        if source_token:
+            return f'task:{task_kind}:{source_token}'
+        return ''
+
+    def _task_graph_column_key_by_source(rows: list[VerificationTaskRow]) -> dict[tuple[str, str], str]:
+        values: dict[tuple[str, str], str] = {}
+        for row in rows:
+            task_kind = str(row['task_kind'] or '')
+            if task_kind not in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
+                continue
+            source_path = normalize_optional_component_source_path_safe(str(row['source_path'] or ''), 'solutions', 'solution path')
+            if not source_path:
+                continue
+            pair = (task_kind, source_path)
+            preferred_key = values.get(pair, '')
+            run_token = normalize_run_id_token(str(row['logical_run_id'] or ''))
+            if run_token:
+                values[pair] = run_token
+            elif not preferred_key:
+                values[pair] = f'task:{task_kind}:{source_path}'
+        return values
+
+    def _task_graph_column_keys_from_task_rows(
+        rows: list[VerificationTaskRow],
+        key_by_source: dict[tuple[str, str], str],
+    ) -> list[str]:
+        values: list[str] = []
+        for row in rows:
+            task_kind = str(row['task_kind'] or '')
+            if task_kind not in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
+                continue
+            source_path = normalize_optional_component_source_path_safe(str(row['source_path'] or ''), 'solutions', 'solution path')
+            if not source_path:
+                continue
+            key = key_by_source.get((task_kind, source_path), '')
+            if key and key not in values:
+                values.append(key)
+        return values
+
+    def _logical_run_ids_from_task_rows(rows: list[VerificationTaskRow]) -> list[str]:
+        key_by_source = _task_graph_column_key_by_source(rows)
+        return _task_graph_column_keys_from_task_rows(rows, key_by_source)
+
+    def _task_counts_from_rows(rows: list[VerificationTaskRow]) -> dict[str, object]:
+        counts = {
+            'total': 0,
+            'pending': 0,
+            'queued': 0,
+            'running': 0,
+            'done': 0,
+            'failed': 0,
+            'cancelled': 0,
+            'by_kind': {},
+        }
+        for row in rows:
+            status = str(row['status'] or '')
+            display_status = 'running' if status == VerificationTaskStore.TASK_LEASED else status
+            counts['total'] = int(counts['total']) + 1
+            if display_status in counts:
+                counts[display_status] = int(counts[display_status]) + 1
+        return counts
+
+    def _running_tasks_from_rows(rows: list[VerificationTaskRow]) -> list[dict[str, str]]:
+        values: list[dict[str, str]] = []
+        for row in rows:
+            if str(row['status'] or '') != VerificationTaskStore.TASK_LEASED:
+                continue
+            source_path = str(row['source_path'] or '')
+            source_label = Path(source_path).name if source_path else '-'
+            test_name = str(row['test_name'] or '')
+            task_kind = str(row['task_kind'] or '')
+            kind_label = task_kind.replace('-', ' ').title()
+            label = ' / '.join(token for token in [kind_label, source_label, test_name] if token)
+            values.append(
+                {
+                    'task_id': str(row['id'] or ''),
+                    'label': label,
+                }
+            )
+        return values
+
+    def _task_graph_task_status_by_run_and_test(
+        rows: list[VerificationTaskRow],
+        key_by_source: dict[tuple[str, str], str],
+    ) -> dict[tuple[str, str], str]:
+        values: dict[tuple[str, str], str] = {}
+        for row in rows:
+            task_kind = str(row['task_kind'] or '')
+            if task_kind not in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
+                continue
+            source_path = normalize_optional_component_source_path_safe(str(row['source_path'] or ''), 'solutions', 'solution path')
+            if not source_path:
+                continue
+            logical_run_id = key_by_source.get((task_kind, source_path), '')
+            test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
+            if (not logical_run_id) or (not test_name):
+                continue
+            values[(logical_run_id, test_name)] = str(row['status'] or '')
+        return values
+
+    def _task_graph_fallback_rows(
+        rows: list[VerificationTaskRow],
+        key_by_source: dict[tuple[str, str], str],
+        *,
+        verification_record: dict[str, str] | None,
+        verification_details: dict[str, object],
+        execute_mode: str,
+    ) -> dict[str, dict[str, object]]:
+        grouped: dict[str, dict[str, object]] = {}
+        for row in rows:
+            task_kind = str(row['task_kind'] or '')
+            if task_kind not in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
+                continue
+            source_path = normalize_optional_component_source_path_safe(str(row['source_path'] or ''), 'solutions', 'solution path')
+            if not source_path:
+                continue
+            key = key_by_source.get((task_kind, source_path), '')
+            if not key:
+                continue
+            item = grouped.setdefault(
+                key,
+                {
+                    'source_path': source_path,
+                    'task_kind': task_kind,
+                    'expected_behavior': str(row['expected_behavior'] or ''),
+                    'statuses': [],
+                    'tests_total': 0,
+                    'rows': [],
+                },
+            )
+            cast(list[str], item['statuses']).append(str(row['status'] or ''))
+            item['tests_total'] = int(item['tests_total']) + 1
+            cast(list[VerificationTaskRow], item['rows']).append(row)
+        values: dict[str, dict[str, object]] = {}
+        verification_status = str(verification_details.get('status') or (verification_record['status'] if verification_record is not None else '') or '')
+        verification_error = str(verification_details.get('error') or verification_record['fail_reason'] if verification_record is not None else '')
+        for key, item in grouped.items():
+            statuses = list(cast(list[str], item['statuses']))
+            grouped_rows = sorted(
+                cast(list[VerificationTaskRow], item['rows']),
+                key=lambda current: (_run_test_sort_key(str(current['test_name'] or '')), str(current['id'] or '')),
+            )
+            if VerificationTaskStore.TASK_LEASED in statuses:
+                status = 'running'
+            elif VerificationTaskStore.TASK_QUEUED in statuses:
+                status = 'queued'
+            elif VerificationTaskStore.TASK_PENDING in statuses:
+                status = 'pending'
+            elif VerificationTaskStore.TASK_FAILED in statuses:
+                status = 'failed'
+            elif VerificationTaskStore.TASK_CANCELLED in statuses:
+                status = 'cancelled'
+            elif grouped_rows and all(str(current['status'] or '') == VerificationTaskStore.TASK_DONE for current in grouped_rows):
+                status = 'ok'
+            else:
+                status = 'pending'
+            tests: list[dict[str, object]] = []
+            compile_log = ''
+            compile_log_truncated = False
+            compile_log_total_chars = 0
+            compile_diagnostics: list[dict[str, object]] = []
+            compile_diagnostics_total = 0
+            compile_diagnostics_truncated = False
+            error_text = ''
+            max_time_ms = 0
+            max_memory_kb = 0
+            for row in grouped_rows:
+                row_status = str(row['status'] or '')
+                if row_status in {VerificationTaskStore.TASK_DONE, VerificationTaskStore.TASK_FAILED}:
+                    runtime_ms = 0 if row['runtime_sec'] is None else max(0, int(round(float(row['runtime_sec']) * 1000.0)))
+                    cpu_ms = runtime_ms if row['cpu_sec'] is None else max(0, int(round(float(row['cpu_sec']) * 1000.0)))
+                    wall_ms = cpu_ms if row['wall_sec'] is None else max(0, int(round(float(row['wall_sec']) * 1000.0)))
+                    memory_kb = 0 if row['memory_kb'] is None else max(0, int(row['memory_kb']))
+                    feedback_text = str(row['feedback_text'] or row['error_text'] or '')
+                    tests.append(
+                        {
+                            'test': str(row['test_name'] or ''),
+                            'verdict': str(row['verdict'] or '--'),
+                            'time_ms': runtime_ms,
+                            'time_user_ms': cpu_ms,
+                            'time_wall_ms': wall_ms,
+                            'memory_kb': memory_kb,
+                            'message': feedback_text,
+                            'output_ref': str(row['output_ref'] or ''),
+                            'feedback_files': [],
+                        }
+                    )
+                    if cpu_ms > max_time_ms:
+                        max_time_ms = cpu_ms
+                    if memory_kb > max_memory_kb:
+                        max_memory_kb = memory_kb
+                if (not compile_log) and str(row['compile_log'] or ''):
+                    compile_log = str(row['compile_log'] or '')
+                    compile_log_truncated = bool(row['compile_log_truncated'])
+                    compile_log_total_chars = int(row['compile_log_total_chars'] or len(compile_log))
+                diagnostics_json = str(row['diagnostics_json'] or '[]')
+                try:
+                    task_diagnostics = cast(list[dict[str, object]], json.loads(diagnostics_json))
+                except Exception:
+                    task_diagnostics = []
+                if task_diagnostics:
+                    compile_diagnostics_total += len(task_diagnostics)
+                    compile_diagnostics.extend(task_diagnostics)
+                if (not error_text) and str(row['error_text'] or ''):
+                    error_text = str(row['error_text'] or '')
+            if compile_diagnostics_total > len(compile_diagnostics):
+                compile_diagnostics_truncated = True
+            summary: dict[str, object] = {
+                'mode': execute_mode,
+                'source': str(item['source_path']),
+                'task_kind': str(item['task_kind']),
+                'expected_behavior': str(item['expected_behavior']),
+                'tests_total': int(item['tests_total']),
+                'tests': tests,
+                'compile_log': compile_log,
+                'compile_log_truncated': bool(compile_log_truncated),
+                'compile_log_total_chars': int(compile_log_total_chars),
+                'compile_diagnostics': compile_diagnostics,
+                'compile_diagnostics_total': int(compile_diagnostics_total),
+                'compile_diagnostics_truncated': bool(compile_diagnostics_truncated),
+                'compile_diagnostics_limit': int(_C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT),
+                'error': error_text,
+                'usage': {
+                    'tests': len(tests),
+                    'time_ms_total': max_time_ms,
+                    'time_user_ms_total': max_time_ms,
+                    'time_wall_ms_total': max_time_ms,
+                    'memory_kb_peak': max_memory_kb,
+                },
+            }
+            if VerificationTaskStore.TASK_CANCELLED in statuses:
+                summary['cancelled'] = True
+                if verification_status == 'failed' and verification_error and (not summary['error']):
+                    summary['error'] = verification_error
+            values[key] = {
+                'id': key,
+                'artifact_verification_id': verification_details.get('artifact_verification_id') or requested_verification_id or '',
+                'mode': execute_mode,
+                'status': status,
+                'source_label': str(item['source_path']),
+                'summary': summary,
+                'created_at': verification_record['created_at'] if verification_record is not None else '',
+                'finished_at': _latest_iso_timestamp([str(current['finished_at'] or '') for current in grouped_rows]) or (verification_record['finished_at'] if verification_record is not None else ''),
+            }
+        return values
+
+    def _missing_solution_cell(task_status: str) -> dict[str, object]:
+        if task_status == VerificationTaskStore.TASK_LEASED:
+            return {
+                'text': '..',
+                'short': '..',
+                'metrics': 'running',
+                'kind': 'neutral',
+                'detail': None,
+            }
+        if task_status == VerificationTaskStore.TASK_FAILED:
+            return {
+                'text': 'FL',
+                'short': 'FL',
+                'metrics': 'failed',
+                'kind': 'fail',
+                'detail': None,
+            }
+        if task_status == VerificationTaskStore.TASK_CANCELLED:
+            return {
+                'text': '--',
+                'short': '--',
+                'metrics': 'cancelled',
+                'kind': 'neutral',
+                'detail': None,
+            }
+        return {
+            'text': '..',
+            'short': '..',
+            'metrics': 'pending',
+            'kind': 'neutral',
+            'detail': None,
+        }
+
     workspace = Path(ctx['workspace']['path'])
     workspace_id = int(ctx['workspace']['id'])
     problem_id = int(ctx['problem']['id'])
@@ -120,45 +399,39 @@ def build_run_detail_context(
     verification_run_rows: dict[str, dict[str, object]] = {}
     verification_id_hint = normalize_run_id_token(requested_verification_id)
     verification_details: dict[str, object] = {}
+    task_rows: list[VerificationTaskRow] = []
+    has_task_graph = False
     verification_record = config.verification_service.verification_record(verification_id_hint) if verification_id_hint else None
     if verification_record is not None and verification_record['workspace_id'] == workspace_id:
-        verification_details = config.verification_service.verification_summary(verification_id_hint)
-        verification_details['verification_id'] = verification_id_hint
-        verification_details['status'] = verification_record['status']
-        verification_details['created_at'] = verification_record['created_at']
-        verification_details['finished_at'] = verification_record['finished_at'] or ''
-        if not selected_ids:
-            for run_id in verification_run_ids(verification_details):
-                token = normalize_run_id_token(run_id)
-                if token:
-                    selected_ids.append(token)
-        for run_id in verification_run_ids(verification_details):
-            run_token = normalize_run_id_token(run_id)
-            if not run_token:
-                continue
-            run_row = verification_run(verification_details, run_id)
-            if not run_row:
-                continue
-            verification_run_rows[run_token] = {
-                'id': run_token,
-                'artifact_verification_id': verification_details.get('artifact_verification_id') or verification_id_hint or '',
-                'mode': verification_details.get('mode') or execute_mode,
-                'status': run_row['status'],
-                'source_label': run_row['source_label'],
-                'summary': dict(run_row['summary']),
-                'created_at': verification_record['created_at'],
-                'finished_at': verification_record['finished_at'] or verification_details.get('finished_at') or '',
-            }
-    if not selected_ids and verification_details:
-        for run_id in verification_run_ids(verification_details):
-            token = normalize_run_id_token(run_id)
-            if token and token not in selected_ids:
-                selected_ids.append(token)
+        verification_details = {
+            **config.verification_service.verification_metadata(verification_id_hint),
+            **config.verification_service.verification_runtime_snapshot(verification_id_hint),
+            'verification_id': verification_id_hint,
+            'artifact_verification_id': verification_id_hint,
+            'status': verification_record['status'],
+            'created_at': verification_record['created_at'],
+            'finished_at': verification_record['finished_at'] or '',
+        }
+        task_rows = VerificationTaskStore(config.db).list_rows(verification_id_hint)
+        has_task_graph = bool(task_rows)
+        verification_details['task_graph'] = has_task_graph
+        if has_task_graph:
+            task_graph_key_by_source = _task_graph_column_key_by_source(task_rows)
+            verification_run_rows = _task_graph_fallback_rows(
+                task_rows,
+                task_graph_key_by_source,
+                verification_record=verification_record,
+                verification_details=verification_details,
+                execute_mode=execute_mode,
+            )
+            if not selected_ids:
+                selected_ids.extend(_task_graph_column_keys_from_task_rows(task_rows, task_graph_key_by_source))
     verification_created_at = ''
     if not verification_created_at and verification_record is not None:
         verification_created_at = verification_record['created_at']
-    solutions = verification_details.get('solutions') or []
-    preferred_solution_run_ids = _solution_run_ids_from_summary(verification_details)
+    solutions = []
+    task_graph_key_by_source: dict[tuple[str, str], str] = _task_graph_column_key_by_source(task_rows) if has_task_graph else {}
+    preferred_solution_run_ids = _logical_run_ids_from_task_rows(task_rows) if has_task_graph else []
     if preferred_solution_run_ids:
         selected_ids = list(preferred_solution_run_ids)
     expected_by_run_id: dict[str, str] = {}
@@ -201,135 +474,6 @@ def build_run_detail_context(
             return expected_token
         return ''
 
-    def _artifact_test_names(artifact_id: str) -> list[str]:
-        safe_artifact_id = artifact_id if is_canonical_artifact_id(artifact_id) else ''
-        if not safe_artifact_id:
-            return []
-        artifact_path = config.verification_service.artifact_path_for_verification(safe_artifact_id)
-        if not artifact_path:
-            return []
-        root = Path(artifact_path).resolve()
-        names_by_index: dict[int, str] = {}
-        tests_meta_path = root / 'logs' / 'tests_meta.json'
-        try:
-            if tests_meta_path.exists() and tests_meta_path.is_file() and (not tests_meta_path.is_symlink()):
-                payload = json.loads(tests_meta_path.read_text(encoding='utf-8'))
-                for item in payload:
-                    index = int(item.get('index') or 0)
-                    if index <= 0:
-                        continue
-                    names_by_index[index] = f'{index:03d}.in'
-        except Exception:
-            names_by_index = {}
-        tests_dir = root / 'tests'
-        try:
-            if tests_dir.exists() and tests_dir.is_dir() and (not tests_dir.is_symlink()):
-                for entry in tests_dir.iterdir():
-                    name = normalize_run_test_name_token(entry.name)
-                    if not name:
-                        continue
-                    try:
-                        if (not entry.is_file()) or entry.is_symlink():
-                            continue
-                    except OSError:
-                        continue
-                    try:
-                        names_by_index[int(Path(name).stem)] = name
-                    except Exception:
-                        continue
-        except OSError:
-            pass
-        return [names_by_index[index] for index in sorted(names_by_index.keys())]
-
-    def _collect_build_stage_markers() -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], str]:
-        if not verification_details:
-            return ({}, {}, '')
-        stage_summaries: list[dict[str, object]] = []
-        generate_stage = config.verification_service.verification_stage_summary(verification_id_hint, 'generate_input') if verification_id_hint else {}
-        if generate_stage:
-            stage_summaries.append(generate_stage)
-        solve_stage = config.verification_service.verification_stage_summary(verification_id_hint, 'solve_main') if verification_id_hint else {}
-        if solve_stage:
-            stage_summaries.append(solve_stage)
-        generate_markers: dict[str, dict[str, str]] = {}
-        main_markers: dict[str, dict[str, str]] = {}
-        main_source_path = ''
-
-        def _upsert_marker(
-            target: dict[str, dict[str, str]],
-            *,
-            test_name: str,
-            updated_at: str,
-            short: str,
-            kind: str,
-            detail: str,
-            stage_label: str = '',
-        ) -> None:
-            safe_test = normalize_run_test_name_token(test_name)
-            if not safe_test:
-                return
-            safe_stamp = (updated_at or '')
-            existing = target.get(safe_test)
-            if existing is not None:
-                existing_stamp = (existing.get('updated_at') or '')
-                if existing_stamp and safe_stamp and existing_stamp > safe_stamp:
-                    return
-            target[safe_test] = {
-                'short': short or '--',
-                'kind': kind or 'neutral',
-                'detail': (detail or ''),
-                'updated_at': safe_stamp,
-                'stage_label': (stage_label or ''),
-            }
-
-        for summary_entry in stage_summaries:
-            source_token = (summary_entry.get('verification_source') or '')
-            if not source_token:
-                source_token = (_verification_source_from_summary(summary_entry) or '')
-            marker_target: dict[str, dict[str, str]] | None = None
-            run_status = (summary_entry.get('status') or '')
-            tests_raw = summary_entry.get('tests')
-            if source_token == 'verification.generate-input':
-                marker_target = generate_markers
-            elif source_token == 'verification.solve-main':
-                marker_target = main_markers
-                if not main_source_path:
-                    source_rel = normalize_workspace_rel_path((_run_source_from_summary(summary_entry) or summary_entry.get('source') or ''))
-                    if source_rel:
-                        main_source_path = source_rel
-            else:
-                continue
-            run_status = run_status
-            stamp = (summary_entry.get('updated_at') or '')
-            tests = tests_raw or []
-            for test_item in tests:
-                test_name = (test_item.get('test') or '')
-                if not test_name:
-                    continue
-                verdict_short = run_verdict_short((test_item.get('verdict') or ''))
-                verdict_display = verdict_short if verdict_short and verdict_short != '--' else '--'
-                if run_status in {'running', 'queued', 'pending'} and verdict_display == '--':
-                    verdict_display = '..'
-                if verdict_display == 'AC':
-                    kind = 'ok'
-                elif verdict_display in {'--', '..'}:
-                    kind = 'neutral'
-                else:
-                    kind = 'fail'
-                detail = compact_error_text((test_item.get('message') or test_item.get('error') or ''))
-                if (not detail) and kind == 'fail':
-                    detail = f'verdict {verdict_display}'
-                _upsert_marker(
-                    marker_target,
-                    test_name=test_name,
-                    updated_at=stamp,
-                    short=verdict_display,
-                    kind=kind,
-                    detail=detail,
-                    stage_label='validated' if (test_item.get('source_kind') or '') == 'manual' else 'generated' if source_token == 'verification.generate-input' else '',
-                )
-        return (generate_markers, main_markers, main_source_path)
-
     def _is_solution_column_source(source_value: str) -> bool:
         safe_source = normalize_optional_component_source_path_safe(
             source_value,
@@ -338,19 +482,12 @@ def build_run_detail_context(
         )
         return bool(safe_source)
 
-    def _generate_stage_label(source_value: str, verification_source: str) -> str:
-        source_token = (verification_source or '')
-        if source_token != 'verification.generate-input':
-            return ''
-        filename = Path((source_value or '')).name
-        if filename == 'manual_validate.cpp':
-            return 'validated'
-        return 'generated'
-
     def _stage_note_status(*, short: str, kind: str, run_status: str) -> tuple[str, str]:
         short_token = (short or '').upper()
         kind_token = (kind or '')
         run_token = (run_status or '')
+        if run_token == 'cancelled':
+            return ('neutral', 'cancelled')
         if kind_token == 'ok' or short_token == 'AC':
             return ('ok', 'ok')
         if kind_token == 'fail':
@@ -363,87 +500,58 @@ def build_run_detail_context(
             return ('fail', 'failed')
         return ('pending', 'pending')
 
-    def _upsert_row_stage_note(
-        target: dict[str, list[dict[str, str]]],
-        *,
-        test_name: str,
-        label: str,
-        short: str,
-        kind: str,
-        run_status: str,
-        detail: str,
-        source_label: str,
-    ) -> None:
-        def _stage_note_text(stage_label: str, stage_status: str) -> str:
-            label_token = (stage_label or '')
-            status_token = (stage_status or '')
-            if label_token == 'generated':
-                if status_token == 'running':
-                    return '.. generating'
-                if status_token == 'failed':
-                    return 'generation failed'
-                if status_token == 'ok':
-                    return 'generated'
-                if status_token == 'pending':
-                    return '.. generation pending'
-            if label_token == 'validated':
-                if status_token == 'running':
-                    return '.. validating'
-                if status_token == 'failed':
-                    return 'validation failed'
-                if status_token == 'ok':
-                    return 'validated'
-                if status_token == 'pending':
-                    return '.. validation pending'
-            return f"{(stage_label or '')} {stage_status}"
-
-        safe_test = normalize_run_test_name_token(test_name)
-        if (not safe_test) or (not label):
-            return
-        tone, status_label = _stage_note_status(short=short, kind=kind, run_status=run_status)
-        notes = target.get(safe_test)
-        if notes is None:
-            notes = []
-            target[safe_test] = notes
-        stage_key = (label or '')
-        note_payload = {
-            'stage_key': stage_key,
-            'label': (label or ''),
-            'status_label': status_label,
-            'tone': tone,
-            'text': _stage_note_text((label or ''), status_label),
-            'detail': (detail or ''),
-            'source_label': (source_label or ''),
-        }
-        for idx, existing in enumerate(notes):
-            if (existing.get('stage_key') or '') == stage_key:
-                notes[idx] = note_payload
-                return
-        notes.append(note_payload)
-
-    def _primary_row_stage_note(notes: list[dict[str, str]]) -> dict[str, str]:
-        priority = {'fail': 4, 'running': 3, 'pending': 2, 'ok': 1}
-        best: dict[str, str] = {}
-        best_score = -1
-        for note in notes:
-            score = int(priority.get((note.get('tone') or ''), 0))
-            if score > best_score:
-                best = note
-                best_score = score
-        return dict(best) if best else {}
+    def _generate_stage_note_from_rows(rows: list[VerificationTaskRow]) -> dict[str, dict[str, str]]:
+        target: dict[str, dict[str, str]] = {}
+        for row in rows:
+            if str(row['task_kind'] or '') != _TASK_KIND_GENERATE_INPUT:
+                continue
+            status = str(row['status'] or '')
+            if status == VerificationTaskStore.TASK_DONE:
+                short = 'AC'
+                kind = 'ok'
+            elif status == VerificationTaskStore.TASK_FAILED:
+                short = 'FL'
+                kind = 'fail'
+            elif status == VerificationTaskStore.TASK_LEASED:
+                short = '..'
+                kind = 'neutral'
+            else:
+                short = '--'
+                kind = 'neutral'
+            tone, status_label = _stage_note_status(short=short, kind=kind, run_status=status)
+            test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
+            if not test_name:
+                continue
+            if status_label == 'running':
+                text = '.. generating'
+            elif status_label == 'failed':
+                text = 'failed'
+            elif status_label == 'cancelled':
+                text = 'cancelled'
+            elif status_label == 'ok':
+                text = 'ready'
+            else:
+                text = '.. pending'
+            detail = preserve_error_text(str(row['error_text'] or '')) or preserve_error_text(str(row['feedback_text'] or ''))
+            target[test_name] = {
+                'tone': tone,
+                'status_label': status_label,
+                'text': text,
+                'detail': detail,
+            }
+        return target
 
     def _test_name_cell(
         *,
         actual_test_name: str,
         fallback_name: str,
         is_placeholder: bool,
-        notes: list[dict[str, str]],
+        note: dict[str, str],
         has_detail: bool,
     ) -> dict[str, object]:
-        primary_note = _primary_row_stage_note(notes)
-        tone = (primary_note.get('tone') or '')
-        note_text = (primary_note.get('text') or '')
-        note_detail = (primary_note.get('detail') or '')
+        tone = str(note.get('tone') or '')
+        note_text = str(note.get('text') or '')
+        note_detail = str(note.get('detail') or '')
         if is_placeholder and (not actual_test_name):
             return {
                 'kind': 'neutral',
@@ -454,11 +562,20 @@ def build_run_detail_context(
                 'clickable': False,
             }
         if tone in {'running', 'pending'}:
+            visible_name = actual_test_name or fallback_name
+            meta = note_text.removeprefix('.. ').strip()
+            if visible_name:
+                return {
+                    'kind': 'running' if tone == 'running' else 'neutral',
+                    'text': visible_name,
+                    'short': '',
+                    'meta': meta or ('running' if tone == 'running' else 'pending'),
+                    'detail': note_detail,
+                    'clickable': False,
+                }
             short = note_text
-            meta = ''
             if note_text.startswith('.. '):
                 short = '..'
-                meta = note_text[3:]
             return {
                 'kind': 'running' if tone == 'running' else 'neutral',
                 'text': '',
@@ -486,9 +603,17 @@ def build_run_detail_context(
 
     columns: list[dict] = []
     all_tests: set[str] = set()
-    row_stage_notes: dict[str, list[dict[str, str]]] = {}
+    row_generate_notes: dict[str, dict[str, str]] = {}
+    task_graph_task_status_by_run_and_test: dict[tuple[str, str], str] = {}
+    if has_task_graph:
+        row_generate_notes = _generate_stage_note_from_rows(task_rows)
+        task_graph_task_status_by_run_and_test = _task_graph_task_status_by_run_and_test(task_rows, task_graph_key_by_source)
+        for row in task_rows:
+            test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
+            if test_name:
+                all_tests.add(test_name)
     selected_test_name_hint = normalize_run_test_name_token(detail_test_name) if include_row_details else ''
-    domjudge_case_cells_by_run = _run_domjudge_case_cells(selected_ids)
+    domjudge_case_cells_by_run: dict[str, dict[str, dict[str, object]]] = {}
     for run_id in selected_ids:
         row = verification_run_rows.get(run_id)
         status = 'running'
@@ -515,8 +640,8 @@ def build_run_detail_context(
             normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
         source = _run_source_from_summary(summary)
-        verification_source = _verification_source_from_summary(summary) or (verification_details.get('verification_source') or '')
-        is_main_correct_run = _is_main_correct_verification_source(verification_source)
+        task_kind = _run_task_kind_from_summary(summary)
+        is_main_correct_run = _is_main_correct_task_kind(task_kind)
         source_for_display = source or source_label
         title = Path(source_for_display).name if source_for_display else ''
         if not title:
@@ -546,7 +671,7 @@ def build_run_detail_context(
         got_display = run_actual_display(status, summary)
         result_kind = _run_cell_kind(got_short, expected_behavior) if got_short else 'neutral'
         result_tone_class = f'tone-{result_kind}'
-        expected_mismatch = bool(completed and (not matched))
+        expected_mismatch = bool(expected_is_ac_only and completed and (not matched))
         execution_skipped_from_summary = bool(summary.get('execution_skipped'))
         if not execution_skipped_from_summary and (summary.get('failure_stage') or '') == 'build':
             execution_skipped_from_summary = True
@@ -691,7 +816,7 @@ def build_run_detail_context(
             max_chars=1600,
             max_lines=24,
         )
-        if not execution_skipped:
+        if (not has_task_graph) and (not execution_skipped):
             case_cells = domjudge_case_cells_by_run.get(run_id) or {}
             for test_name, case_cell in case_cells.items():
                 if selected_test_name_hint and test_name != selected_test_name_hint:
@@ -767,21 +892,7 @@ def build_run_detail_context(
                         max_memory_kb = memory_kb
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
-        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'verification_source': verification_source, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'status_upper': status.upper(), 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')), 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0), 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0), 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
-        hidden_stage_label = _generate_stage_label(source_for_display, verification_source)
-        if hidden_stage_label:
-            for test_name, cell in tests_map.items():
-                _upsert_row_stage_note(
-                    row_stage_notes,
-                    test_name=test_name,
-                    label=hidden_stage_label,
-                    short=(cell.get('short') or cell.get('text') or '--'),
-                    kind=(cell.get('kind') or 'neutral'),
-                    run_status=status,
-                    detail=((cell.get('detail') or {}).get('feedback_display') or ''),
-                    source_label=source_for_display,
-                )
-            continue
+        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')), 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0), 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0), 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
         if not _is_solution_column_source(source_for_display):
             continue
         columns.append(column_payload)
@@ -792,16 +903,14 @@ def build_run_detail_context(
         if overall_status in {'running', 'queued', 'pending'}:
             status_summary = {
                 'status': 'running',
-                'status_upper': 'RUNNING',
                 'is_failed': False,
                 'has_running': True,
                 'matched_count': int(status_summary.get('matched_count') or 0),
                 'total_count': int(status_summary.get('total_count') or len(columns)),
             }
-        elif overall_status in {'failed', 'cancelled'}:
+        elif overall_status == 'failed':
             status_summary = {
                 'status': 'failed',
-                'status_upper': 'FAILED',
                 'is_failed': True,
                 'has_running': False,
                 'matched_count': int(status_summary.get('matched_count') or 0),
@@ -810,11 +919,8 @@ def build_run_detail_context(
     if (not columns) and verification_details:
         fallback_status = verification_details.get('status') or (verification_record['status'] if verification_record is not None else '') or ''
         fallback_total = 0
-        for raw_total in (
-            verification_details.get('solution_count'),
-            len(verification_run_ids(verification_details)),
-            len(verification_source_paths(verification_details)),
-        ):
+        raw_totals: list[object] = [len(verification_details.get('source_paths') or [])]
+        for raw_total in raw_totals:
             try:
                 fallback_total = max(fallback_total, int(raw_total or 0))
             except Exception:
@@ -822,16 +928,14 @@ def build_run_detail_context(
         if fallback_status in {'running', 'queued', 'pending'}:
             status_summary = {
                 'status': 'running',
-                'status_upper': 'RUNNING',
                 'is_failed': False,
                 'has_running': True,
                 'matched_count': 0,
                 'total_count': fallback_total,
             }
-        elif fallback_status in {'failed', 'cancelled'}:
+        elif fallback_status == 'failed':
             status_summary = {
                 'status': 'failed',
-                'status_upper': 'FAILED',
                 'is_failed': True,
                 'has_running': False,
                 'matched_count': 0,
@@ -840,56 +944,19 @@ def build_run_detail_context(
         elif fallback_status in {'ok', 'pass'}:
             status_summary = {
                 'status': 'ok',
-                'status_upper': 'OK',
                 'is_failed': False,
                 'has_running': False,
                 'matched_count': fallback_total,
                 'total_count': fallback_total,
             }
-    detail_verification_sources = {
-        (col.get('verification_source') or '')
+    detail_task_kinds = {
+        (col.get('task_kind') or '')
         for col in columns
-        if col.get('verification_source')
+        if col.get('task_kind')
     }
-    detail_is_main_correct_run = bool(detail_verification_sources) and detail_verification_sources.issubset({'verification.solve-main'})
-    if not detail_is_main_correct_run:
-        details_source = verification_details.get('source') or ''
-        if details_source == 'verification.solve-main':
-            detail_is_main_correct_run = True
-    if not detail_is_main_correct_run:
-        artifact_verification_status_token = verification_details.get('artifact_verification_status') or ''
-        has_materialized_summary = any(col.get('summary') for col in columns)
-        if (artifact_verification_status_token in {'running', 'queued', 'pending'}) and (not has_materialized_summary):
-            detail_is_main_correct_run = True
-    safe_verification_hint = normalize_run_id_token(verification_id_hint)
-    if (not detail_is_main_correct_run) and safe_verification_hint.startswith('inv-buildsolve-'):
-        detail_is_main_correct_run = True
-    artifact_verification_id = verification_details.get('artifact_verification_id') or verification_id_hint or ''
-    if not is_canonical_artifact_id(artifact_verification_id):
-        artifact_verification_id = ''
-    if not artifact_verification_id:
-        for col in columns:
-            candidate_build = (col.get('artifact_verification_id') or '')
-            if is_canonical_artifact_id(candidate_build):
-                artifact_verification_id = candidate_build
-                break
-    artifact_test_names = _artifact_test_names(artifact_verification_id)
-    generate_stage_map: dict[str, dict[str, str]] = {}
-    if artifact_verification_id:
-        generate_stage_map, _main_stage_map, _main_stage_source = _collect_build_stage_markers()
-    for test_name, marker in generate_stage_map.items():
-        _upsert_row_stage_note(
-            row_stage_notes,
-            test_name=test_name,
-            label=(marker.get('stage_label') or 'generated'),
-            short=(marker.get('short') or '--'),
-            kind=(marker.get('kind') or 'neutral'),
-            run_status='',
-            detail=(marker.get('detail') or ''),
-            source_label='',
-        )
-    all_tests.update(artifact_test_names)
-    all_tests.update(generate_stage_map.keys())
+    detail_is_main_correct_run = bool(detail_task_kinds) and detail_task_kinds.issubset({'main-correct'})
+    if has_task_graph:
+        detail_is_main_correct_run = False
     ordered_tests = sorted(all_tests, key=_run_test_sort_key)
     known_tests_by_index: dict[int, str] = {}
     for test_name in ordered_tests:
@@ -901,9 +968,9 @@ def build_run_detail_context(
             known_tests_by_index[test_index] = test_name
     tests_meta_stats = _verification_tests_meta_stats(verification_details)
     try:
-        tests_meta_total = max(len(artifact_test_names), max(0, int(tests_meta_stats.get('total') or 0)))
+        tests_meta_total = max(0, int(tests_meta_stats.get('total') or 0))
     except Exception:
-        tests_meta_total = len(artifact_test_names)
+        tests_meta_total = 0
     column_tests_total = 0
     for col in columns:
         try:
@@ -927,18 +994,22 @@ def build_run_detail_context(
             for col in columns:
                 cell = col['tests_map'].get(actual_test_name) if actual_test_name else None
                 if cell is None:
-                    col_status = (col.get('status') or '')
-                    missing_running = col_status == 'running'
-                    missing_pending = col_status in {'queued', 'pending'}
-                    cells.append(
-                        {
-                            'text': '..' if (missing_running or missing_pending) else '--',
-                            'short': '..' if (missing_running or missing_pending) else '--',
-                            'metrics': 'running' if missing_running else 'pending' if missing_pending else '-',
-                            'kind': 'neutral',
-                            'detail': None,
-                        }
-                    )
+                    if has_task_graph and actual_test_name:
+                        task_status = task_graph_task_status_by_run_and_test.get((str(col.get('id') or ''), actual_test_name), '')
+                        cells.append(_missing_solution_cell(task_status))
+                    else:
+                        col_status = (col.get('status') or '')
+                        missing_running = col_status == 'running'
+                        missing_pending = col_status in {'queued', 'pending'}
+                        cells.append(
+                            {
+                                'text': '..' if (missing_running or missing_pending) else '--',
+                                'short': '..' if (missing_running or missing_pending) else '--',
+                                'metrics': 'running' if missing_running else 'pending' if missing_pending else '-',
+                                'kind': 'neutral',
+                                'detail': None,
+                            }
+                        )
                     continue
                 if bool(cell.get('detail_available')):
                     has_detail = True
@@ -951,12 +1022,12 @@ def build_run_detail_context(
                         'detail': None,
                     }
                 )
-            stage_notes = list(row_stage_notes.get(actual_test_name or display_name) or [])
+            generate_note = dict(row_generate_notes.get(actual_test_name or display_name) or {})
             test_cell = _test_name_cell(
                 actual_test_name=actual_test_name,
                 fallback_name=display_name,
                 is_placeholder=bool(is_placeholder),
-                notes=stage_notes,
+                note=generate_note,
                 has_detail=bool(has_detail),
             )
             detail_rows.append(
@@ -1135,12 +1206,12 @@ def build_run_detail_context(
                     if output_preview is not None and bool(output_preview.get('available')):
                         answer_preview = output_preview
                         break
-            stage_notes = list(row_stage_notes.get(test_name) or [])
+            generate_note = dict(row_generate_notes.get(test_name) or {})
             test_cell = _test_name_cell(
                 actual_test_name=test_name,
                 fallback_name=test_name,
                 is_placeholder=False,
-                notes=stage_notes,
+                note=generate_note,
                 has_detail=any((cell.get('detail') is not None for cell in cells)),
             )
             detail_rows.append(
@@ -1177,7 +1248,6 @@ def build_run_detail_context(
         last_updated_candidates.append(verification_created_at)
     last_updated = _latest_iso_timestamp(last_updated_candidates)
     verification_id = verification_id_hint
-    lifecycle_cards: list[dict[str, object]] = []
     if (not verification_details) and verification_id:
         detail_snapshot = load_verification_detail_snapshot(problem_id, verification_id)
         detail_details = detail_snapshot.get('details')
@@ -1185,31 +1255,14 @@ def build_run_detail_context(
             verification_details = dict(detail_details)
         if not verification_created_at:
             verification_created_at = (detail_snapshot.get('created_at') or '')
-    has_verification_context = bool(
-        verification_id
-        or verification_details
-        or verification_record is not None
-    )
-    if selected_ids or has_verification_context:
-        lifecycle_cards = [
-            _build_verification_lifecycle_card(
-                problem_slug=(ctx['problem']['slug']),
-                problem_id=int(ctx['problem']['id']),
-                workspace_id=int(ctx['workspace']['id']),
-                actor_user_id=int(ctx['user']['id']),
-                verification_id=verification_id,
-                verification_details=verification_details,
-                columns=columns,
-                row_test_stage_states=row_stage_notes,
-                test_row_total=display_test_total,
-                detail_status=(status_summary['status']),
-                detail_running=bool(status_summary['has_running']),
-                progress_reported=progress_reported,
-                progress_total=progress_total,
-                matched_count=int(status_summary['matched_count']),
-                match_total=int(status_summary['total_count']),
-            )
-        ]
+    if has_task_graph:
+        task_counts = _task_counts_from_rows(task_rows)
+        running_tasks = _running_tasks_from_rows(task_rows)
+    else:
+        task_counts = {}
+        running_tasks = []
+    detail_fail_reason = str((verification_record.get('fail_reason') if verification_record is not None else '') or '')
+    detail_fail_flag = bool(detail_fail_reason)
     verification_logs: dict[str, object] = {
         'available': False,
         'title': 'Verification',
@@ -1223,20 +1276,10 @@ def build_run_detail_context(
         'diagnostics_truncated': False,
         'diagnostics_limit': _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
     }
-    artifact_verification_id = verification_details.get('artifact_verification_id') or verification_id_hint or ''
-    source_verification_id = artifact_verification_id if is_canonical_artifact_id(artifact_verification_id) else ''
+    source_verification_id = verification_id_hint if is_canonical_artifact_id(verification_id_hint) else ''
     if source_verification_id and problem_slug and username:
-        source_verification_row = config.verification_service.export_runtime_verification(
-            int(problem_id),
-            source_verification_id,
-        )
-        source_verification_summary = parse_summary_json(source_verification_row['summary_json'], f'verification/{source_verification_id}') if source_verification_row is not None else {}
-        artifact_verification_status = source_verification_row['status'] if source_verification_row is not None else (verification_details.get('artifact_verification_status') or '')
-        artifact_verification_error = verification_details.get('artifact_verification_error') or ''
-        if not artifact_verification_error:
-            artifact_verification_error = source_verification_summary.get('error') or ''
-        if not artifact_verification_error:
-            artifact_verification_error = verification_details.get('error') or ''
+        artifact_verification_status = verification_record['status'] if verification_record is not None else ''
+        artifact_verification_error = detail_fail_reason
         diagnostics_title = 'Verification'
         log_rows: list[dict[str, str]] = []
         for name in ('failure.log', 'compile.log', 'generate.log', 'validate.log', 'solve.log'):
@@ -1254,33 +1297,17 @@ def build_run_detail_context(
         diagnostics_rows: list[dict[str, object]] = []
         diagnostics_total = 0
         diagnostics_truncated = False
-        raw_diags = source_verification_summary.get('diagnostics') or []
-        if raw_diags:
+        for col in columns:
+            raw_diags = col.get('compile_diagnostics') or []
+            if not raw_diags:
+                continue
             diagnostics_total = len(raw_diags)
             capped_diags = raw_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
             diagnostics_truncated = diagnostics_total > len(capped_diags)
             normalized_diags = _normalize_diagnostics(capped_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
-        if not diagnostics_rows:
-            for run_id in verification_run_ids(verification_details):
-                run_row = verification_run(verification_details, run_id)
-                if not run_row:
-                    continue
-                run_summary = run_row['summary']
-                raw_diags = run_summary.get('compile_diagnostics') or []
-                if not raw_diags:
-                    continue
-                diagnostics_total = len(raw_diags)
-                capped_diags = raw_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
-                diagnostics_truncated = diagnostics_total > len(capped_diags)
-                normalized_diags = _normalize_diagnostics(capped_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
-                diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
-                diagnostics_title = (
-                    (run_row.get('source_label') or '')
-                    or (_run_source_from_summary(run_summary) or '')
-                    or 'Verification'
-                )
-                break
+            diagnostics_title = str(col.get('title') or 'Verification')
+            break
         if diagnostics_rows and (
             (not artifact_verification_error)
             or ('/opt/domjudge/judgehost/judgings/' in artifact_verification_error)
@@ -1319,14 +1346,16 @@ def build_run_detail_context(
         'match_total': int(status_summary['total_count']),
         'all_matched': bool(columns) and all((bool(col.get('matched')) for col in columns)),
         'detail_status': (status_summary['status']),
-        'detail_status_upper': (status_summary['status_upper']),
         'detail_is_main_correct_run': bool(detail_is_main_correct_run),
         'detail_running': bool(status_summary['has_running']),
         'detail_last_updated': last_updated,
         'detail_progress_total': progress_total,
         'detail_progress_reported': progress_reported,
         'detail_progress_placeholder_total': progress_placeholder_total,
-        'detail_lifecycle_cards': lifecycle_cards,
+        'detail_task_counts': task_counts,
+        'detail_running_tasks': running_tasks,
+        'detail_fail_flag': detail_fail_flag,
+        'detail_fail_reason': detail_fail_reason,
         'detail_verification_logs': verification_logs,
     }
 

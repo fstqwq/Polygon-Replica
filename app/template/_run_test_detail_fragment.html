@@ -94,7 +94,7 @@
         {% endif %}
       </div>
       {% if final_row.output_preview and final_row.output_preview.available and final_row.output_preview.text != '(empty)' %}
-      <pre class="preview-content output-preview"><code>{{ final_row.output_preview.text }}</code></pre>
+      <pre class="preview-content">{{ final_row.output_preview.text }}</pre>
       {% if final_row.output_preview.truncated %}
       <div class="muted">Showing first {{ final_row.output_preview.limit }} bytes.</div>
       {% endif %}

@@ -19,8 +19,6 @@ from .internal.domjudge_util import JudgehostDomjudgeUtilsMixin
 from .internal.enqueue import JudgehostEnqueueMixin
 from .internal.queue import JudgehostQueueMixin
 
-JUDGEHOST_BACKEND_NAME = "domjudge-judgehost"
-
 
 class Judgehost(
     JudgehostCoreMixin,
@@ -30,7 +28,6 @@ class Judgehost(
     JudgehostDomjudgeDispatchMixin,
     JudgehostDomjudgeResultsMixin,
 ):
-    BACKEND_NAME = JUDGEHOST_BACKEND_NAME
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
     STATUS_COMPLETED = "completed"
@@ -71,46 +68,18 @@ class Judgehost(
         self._lease_requeue_lock = threading.Lock()
         self._lease_requeue_next_ts = 0.0
         self._testcase_registry_lock = threading.RLock()
-        self._testcase_registry_next_id = 1
         self._testcase_registry_by_hash: dict[str, dict[str, object]] = {}
-        self._testcase_registry_by_id: dict[int, dict[str, object]] = {}
         self._state_lock = threading.RLock()
         self._tasks_by_id: dict[str, dict[str, object]] = {}
         self._task_id_by_run: dict[str, str] = {}
         self._hosts_state: dict[str, dict[str, object]] = {}
+        self._peer_hostname_by_client_addr: dict[str, str] = {}
         self._host_judged_case_events: dict[str, list[float]] = {}
         self._host_last_judging: dict[str, dict[str, str]] = {}
         self._judgehost_state_store = JudgehostStateStore()
         self._verification_store = VerificationStore(self.db)
         self._judge_fs_index_service = judge_fs_index_service
         self.apply_runtime_values(constants)
-
-    @classmethod
-    def backend_name(cls) -> str:
-        return cls.BACKEND_NAME
-
-    def backend_status(self) -> dict[str, object]:
-        status = self.status()
-        queue = status["queue"]
-        queue_text = f"queue queued={int(queue.get('queued', 0))}, leased={int(queue.get('leased', 0))}"
-        ready = bool(self.enabled() and self.auth_token_configured())
-        if not self.enabled():
-            detail = "judgehost service disabled"
-        elif not self.auth_token_configured():
-            detail = "set JUDGEHOST_API_TOKEN in system config"
-        else:
-            detail = f"judgehost queue ready ({queue_text})".strip()
-        return {
-            "configured": self.BACKEND_NAME,
-            "active": self.BACKEND_NAME,
-            "available": [
-                {
-                    "name": self.BACKEND_NAME,
-                    "ready": ready,
-                    "detail": detail,
-                }
-            ],
-        }
 
     def run_submission(
         self,
@@ -218,10 +187,9 @@ class Judgehost(
             self._tasks_by_id.clear()
             self._task_id_by_run.clear()
             self._hosts_state.clear()
+            self._peer_hostname_by_client_addr.clear()
             self._host_judged_case_events.clear()
             self._host_last_judging.clear()
         with self._testcase_registry_lock:
-            self._testcase_registry_next_id = 1
             self._testcase_registry_by_hash.clear()
-            self._testcase_registry_by_id.clear()
         self._judgehost_state_store.reset()

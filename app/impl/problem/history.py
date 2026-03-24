@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ from fastapi import Request
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_job import page_ctx
+from app.impl.workspace.context_ui import page_ctx
 
 _C = config.constants
 
@@ -73,5 +73,6 @@ def history_page(request: Request, problem: str, user: str):
             'diff_char_limit': int(config.git_service.DIFF_MAX_CHARS),
         },
     )
+
 
 

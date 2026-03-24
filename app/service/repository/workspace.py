@@ -18,8 +18,7 @@ from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.setting import Settings
 from app.service.statement.render import seed_statement_sources
-from app.service.platform.process import run_cmd
-from app.service.verification.store import verification_run_ids
+from app.service.platform.git_process import run_git
 
 PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
 USERNAME_RULE_MESSAGE: str = "invalid username"
@@ -109,7 +108,7 @@ class WorkspaceService:
         bare = self.settings.bare_root / repo_name
         if not bare.exists():
             ensure_dir(bare.parent)
-            run_cmd(["git", "init", "--bare", str(bare)])
+            run_git(["git", "init", "--bare", str(bare)])
         row = self._store.ensure_problem_row(slug=slug, name=name, repo_name=repo_name)
         self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
 
@@ -403,7 +402,7 @@ class WorkspaceService:
                     shutil.rmtree(workspace, ignore_errors=False)
             if not workspace.exists():
                 ensure_dir(workspace.parent)
-                run_cmd(["git", "clone", str(bare), str(workspace)])
+                run_git(["git", "clone", str(bare), str(workspace)])
                 if not (workspace / ".git").exists():
                     raise RuntimeError("workspace clone failed")
                 self._ensure_main_checkout(workspace)
@@ -424,22 +423,22 @@ class WorkspaceService:
         return workspace
 
     def _ensure_main_checkout(self, workspace: Path) -> None:
-        has_local_main = run_cmd(
+        has_local_main = run_git(
             ["git", "-C", str(workspace), "show-ref", "--verify", "--quiet", "refs/heads/main"]
         ).returncode == 0
         if has_local_main:
-            run_cmd(["git", "-C", str(workspace), "switch", "--quiet", "main"])
+            run_git(["git", "-C", str(workspace), "switch", "--quiet", "main"])
             return
 
-        has_origin_main = run_cmd(
+        has_origin_main = run_git(
             ["git", "-C", str(workspace), "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"]
         ).returncode == 0
         if has_origin_main:
-            run_cmd(["git", "-C", str(workspace), "switch", "--quiet", "-c", "main", "--track", "origin/main"])
+            run_git(["git", "-C", str(workspace), "switch", "--quiet", "-c", "main", "--track", "origin/main"])
             return
 
         # Keep empty repositories on unborn main branch.
-        run_cmd(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
+        run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
     def _seed_problem_repo(self, workspace: Path) -> None:
         required_dirs = [
@@ -461,10 +460,10 @@ class WorkspaceService:
         if not testlib.exists():
             source = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3])
             testlib.write_bytes(source.read_bytes())
-        has_head = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
+        has_head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
         if not has_head:
             # Keep newly-created repositories at v0 without an automatic initial commit.
-            run_cmd(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
+            run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
         status = self.read_workspace_status(workspace)
@@ -475,12 +474,12 @@ class WorkspaceService:
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
     def read_workspace_status(self, workspace: Path) -> dict[str, str | int | None]:
-        status_v2 = run_cmd(["git", "-C", str(workspace), "status", "--porcelain=2", "--branch"])
+        status_v2 = run_git(["git", "-C", str(workspace), "status", "--porcelain=2", "--branch"])
         if status_v2.returncode == 0:
             branch, head, dirty = self._parse_status_v2(status_v2.stdout)
             return {"branch": branch, "head_commit": head, "dirty": dirty}
 
-        status_out = run_cmd(["git", "-C", str(workspace), "status", "--short", "--branch"]).stdout
+        status_out = run_git(["git", "-C", str(workspace), "status", "--short", "--branch"]).stdout
         branch = "main"
         for raw in status_out.splitlines():
             line = raw.strip()
@@ -492,7 +491,7 @@ class WorkspaceService:
                 break
             branch = branch_line.split("...", 1)[0].strip() or "main"
             break
-        head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+        head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
         dirty = 1 if self._is_status_dirty(status_out) else 0
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
@@ -684,10 +683,7 @@ class WorkspaceService:
             label=f"bare repo path for {safe_problem}",
         )
 
-        run_ids = self._store.delete_problem_metadata(
-            problem_id,
-            collect_run_ids=verification_run_ids,
-        )
+        run_ids = self._store.delete_problem_metadata(problem_id)
         try:
             from app.impl.runtime.config import config
 
@@ -738,7 +734,7 @@ class WorkspaceService:
         extract_git_archive(workspace, commit, snap, timeout=120)
 
     def resolve_commit(self, workspace: Path, commit_ref: str) -> str:
-        proc = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", f"{commit_ref}^{{commit}}"])
+        proc = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", f"{commit_ref}^{{commit}}"])
         commit = proc.stdout.strip()
         if proc.returncode != 0 or not commit:
             detail = (proc.stderr or proc.stdout).strip()
@@ -746,7 +742,7 @@ class WorkspaceService:
         return commit
 
     def _workspace_dirty(self, workspace: Path) -> bool:
-        proc = run_cmd(["git", "-C", str(workspace), "status", "--porcelain"])
+        proc = run_git(["git", "-C", str(workspace), "status", "--porcelain"])
         return self._is_status_dirty(proc.stdout)
 
     def _is_status_dirty(self, status_output: str) -> bool:
@@ -782,7 +778,7 @@ class WorkspaceService:
             if not dirty:
                 head = (workspace_head or "").strip()
                 if not head:
-                    head = run_cmd(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+                    head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
                 self._extract_commit_snapshot(workspace, head, snap)
             else:
                 copytree(workspace, snap)

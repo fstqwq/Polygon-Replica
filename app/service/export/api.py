@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -14,7 +14,8 @@ from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
-from app.service.platform.process import run_cmd
+from app.service.platform.git_process import run_git
+from app.service.platform.latex_process import run_pdflatex
 
 
 class ExportService:
@@ -451,7 +452,7 @@ class ExportService:
         snapshot = tmp_root / "_source"
         source_commit = str(source_commit or "").strip()
         if source_commit:
-            resolved = run_cmd(
+            resolved = run_git(
                 [
                     "git",
                     "-C",
@@ -500,7 +501,7 @@ class ExportService:
         if not commit:
             return None
         try:
-            proc = run_cmd(
+            proc = run_git(
                 ["git", "-C", str(workspace), "rev-list", "--count", commit],
                 timeout=120,
             )
@@ -623,11 +624,7 @@ class ExportService:
         except Exception:
             return False
         workdir = rendered.parent
-        proc = run_cmd(
-            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", rendered.name],
-            cwd=workdir,
-            timeout=self.STATEMENT_PDF_TIMEOUT_SEC,
-        )
+        proc = run_pdflatex(rendered.name, cwd=workdir, timeout_sec=self.STATEMENT_PDF_TIMEOUT_SEC)
         if proc.returncode != 0:
             return False
         pdf_path = rendered.with_suffix(".pdf")
@@ -771,6 +768,7 @@ class ExportService:
         source_commit: str = "",
     ) -> Path:
         resolved_export_type = str(export_type or "").strip().lower() or "icpc"
+        resolved_verification_id = str(verification_id or "").strip()
         if resolved_export_type not in self.TYPES:
             raise ValueError("unsupported export type")
 
@@ -783,7 +781,7 @@ class ExportService:
             raise ValueError("export requires workspace_id")
         workspace = self._workspace_path_for_export(resolved_workspace_id, problem)
         if not resolved_source_commit:
-            head = run_cmd(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"], timeout=120)
+            head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"], timeout=120)
             if head.returncode != 0 or not head.stdout.strip():
                 raise ValueError("no committed revision; commit changes first")
             resolved_source_commit = head.stdout.strip()
@@ -853,7 +851,7 @@ class ExportService:
             self._store.insert_export_record(
                 export_id=export_id,
                 problem_id=int(problem_row["id"]),
-                verification_id="",
+                verification_id=resolved_verification_id,
                 workspace_id=resolved_workspace_id,
                 export_type=resolved_export_type,
                 filename=out.name,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_one
+from .db_helpers import db_execute, db_fetch_one, write_verification_summary
 
 import asyncio
 import base64
@@ -158,16 +158,8 @@ class TestSecurity(SmokeBase):
         return str(messages[0] or "")
 
     def _fixture_verification_root(self, *, problem: str, workspace_id: int, verification_id: str) -> tuple[str, Path]:
-        build_ref = config.fs_manager.compute_artifact_ref(
-            {
-                "suite": "security",
-                "problem": str(problem or "").strip(),
-                "workspace_id": int(workspace_id),
-                "verification_id": str(verification_id or "").strip(),
-            }
-        )
-        artifact_root = config.fs_manager.ensure_artifact_layout(build_ref).root.resolve()
-        return build_ref, artifact_root
+        artifact_root = config.fs_manager.prepare_verification_root(str(verification_id or "").strip()).resolve()
+        return "", artifact_root
 
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:
         username = f"secsql-{uuid.uuid4().hex[:8]}"
@@ -213,23 +205,22 @@ class TestSecurity(SmokeBase):
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db_execute(
             """
-            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [
                 verification_id,
                 problem_id,
                 alice_workspace_id,
                 "",
-                "main",
-                "build",
+                "all",
                 "ok",
-                "{}",
-                str(artifact_root),
+                "",
                 "2026-02-25T00:00:00Z",
                 "2026-02-25T00:00:01Z",
             ],
         )
+        write_verification_summary(verification_id, {"status": "ok"})
 
         with self.assertRaises(HTTPException) as denied:
             artifact_file("alice/sample", "bob", verification_id, "logs/compile.log")
@@ -251,23 +242,22 @@ class TestSecurity(SmokeBase):
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db_execute(
             """
-            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [
                 verification_id,
                 problem_id,
                 alice_workspace_id,
                 "",
-                "main",
-                "build",
+                "all",
                 "ok",
-                "{}",
-                str(artifact_root),
+                "",
                 "2026-02-25T00:00:00Z",
                 "2026-02-25T00:00:01Z",
             ],
         )
+        write_verification_summary(verification_id, {"status": "ok"})
 
         with self.assertRaises(HTTPException) as denied:
             artifact_file("alice/sample", "alice", verification_id, "../outside.txt")
@@ -556,40 +546,40 @@ class TestSecurity(SmokeBase):
         verification_id = f"ver-{run_id}"
         db_execute(
             """
-            INSERT INTO verifications(id,problem_id,workspace_id,source_commit,source_ref,kind,status,summary_json,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             [
                 verification_id,
                 int(ctx["problem"]["id"]),
                 int(ctx["workspace"]["id"]),
                 "",
-                "main",
-                "verification",
+                "all",
                 "ok",
-                json.dumps(
-                    {
-                        "kind": "verification",
-                        "mode": "pass-fail",
-                        "status": "ok",
-                        "runs_order": [run_id],
-                        "runs": {
-                            run_id: {
-                                "key": run_id,
-                                "status": "ok",
-                                "source_label": run_id,
-                                "expected_behavior": "unknown",
-                                "artifact_path": str(root),
-                                "task_kind": "",
-                                "summary": {},
-                            }
-                        },
-                    }
-                ),
-                str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
+                "",
                 "2026-02-28T00:00:00Z",
                 "2026-02-28T00:00:01Z",
             ],
+        )
+        write_verification_summary(
+            verification_id,
+            {
+                "kind": "all",
+                "mode": "pass-fail",
+                "status": "ok",
+                "runs_order": [run_id],
+                "runs": {
+                    run_id: {
+                        "key": run_id,
+                        "status": "ok",
+                        "source_label": run_id,
+                        "expected_behavior": "unknown",
+                        "artifact_path": str(root),
+                        "task_kind": "",
+                        "summary": {},
+                    }
+                },
+            },
         )
 
     def test_run_artifact_file_rejects_path_traversal(self) -> None:
@@ -613,13 +603,16 @@ class TestSecurity(SmokeBase):
         self.assertIn("compile.log download is disabled", str(denied.exception.detail).lower())
 
     def test_run_execute_sanitizes_path_traversal_solution_paths_before_queue(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         captured: dict[str, object] = {}
 
-        def _fake_start_run_execute_batch(*args, **kwargs):
+        def _fake_start_verification_job(*args, **kwargs):
             captured["targets"] = list(kwargs.get("targets") or [])
             return True
 
-        with patch("app.impl.run_export.run.start_run_execute_batch", side_effect=_fake_start_run_execute_batch):
+        with patch("app.impl.run_export.run.start_verification_job", side_effect=_fake_start_verification_job):
             resp = run_execute(
                 problem="alice/sample",
                 user="alice",
@@ -636,7 +629,7 @@ class TestSecurity(SmokeBase):
         self.assertTrue(targets)
         for row in targets:
             self.assertIsInstance(row, dict)
-            submission_path = str(row.get("submission_path") or "")
+            submission_path = str(row.get("path") or "")
             self.assertNotIn("..", submission_path)
             self.assertFalse(submission_path.startswith("/"))
             self.assertFalse(submission_path.startswith("\\"))

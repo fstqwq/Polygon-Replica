@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TypedDict
 
 from app.db import DB, now_iso
@@ -10,7 +12,7 @@ class PreviewRow(TypedDict):
     status: str
     source_commit: str
     source_ref: str
-    summary_json: str
+    summary: dict[str, object]
     created_at: str
     finished_at: str
 
@@ -20,7 +22,7 @@ class PreviewArtifactRow(TypedDict):
     status: str
     source_commit: str
     source_ref: str
-    summary_json: str
+    summary: dict[str, object]
     artifact_path: str
 
 
@@ -33,17 +35,42 @@ class PreviewLatestRow(TypedDict):
 
 class PreviewCacheRow(TypedDict):
     id: str
-    summary_json: str
+    summary: dict[str, object]
 
 
 class PreviewStore:
     def __init__(self, db: DB):
         self.db = db
 
+    def _summary_path(self, artifact_path: str) -> Path:
+        return (Path(artifact_path).resolve() / "summary.json").resolve()
+
+    def _read_summary(self, artifact_path: str) -> dict[str, object]:
+        if not artifact_path:
+            return {}
+        try:
+            text = self._summary_path(artifact_path).read_text(encoding="utf-8")
+        except OSError:
+            return {}
+        if not text:
+            return {}
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _write_summary(self, artifact_path: str, summary: dict[str, object]) -> None:
+        if not artifact_path:
+            return
+        path = self._summary_path(artifact_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
     def list_workspace_previews(self, problem_id: int, workspace_id: int, *, limit: int = 30) -> list[PreviewRow]:
         rows = self.db.fetch_all(
             """
-            SELECT id,status,source_commit,source_ref,summary_json,created_at,finished_at
+            SELECT id,status,source_commit,source_ref,artifact_path,created_at,finished_at
             FROM previews
             WHERE problem_id=? AND workspace_id=?
             ORDER BY created_at DESC
@@ -59,7 +86,7 @@ class PreviewStore:
                     "status": str(row["status"]),
                     "source_commit": str(row["source_commit"] or ""),
                     "source_ref": str(row["source_ref"] or ""),
-                    "summary_json": str(row["summary_json"] or ""),
+                    "summary": self._read_summary(str(row["artifact_path"] or "")),
                     "created_at": str(row["created_at"]),
                     "finished_at": str(row["finished_at"] or ""),
                 }
@@ -69,7 +96,7 @@ class PreviewStore:
     def get_workspace_preview(self, problem_id: int, workspace_id: int, preview_id: str) -> PreviewRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,source_commit,source_ref,summary_json,created_at,finished_at
+            SELECT id,status,source_commit,source_ref,artifact_path,created_at,finished_at
             FROM previews
             WHERE id=? AND problem_id=? AND workspace_id=?
             """,
@@ -82,7 +109,7 @@ class PreviewStore:
             "status": str(row["status"]),
             "source_commit": str(row["source_commit"] or ""),
             "source_ref": str(row["source_ref"] or ""),
-            "summary_json": str(row["summary_json"] or ""),
+            "summary": self._read_summary(str(row["artifact_path"] or "")),
             "created_at": str(row["created_at"]),
             "finished_at": str(row["finished_at"] or ""),
         }
@@ -90,7 +117,7 @@ class PreviewStore:
     def get_workspace_preview_artifact(self, problem_id: int, workspace_id: int, preview_id: str) -> PreviewArtifactRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,source_commit,source_ref,summary_json,artifact_path
+            SELECT id,status,source_commit,source_ref,artifact_path
             FROM previews
             WHERE id=? AND problem_id=? AND workspace_id=?
             """,
@@ -103,7 +130,7 @@ class PreviewStore:
             "status": str(row["status"]),
             "source_commit": str(row["source_commit"] or ""),
             "source_ref": str(row["source_ref"] or ""),
-            "summary_json": str(row["summary_json"] or ""),
+            "summary": self._read_summary(str(row["artifact_path"] or "")),
             "artifact_path": str(row["artifact_path"] or ""),
         }
 
@@ -130,7 +157,7 @@ class PreviewStore:
     def get_preview_row(self, preview_id: str) -> PreviewArtifactRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,source_commit,source_ref,summary_json,artifact_path
+            SELECT id,status,source_commit,source_ref,artifact_path
             FROM previews
             WHERE id=?
             """,
@@ -143,7 +170,7 @@ class PreviewStore:
             "status": str(row["status"]),
             "source_commit": str(row["source_commit"] or ""),
             "source_ref": str(row["source_ref"] or ""),
-            "summary_json": str(row["summary_json"] or ""),
+            "summary": self._read_summary(str(row["artifact_path"] or "")),
             "artifact_path": str(row["artifact_path"] or ""),
         }
 
@@ -156,7 +183,7 @@ class PreviewStore:
         limit: int,
     ) -> list[PreviewCacheRow]:
         sql = (
-            "SELECT id,summary_json FROM previews "
+            "SELECT id,artifact_path FROM previews "
             "WHERE problem_id=? AND workspace_id=? AND status='ok'"
         )
         params: list[object] = [int(problem_id), int(workspace_id)]
@@ -171,7 +198,7 @@ class PreviewStore:
             result.append(
                 {
                     "id": str(row["id"] or ""),
-                    "summary_json": str(row["summary_json"] or ""),
+                    "summary": self._read_summary(str(row["artifact_path"] or "")),
                 }
             )
         return result
@@ -191,32 +218,35 @@ class PreviewStore:
             INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,artifact_path,created_at)
             VALUES(?,?,?,?,?,?,?,?,?)
             """,
-            [preview_id, problem_id, workspace_id, "", source_commit, source_ref, "running", artifact_path, now_iso()],
+            [preview_id, problem_id, workspace_id, None, source_commit, source_ref, "running", artifact_path, now_iso()],
         )
 
     def update_preview_result(
         self,
         *,
         preview_id: str,
-        verification_id: str,
+        verification_id: str | None,
         source_commit: str,
         source_ref: str,
         status: str,
-        summary_json: str,
+        summary: dict[str, object],
     ) -> None:
+        row = self.db.fetch_one("SELECT artifact_path FROM previews WHERE id=?", [preview_id])
+        artifact_path = "" if row is None else str(row["artifact_path"] or "")
+        self._write_summary(artifact_path, summary)
         self.db.execute(
             """
             UPDATE previews
-            SET verification_id=?, source_commit=?, source_ref=?, status=?, summary_json=?, finished_at=?
+            SET verification_id=?, source_commit=?, source_ref=?, status=?, finished_at=?
             WHERE id=?
             """,
-            [verification_id, source_commit, source_ref, status, summary_json, now_iso(), preview_id],
+            [verification_id, source_commit, source_ref, status, now_iso(), preview_id],
         )
 
     def list_other_workspace_previews(self, problem_id: int, workspace_id: int, keep_preview_id: str) -> list[PreviewArtifactRow]:
         rows = self.db.fetch_all(
             """
-            SELECT id,status,source_commit,source_ref,summary_json,artifact_path
+            SELECT id,status,source_commit,source_ref,artifact_path
             FROM previews
             WHERE problem_id=? AND workspace_id=? AND id<>?
             """,
@@ -230,7 +260,7 @@ class PreviewStore:
                     "status": str(row["status"]),
                     "source_commit": str(row["source_commit"] or ""),
                     "source_ref": str(row["source_ref"] or ""),
-                    "summary_json": str(row["summary_json"] or ""),
+                    "summary": self._read_summary(str(row["artifact_path"] or "")),
                     "artifact_path": str(row["artifact_path"] or ""),
                 }
             )
