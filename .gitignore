@@ -8,3 +8,4 @@ migration-gates/*
 .*
 !.gitattributes
 tmp/
+third_party/polygon-package-examples/contest/contest-41963.zip
