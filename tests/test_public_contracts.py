@@ -97,7 +97,7 @@ class TestPublicContracts(unittest.TestCase):
         self.assertIn("background: var(--danger-link-hover-bg);", source)
         self.assertIn("outline: 2px solid var(--danger-link-focus);", source)
 
-    def test_legacy_danger_link_variants_removed_from_templates_and_styles(self) -> None:
+    def test_old_danger_link_variants_removed_from_templates_and_styles(self) -> None:
         offenders: list[str] = []
         banned_snippets = [
             'class="linkish danger"',

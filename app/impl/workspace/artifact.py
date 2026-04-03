@@ -7,7 +7,6 @@ from fastapi.responses import FileResponse
 from app.impl.runtime.config import config
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
-
 from .revision import git_commit_count
 
 
@@ -59,6 +58,54 @@ def safe_artifact_path(problem: str, verification_id: str, rel: str) -> Path:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="artifact file not found")
     return path
+
+
+def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, str] | None:
+    safe_verification_id = str(verification_id or "").strip()
+    rel_norm = rel.lstrip("/")
+    if not safe_verification_id or not rel_norm:
+        return None
+    parts = Path(rel_norm).parts
+    if len(parts) == 3 and parts[0] == "output":
+        task_id = str(parts[1] or "").strip()
+        filename = Path(parts[2]).name
+        if (not task_id) or (not filename):
+            return None
+        task_output = config.verification_service.verification_task_output_ref(safe_verification_id, task_id)
+        if task_output is None:
+            return None
+        test_name, ref = task_output
+        expected_name = f"{Path(test_name).stem}.out" if Path(test_name).stem else "program.out"
+        if filename != expected_name:
+            return None
+        if not ref:
+            return None
+        blob = config.verification_service.resolve_artifact_blob(ref)
+        if blob is None:
+            return None
+        return (blob, filename)
+    filename = Path(rel_norm).name
+    if rel_norm == f"tests/{filename}" and filename:
+        ref = config.verification_service.verification_artifact_ref(safe_verification_id, filename, "input_ref")
+        if not ref:
+            return None
+        blob = config.verification_service.resolve_artifact_blob(ref)
+        if blob is None:
+            return None
+        return (blob, filename)
+    if rel_norm == f"ans/{filename}" and filename:
+        stem = Path(filename).stem
+        if not stem:
+            return None
+        test_name = f"{stem}.in"
+        ref = config.verification_service.verification_artifact_ref(safe_verification_id, test_name, "answer_ref")
+        if not ref:
+            return None
+        blob = config.verification_service.resolve_artifact_blob(ref)
+        if blob is None:
+            return None
+        return (blob, filename)
+    return None
 
 
 def browser_file_response(file_path: Path) -> FileResponse:
@@ -131,15 +178,6 @@ def safe_run_artifact_path(ctx: dict, run_id: str, rel: str) -> Path:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="run artifact file not found")
     return path
-
-
-def assert_workspace_verification_access(ctx: dict, verification_id: str) -> None:
-    if not config.verification_service.workspace_verification_exists(
-        int(ctx["problem"]["id"]),
-        int(ctx["workspace"]["id"]),
-        verification_id,
-    ):
-        raise HTTPException(status_code=404, detail="verification not found in workspace")
 
 
 def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:

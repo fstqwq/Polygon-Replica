@@ -25,7 +25,6 @@ from app.service.judgehost.runtime import (
     domjudge_parse_meta_text,
     domjudge_rewrite_untrusted_runresult,
 )
-from app.service.platform.hashing import sha256_hex_bytes as domjudge_sha256_bytes
 from app.service.verification.test_rows import (
     build_verification_test_pass_row,
     build_verification_test_row,
@@ -207,7 +206,7 @@ class JudgehostDomjudgeResultsMixin:
     def domjudge_get_testcase_files(self, testcase_id: int, *, hostname: str) -> list[dict[str, object]]:
         token = int(testcase_id)
         safe_host = self._normalize_hostname(hostname)
-        row, resolution_source = self._judgehost_state_store.testcase_paths(token, hostname=safe_host)
+        row, resolution_source = self._judgehost_state_store.testcase_refs(token, hostname=safe_host)
         if row is None:
             _diag_logger.warning(
                 "judgehost.get_testcase_files testcase_id=%s host=%s resolved=missing",
@@ -215,17 +214,19 @@ class JudgehostDomjudgeResultsMixin:
                 safe_host,
             )
             raise RuntimeError("testcase files not found")
-        in_path = Path(row["input_path"]).resolve()
-        ans_path = Path(row["answer_path"]).resolve()
-        if not in_path.exists() or not ans_path.exists():
+        input_ref = domjudge_text(row["input_ref"])
+        answer_ref = domjudge_text(row["answer_ref"])
+        input_blob = self.resolve_artifact_blob(input_ref)
+        answer_blob = self.resolve_artifact_blob(answer_ref)
+        if input_blob is None or answer_blob is None:
             _diag_logger.warning(
                 "judgehost.get_testcase_files testcase_id=%s host=%s resolved=%s exists=%s input=%s answer=%s",
                 token,
                 safe_host,
                 resolution_source,
                 False,
-                in_path,
-                ans_path,
+                input_ref,
+                answer_ref,
             )
             raise RuntimeError("testcase files not found")
         _diag_logger.warning(
@@ -234,12 +235,12 @@ class JudgehostDomjudgeResultsMixin:
             safe_host,
             resolution_source,
             True,
-            in_path,
-            ans_path,
+            input_ref,
+            answer_ref,
         )
         return [
-            {"filename": "input", "content": base64.b64encode(in_path.read_bytes()).decode("ascii")},
-            {"filename": "output", "content": base64.b64encode(ans_path.read_bytes()).decode("ascii")},
+            {"filename": "input", "content": base64.b64encode(input_blob).decode("ascii")},
+            {"filename": "output", "content": base64.b64encode(answer_blob).decode("ascii")},
         ]
 
     def domjudge_get_executable_files(self, kind: str, script_id: object) -> list[dict[str, object]]:
@@ -636,42 +637,39 @@ class JudgehostDomjudgeResultsMixin:
             logger.info("ignoring add_judging_run for cancelled DOMjudge task id: %s", case_id)
             return case_id
         work_root = Path(domjudge_text(row["work_root"])).resolve()
-        result_root = (work_root / "results" / f"{case_id}").resolve()
-        result_root.mkdir(parents=True, exist_ok=True)
         task_payload = self._task_payload(safe_task_id) if safe_task_id else {}
         verification_source = task_payload.get("verification_source", "")
         task_kind = self._domjudge_task_kind(task_payload, verification_source=verification_source)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
 
-        def _store_payload_file(
+        payload_files: dict[str, bytes] = {}
+
+        def _capture_payload_file(
             name: str,
             value: object,
             *,
             allow_empty: bool = False,
-        ) -> str:
+        ) -> bytes:
             if value is None:
-                return ""
+                return b""
             raw = self._domjudge_payload_blob_bytes(value)
             if (not raw) and (not allow_empty):
-                return ""
-            target = (result_root / name).resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(raw)
-            return target.relative_to(work_root).as_posix()
+                return b""
+            payload_files[name] = raw
+            return raw
 
-        output_run_rel = ""
         if not compile_only:
-            output_run_rel = _store_payload_file(
+            _capture_payload_file(
                 "program.out",
                 payload.get("output_run"),
                 allow_empty=True,
             )
-        output_err_rel = _store_payload_file("program.err", payload.get("output_error"))
-        output_sys_rel = _store_payload_file("system.out", payload.get("output_system"))
-        output_diff_rel = _store_payload_file("judgemessage.txt", payload.get("output_diff"))
-        metadata_rel = _store_payload_file("program.meta", payload.get("metadata"))
-        compare_meta_rel = _store_payload_file("compare.meta", payload.get("compare_metadata"))
-        team_message_rel = _store_payload_file("teammessage.txt", payload.get("team_message"))
+        _capture_payload_file("program.err", payload.get("output_error"))
+        _capture_payload_file("system.out", payload.get("output_system"))
+        _capture_payload_file("judgemessage.txt", payload.get("output_diff"))
+        metadata_blob = _capture_payload_file("program.meta", payload.get("metadata"))
+        compare_meta_blob = _capture_payload_file("compare.meta", payload.get("compare_metadata"))
+        _capture_payload_file("teammessage.txt", payload.get("team_message"))
 
         runtime_sec = domjudge_parse_float(payload.get("runtime"), 0.0)
         cpu_sec = runtime_sec
@@ -679,22 +677,18 @@ class JudgehostDomjudgeResultsMixin:
         memory_kb = 0
         compare_exit_code = -1
         program_meta: dict[str, str] = {}
-        if metadata_rel:
-            meta_path = (work_root / metadata_rel).resolve()
-            if meta_path.exists() and meta_path.is_file():
-                program_meta = domjudge_parse_meta_text(meta_path.read_text(encoding="utf-8", errors="replace"))
-                cpu_total_sec = domjudge_parse_float(program_meta.get("cpu-time"), runtime_sec)
-                wall_sec = domjudge_parse_float(program_meta.get("wall-time"), cpu_total_sec)
-                runtime_sec = cpu_sec = cpu_total_sec
-                mem_bytes = domjudge_parse_int(program_meta.get("memory-bytes"), 0)
-                memory_kb = max(0, int(mem_bytes // 1024))
-        if compare_meta_rel:
-            compare_meta_path = (work_root / compare_meta_rel).resolve()
-            if compare_meta_path.exists() and compare_meta_path.is_file():
-                compare_meta = domjudge_parse_meta_text(
-                    compare_meta_path.read_text(encoding="utf-8", errors="replace")
-                )
-                compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
+        if metadata_blob:
+            program_meta = domjudge_parse_meta_text(metadata_blob.decode("utf-8", errors="replace"))
+            cpu_total_sec = domjudge_parse_float(program_meta.get("cpu-time"), runtime_sec)
+            wall_sec = domjudge_parse_float(program_meta.get("wall-time"), cpu_total_sec)
+            runtime_sec = cpu_sec = cpu_total_sec
+            mem_bytes = domjudge_parse_int(program_meta.get("memory-bytes"), 0)
+            memory_kb = max(0, int(mem_bytes // 1024))
+        if compare_meta_blob:
+            compare_meta = domjudge_parse_meta_text(
+                compare_meta_blob.decode("utf-8", errors="replace")
+            )
+            compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
 
         score_text = domjudge_text(payload.get("score"))
 
@@ -721,29 +715,15 @@ class JudgehostDomjudgeResultsMixin:
                 source_bytes = b""
             source_hash = domjudge_source_hash(source_name, source_bytes)
 
-        input_bytes = b""
-        input_path = Path(domjudge_text(row["input_path"])).resolve()
-        try:
-            if input_path.exists() and input_path.is_file() and (not input_path.is_symlink()):
-                input_bytes = input_path.read_bytes()
-        except OSError:
-            input_bytes = b""
-
-        answer_bytes = b""
-        answer_path = Path(domjudge_text(row["answer_path"])).resolve()
-        try:
-            if answer_path.exists() and answer_path.is_file() and (not answer_path.is_symlink()):
-                answer_bytes = answer_path.read_bytes()
-        except OSError:
-            answer_bytes = b""
-
         testcase_hash = domjudge_lower_text(row["testcase_hash"])
-        testcase_input_hash = domjudge_sha256_bytes(input_bytes)
-        if not re.fullmatch(r"[0-9a-f]{64}", testcase_hash):
-            if task_kind == self._TASK_KIND_MAIN_CORRECT:
-                testcase_hash = testcase_input_hash
-            else:
-                testcase_hash = self._domjudge_set_hash_from_blobs([input_bytes, answer_bytes])
+        testcase_input_hash = domjudge_lower_text(row["testcase_input_hash"])
+        testcase_answer_hash = domjudge_lower_text(row["testcase_answer_hash"])
+        if re.fullmatch(r"[0-9a-f]{64}", testcase_hash) is None:
+            raise RuntimeError(f"missing testcase_hash for DOMjudge case {case_id}")
+        if re.fullmatch(r"[0-9a-f]{64}", testcase_input_hash) is None:
+            raise RuntimeError(f"missing testcase_input_hash for DOMjudge case {case_id}")
+        if re.fullmatch(r"[0-9a-f]{64}", testcase_answer_hash) is None:
+            raise RuntimeError(f"missing testcase_answer_hash for DOMjudge case {case_id}")
 
         compile_hash = domjudge_lower_text(row["compile_hash"])
         run_hash = domjudge_lower_text(row["run_hash"])
@@ -777,18 +757,6 @@ class JudgehostDomjudgeResultsMixin:
         if runresult in {"compare-error", "run-error"} and compare_exit_code == 3:
             runresult = "checker-fail"
         verdict = self._domjudge_verdict_from_runresult(runresult)
-        feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
-            work_root=work_root,
-            runresult=runresult,
-            output_error_rel=output_err_rel,
-            output_diff_rel=output_diff_rel,
-            team_message_rel=team_message_rel,
-        )
-        if (not compile_only) and verdict == "OK" and (not output_run_rel):
-            target = (result_root / "program.out").resolve()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"")
-            output_run_rel = target.relative_to(work_root).as_posix()
         compile_config_hash = domjudge_json_hash(compile_cfg)
         run_config_hash = domjudge_json_hash(run_cfg)
         compare_config_hash = domjudge_json_hash(compare_cfg)
@@ -796,23 +764,7 @@ class JudgehostDomjudgeResultsMixin:
         if re.fullmatch(r"[0-9a-f]{64}", toolchain_cmd_digest) is None:
             toolchain_cmd_digest = self._domjudge_toolchain_cmd_digest(source_name)
 
-        cache_files: dict[str, bytes] = {}
-
-        def _read_rel_blob(rel_path: str) -> bytes | None:
-            return self._domjudge_read_artifact_blob(work_root, rel_path)
-
-        for rel, blob_name in (
-            (output_run_rel, "program.out"),
-            (output_err_rel, "program.err"),
-            (output_sys_rel, "system.out"),
-            (output_diff_rel, "judgemessage.txt"),
-            (metadata_rel, "program.meta"),
-            (compare_meta_rel, "compare.meta"),
-            (team_message_rel, "teammessage.txt"),
-        ):
-            blob = _read_rel_blob(rel)
-            if blob is not None:
-                cache_files[blob_name] = blob
+        cache_files: dict[str, bytes] = dict(payload_files)
 
         case_key_hash, case_signature = self._domjudge_case_cache_ref(
             source_hash=source_hash,
@@ -825,11 +777,10 @@ class JudgehostDomjudgeResultsMixin:
             toolchain_cmd_digest=toolchain_cmd_digest,
             testcase_hash=testcase_hash,
         )
-        should_store_case_cache = verdict != "FL"
+        shortcut_eligible = verdict != "FL"
         if compile_only and verdict != "OK":
-            should_store_case_cache = False
-        if should_store_case_cache:
-            self._domjudge_store_case_cache(
+            shortcut_eligible = False
+        self._domjudge_store_case_cache(
                 key_parts={"key_hash": case_key_hash, "signature": case_signature},
                 tags={
                     "source_hash": source_hash,
@@ -844,13 +795,14 @@ class JudgehostDomjudgeResultsMixin:
                 memory_kb=memory_kb,
                 score_text=score_text,
                 files=cache_files,
+                shortcut_eligible=shortcut_eligible,
             )
 
-        use_case_cache_tokens = bool(should_store_case_cache and self._judge_fs_index_service is not None)
+        use_case_cache_tokens = bool(self._judge_fs_index_service is not None)
 
-        def _case_blob_token(blob_name: str, fallback_rel: str) -> str:
+        def _case_blob_token(blob_name: str) -> str:
             if (not use_case_cache_tokens) or (blob_name not in cache_files):
-                return fallback_rel
+                return ""
             return self._domjudge_cache_blob_ref(
                 kind=self.CASE_CACHE_KIND,
                 key_hash=case_key_hash,
@@ -858,15 +810,22 @@ class JudgehostDomjudgeResultsMixin:
                 name=blob_name,
             )
 
-        output_run_token = _case_blob_token("program.out", output_run_rel)
-        output_err_token = _case_blob_token("program.err", output_err_rel)
-        output_sys_token = _case_blob_token("system.out", output_sys_rel)
-        output_diff_token = _case_blob_token("judgemessage.txt", output_diff_rel)
-        metadata_token = _case_blob_token("program.meta", metadata_rel)
-        compare_meta_token = _case_blob_token("compare.meta", compare_meta_rel)
-        team_message_token = _case_blob_token("teammessage.txt", team_message_rel)
-        # Prefer cache refs for summary output_ref so build/run consumers can still
-        # resolve artifacts after judgehost temp work directories are cleaned.
+        output_run_token = _case_blob_token("program.out")
+        output_err_token = _case_blob_token("program.err")
+        output_sys_token = _case_blob_token("system.out")
+        output_diff_token = _case_blob_token("judgemessage.txt")
+        metadata_token = _case_blob_token("program.meta")
+        compare_meta_token = _case_blob_token("compare.meta")
+        team_message_token = _case_blob_token("teammessage.txt")
+        feedback_text, feedback_files = self._domjudge_feedback_text_and_files(
+            work_root=work_root,
+            runresult=runresult,
+            output_error_rel=output_err_token,
+            output_diff_rel=output_diff_token,
+            team_message_rel=team_message_token,
+        )
+        # Always persist result artifacts as cache refs so product and judgehost
+        # readers do not depend on work_root/results materialization.
 
         now_text = now_iso()
         updated_case = self._judgehost_state_store.report_case_result(

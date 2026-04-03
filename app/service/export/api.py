@@ -31,7 +31,6 @@ class ExportService:
         "run_time_error",
         "rejected",
     )
-    MODE_DETECT_READ_CHUNK = 65536
     STANDARD_CHECKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     STANDARD_CHECKER_ROOT = (Path(__file__).resolve().parents[2] / "third_party" / "upstream" / "testlib" / "checkers").resolve()
     STATEMENT_PDF_TIMEOUT_SEC = 60
@@ -94,30 +93,6 @@ class ExportService:
             return False
         return resolved_root in resolved.parents or resolved_root == resolved
 
-    def _validate_required_paths(self, build_root: Path, required: list[tuple[str, str]]) -> list[str]:
-        try:
-            root_resolved = build_root.resolve()
-        except OSError:
-            return [rel for rel, _kind in required]
-
-        issues: list[str] = []
-        for rel, kind in required:
-            p = build_root / rel
-            display = rel if kind == "file" else f"{rel}/"
-            if not p.exists():
-                issues.append(display)
-                continue
-            if p.is_symlink():
-                issues.append(display)
-                continue
-            if kind == "dir":
-                if not p.is_dir() or not self._is_safe_path_within(build_root, p, root_resolved=root_resolved):
-                    issues.append(display)
-                continue
-            if not p.is_file() or not self._is_safe_path_within(build_root, p, root_resolved=root_resolved):
-                issues.append(display)
-        return issues
-
     def _iter_safe_descendant_files(self, root: Path):
         if not root.exists() or not root.is_dir():
             return
@@ -162,38 +137,6 @@ class ExportService:
             target = dst / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, target)
-
-    def _iter_safe_top_level_suffix_files(
-        self,
-        folder: Path,
-        suffix: str,
-        folder_resolved: Path | None = None,
-    ):
-        if not suffix or not folder.exists() or not folder.is_dir():
-            return
-        # Require a resolvable root up front so callers keep deterministic empty behavior
-        # for invalid/unreadable artifact directories.
-        try:
-            _ = folder_resolved if folder_resolved is not None else folder.resolve()
-        except OSError:
-            return
-        matched: list[str] = []
-        try:
-            with os.scandir(folder) as entries:
-                for entry in entries:
-                    name = entry.name
-                    if not name.endswith(suffix):
-                        continue
-                    try:
-                        if not entry.is_file(follow_symlinks=False):
-                            continue
-                    except OSError:
-                        continue
-                    matched.append(name)
-        except OSError:
-            return
-        for name in sorted(matched):
-            yield folder / name
 
     def _find_first_source(self, folder: Path, preferred: list[str] | None = None) -> Path | None:
         if not folder.exists() or not folder.is_dir():
@@ -384,27 +327,6 @@ class ExportService:
                     raise ValueError("interactor_source is configured but invalid")
                 return None
         return self._find_first_source(snapshot / "interactors")
-
-    def _file_contains_token(self, path: Path, token: str) -> bool:
-        needle = str(token or "").encode("utf-8")
-        if not needle:
-            return False
-        overlap = max(0, len(needle) - 1)
-        carry = b""
-        chunk_size = max(4096, int(self.MODE_DETECT_READ_CHUNK))
-        try:
-            with path.open("rb") as fh:
-                while True:
-                    chunk = fh.read(chunk_size)
-                    if not chunk:
-                        break
-                    data = carry + chunk
-                    if needle in data:
-                        return True
-                    carry = data[-overlap:] if overlap and len(data) > overlap else data if overlap else b""
-        except OSError:
-            return False
-        return False
 
     def _problem_mode_and_pass_limit(self, snapshot: Path | None) -> tuple[str, int]:
         if snapshot is None:

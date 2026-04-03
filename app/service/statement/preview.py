@@ -171,21 +171,15 @@ class PreviewService:
             if error_text:
                 raise RuntimeError(f"sample verification failed ({verification_id}): {error_text}")
             raise RuntimeError(f"sample verification failed ({verification_id})")
-        runtime_layout = self.fs_manager.verification_runtime_layout(verification_id)
-        tests_dir = runtime_layout.tests
-        ans_dir = runtime_layout.answers
-        if not tests_dir.exists() or not tests_dir.is_dir() or tests_dir.is_symlink():
-            raise RuntimeError(f"sample verification missing tests directory: {verification_id}")
-        if not ans_dir.exists() or not ans_dir.is_dir() or ans_dir.is_symlink():
-            raise RuntimeError(f"sample verification missing ans directory: {verification_id}")
         copied = 0
         snapshot_root = snapshot.resolve()
         for row in rows:
             index = int(row.index)
             test_id = str(row.test_id)
             kind = str(row.kind)
-            source_in = tests_dir / f"{int(index):03d}.in"
-            source_ans = ans_dir / f"{int(index):03d}.ans"
+            test_name = f"{int(index):03d}.in"
+            input_ref = self.verification_service.verification_artifact_ref(verification_id, test_name, "input_ref")
+            answer_ref = self.verification_service.verification_artifact_ref(verification_id, test_name, "answer_ref")
             input_rel = Path(payload_rel_path_for_test(test_id, kind))
             answer_rel = Path("tests") / "answers" / f"{test_id}.ans"
             input_target = (snapshot / input_rel).resolve()
@@ -194,16 +188,18 @@ class PreviewService:
                 raise RuntimeError(f"invalid sample target path for test id {test_id}")
             copied_row = False
             if row.needs_input_copy:
-                if source_in.is_symlink() or (not source_in.exists()) or (not source_in.is_file()):
+                input_blob = self.verification_service.resolve_artifact_blob(input_ref) if input_ref else None
+                if input_blob is None:
                     raise RuntimeError(f"sample input missing from verification for test id {test_id} (row {index})")
                 input_target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_in, input_target)
+                input_target.write_bytes(input_blob)
                 copied_row = True
             if row.needs_output_copy:
-                if source_ans.is_symlink() or (not source_ans.exists()) or (not source_ans.is_file()):
+                answer_blob = self.verification_service.resolve_artifact_blob(answer_ref) if answer_ref else None
+                if answer_blob is None:
                     raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
                 answer_target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_ans, answer_target)
+                answer_target.write_bytes(answer_blob)
                 copied_row = True
             if copied_row:
                 copied += 1

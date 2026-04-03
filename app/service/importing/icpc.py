@@ -227,52 +227,6 @@ def _yaml_unquote(raw: str) -> str:
     return text
 
 
-def _yaml_parse_inline_list(raw: str) -> list[str]:
-    value = raw.strip()
-    if not value:
-        return []
-    if not (value.startswith("[") and value.endswith("]")):
-        token = _yaml_unquote(value)
-        return [token] if token else []
-    body = value[1:-1].strip()
-    if not body:
-        return []
-    items: list[str] = []
-    buf: list[str] = []
-    in_single = False
-    in_double = False
-    i = 0
-    while i < len(body):
-        ch = body[i]
-        if ch == "'" and not in_double:
-            if in_single and i + 1 < len(body) and body[i + 1] == "'":
-                buf.append("''")
-                i += 2
-                continue
-            in_single = not in_single
-            buf.append(ch)
-            i += 1
-            continue
-        if ch == '"' and not in_single:
-            in_double = not in_double
-            buf.append(ch)
-            i += 1
-            continue
-        if ch == "," and (not in_single) and (not in_double):
-            token = _yaml_unquote("".join(buf))
-            if token:
-                items.append(token)
-            buf = []
-            i += 1
-            continue
-        buf.append(ch)
-        i += 1
-    token = _yaml_unquote("".join(buf))
-    if token:
-        items.append(token)
-    return items
-
-
 def _parse_domjudge_ini(text: str) -> DomjudgeMeta:
     time_limit_ms: int | None = None
     external_id = ""

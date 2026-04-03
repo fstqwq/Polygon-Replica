@@ -10,21 +10,22 @@ from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
+from app.service.platform.hashing import sha256_hex_bytes, sha256_hex_json
+from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.judgehost.domjudge.cache import domjudge_cache_blob_ref
 from app.service.problem.test_spec import (
     parse_gen_command_tokens,
 )
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.types import Kind
 
-from app.service.verification.pipeline import effective_compile_jobs
-from app.service.verification.pipeline import wait_build_terminal_status
 from app.service.verification.read_model import (
     logical_run_ids,
     running_tasks,
     solution_source_paths,
     task_counts,
 )
-from app.service.verification.runtime import coerce_int, effective_run_timeout_ms, effective_run_timeout_sec, load_problem_runtime_config
+from app.service.verification.runtime import load_problem_runtime_config
 from app.service.verification.signature import verification_signature
 from app.service.verification.source import resolve_standard_checker_source, select_checker_source, select_source
 from app.service.verification.task_store import VerificationTaskStore
@@ -44,50 +45,27 @@ TIME_LIMIT_MIN_MS = 100
 TIME_LIMIT_MAX_MS = 30000
 
 class VerificationService:
-    DB_SUMMARY_TESTS_LIMIT = 8192
-    DB_SUMMARY_DIAGNOSTICS_LIMIT = 512
-    DB_SUMMARY_FEEDBACK_FILES_LIMIT = 16
-    DB_SUMMARY_DIAGNOSTIC_MESSAGE_LIMIT = 4096
-    VERIFICATION_JOIN_WAIT_TIMEOUT_SEC = 180
-    VERIFICATION_JOIN_POLL_SEC = 0.25
-
     def __init__(
         self,
         db: DB,
         workspace_service: WorkspaceService,
         artifacts: ArtifactService,
         judgehost_task_service: Judgehost,
+        judge_fs_index_service: JudgeFsIndexService | None = None,
         constants: RuntimeValues | None = None,
     ):
         self.db = db
         self.workspace_service = workspace_service
         self.artifacts = artifacts
-        self.default_exec_memory_mb = 1024
-        self.default_exec_process_limit = 64
-        self.default_exec_output_kb = 65536
-        self.wall_time_slack_pass_fail_sec = 1
-        self.wall_time_slack_multi_pass_sec = 15
-        self.wall_time_slack_interactive_sec = 15
         self.judgehost_task_service = judgehost_task_service
+        self.judge_fs_index_service = judge_fs_index_service
         self._verification_inflight_lock = threading.RLock()
-        self._verification_inflight: dict[str, str] = {}
         self.fs_manager = FsManager(self.workspace_service.settings.cache_root, self.workspace_service.settings.artifacts_root)
         self._verification_store = VerificationStore(db, self.fs_manager)
         self.apply_runtime_values(constants or build_runtime_values())
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
         row = self._verification_store.get_runtime_row(int(problem_id), verification_id)
-        if row is None:
-            return None
-        return row
-
-    def workspace_runtime_verification(
-        self,
-        problem_id: int,
-        workspace_id: int | None,
-        verification_id: str,
-    ) -> dict[str, object] | None:
-        row = self._verification_store.get_workspace_runtime_row(int(problem_id), int(workspace_id), verification_id)
         if row is None:
             return None
         return row
@@ -103,6 +81,9 @@ class VerificationService:
 
     def artifact_path_for_verification(self, verification_id: str) -> str:
         return self._verification_store.artifact_path_for_verification(verification_id)
+
+    def allocate_verification_id(self) -> str:
+        return self._verification_store.allocate_id()
 
     def workspace_verification_id_for_run(self, problem_id: int, workspace_id: int, run_id: str) -> str:
         token = run_id
@@ -169,6 +150,131 @@ class VerificationService:
 
     def persist_verification_metadata(self, verification_id: str, metadata: dict[str, object]) -> None:
         self._verification_store.save_metadata(verification_id, metadata)
+
+    def _verification_blob_ref(self, *, key_hash: str, signature: str, name: str) -> str:
+        return domjudge_cache_blob_ref(
+            kind=JudgeFsIndexService.KIND_VERIFICATION,
+            key_hash=key_hash,
+            signature=signature,
+            name=name,
+        )
+
+    def store_verification_blob(
+        self,
+        *,
+        verification_id: str,
+        test_name: str,
+        role: str,
+        file_name: str,
+        payload: bytes,
+        extra_tags: dict[str, object] | None = None,
+    ) -> str:
+        service = self.judge_fs_index_service
+        if service is None:
+            raise RuntimeError("verification blob store is unavailable")
+        safe_verification_id = str(verification_id or "").strip()
+        safe_test_name = str(test_name or "").strip()
+        safe_role = str(role or "").strip().lower()
+        safe_file_name = Path(file_name).name
+        blob = bytes(payload)
+        key_hash = sha256_hex_json(
+            {
+                "schema": "verification-artifact-key.v1",
+                "verification_id": safe_verification_id,
+                "test_name": safe_test_name,
+                "role": safe_role,
+            },
+            ensure_ascii=False,
+        )
+        signature = JudgeFsIndexService.signature(
+            {
+                "schema": "verification-artifact.v1",
+                "payload_sha256": sha256_hex_bytes(blob),
+                "file_name": safe_file_name,
+            }
+        )
+        tags = {
+            "verification_id": safe_verification_id,
+            "test_name": safe_test_name,
+            "role": safe_role,
+        }
+        if extra_tags:
+            tags.update(dict(extra_tags))
+        service.put(
+            kind=JudgeFsIndexService.KIND_VERIFICATION,
+            key_hash=key_hash,
+            signature=signature,
+            value={
+                "schema": "verification-artifact.v1",
+                "verification_id": safe_verification_id,
+                "test_name": safe_test_name,
+                "role": safe_role,
+                "file_name": safe_file_name,
+                "payload_sha256": sha256_hex_bytes(blob),
+            },
+            files={safe_file_name: blob},
+            tags=tags,
+        )
+        return self._verification_blob_ref(key_hash=key_hash, signature=signature, name=safe_file_name)
+
+    def verification_artifact_refs(self, verification_id: str) -> dict[str, dict[str, str]]:
+        metadata = self.verification_metadata(verification_id)
+        raw = metadata.get("artifact_refs")
+        if not isinstance(raw, dict):
+            return {}
+        refs: dict[str, dict[str, str]] = {}
+        for test_name, item in raw.items():
+            if not isinstance(item, dict):
+                continue
+            normalized = {
+                str(key): str(value)
+                for key, value in item.items()
+                if str(value or "")
+            }
+            refs[str(test_name)] = normalized
+        return refs
+
+    def verification_artifact_ref(self, verification_id: str, test_name: str, ref_key: str) -> str:
+        refs = self.verification_artifact_refs(verification_id)
+        item = refs.get(str(test_name), {})
+        return str(item.get(str(ref_key), "") or "")
+
+    def verification_task_output_ref(self, verification_id: str, task_id: str) -> tuple[str, str] | None:
+        row = self.db.fetch_one(
+            """
+            SELECT test_name,output_ref
+            FROM verification_tasks
+            WHERE verification_id=? AND id=?
+            """,
+            [str(verification_id or "").strip(), str(task_id or "").strip()],
+        )
+        if row is None:
+            return None
+        return (str(row["test_name"] or ""), str(row["output_ref"] or ""))
+
+    def resolve_artifact_blob(self, token: str) -> bytes | None:
+        return self.judgehost_task_service.resolve_artifact_blob(token)
+
+    def update_verification_artifact_refs(self, verification_id: str, test_name: str, refs: dict[str, str]) -> dict[str, object]:
+        with self._verification_inflight_lock:
+            metadata = self.verification_metadata(verification_id)
+            raw = metadata.get("artifact_refs")
+            artifact_refs: dict[str, dict[str, str]] = {}
+            if isinstance(raw, dict):
+                for raw_test_name, raw_item in raw.items():
+                    if not isinstance(raw_item, dict):
+                        continue
+                    artifact_refs[str(raw_test_name)] = {
+                        str(key): str(value)
+                        for key, value in raw_item.items()
+                        if str(value or "")
+                    }
+            current = dict(artifact_refs.get(str(test_name), {}))
+            current.update({str(key): str(value) for key, value in refs.items() if str(value or "")})
+            artifact_refs[str(test_name)] = current
+            metadata["artifact_refs"] = artifact_refs
+            self.persist_verification_metadata(verification_id, metadata)
+            return metadata
 
     def verification_runtime_snapshot(self, verification_id: str) -> dict[str, object]:
         rows = VerificationTaskStore(self.db).list_rows_for_list(verification_id)
@@ -253,52 +359,8 @@ class VerificationService:
             finished=finished,
         )
 
-    def wait_for_terminal_status(self, verification_id: str, *, timeout_sec: float) -> str:
-        waited = wait_build_terminal_status(
-            self._verification_store,
-            verification_id=verification_id,
-            timeout_sec=float(timeout_sec),
-            poll_sec=self.VERIFICATION_JOIN_POLL_SEC,
-        )
-        return waited or ""
-
     def apply_runtime_values(self, values: RuntimeValues) -> None:
-        self.default_exec_memory_mb = coerce_int(
-            values.get("VERIFICATION_EXEC_MEMORY_MB", 1024),
-            default=1024,
-            min_value=16,
-            max_value=262144,
-        )
-        self.default_exec_process_limit = coerce_int(
-            values.get("VERIFICATION_EXEC_PROCESS_LIMIT", 64),
-            default=64,
-            min_value=1,
-            max_value=4096,
-        )
-        self.default_exec_output_kb = coerce_int(
-            values.get("VERIFICATION_EXEC_OUTPUT_KB", 65536),
-            default=65536,
-            min_value=64,
-            max_value=1048576,
-        )
-        self.wall_time_slack_pass_fail_sec = coerce_int(
-            values.get("RUN_WALL_TIME_SLACK_PASS_FAIL_SEC", 1),
-            default=1,
-            min_value=0,
-            max_value=300,
-        )
-        self.wall_time_slack_multi_pass_sec = coerce_int(
-            values.get("RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC", 15),
-            default=15,
-            min_value=0,
-            max_value=300,
-        )
-        self.wall_time_slack_interactive_sec = coerce_int(
-            values.get("RUN_WALL_TIME_SLACK_INTERACTIVE_SEC", 15),
-            default=15,
-            min_value=0,
-            max_value=300,
-        )
+        _ = values
 
     def _resolve_standard_checker_source(self, checker_standard: str) -> Path | None:
         return resolve_standard_checker_source(
@@ -387,22 +449,6 @@ class VerificationService:
             cfg["run_timeout_sec"] = 30
         return cfg
 
-    def _effective_run_timeout_ms(self, time_limit_ms: int, *, mode: object = "pass-fail", pass_limit: object = 1) -> int:
-        return effective_run_timeout_ms(
-            time_limit_ms,
-            mode=mode,
-            pass_limit=pass_limit,
-            default_ms=DEFAULT_TIME_LIMIT_MS,
-            min_ms=TIME_LIMIT_MIN_MS,
-            max_ms=TIME_LIMIT_MAX_MS,
-            pass_fail_slack_sec=int(self.wall_time_slack_pass_fail_sec),
-            multi_pass_slack_sec=int(self.wall_time_slack_multi_pass_sec),
-            interactive_slack_sec=int(self.wall_time_slack_interactive_sec),
-        )
-
-    def _effective_run_timeout_sec(self, run_timeout_ms: int) -> int:
-        return effective_run_timeout_sec(run_timeout_ms)
-
     def _load_problem_runtime_config(self, snapshot: Path) -> dict:
         return load_problem_runtime_config(
             snapshot,
@@ -431,9 +477,6 @@ class VerificationService:
             generator_source_extensions=GENERATOR_SOURCE_EXTENSIONS,
             parse_gen_command_tokens_fn=parse_gen_command_tokens,
         )
-
-    def _effective_compile_jobs(self, configured: object, target_count: int) -> int:
-        return effective_compile_jobs(configured, target_count)
 
     def run_verification(
         self,

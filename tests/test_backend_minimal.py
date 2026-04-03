@@ -111,8 +111,8 @@ class TestBackendMinimal(SmokeBase):
                         workspace_id INTEGER,
                         mode TEXT NOT NULL,
                         status TEXT NOT NULL,
-                        legacy_payload TEXT,
-                        legacy_root TEXT NOT NULL,
+                        payload_json TEXT,
+                        artifact_root TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         finished_at TEXT
                     )
@@ -126,8 +126,8 @@ class TestBackendMinimal(SmokeBase):
                         workspace_id INTEGER,
                         kind TEXT NOT NULL,
                         status TEXT NOT NULL,
-                        legacy_payload TEXT,
-                        legacy_root TEXT NOT NULL,
+                        payload_json TEXT,
+                        artifact_root TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         finished_at TEXT
                     )
@@ -136,7 +136,7 @@ class TestBackendMinimal(SmokeBase):
                 conn.execute(
                     """
                     INSERT INTO verifications(
-                        id,problem_id,workspace_id,kind,status,legacy_payload,legacy_root,created_at,finished_at
+                        id,problem_id,workspace_id,kind,status,payload_json,artifact_root,created_at,finished_at
                     ) VALUES(?,?,?,?,?,?,?,?,?)
                     """,
                     [

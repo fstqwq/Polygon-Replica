@@ -42,10 +42,6 @@ def judgehost_cases_for_run(service, run_id: str):
     return service._judgehost_state_store.cases_for_run(run_id)
 
 
-def read_verification_summary(verification_id: str) -> dict[str, object]:
-    return dict(config.verification_service.verification_metadata(str(verification_id).strip()))
-
-
 def write_verification_summary(verification_id: str, summary: dict[str, object]) -> None:
     config.verification_service.persist_verification_metadata(str(verification_id).strip(), dict(summary))
 

@@ -50,9 +50,6 @@ class _InMemoryTaskStore:
         with self._lock:
             return [dict(row) for row in sorted(self._rows, key=lambda item: (int(item["queue_index"]), str(item["id"])))]
 
-    def list_edge_rows(self, verification_id: str) -> list[dict[str, str]]:
-        return [dict(row) for row in self._edges]
-
     def set_task_queued(self, task_id: str, *, run_id: str, judgehost_task_id: str) -> None:
         with self._lock:
             for row in self._rows:
@@ -67,13 +64,6 @@ class _InMemoryTaskStore:
             for row in self._rows:
                 if str(row["id"]) == task_id and str(row["status"]) == VerificationTaskStore.TASK_QUEUED:
                     row["status"] = VerificationTaskStore.TASK_LEASED
-                    return
-
-    def requeue_task(self, task_id: str) -> None:
-        with self._lock:
-            for row in self._rows:
-                if str(row["id"]) == task_id and str(row["status"]) == VerificationTaskStore.TASK_LEASED:
-                    row["status"] = VerificationTaskStore.TASK_QUEUED
                     return
 
     def save_task_result(

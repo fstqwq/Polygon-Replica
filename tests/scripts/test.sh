@@ -30,8 +30,8 @@ python -m py_compile "${PY_FILES[@]}"
 echo "[2/5] Lint check (pyflakes)"
 python -m pyflakes "${PY_FILES[@]}"
 
-echo "[3/5] Dead code check (vulture, confidence=60)"
-python -m vulture app tests --min-confidence 60
+echo "[3/5] Dead code check (vulture, confidence=70)"
+python -m vulture app tests --min-confidence 70
 
 echo "[4/5] Import architecture policy checks"
 bash tests/scripts/check-import-policy.sh

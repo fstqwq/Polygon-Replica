@@ -108,10 +108,6 @@ def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float
         config.worker_queue_service.wait_for_futures(workers, timeout_sec=min(0.2, remaining))
 
 
-def _wait_for_run_execute_workers(timeout_sec: float = 300.0) -> None:
-    _wait_for_worker_group("run_execute_lock", "run_execute_workers", timeout_sec=timeout_sec)
-
-
 def _wait_for_verification_workers(timeout_sec: float = 300.0) -> None:
     _wait_for_worker_group("verification_lock", "verification_workers", timeout_sec=timeout_sec)
 
@@ -127,10 +123,6 @@ workspace_service = config.workspace_service
 
 class SmokeBase(unittest.TestCase):
     def setUp(self) -> None:
-        try:
-            _wait_for_run_execute_workers(timeout_sec=10.0)
-        except Exception:
-            pass
         try:
             _wait_for_verification_workers(timeout_sec=10.0)
         except Exception:

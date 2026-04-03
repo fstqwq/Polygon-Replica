@@ -229,9 +229,6 @@ class JudgehostEnqueueMixin:
         safe_verification_id = JudgehostEnqueueMixin._normalize_text(artifact_verification_id)
         if not safe_verification_id:
             return {}
-        runtime_layout = self._fs_manager.verification_runtime_layout(safe_verification_id)
-        tests_dir = runtime_layout.tests.resolve()
-        ans_dir = runtime_layout.answers.resolve()
         verification_metadata = self._verification_store.metadata(safe_verification_id)
 
         wanted_tests: list[str] = []
@@ -256,24 +253,24 @@ class JudgehostEnqueueMixin:
                     break
 
         tests_payload: list[dict[str, object]] = []
+        artifact_refs = verification_metadata.get("artifact_refs")
+        verification_artifact_refs = cast(dict[str, object], artifact_refs) if isinstance(artifact_refs, dict) else {}
         for test_name in wanted_tests:
-            test_file = (tests_dir / test_name).resolve()
-            if not test_file.exists() or (not test_file.is_file()):
+            test_artifact_refs = verification_artifact_refs.get(test_name)
+            test_artifact_map = cast(dict[str, object], test_artifact_refs) if isinstance(test_artifact_refs, dict) else {}
+            input_ref = JudgehostEnqueueMixin._normalize_text(test_artifact_map.get("input_ref"))
+            if not input_ref:
                 continue
-            test_bytes = self._safe_read_bytes(
-                test_file,
-                max_bytes=self._max_test_payload_bytes,
-                label="test payload",
-            )
+            test_bytes = self.resolve_artifact_blob(input_ref)
+            if test_bytes is None:
+                continue
             ans_name = f"{Path(test_name).stem}.ans"
-            ans_file = (ans_dir / ans_name).resolve()
+            answer_ref = JudgehostEnqueueMixin._normalize_text(test_artifact_map.get("answer_ref"))
             ans_bytes = b""
-            if ans_file.exists() and ans_file.is_file():
-                ans_bytes = self._safe_read_bytes(
-                    ans_file,
-                    max_bytes=self._max_test_payload_bytes,
-                    label="answer payload",
-                )
+            if answer_ref:
+                resolved_answer = self.resolve_artifact_blob(answer_ref)
+                if resolved_answer is not None:
+                    ans_bytes = resolved_answer
             tests_payload.append(
                 {
                     "name": test_name,
@@ -282,6 +279,8 @@ class JudgehostEnqueueMixin:
                     "answer_b64": base64.b64encode(ans_bytes).decode("ascii"),
                 }
             )
+
+        workspace_resolved = workspace.resolve()
 
         run_config_text = ""
         run_cfg_obj: dict[str, object] = {}
@@ -294,8 +293,6 @@ class JudgehostEnqueueMixin:
             run_cfg_obj = self._json_object(run_config_text)
 
         binaries: dict[str, str] = {}
-
-        workspace_resolved = workspace.resolve()
 
         def _safe_workspace_rel_file(rel_path: str) -> Path | None:
             token = JudgehostEnqueueMixin._normalize_text(rel_path).replace("\\", "/")
@@ -473,7 +470,7 @@ class JudgehostEnqueueMixin:
                 "compile_only": bool(compile_only),
             }
         )
-        legacy_compile_only = safe_task_kind == self._TASK_KIND_COMPILE_ONLY
+        compile_only_flag = safe_task_kind == self._TASK_KIND_COMPILE_ONLY
         return {
             "type": "verification.run",
             "run_id": run_id,
@@ -492,7 +489,7 @@ class JudgehostEnqueueMixin:
             "verification_source": verification_source,
             "task_kind": safe_task_kind,
             "force_recompile": bool(force_recompile),
-            "compile_only": bool(legacy_compile_only),
+            "compile_only": bool(compile_only_flag),
             "verification_payload": verification_payload,
             "enqueued_at": now_iso(),
         }

@@ -28,13 +28,6 @@ def _normalize_contest_problem_idx_required(raw: object) -> str:
     return token
 
 
-def _normalize_contest_member_role_required(raw: object) -> str:
-    role = str(raw or "").strip().lower()
-    if role not in {"owner", "write", "read"}:
-        raise ValueError("invalid role")
-    return role
-
-
 def _normalize_transferable_contest_member_role_required(raw: object) -> str:
     role = str(raw or "").strip().lower()
     if role in {"write", "read"}:

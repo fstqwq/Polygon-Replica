@@ -78,9 +78,12 @@ def start_verification_job(
     targets: list[dict[str, object]],
     verification_id: str,
     initial_details: dict[str, object] | None=None,
+    initial_summary: dict[str, object] | None=None,
     workspace_path: Path | str | None=None,
     selected_test_names: list[str] | None=None,
 ) -> bool:
+    if initial_details is None and initial_summary is not None:
+        initial_details = dict(initial_summary)
     key = _verification_workspace_key(problem_id, workspace_id)
     signature = ""
     if workspace_path:
@@ -89,8 +92,13 @@ def start_verification_job(
             signature = _verification_sources_signature(workspace_obj)
         except Exception:
             signature = ""
-    if initial_details is not None and signature and (not (initial_details.get("signature") or "")):
-        initial_details["signature"] = signature
+    if initial_details is not None:
+        if signature and (not (initial_details.get("signature") or "")):
+            initial_details["signature"] = signature
+        initial_details.setdefault("artifact_verification_id", verification_id)
+        initial_details.setdefault("task_graph", True)
+        initial_details.setdefault("verification_source", "verification.start")
+        initial_details.setdefault("steps", ["gen", "val", "run", "check"])
     kind = _requested_verification_kind(selected_test_names=list(selected_test_names or []))
     with config.verification_lock:
         if key in config.verification_inflight:
@@ -103,14 +111,6 @@ def start_verification_job(
             with config.verification_lock:
                 config.verification_inflight.discard(key)
             raise
-    config.verification_service.begin_verification_record(
-        verification_id=verification_id,
-        problem_id=problem_id,
-        workspace_id=workspace_id,
-        signature=signature,
-        kind=kind,
-        status=Status.RUNNING.value,
-    )
     metadata = {
         "mode": str(initial_details.get("mode") or "pass-fail") if initial_details is not None else "pass-fail",
         "pass_limit": int(initial_details.get("pass_limit") or 1) if initial_details is not None else 1,
@@ -118,8 +118,22 @@ def start_verification_job(
         "kind": kind,
         "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
         "selected_test_names": list(selected_test_names or []),
+        "artifact_verification_id": str(
+            initial_details.get("artifact_verification_id") or verification_id
+        ) if initial_details is not None else str(verification_id),
+        "task_graph": True,
+        "verification_source": str(initial_details.get("verification_source") or "verification.start") if initial_details is not None else "verification.start",
+        "steps": list(initial_details.get("steps") or ["gen", "val", "run", "check"]) if initial_details is not None else ["gen", "val", "run", "check"],
     }
-    config.verification_service.persist_verification_metadata(verification_id, metadata)
+    config.verification_service.begin_verification_record(
+        verification_id=verification_id,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        signature=signature,
+        kind=kind,
+        status=Status.RUNNING.value,
+        metadata=metadata,
+    )
     worker_ref: list[object] = [None]
 
     def _runner() -> None:

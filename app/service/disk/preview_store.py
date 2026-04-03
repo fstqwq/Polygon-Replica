@@ -137,25 +137,6 @@ class PreviewStore:
             "finished_at": str(row["finished_at"] or ""),
         }
 
-    def get_preview_row(self, preview_id: str) -> PreviewArtifactRow | None:
-        row = self.db.fetch_one(
-            """
-            SELECT id,status,source_commit,source_ref,summary_json
-            FROM previews
-            WHERE id=?
-            """,
-            [preview_id],
-        )
-        if row is None:
-            return None
-        return {
-            "id": str(row["id"]),
-            "status": str(row["status"]),
-            "source_commit": str(row["source_commit"] or ""),
-            "source_ref": str(row["source_ref"] or ""),
-            "summary": self._decode_summary(row["summary_json"]),
-        }
-
     def list_cached_ok_previews(
         self,
         problem_id: int,

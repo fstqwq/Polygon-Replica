@@ -4,14 +4,12 @@ import secrets
 from pathlib import Path
 
 from app.impl.runtime.config import config
-from app.service.disk.verification_store import VerificationStore
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind, Status
 
 from .context_run_detail import normalize_run_id_token
 from .context_ui import page_ctx
-from .context_verification import _verification_solution_match
 
 
 def allocate_run_id() -> str:
@@ -19,7 +17,7 @@ def allocate_run_id() -> str:
 
 
 def allocate_verification_id() -> str:
-    return VerificationStore(config.db).allocate_id()
+    return config.verification_service.allocate_verification_id()
 
 
 def _verification_id_for_run(run_id: str, verification_id: str) -> str:
@@ -90,6 +88,9 @@ def record_async_run_failure(
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
+    task_store = VerificationTaskStore(config.db)
+    task_id = task_store.allocate_id()
+    test_name = artifact_failed_test or _failed_test_name(detail_error, synthesized_test_names if synthesize_failed_tests else None)
     config.verification_service.begin_verification_record(
         verification_id=resolved_verification_id,
         problem_id=problem_id,
@@ -97,13 +98,7 @@ def record_async_run_failure(
         signature="",
         kind=Kind.CUSTOM.value,
         status=Status.FAILED.value,
-    )
-    task_store = VerificationTaskStore(config.db)
-    task_id = task_store.allocate_id()
-    test_name = artifact_failed_test or _failed_test_name(detail_error, synthesized_test_names if synthesize_failed_tests else None)
-    config.verification_service.persist_verification_metadata(
-        resolved_verification_id,
-        {
+        metadata={
             "mode": str(mode or "pass-fail"),
             "error": detail_error,
             "failed_test": test_name,
@@ -149,62 +144,3 @@ def record_async_run_failure(
         fail_reason=detail_error,
         finished=True,
     )
-
-
-def annotate_verification_run_result(
-    problem_id: int,
-    workspace_id: int,
-    run_id: str,
-    *,
-    verification_id: str,
-    expected_behavior: str,
-    verification_source: str = "run.execute",
-) -> dict[str, object]:
-    del problem_id
-    del workspace_id
-    del verification_source
-    safe_expected = normalize_expected_behavior(expected_behavior)
-    resolved_verification_id = _verification_id_for_run(run_id, verification_id)
-    rows = VerificationTaskStore(config.db).list_rows(resolved_verification_id)
-    matching_rows = [row for row in rows if str(row["logical_run_id"] or "") == run_id]
-    if not matching_rows:
-        return {
-            "run_id": run_id,
-            "status": "missing",
-            "expected_behavior": safe_expected,
-            "matched": False,
-            "completed": False,
-            "passed_all_tests": False,
-            "reason": "run missing",
-        }
-    if any(str(row["status"] or "") == VerificationTaskStore.TASK_FAILED for row in matching_rows):
-        run_status = "failed"
-    elif all(str(row["status"] or "") == VerificationTaskStore.TASK_DONE for row in matching_rows):
-        run_status = "ok"
-    else:
-        run_status = "running"
-    summary = {
-        "source": str(matching_rows[0]["source_path"] or ""),
-        "tests": [
-            {
-                "test": str(row["test_name"] or ""),
-                "verdict": str(row["verdict"] or ""),
-                "time_ms": int(round(float(row["runtime_sec"] or 0.0) * 1000.0)),
-                "memory_kb": int(row["memory_kb"] or 0),
-                "message": str(row["feedback_text"] or row["error_text"] or ""),
-                "output_ref": str(row["output_ref"] or ""),
-            }
-            for row in matching_rows
-        ],
-        "error": str(matching_rows[0]["error_text"] or ""),
-    }
-    matched, completed, observed_pass, reason = _verification_solution_match(safe_expected, run_status, summary)
-    return {
-        "run_id": run_id,
-        "status": run_status,
-        "expected_behavior": safe_expected,
-        "matched": bool(matched),
-        "completed": bool(completed),
-        "passed_all_tests": bool(observed_pass),
-        "reason": reason,
-    }

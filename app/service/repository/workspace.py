@@ -253,21 +253,6 @@ class WorkspaceService:
             details=details,
         )
 
-    def audit_details(
-        self,
-        *,
-        problem_id: int,
-        actor_user_id: int,
-        action: str,
-        limit: int,
-    ) -> list[str]:
-        return self._store.audit_detail_rows(
-            problem_id=int(problem_id),
-            actor_user_id=int(actor_user_id),
-            action=action,
-            limit=max(1, int(limit)),
-        )
-
     def access_context(self, problem_id: int, user_id: int) -> dict[str, object]:
         role = self._store.repo_role(int(problem_id), int(user_id))
         if role is None:

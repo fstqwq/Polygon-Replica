@@ -374,28 +374,6 @@ class JudgehostQueueMixin:
             "summary": dict(row.get("summary") or {}),
         }
 
-    def task_case_state(self, task_id: str, test_name: str) -> str:
-        if not task_id:
-            raise RuntimeError("judgehost task id is required")
-        if not test_name:
-            raise RuntimeError("judgehost test name is required")
-        row = self._task_by_id(task_id)
-        if row is None:
-            raise RuntimeError("judgehost task disappeared")
-        case_row = self._judgehost_state_store.case_for_task(task_id, test_name)
-        if case_row is not None:
-            case_status = str(case_row["status"] or "")
-            if case_status:
-                return case_status
-        task_status = str(row["status"] or "")
-        if task_status == self.STATUS_FAILED:
-            return self.STATUS_FAILED
-        if task_status == self.STATUS_COMPLETED:
-            return self.STATUS_COMPLETED
-        if task_status == self.STATUS_LEASED:
-            return self.STATUS_QUEUED
-        return task_status
-
     def wait_for_task_case_result(self, task_id: str, test_name: str, timeout_sec: float | None = None) -> dict[str, object]:
         if not task_id:
             raise RuntimeError("judgehost task id is required")
@@ -713,18 +691,6 @@ class JudgehostQueueMixin:
                 affected += 1
         return affected
 
-    def active_task_count_for_verification(self, verification_id: str) -> int:
-        if not verification_id:
-            return 0
-        count = 0
-        with self._state_lock:
-            for row in self._tasks_by_id.values():
-                artifact_verification_id = row["artifact_verification_id"]
-                if artifact_verification_id != verification_id:
-                    continue
-                if row["status"] in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                    count += 1
-        return count
 
     def startup_cancel_inflight_tasks(self, *, reason: str) -> list[dict[str, str]]:
         reason = reason.strip()
@@ -789,31 +755,6 @@ class JudgehostQueueMixin:
 
     def cancel_all_domjudge_inflight(self) -> int:
         return self._judgehost_state_store.cancel_all_inflight(now_text=now_iso())
-
-    def domjudge_case_progress_for_runs(self, run_ids: list[str]) -> dict[str, dict[str, int]]:
-        safe_run_ids = [self._normalize_run_id(run_id) for run_id in run_ids if run_id]
-        return self._judgehost_state_store.case_progress_for_runs(safe_run_ids)
-
-    def domjudge_case_cells_for_runs(self, run_ids: list[str]) -> list[dict[str, object]]:
-        safe_run_ids = [self._normalize_run_id(run_id) for run_id in run_ids if run_id]
-        return self._judgehost_state_store.case_cells_for_runs(safe_run_ids)
-
-    def domjudge_solve_main_progress(self, verification_id: str) -> dict[str, int]:
-        if not verification_id:
-            return {"total": 0, "reported": 0}
-        run_ids: list[str] = []
-        with self._state_lock:
-            for row in self._tasks_by_id.values():
-                artifact_verification_id = row["artifact_verification_id"]
-                if artifact_verification_id != verification_id:
-                    continue
-                run_id = row["run_id"]
-                if (not run_id) or (not run_id.startswith("r-solve-main-")):
-                    continue
-                if run_id not in run_ids:
-                    run_ids.append(run_id)
-        return self._judgehost_state_store.aggregate_case_counts(run_ids)
-
 
     def forget_domjudge_runs(self, run_ids: list[str]) -> int:
         return self._judgehost_state_store.forget_runs(run_ids)

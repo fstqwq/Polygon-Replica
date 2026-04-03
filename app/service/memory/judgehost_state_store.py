@@ -48,8 +48,8 @@ class JudgehostCaseRow(TypedDict):
     testcase_hash: str
     testcase_input_hash: str
     testcase_answer_hash: str
-    input_path: str
-    answer_path: str
+    input_ref: str
+    answer_ref: str
     status: str
     lease_owner: str
     runresult: str
@@ -74,8 +74,22 @@ class JudgehostStateStore:
     def __init__(self, lock: threading.RLock | None = None):
         self._lock = threading.RLock() if lock is None else lock
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
         self.ensure_schema()
+
+    @staticmethod
+    def _row_to_dict(cursor: sqlite3.Cursor, row: object | None) -> dict[str, object] | None:
+        if row is None:
+            return None
+        return dict(sqlite3.Row(cursor, row))
+
+    @classmethod
+    def _rows_to_dicts(cls, cursor: sqlite3.Cursor, rows: list[object]) -> list[dict[str, object]]:
+        result: list[dict[str, object]] = []
+        for row in rows:
+            row_dict = cls._row_to_dict(cursor, row)
+            if row_dict is not None:
+                result.append(row_dict)
+        return result
 
     def ensure_schema(self) -> None:
         with self._lock:
@@ -128,8 +142,8 @@ class JudgehostStateStore:
                     testcase_hash TEXT NOT NULL,
                     testcase_input_hash TEXT NOT NULL DEFAULT '',
                     testcase_answer_hash TEXT NOT NULL DEFAULT '',
-                    input_path TEXT NOT NULL,
-                    answer_path TEXT NOT NULL,
+                    input_ref TEXT NOT NULL,
+                    answer_ref TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     lease_owner TEXT,
                     runresult TEXT,
@@ -291,13 +305,13 @@ class JudgehostStateStore:
             [submit_id],
         )
 
-    def testcase_paths(self, testcase_id: int, *, hostname: str) -> tuple[dict[str, object] | None, str]:
+    def testcase_refs(self, testcase_id: int, *, hostname: str) -> tuple[dict[str, object] | None, str]:
         safe_host = str(hostname or "").strip()
         if not safe_host:
             return None, "missing-host"
         row = self._fetch_one(
             """
-            SELECT input_path,answer_path
+            SELECT input_ref,answer_ref
             FROM judgehost_domjudge_cases
             WHERE testcase_id=? AND lease_owner=? AND status='leased'
             ORDER BY updated_at DESC, id DESC
@@ -308,12 +322,6 @@ class JudgehostStateStore:
         if row is not None:
             return row, "leased-host-testcase-id"
         return None, "missing"
-
-    def work_root_for_job(self, job_id: int) -> str:
-        row = self._fetch_one("SELECT work_root FROM judgehost_domjudge_jobs WHERE job_id=?", [int(job_id)])
-        if row is None:
-            return ""
-        return str(row["work_root"])
 
     def jobs_for_script_kind(self, kind: str) -> list[dict[str, object]]:
         field_map = {
@@ -395,7 +403,8 @@ class JudgehostStateStore:
         return self._fetch_one(
             """
             SELECT
-                c.id,c.job_id,c.task_id,c.test_name,c.testcase_hash,c.input_path,c.answer_path,c.status AS case_status,
+                c.id,c.job_id,c.task_id,c.test_name,c.testcase_hash,c.testcase_input_hash,c.testcase_answer_hash,
+                c.input_ref,c.answer_ref,c.status AS case_status,
                 j.run_id,j.work_root,j.mode,j.source_name,j.source_path,j.status AS job_status,
                 j.group_key,
                 j.source_hash,j.compile_hash,j.run_hash,j.compare_hash,
@@ -508,7 +517,7 @@ class JudgehostStateStore:
     def register_host_requeue(self, hostname: str, *, now_text: str, remap_seed: int) -> list[dict[str, object]]:
         with self._lock:
             unfinished: list[dict[str, object]] = []
-            affected = self._conn.execute(
+            affected_cursor = self._conn.execute(
                 """
                 SELECT job_id,submit_id
                 FROM judgehost_domjudge_jobs
@@ -516,7 +525,8 @@ class JudgehostStateStore:
                 ORDER BY job_id ASC
                 """,
                 [hostname],
-            ).fetchall()
+            )
+            affected = self._rows_to_dicts(affected_cursor, affected_cursor.fetchall())
             remap_step = 0
             for row in affected:
                 remap_step += 1
@@ -608,10 +618,11 @@ class JudgehostStateStore:
                     created_at,
                 ],
             )
-            row = self._conn.execute(
+            row_cursor = self._conn.execute(
                 "SELECT job_id FROM judgehost_domjudge_jobs WHERE task_id=?",
                 [task_id],
-            ).fetchone()
+            )
+            row = self._row_to_dict(row_cursor, row_cursor.fetchone())
             if row is None:
                 raise RuntimeError("failed to allocate DOMjudge compatibility job")
             job_id = int(row["job_id"])
@@ -625,7 +636,7 @@ class JudgehostStateStore:
                 self._conn.execute(
                     """
                     INSERT INTO judgehost_domjudge_cases(
-                        job_id,task_id,run_id,test_name,ordinal,testcase_id,testcase_hash,testcase_input_hash,testcase_answer_hash,input_path,answer_path,status,created_at,updated_at
+                        job_id,task_id,run_id,test_name,ordinal,testcase_id,testcase_hash,testcase_input_hash,testcase_answer_hash,input_ref,answer_ref,status,created_at,updated_at
                     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     [
@@ -638,8 +649,8 @@ class JudgehostStateStore:
                         case_row["testcase_hash"],
                         case_row["testcase_input_hash"],
                         case_row["testcase_answer_hash"],
-                        case_row["input_path"],
-                        case_row["answer_path"],
+                        case_row["input_ref"],
+                        case_row["answer_ref"],
                         case_row["status"],
                         created_at,
                         created_at,
@@ -656,7 +667,7 @@ class JudgehostStateStore:
         now_text: str,
     ) -> dict[str, object]:
         with self._lock:
-            job_row = self._conn.execute(
+            job_cursor = self._conn.execute(
                 """
                 SELECT job_id,status,compile_success
                 FROM judgehost_domjudge_jobs
@@ -664,12 +675,13 @@ class JudgehostStateStore:
                 LIMIT 1
                 """,
                 [int(job_id)],
-            ).fetchone()
+            )
+            job_row = self._row_to_dict(job_cursor, job_cursor.fetchone())
             if job_row is None:
                 return {"job_id": 0, "inserted": 0, "reactivated": False}
             job_status = str(job_row["status"] or "")
             compile_success = job_row["compile_success"]
-            existing_rows = self._conn.execute(
+            existing_cursor = self._conn.execute(
                 """
                 SELECT task_id,test_name,ordinal
                 FROM judgehost_domjudge_cases
@@ -677,7 +689,8 @@ class JudgehostStateStore:
                 ORDER BY ordinal ASC, id ASC
                 """,
                 [int(job_id)],
-            ).fetchall()
+            )
+            existing_rows = self._rows_to_dicts(existing_cursor, existing_cursor.fetchall())
             existing_pairs = {
                 (str(row["task_id"] or ""), str(row["test_name"] or ""))
                 for row in existing_rows
@@ -700,7 +713,7 @@ class JudgehostStateStore:
                     self._conn.execute(
                         """
                         INSERT INTO judgehost_domjudge_cases(
-                            job_id,task_id,run_id,test_name,ordinal,testcase_id,testcase_hash,testcase_input_hash,testcase_answer_hash,input_path,answer_path,
+                            job_id,task_id,run_id,test_name,ordinal,testcase_id,testcase_hash,testcase_input_hash,testcase_answer_hash,input_ref,answer_ref,
                             status,runresult,runtime_sec,cpu_sec,wall_sec,memory_kb,
                             output_run_rel,output_error_rel,output_system_rel,output_diff_rel,metadata_rel,compare_metadata_rel,team_message_rel,score_text,
                             created_at,updated_at
@@ -716,8 +729,8 @@ class JudgehostStateStore:
                             case_row["testcase_hash"],
                             case_row["testcase_input_hash"],
                             case_row["testcase_answer_hash"],
-                            case_row["input_path"],
-                            case_row["answer_path"],
+                            case_row["input_ref"],
+                            case_row["answer_ref"],
                             "reported",
                             "compiler-error",
                             0.0,
@@ -741,7 +754,7 @@ class JudgehostStateStore:
                     self._conn.execute(
                         """
                         INSERT INTO judgehost_domjudge_cases(
-                            job_id,task_id,run_id,test_name,ordinal,testcase_id,testcase_hash,testcase_input_hash,testcase_answer_hash,input_path,answer_path,status,created_at,updated_at
+                            job_id,task_id,run_id,test_name,ordinal,testcase_id,testcase_hash,testcase_input_hash,testcase_answer_hash,input_ref,answer_ref,status,created_at,updated_at
                         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """,
                         [
@@ -754,8 +767,8 @@ class JudgehostStateStore:
                             case_row["testcase_hash"],
                             case_row["testcase_input_hash"],
                             case_row["testcase_answer_hash"],
-                            case_row["input_path"],
-                            case_row["answer_path"],
+                            case_row["input_ref"],
+                            case_row["answer_ref"],
                             case_status,
                             now_text,
                             now_text,
@@ -789,7 +802,7 @@ class JudgehostStateStore:
         now_text: str,
     ) -> dict[str, object]:
         with self._lock:
-            job_row = self._conn.execute(
+            job_cursor = self._conn.execute(
                 """
                 SELECT job_id,status,compile_success
                 FROM judgehost_domjudge_jobs
@@ -797,11 +810,12 @@ class JudgehostStateStore:
                 LIMIT 1
                 """,
                 [task_id],
-            ).fetchone()
+            )
+            job_row = self._row_to_dict(job_cursor, job_cursor.fetchone())
             if job_row is None:
                 return {"job_id": 0, "inserted": 0, "reactivated": False}
             job_id = int(job_row["job_id"])
-            existing_rows = self._conn.execute(
+            existing_cursor = self._conn.execute(
                 """
                 SELECT test_name,ordinal
                 FROM judgehost_domjudge_cases
@@ -809,7 +823,8 @@ class JudgehostStateStore:
                 ORDER BY ordinal ASC, id ASC
                 """,
                 [job_id],
-            ).fetchall()
+            )
+            existing_rows = self._rows_to_dicts(existing_cursor, existing_cursor.fetchall())
             existing_names = {str(row["test_name"] or "") for row in existing_rows}
             result = self.append_cases_to_job(
                 job_id=job_id,
@@ -886,7 +901,7 @@ class JudgehostStateStore:
     def lease_cases(self, job_id: int, *, hostname: str, limit: int, now_text: str) -> list[JudgehostCaseRow]:
         cap = max(1, min(256, int(limit)))
         with self._lock:
-            rows = self._conn.execute(
+            rows_cursor = self._conn.execute(
                 """
                 SELECT *
                 FROM judgehost_domjudge_cases
@@ -895,7 +910,8 @@ class JudgehostStateStore:
                 LIMIT ?
                 """,
                 [int(job_id), cap],
-            ).fetchall()
+            )
+            rows = self._rows_to_dicts(rows_cursor, rows_cursor.fetchall())
             if not rows:
                 return []
             self._conn.execute(
@@ -933,10 +949,11 @@ class JudgehostStateStore:
     ) -> None:
         with self._lock:
             if case_id is not None:
-                current_row = self._conn.execute(
+                current_cursor = self._conn.execute(
                     "SELECT debug_text FROM judgehost_domjudge_cases WHERE id=?",
                     [int(case_id)],
-                ).fetchone()
+                )
+                current_row = self._row_to_dict(current_cursor, current_cursor.fetchone())
                 current_text = "" if current_row is None else str(current_row["debug_text"] or "")
                 merged_text = debug_text if not current_text else f"{current_text}\n{debug_text}"
                 if len(merged_text) > 4000:
@@ -946,10 +963,11 @@ class JudgehostStateStore:
                     [merged_text, now_text, int(case_id)],
                 )
             if job_id is not None:
-                current_row = self._conn.execute(
+                current_cursor = self._conn.execute(
                     "SELECT debug_text FROM judgehost_domjudge_jobs WHERE job_id=?",
                     [int(job_id)],
-                ).fetchone()
+                )
+                current_row = self._row_to_dict(current_cursor, current_cursor.fetchone())
                 current_text = "" if current_row is None else str(current_row["debug_text"] or "")
                 merged_text = debug_text if not current_text else f"{current_text}\n{debug_text}"
                 if len(merged_text) > 4000:
@@ -988,58 +1006,13 @@ class JudgehostStateStore:
             progress[run_id] = {"total": total, "reported": reported, "leased": leased}
         return progress
 
-    def case_cells_for_runs(self, run_ids: list[str]) -> list[dict[str, object]]:
-        safe_run_ids = [run_id for run_id in run_ids if run_id]
-        if not safe_run_ids:
-            return []
-        placeholders = ",".join(("?" for _ in safe_run_ids))
-        return self._fetch_all(
-            f"""
-            SELECT c.run_id AS run_id,
-                   c.test_name AS test_name,
-                   c.status AS status,
-                   c.runresult AS runresult,
-                   c.cpu_sec AS cpu_sec,
-                   c.runtime_sec AS runtime_sec,
-                   c.wall_sec AS wall_sec,
-                   c.memory_kb AS memory_kb
-            FROM judgehost_domjudge_cases c
-            WHERE c.run_id IN ({placeholders})
-            ORDER BY c.run_id ASC, c.ordinal ASC, c.id ASC
-            """,
-            [*safe_run_ids],
-        )
-
-    def aggregate_case_counts(self, run_ids: list[str]) -> dict[str, int]:
-        safe_run_ids = [run_id for run_id in run_ids if run_id]
-        if not safe_run_ids:
-            return {"total": 0, "reported": 0}
-        placeholders = ",".join(("?" for _ in safe_run_ids))
-        rows = self._fetch_all(
-            f"""
-            SELECT COUNT(c.id) AS total_cases,
-                   SUM(CASE WHEN c.status='reported' THEN 1 ELSE 0 END) AS reported_cases
-            FROM judgehost_domjudge_cases c
-            WHERE c.run_id IN ({placeholders})
-            """,
-            [*safe_run_ids],
-        )
-        if not rows:
-            return {"total": 0, "reported": 0}
-        row = rows[0]
-        total = max(0, int(row["total_cases"] or 0))
-        reported = max(0, int(row["reported_cases"] or 0))
-        if total > 0 and reported > total:
-            reported = total
-        return {"total": total, "reported": reported}
-
     def cancel_jobs_for_runs(self, run_ids: list[str], *, final_status: str, now_text: str) -> int:
         safe_run_ids = [run_id for run_id in run_ids if run_id]
         if not safe_run_ids:
             return 0
         placeholders = ",".join(("?" for _ in safe_run_ids))
         with self._lock:
-            job_rows = self._conn.execute(
+            job_rows_cursor = self._conn.execute(
                 f"""
                 SELECT DISTINCT c.job_id
                 FROM judgehost_domjudge_cases c
@@ -1047,7 +1020,8 @@ class JudgehostStateStore:
                 WHERE c.run_id IN ({placeholders}) AND j.status IN ('queued','leased')
                 """,
                 [*safe_run_ids],
-            ).fetchall()
+            )
+            job_rows = self._rows_to_dicts(job_rows_cursor, job_rows_cursor.fetchall())
             job_ids = [int(row["job_id"]) for row in job_rows if row is not None and row["job_id"] is not None]
             if not job_ids:
                 return 0
@@ -1062,7 +1036,7 @@ class JudgehostStateStore:
                 [now_text, *safe_run_ids],
             )
             for job_id in job_ids:
-                counts_row = self._conn.execute(
+                counts_cursor = self._conn.execute(
                     """
                     SELECT
                         SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_count,
@@ -1071,7 +1045,8 @@ class JudgehostStateStore:
                     WHERE job_id=?
                     """,
                     [job_id],
-                ).fetchone()
+                )
+                counts_row = self._row_to_dict(counts_cursor, counts_cursor.fetchone())
                 pending_count = 0 if counts_row is None else int(counts_row["pending_count"] or 0)
                 leased_count = 0 if counts_row is None else int(counts_row["leased_count"] or 0)
                 if leased_count > 0:
@@ -1179,12 +1154,14 @@ class JudgehostStateStore:
 
     def _fetch_one(self, sql: str, params: list[object]) -> dict[str, object] | None:
         with self._lock:
-            row = self._conn.execute(sql, params).fetchone()
+            cursor = self._conn.execute(sql, params)
+            row = cursor.fetchone()
         if row is None:
             return None
-        return dict(row)
+        return dict(sqlite3.Row(cursor, row))
 
     def _fetch_all(self, sql: str, params: list[object]) -> list[dict[str, object]]:
         with self._lock:
-            rows = self._conn.execute(sql, params).fetchall()
-        return [dict(row) for row in rows]
+            cursor = self._conn.execute(sql, params)
+            rows = cursor.fetchall()
+        return [dict(sqlite3.Row(cursor, row)) for row in rows]

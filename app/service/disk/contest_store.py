@@ -141,14 +141,11 @@ class ContestDiskStore:
             exists = conn.execute("SELECT id FROM contests WHERE slug=?", [slug]).fetchone()
             if exists is not None:
                 raise ValueError("contest slug already exists")
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO contests(slug,title,owner_user_id,created_at) VALUES(?,?,?,?)",
                 [slug, title, int(owner_user_id), created_at],
             )
-            contest_row = conn.execute("SELECT id FROM contests WHERE slug=?", [slug]).fetchone()
-            if contest_row is None:
-                raise RuntimeError("failed to create contest")
-            contest_id = int(contest_row["id"])
+            contest_id = int(cursor.lastrowid)
             conn.execute(
                 "INSERT INTO contest_members(contest_id,user_id,role,created_at) VALUES(?,?,?,?)",
                 [contest_id, int(owner_user_id), "owner", created_at],
@@ -410,10 +407,11 @@ class ContestDiskStore:
         def tx(conn: sqlite3.Connection) -> int:
             updated = 0
             for problem_id, idx in safe_pairs:
-                row = conn.execute(
+                row_cursor = conn.execute(
                     "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
                     [int(contest_id), problem_id],
-                ).fetchone()
+                )
+                row = row_cursor.fetchone()
                 if row is None:
                     continue
                 conn.execute(

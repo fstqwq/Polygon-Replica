@@ -11,8 +11,8 @@ from app.impl.workspace.artifact import (
     assert_workspace_artifact_access,
     browser_file_response,
     export_download_filename,
-    safe_artifact_path,
     safe_run_artifact_path,
+    verification_artifact_blob,
     workspace_run_artifact_root,
 )
 from app.impl.workspace.context_ui import page_ctx
@@ -64,6 +64,8 @@ def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     assert_workspace_artifact_access(ctx, verification_id)
     rel_norm = rel_path.lstrip('/')
+    if ".." in Path(rel_norm).parts:
+        raise HTTPException(status_code=400, detail="invalid artifact path")
     if rel_norm.startswith("export/"):
         from app.impl.run_export.export import _resolve_export_archive_path
 
@@ -72,7 +74,11 @@ def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
         if file_path is None:
             raise HTTPException(status_code=404, detail="artifact file not found")
     else:
-        file_path = safe_artifact_path(problem, verification_id, rel_path)
+        virtual_blob = verification_artifact_blob(verification_id, rel_norm)
+        if virtual_blob is None:
+            raise HTTPException(status_code=404, detail="artifact unavailable")
+        blob, filename = virtual_blob
+        return _browser_blob_response(blob, filename)
     if rel_norm.startswith('export/'):
         export_name = Path(rel_norm).name
         download_name = export_download_filename(ctx, verification_id, export_name)
@@ -100,10 +106,11 @@ def export_file(problem: str, user: str, export_id: str, filename: str):
 def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     rel_norm = rel_path.lstrip('/')
+    if ".." in Path(rel_norm).parts:
+        raise HTTPException(status_code=400, detail="invalid run artifact path")
     if Path(rel_norm).name == 'compile.log':
         raise HTTPException(status_code=403, detail='compile.log download is disabled')
     if rel_norm.startswith("cache://"):
-        workspace_run_artifact_root(ctx, run_id)
         service = getattr(config, "judgehost_task_service", None)
         if service is None:
             raise HTTPException(status_code=404, detail="artifact unavailable")
@@ -119,13 +126,19 @@ def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
             detail = ""
         else:
             detail = detail.strip()
-        if int(getattr(exc, "status_code", 500)) == 404 and detail.startswith("run artifact"):
+        if int(getattr(exc, "status_code", 500)) == 404 and (
+            detail.startswith("run artifact") or detail == "run not found in workspace"
+        ):
             try:
                 run_root = workspace_run_artifact_root(ctx, run_id)
                 candidate = run_root / rel_path.lstrip("/")
                 if contains_symlink_component(run_root, candidate):
                     raise
-            except HTTPException:
+            except HTTPException as inner_exc:
+                inner_detail = cast(str | None, getattr(inner_exc, "detail", None))
+                inner_text = "" if inner_detail is None else inner_detail.strip()
+                if inner_text == "run not found in workspace":
+                    raise HTTPException(status_code=404, detail="artifact unavailable")
                 raise
             except Exception:
                 pass

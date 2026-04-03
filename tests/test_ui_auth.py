@@ -503,7 +503,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(resp.headers.get("location", ""), f"/contests/demo/{username}/overview")
 
-    def test_auth_middleware_rewrite_strips_legacy_message_query(self) -> None:
+    def test_auth_middleware_rewrite_strips_old_message_query(self) -> None:
         username = f"contestauthmsg-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")

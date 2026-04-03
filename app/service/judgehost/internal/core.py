@@ -23,10 +23,6 @@ class JudgehostCoreMixin:
             self._online_window_sec = max(5, min(86400, int(constants.JUDGEHOST_ONLINE_WINDOW_SEC)))
             self._max_source_bytes = max(1024, min(16 * 1024 * 1024, int(constants.JUDGEHOST_MAX_INLINE_SOURCE_BYTES)))
             self._max_tests_per_task = max(1, min(10000, int(constants.JUDGEHOST_MAX_TESTS_PER_TASK)))
-            self._max_test_payload_bytes = max(
-                1024,
-                min(256 * 1024 * 1024, int(constants.JUDGEHOST_MAX_TEST_PAYLOAD_BYTES)),
-            )
             self._include_build_payload = bool(constants.JUDGEHOST_INCLUDE_BUILD_PAYLOAD)
             self._max_binary_payload_bytes = max(
                 1024, min(128 * 1024 * 1024, int(constants.JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES))
@@ -108,26 +104,6 @@ class JudgehostCoreMixin:
             while events and events[0] < cutoff:
                 events.pop(0)
             self._host_last_judging[safe_host] = {"label": label, "updated_at": now_text}
-
-    def _host_state_row(self, hostname: str) -> dict[str, object]:
-        safe_host = self._normalize_hostname(hostname)
-        now_text = now_iso()
-        with self._state_lock:
-            row = self._hosts_state.get(safe_host)
-            if row is None:
-                row = {
-                    "hostname": safe_host,
-                    "enabled": True,
-                    "first_seen_at": now_text,
-                    "last_seen_at": now_text,
-                    "last_action": "",
-                    "last_task_id": "",
-                    "last_run_id": "",
-                    "lease_expires_at": "",
-                    "update_count": 0,
-                }
-                self._hosts_state[safe_host] = row
-            return row
 
     def bind_request_peer_hostname(self, peer_addr: str, hostname: str) -> None:
         safe_peer = str(peer_addr or "").strip()

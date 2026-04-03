@@ -38,12 +38,6 @@ class VerificationTaskRow(TypedDict):
     updated_at: str
 
 
-class VerificationTaskEdgeRow(TypedDict):
-    parent_task_id: str
-    child_task_id: str
-    created_at: str
-
-
 class VerificationTaskListRow(TypedDict):
     id: str
     verification_id: str
@@ -339,20 +333,6 @@ class VerificationTaskStore:
         ordered = sorted((dict(item) for item in rows), key=self._row_order)
         return [self._decorate_row(index + 1, row) for index, row in enumerate(ordered)]
 
-    def list_edge_rows(self, verification_id: str) -> list[VerificationTaskEdgeRow]:
-        rows = self.db.fetch_all(
-            "SELECT id, predecessor_task_id, created_at FROM verification_tasks WHERE verification_id=? AND predecessor_task_id IS NOT NULL ORDER BY id ASC",
-            [verification_id],
-        )
-        return [
-            {
-                "parent_task_id": str(row["predecessor_task_id"] or ""),
-                "child_task_id": str(row["id"] or ""),
-                "created_at": str(row["created_at"] or ""),
-            }
-            for row in rows
-        ]
-
     def verification_ids_with_unfinished_tasks(self) -> list[str]:
         rows = self.db.fetch_all(
             "SELECT DISTINCT verification_id FROM verification_tasks WHERE final_status='' ORDER BY verification_id ASC"
@@ -376,17 +356,6 @@ class VerificationTaskStore:
             run_id=current.run_id,
             judgehost_task_id=current.judgehost_task_id,
             started_at=current.started_at or now_iso(),
-        )
-
-    def requeue_task(self, task_id: str) -> None:
-        current = self._runtime_by_task_id.get(task_id)
-        if current is None:
-            return
-        self._runtime_by_task_id[task_id] = _RuntimeTaskState(
-            status=self.TASK_QUEUED,
-            run_id=current.run_id,
-            judgehost_task_id=current.judgehost_task_id,
-            started_at=current.started_at,
         )
 
     def save_task_result(
@@ -493,9 +462,6 @@ class VerificationTaskStore:
 
     def set_fail_flag(self, verification_id: str, *, reason: str) -> None:
         self._fail_reason_by_verification_id[verification_id] = reason
-
-    def clear_fail_flag(self, verification_id: str) -> None:
-        self._fail_reason_by_verification_id.pop(verification_id, None)
 
     def fail_state(self, verification_id: str) -> tuple[bool, str]:
         fail_reason = self._fail_reason_by_verification_id.get(verification_id, "")

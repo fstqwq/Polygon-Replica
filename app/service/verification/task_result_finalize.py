@@ -47,6 +47,32 @@ def _materialized_output_name(test_name: str) -> str:
     return "program.out"
 
 
+def _persist_verification_artifact(
+    *,
+    verification_id: str,
+    test_name: str,
+    ref_key: str,
+    file_name: str,
+    payload: bytes,
+) -> str:
+    from app.impl.runtime.config import config
+
+    role = ref_key.removesuffix("_ref") or ref_key
+    ref = config.verification_service.store_verification_blob(
+        verification_id=verification_id,
+        test_name=test_name,
+        role=role,
+        file_name=file_name,
+        payload=payload,
+    )
+    config.verification_service.update_verification_artifact_refs(
+        verification_id,
+        test_name,
+        {ref_key: ref},
+    )
+    return ref
+
+
 def _materialize_run_output(
     *,
     verification_id: str,
@@ -72,11 +98,16 @@ def _materialize_run_output(
     )
     if output_blob is None:
         return ("", None)
-    run_root = config.fs_manager.prepare_verification_run_root(verification_id, artifact_run_id)
-    filename = _materialized_output_name(test_name)
-    target_path = (run_root / filename).resolve()
-    target_path.write_bytes(output_blob)
-    return (filename, output_blob)
+    if resolved_output_ref.startswith("cache://"):
+        return (resolved_output_ref, output_blob)
+    output_ref_token = _persist_verification_artifact(
+        verification_id=verification_id,
+        test_name=test_name,
+        ref_key="output_ref",
+        file_name=_materialized_output_name(test_name),
+        payload=output_blob,
+    )
+    return (output_ref_token, output_blob)
 
 
 def _verdict_from_summary(summary: dict[str, object], run_status: str) -> str:
@@ -156,10 +187,7 @@ def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
 
 
 def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: dict[str, object]) -> TaskExecutionResult:
-    from app.impl.runtime.config import config
-
     verification_id = str(task_row["verification_id"] or "")
-    runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
     task_id = str(task_row["id"] or "")
     task_kind = str(task_row["task_kind"] or "")
     test_name = str(task_row["test_name"] or "")
@@ -220,30 +248,33 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 fail_flag_reason=fail_reason,
             )
         output_blob = materialized_output_blob
-        target_path = runtime_layout.tests / test_name
         if output_blob is None:
-            if not target_path.exists():
-                fail_message = f"generated input output missing for {test_name}"
-                fail_meta = canonical_truncated_text(fail_message, limit=_ERROR_TEXT_CHAR_LIMIT)
-                return TaskExecutionResult(
-                    task_id=task_id,
-                    status=VerificationTaskStore.TASK_FAILED,
-                    verdict="FL",
-                    run_id=run_id,
-                    judgehost_task_id=judgehost_task_id,
-                    runtime_sec=parts.runtime_sec,
-                    cpu_sec=parts.cpu_sec,
-                    wall_sec=parts.wall_sec,
-                    memory_kb=parts.memory_kb,
-                    compile_log=parts.compile_log,
-                    diagnostics_json=parts.diagnostics_json,
-                    error_text=fail_meta["text"],
-                    feedback_text=parts.feedback_text,
-                    output_ref=materialized_output_ref,
-                    fail_flag_reason=fail_message,
-                )
-        else:
-            target_path.write_bytes(output_blob)
+            fail_message = f"generated input output missing for {test_name}"
+            fail_meta = canonical_truncated_text(fail_message, limit=_ERROR_TEXT_CHAR_LIMIT)
+            return TaskExecutionResult(
+                task_id=task_id,
+                status=VerificationTaskStore.TASK_FAILED,
+                verdict="FL",
+                run_id=run_id,
+                judgehost_task_id=judgehost_task_id,
+                runtime_sec=parts.runtime_sec,
+                cpu_sec=parts.cpu_sec,
+                wall_sec=parts.wall_sec,
+                memory_kb=parts.memory_kb,
+                compile_log=parts.compile_log,
+                diagnostics_json=parts.diagnostics_json,
+                error_text=fail_meta["text"],
+                feedback_text=parts.feedback_text,
+                output_ref=materialized_output_ref,
+                fail_flag_reason=fail_message,
+            )
+        _persist_verification_artifact(
+            verification_id=verification_id,
+            test_name=test_name,
+            ref_key="input_ref",
+            file_name=test_name,
+            payload=output_blob,
+        )
         return TaskExecutionResult(
             task_id=task_id,
             status=VerificationTaskStore.TASK_DONE,
@@ -287,7 +318,13 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 output_ref=materialized_output_ref,
                 fail_flag_reason=fail_message,
             )
-        (runtime_layout.answers / _answer_name(test_name)).write_bytes(output_bytes)
+        _persist_verification_artifact(
+            verification_id=verification_id,
+            test_name=test_name,
+            ref_key="answer_ref",
+            file_name=_answer_name(test_name),
+            payload=output_bytes,
+        )
     return TaskExecutionResult(
         task_id=task_id,
         status=task_status,

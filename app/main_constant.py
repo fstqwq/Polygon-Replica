@@ -107,7 +107,6 @@ JUDGEHOST_WAIT_POLL_SEC = 0.5
 JUDGEHOST_ONLINE_WINDOW_SEC = 120
 JUDGEHOST_MAX_INLINE_SOURCE_BYTES = 262144
 JUDGEHOST_MAX_TESTS_PER_TASK = 512
-JUDGEHOST_MAX_TEST_PAYLOAD_BYTES = 268435456
 JUDGEHOST_INCLUDE_BUILD_PAYLOAD = True
 JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES = 8388608
 TOOLCHAIN_COMPILE_TIMEOUT_SEC = 120
@@ -325,7 +324,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "JUDGEHOST_ONLINE_WINDOW_SEC": {"type": "int", "min": 5, "max": 86400, "description": "Seconds a judgehost is considered online since last heartbeat/fetch/report event."},
     "JUDGEHOST_MAX_INLINE_SOURCE_BYTES": {"type": "int", "min": 1024, "max": 16777216, "description": "Max submission source bytes embedded in judgehost task payload."},
     "JUDGEHOST_MAX_TESTS_PER_TASK": {"type": "int", "min": 1, "max": 10000, "description": "Max tests embedded per judgehost task payload."},
-    "JUDGEHOST_MAX_TEST_PAYLOAD_BYTES": {"type": "int", "min": 1024, "max": 268435456, "description": "Per-test payload byte cap for embedded input/answer data."},
     "JUDGEHOST_INCLUDE_BUILD_PAYLOAD": {"type": "bool", "description": "Include selected test payload and checker binaries in judgehost task payload."},
     "JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES": {"type": "int", "min": 1024, "max": 134217728, "description": "Per-binary payload byte cap for embedded checker/interactor."},
 }

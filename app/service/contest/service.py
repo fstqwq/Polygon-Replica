@@ -9,7 +9,6 @@ from typing import TypedDict
 from app.db import DB, now_iso
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import ContestDiskStore
-from app.service.disk.preview_store import PreviewStore
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.hashing import sha256_file
 from app.service.platform.process import is_canonical_artifact_id
@@ -105,11 +104,6 @@ class ContestStatementAttachment(TypedDict):
     created_at: str
 
 
-class ContestPreviewResult(TypedDict):
-    status: str
-    summary: dict[str, object]
-
-
 class ContestVerificationStage(TypedDict):
     id: str
     status: str
@@ -143,7 +137,6 @@ class ContestService:
         self.db = db
         self.settings = settings
         self._store = ContestDiskStore(db)
-        self._preview_store = PreviewStore(db)
         self._verification_store = VerificationStore(db)
 
     def _normalize_role(self, raw_role: str | None) -> str:
@@ -802,15 +795,6 @@ class ContestService:
             return None
         filename = Path(str(row["filename"])).name or file_path.name
         return (file_path, filename)
-
-    def preview_result(self, preview_id: str) -> ContestPreviewResult | None:
-        row = self._preview_store.get_preview_row(str(preview_id).strip())
-        if row is None:
-            return None
-        return {
-            "status": str(row["status"]).strip().lower(),
-            "summary": dict(row["summary"]),
-        }
 
     def verification_stage(self, problem_id: int, workspace_id: int, verification_id: str) -> ContestVerificationStage | None:
         row = self._verification_store.workspace_verification_row(int(problem_id), int(workspace_id), verification_id)

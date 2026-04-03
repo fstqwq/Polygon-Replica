@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.runtime_value import RuntimeValues, build_runtime_values
-from app.service.platform.hashing import compile_command_digest
 
 TOOLCHAIN_CPP_COMPILER: str = "g++"
 TOOLCHAIN_PYTHON_EXECUTABLE: str = "python3"
@@ -51,13 +50,6 @@ def apply_runtime_values(values: RuntimeValues) -> None:
     TOOLCHAIN_JAVA_RUNTIME_DEFAULT_HEAP_MB = int(values.TOOLCHAIN_JAVA_RUNTIME_DEFAULT_HEAP_MB)
     TOOLCHAIN_JAVA_RUNTIME_MIN_HEAP_MB = int(values.TOOLCHAIN_JAVA_RUNTIME_MIN_HEAP_MB)
     TOOLCHAIN_JAVA_RUNTIME_INITIAL_HEAP_MB = int(values.TOOLCHAIN_JAVA_RUNTIME_INITIAL_HEAP_MB)
-
-
-def current_cpp_command_digest() -> str:
-    # Build/runtime execution is judgehost-only. Cache keys should stay stable
-    # across host-local compiler availability and vary only when the execution
-    # backend contract changes.
-    return compile_command_digest("judgehost-only", [])
 
 
 apply_runtime_values(build_runtime_values())

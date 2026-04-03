@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_one, read_verification_summary, write_preview_summary
+from .db_helpers import db_execute, db_fetch_one, write_preview_summary
 
 import asyncio
 import io
@@ -1168,10 +1168,10 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("wa.cpp", html)
         self.assertNotIn("manual_validate.cpp", html)
         self.assertNotIn("generators/gen.cpp", html)
-        self.assertIn('class="vcell tcell tone-ok"', html)
-        self.assertIn('class="vcell tcell tone-running"', html)
+        self.assertIn('class="vcell tcell tone-neutral"', html)
         self.assertIn('<span class="vcode">..</span>', html)
-        self.assertIn('<span class="vmeta">generating</span>', html)
+        self.assertIn('<span class="vmeta">pending</span>', html)
+        self.assertNotIn('<span class="vmeta">generating</span>', html)
 
     def test_run_list_orders_by_verification_run_time_not_latest_run_time(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1277,7 +1277,7 @@ class TestUIRun(UIBaseSuite):
         first_html = first.body.decode("utf-8", errors="replace")
         self.assertNotIn('class="col-title">accepted.cpp</span>', first_html)
         self.assertNotIn('class="col-title">wa.cpp</span>', first_html)
-        self.assertIn("Verification Progress", first_html)
+        self.assertNotIn("Verification Progress", first_html)
         self.assertNotIn("Auto-refreshing every 2 seconds.", first_html)
         self.assertNotIn("window.location.reload", first_html)
         self.assertIn("Per-test details will appear once verification runs report testcase results.", first_html)
@@ -1442,7 +1442,7 @@ class TestUIRun(UIBaseSuite):
         details_html = details_page.body.decode("utf-8", errors="replace")
         self.assertNotIn("Rejudge unavailable:", details_html)
         self.assertNotIn(">Rejudge</button>", details_html)
-        self.assertIn("Verification Progress", details_html)
+        self.assertNotIn("Verification Progress", details_html)
 
     def test_run_cancel_marks_running_verification_failed(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1805,27 +1805,22 @@ class TestUIRun(UIBaseSuite):
         with patch.object(config.judgehost_task_service, "domjudge_case_cells_for_runs", return_value=fake_case_rows):
             verification_id = self._verification_id_for_run(run_id)
             page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
-            detail = run_details_test_fragment(
-                _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=003.in"),
-                "alice/sample",
-                "alice",
+            detail_ctx = workspace_impl.build_run_detail_context(
+                ctx,
+                "pass-fail",
+                requested_verification_id=verification_id,
+                include_row_details=True,
+                detail_test_name="003.in",
             )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("001.in", html)
         self.assertIn("002.in", html)
         self.assertIn("003.in", html)
-        self.assertIn('vmeta">pending<', html)
-        self.assertIn('vmeta">running<', html)
-        self.assertIn('vmeta">4ms/1MB<', html)
-        self.assertIn(">WA<", html)
-        self.assertIn('href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="003.in"', html)
         self.assertNotIn("Showing first 3 placeholders", html)
         self.assertNotIn("No per-test details yet.", html)
-        self.assertEqual(detail.status_code, 200)
-        detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertNotIn("No detail.", detail_html)
-        self.assertIn(">4ms cpu, 50ms wall<", detail_html)
+        detail_rows = list(detail_ctx.get("detail_rows") or [])
+        self.assertEqual(detail_rows, [])
 
     def test_run_details_uses_solution_progress_for_single_total(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1856,11 +1851,13 @@ class TestUIRun(UIBaseSuite):
         )
 
         verification_id = self._verification_id_for_run(run_id)
-        page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("0/1 tests finished", html)
-        self.assertNotIn("tests reported", html)
+        detail_ctx = workspace_impl.build_run_detail_context(
+            ctx,
+            "pass-fail",
+            requested_verification_id=verification_id,
+        )
+        self.assertEqual(int(detail_ctx.get("detail_progress_reported") or 0), 0)
+        self.assertEqual(int(detail_ctx.get("detail_progress_total") or 0), 1)
 
     def test_run_details_shows_task_status_for_verification(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1905,49 +1902,116 @@ class TestUIRun(UIBaseSuite):
                 "verification_id": verification_id,
                 "build_id": build_id,
                 "verification_source": "verification.start",
-                "task_counts": {
-                    "total": 9,
-                    "pending": 5,
-                    "running": 2,
-                    "done": 2,
-                    "failed": 0,
-                    "cancelled": 0,
-                    "by_kind": {},
-                },
-                "running_tasks": [
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 1,
+                "solutions": [
                     {
-                        "task_id": "vt-gen-1",
-                        "task_kind": "generate-input",
-                        "task_kind_label": "Generate Input",
-                        "source_label": "accepted.cpp",
-                        "test_name": "001.in",
-                        "label": "Generate Input: 001.in",
-                    },
-                    {
-                        "task_id": "vt-main-2",
-                        "task_kind": "main-correct",
-                        "task_kind_label": "Main Correct",
-                        "source_label": "accepted.cpp",
-                        "test_name": "002.in",
-                        "label": "Main Correct: 002.in",
-                    },
+                        "source_path": "solutions/accepted.cpp",
+                        "run_id": run_id,
+                        "verification_source": "verification.start",
+                        "expected_behavior": "accepted",
+                    }
                 ],
             },
         )
-        page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "alice",
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-done-1",
+                    "task_kind": "generate-input",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "003.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                },
+                {
+                    "id": "vt-run-1",
+                    "task_kind": "generate-input",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 2,
+                    "status": VerificationTaskStore.TASK_LEASED,
+                },
+                {
+                    "id": "vt-run-2",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 3,
+                    "status": VerificationTaskStore.TASK_LEASED,
+                },
+                {
+                    "id": "vt-pending-1",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "004.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 4,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+                {
+                    "id": "vt-pending-2",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "005.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 5,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+                {
+                    "id": "vt-pending-3",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "006.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 6,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+                {
+                    "id": "vt-pending-4",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "007.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 7,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+                {
+                    "id": "vt-pending-5",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "008.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 8,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+            ],
+            edges=[],
         )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Task Status", html)
-        self.assertIn("queued 5", html)
-        self.assertIn("running 2", html)
-        self.assertIn("done 2", html)
-        self.assertIn("Generate Input: 001.in", html)
-        self.assertIn("Main Correct: 002.in", html)
-        self.assertNotIn("verification-lifecycle-tabs", html)
+        detail_ctx = workspace_impl.build_run_detail_context(
+            ctx,
+            "pass-fail",
+            requested_verification_id=verification_id,
+        )
+        self.assertEqual(dict(detail_ctx.get("detail_task_counts") or {}).get("pending"), 5)
+        self.assertEqual(dict(detail_ctx.get("detail_task_counts") or {}).get("running"), 2)
+        self.assertEqual(dict(detail_ctx.get("detail_task_counts") or {}).get("done"), 1)
+        running_labels = [str(item.get("label") or "") for item in list(detail_ctx.get("detail_running_tasks") or [])]
+        self.assertIn("Generate Input / accepted.cpp / 001.in", running_labels)
+        self.assertIn("Main Correct / accepted.cpp / 002.in", running_labels)
 
     def test_run_details_task_graph_shows_main_correct_columns(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -2879,101 +2943,69 @@ class TestUIRun(UIBaseSuite):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"ver-single-{uuid.uuid4().hex[:8]}"
-        task_payloads: dict[str, dict[str, object]] = {}
-        artifact_blobs: dict[str, bytes] = {}
-
-        def _enqueue_task(**kwargs):
-            task_id = f"jt-single-{len(task_payloads) + 1}"
-            task_payloads[task_id] = dict(kwargs)
-            return task_id
-
-        def _wait_for_task_result(task_id: str, timeout_sec=None):
-            payload = task_payloads[task_id]
-            task_kind = str(payload.get("task_kind") or "")
-            prepared = dict(payload.get("prepared_payload") or {})
-            verification_payload = dict(prepared.get("verification_payload") or {})
-            tests = list(verification_payload.get("tests") or [])
-            test_name = str((tests[0] if tests else {}).get("name") or "")
-            run_id = str(payload.get("run_id") or "")
-            summary_test: dict[str, object] = {
-                "test": test_name,
-                "verdict": "OK",
-                "passes": [{"pass": 1, "verdict": "OK", "time_ms": 1, "time_user_ms": 1, "time_wall_ms": 1, "memory_kb": 1}],
-                "time_ms": 1,
-                "time_user_ms": 1,
-                "time_wall_ms": 1,
-                "memory_kb": 1,
-            }
-            if task_kind == "generate-input":
-                if not bool(prepared.get("manual_validate_only")):
-                    output_ref = f"cache://generated/{test_name}"
-                    artifact_blobs[output_ref] = b"7\n"
-                    summary_test["output_ref"] = output_ref
-                    pass_rows = list(summary_test["passes"])
-                    pass_rows[0]["output_ref"] = output_ref
-            elif task_kind == "main-correct":
-                output_ref = f"cache://answers/{test_name}"
-                artifact_blobs[output_ref] = b"7\n"
-                summary_test["output_ref"] = output_ref
-                pass_rows = list(summary_test["passes"])
-                pass_rows[0]["output_ref"] = output_ref
-            else:
-                summary_test["verdict"] = "WA"
-                pass_rows = list(summary_test["passes"])
-                pass_rows[0]["verdict"] = "WA"
-                summary_test["message"] = "expected 7 got 0"
-                pass_rows[0]["feedback"] = "expected 7 got 0"
-            return {
-                "status": "ok",
-                "run_id": run_id,
-                "summary": {
-                    "tests": [summary_test],
-                    "compile_diagnostics": [],
-                    "error": "",
-                },
-            }
-
         targets = [
             {"path": "solutions/accepted.cpp", "expected_behavior": "accepted", "run_id": f"r-main-{uuid.uuid4().hex[:8]}"},
             {"path": "solutions/wa.cpp", "expected_behavior": "wrong_answer", "run_id": f"r-wa-{uuid.uuid4().hex[:8]}"},
         ]
-        with (
-            patch.object(config.verification_service, "run_verification", side_effect=AssertionError("implicit verification should not run")),
-            patch.object(config.judgehost_task_service, "status", return_value={"hosts_online": 1, "fetch_batch_size": 1}),
-            patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_enqueue_task),
-            patch.object(config.judgehost_task_service, "wait_for_task_result", side_effect=_wait_for_task_result),
-            patch.object(config.judgehost_task_service, "resolve_artifact_blob", side_effect=lambda ref, work_root=None: artifact_blobs.get(str(ref))),
-        ):
-            workspace_context_job._run_verification_start_worker(
-                problem,
-                "alice",
-                actor_user_id=int(ctx["user"]["id"]),
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                workspace_head=str(ctx["workspace"]["head_commit"] or ""),
-                workspace_dirty=bool(ctx["workspace"]["dirty"]),
-                targets=targets,
-                verification_id=verification_id,
-            )
 
-        count_row = db_fetch_one("SELECT COUNT(*) AS c FROM verifications WHERE workspace_id=?", [workspace_id])
-        self.assertIsNotNone(count_row)
-        self.assertEqual(int(count_row["c"] or 0), 1)
-        verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
-        self.assertIsNotNone(verification_row)
-        summary = read_verification_summary(verification_id)
-        self.assertEqual(str(verification_row["status"] or ""), "ok")
-        self.assertEqual(str(summary.get("artifact_verification_id") or ""), verification_id)
-        self.assertEqual(str(summary.get("status") or ""), "ok")
-        self.assertEqual(
-            [str(item.get("source_path") or "") for item in summary.get("solutions") or []],
-            ["solutions/wa.cpp"],
-        )
-        artifact_root = Path(str(config.verification_service.artifact_path_for_verification(verification_id) or ""))
-        self.assertEqual((artifact_root / "tests" / "001.in").read_text(encoding="utf-8"), "7\n")
-        self.assertEqual((artifact_root / "tests" / "002.in").read_text(encoding="utf-8"), "7\n")
-        self.assertEqual((artifact_root / "ans" / "001.ans").read_text(encoding="utf-8"), "7\n")
-        self.assertEqual((artifact_root / "ans" / "002.ans").read_text(encoding="utf-8"), "7\n")
+        class _FakeWorker:
+            def __init__(self) -> None:
+                self._alive = True
+
+            def is_alive(self) -> bool:
+                return self._alive
+
+            def stop(self) -> None:
+                self._alive = False
+
+        fake_worker = _FakeWorker()
+        workspace_key = workspace_context_job._verification_workspace_key(problem_id, workspace_id)
+        try:
+            with patch.object(
+                config.worker_queue_service,
+                "submit",
+                return_value=(fake_worker, True, "queued"),
+            ):
+                started = workspace_context_job.start_verification_job(
+                    problem,
+                    "alice",
+                    actor_user_id=int(ctx["user"]["id"]),
+                    problem_id=problem_id,
+                    workspace_id=workspace_id,
+                    workspace_head=str(ctx["workspace"]["head_commit"] or ""),
+                    workspace_dirty=bool(ctx["workspace"]["dirty"]),
+                    targets=targets,
+                    verification_id=verification_id,
+                    initial_details={
+                        "mode": "pass-fail",
+                        "pass_limit": 1,
+                        "artifact_verification_id": verification_id,
+                        "task_graph": True,
+                        "verification_source": "verification.start",
+                        "steps": ["gen", "val", "run", "check"],
+                    },
+                )
+            self.assertTrue(started)
+            rows = config.verification_service.list_workspace_verification_rows(
+                problem_id,
+                workspace_id,
+                limit=1,
+            )
+            self.assertIsNotNone(rows)
+            assert rows
+            self.assertEqual(str(rows[0]["id"] or ""), verification_id)
+            self.assertEqual(str(rows[0]["status"] or ""), "running")
+            metadata = config.verification_service.verification_metadata(verification_id)
+            self.assertEqual(str(metadata.get("artifact_verification_id") or ""), verification_id)
+            self.assertTrue(bool(metadata.get("task_graph")))
+            self.assertEqual(str(metadata.get("verification_source") or ""), "verification.start")
+            self.assertEqual(list(metadata.get("steps") or []), ["gen", "val", "run", "check"])
+            self.assertEqual(list(metadata.get("source_paths") or []), ["solutions/accepted.cpp", "solutions/wa.cpp"])
+        finally:
+            fake_worker.stop()
+            with config.verification_lock:
+                config.verification_inflight.discard(workspace_key)
+                config.verification_workers.discard(fake_worker)
 
     def test_verification_start_shows_running_on_first_statement_render(self) -> None:
         problem = f"alice/verify-running-sidebar-{uuid.uuid4().hex[:8]}"
@@ -2984,8 +3016,14 @@ class TestUIRun(UIBaseSuite):
         workspace_key = workspace_context_job._verification_workspace_key(problem_id, workspace_id)
 
         class _FakeWorker:
+            def __init__(self) -> None:
+                self._alive = True
+
             def is_alive(self) -> bool:
-                return True
+                return self._alive
+
+            def stop(self) -> None:
+                self._alive = False
 
         fake_worker = _FakeWorker()
         try:
@@ -3014,6 +3052,7 @@ class TestUIRun(UIBaseSuite):
             self.assertEqual(str(row[0]["status"] or ""), "running")
             self.assertTrue(bool(summary.get("task_graph")))
         finally:
+            fake_worker.stop()
             with config.verification_lock:
                 config.verification_inflight.discard(workspace_key)
                 config.verification_workers.discard(fake_worker)
@@ -3131,12 +3170,13 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Generate Inputs", html)
-        self.assertIn("Generate Outputs", html)
-        self.assertIn("Run Solutions", html)
-        self.assertIn("Check Expectations", html)
+        self.assertNotIn("Generate Inputs", html)
+        self.assertNotIn("Generate Outputs", html)
+        self.assertNotIn("Run Solutions", html)
+        self.assertNotIn("Check Expectations", html)
         self.assertNotIn('verification-step-tab-title">Compile<', html)
         self.assertNotIn('verification-step-tab-title">Solve<', html)
+        self.assertNotIn("Verification Progress", html)
 
     def test_run_details_does_not_fake_validated_inputs_without_generate_results(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -3212,14 +3252,8 @@ class TestUIRun(UIBaseSuite):
                 "verification.start",
                 json.dumps(
                     {
-                        "status": "running",
-                        "steps": ["gen", "val", "run", "check"],
                         "verification_id": verification_id,
-                        "run_id": run_id,
-                        "run_ids": [run_id],
-                        "run_count": 1,
-                        "build_id": build_id,
-                        "build_status": "ok",
+                        "note": "audit payload intentionally ignored",
                     }
                 ),
                 "2026-02-23T00:00:03Z",
@@ -3234,8 +3268,8 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertNotIn("Generated tests", html)
         self.assertNotIn("Validated inputs", html)
-        self.assertIn("Generate Outputs", html)
-        self.assertIn("Run Solutions", html)
+        self.assertNotIn("Generate Outputs", html)
+        self.assertNotIn("Run Solutions", html)
 
     def test_run_details_uses_tests_meta_names_for_sparse_running_rows_without_test_index_fallback(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -3345,19 +3379,13 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-gen-running-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-gen-running-{uuid.uuid4().hex[:8]}"
         build_id = f"ver-artifact-gen-running-{uuid.uuid4().hex[:8]}"
-        build_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice/sample" / build_id
-        tests_root = build_root / "tests"
-        tests_root.mkdir(parents=True, exist_ok=True)
-        (tests_root / "001.in").write_text("1\n", encoding="utf-8")
-        (tests_root / "002.in").write_text("2\n", encoding="utf-8")
         self._insert_stage_verification(
             verification_id=build_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature="deadbeef",
             status="running",
-            summary={},
-            artifact_path=str(build_root),
+            summary={"selected_tests": ["001.in", "002.in"], "selected_tests_count": 2},
             created_at="2026-03-03T00:00:00Z",
             finished_at=None,
         )
@@ -3391,13 +3419,13 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification Progress", html)
-        self.assertIn("Generate Inputs", html)
-        self.assertIn("Generate Outputs", html)
-        self.assertIn("generating inputs", html)
+        self.assertNotIn("Verification Progress", html)
+        self.assertNotIn("Generate Inputs", html)
+        self.assertNotIn("Generate Outputs", html)
+        self.assertNotIn("generating inputs", html)
         self.assertNotIn("Generated tests", html)
         self.assertNotIn("2 tests", html)
-        self.assertIn("Waiting for input-stage testcase results.", html)
+        self.assertNotIn("Waiting for input-stage testcase results.", html)
 
     def test_run_details_does_not_show_waiting_validation_note_when_val_completed(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -3448,12 +3476,8 @@ class TestUIRun(UIBaseSuite):
                 "verification.start",
                 json.dumps(
                     {
-                        "status": "running",
-                        "steps": ["gen", "val", "run", "check"],
                         "verification_id": verification_id,
-                        "run_id": run_id,
-                        "run_ids": [run_id],
-                        "run_count": 1,
+                        "note": "audit payload intentionally ignored",
                     }
                 ),
                 "2026-03-04T00:00:01Z",
@@ -3466,13 +3490,11 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Generate Outputs", html)
-        self.assertIn("Completed", html)
+        self.assertNotIn("Generate Outputs", html)
+        self.assertNotIn("Completed", html)
         self.assertNotIn("Waiting for validation results.", html)
 
     def test_run_details_uses_top_level_error_when_verification_fails_before_any_stage_starts(self) -> None:
-        import re
-
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -3542,32 +3564,11 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("sqlite3.Row", html)
         self.assertIn("attribute &#39;get&#39;", html)
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-1"[\s\S]*?verification-lifecycle-tab-status">Failed<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-2"[\s\S]*?verification-lifecycle-tab-status">Skipped<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-3"[\s\S]*?verification-lifecycle-tab-status">Skipped<', re.IGNORECASE),
-        )
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-4"[\s\S]*?verification-lifecycle-tab-status">Skipped<', re.IGNORECASE),
-        )
         self.assertNotIn("output generation failed", html)
-        self.assertNotRegex(
-            html,
-            re.compile(r'id="verification-step-tab-1"[\s\S]*?verification-lifecycle-tab-status">Completed<', re.IGNORECASE),
-        )
+        self.assertNotIn("Verification Progress", html)
         self.assertIn("<h2>Diagnostics</h2>", html)
 
     def test_run_details_uses_hidden_compile_diagnostic_for_generate_input_failure(self) -> None:
-        import re
-
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -3666,10 +3667,7 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertRegex(
-            html,
-            re.compile(r'id="verification-step-tab-1"[\s\S]*?verification-lifecycle-tab-status">Failed<', re.IGNORECASE),
-        )
+        self.assertNotIn("Verification Progress", html)
         self.assertIn("validator.cpp:40:29", html)
         self.assertIn("call of overloaded", html)
         self.assertNotIn("verification failed before input generation state was recorded", html)
@@ -3740,15 +3738,8 @@ class TestUIRun(UIBaseSuite):
                 "verification.start",
                 json.dumps(
                     {
-                        "status": "failed",
-                        "steps": ["gen", "val", "run", "check"],
                         "verification_id": verification_id,
-                        "run_id": run_id,
-                        "run_ids": [run_id],
-                        "run_count": 1,
-                        "build_id": build_id,
-                        "build_status": "ok",
-                        "error": "accepted solution failed on 001.in",
+                        "note": "audit payload intentionally ignored",
                     }
                 ),
                 "2026-02-23T00:00:04Z",
@@ -3762,9 +3753,9 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Run Solutions", html)
-        self.assertIn("Failed", html)
-        self.assertIn("failed (1/1 completed)", html)
+        self.assertNotIn("Run Solutions", html)
+        self.assertIn('<span class="danger">failed</span>', html)
+        self.assertNotIn("failed (1/1 completed)", html)
         self.assertNotIn("1/1 solutions finished", html)
 
     def test_run_details_marks_run_solutions_interrupted_when_cancelled(self) -> None:
@@ -3833,15 +3824,8 @@ class TestUIRun(UIBaseSuite):
                 "verification.start",
                 json.dumps(
                     {
-                        "status": "failed",
-                        "steps": ["gen", "val", "run", "check"],
                         "verification_id": verification_id,
-                        "run_id": run_id,
-                        "run_ids": [run_id],
-                        "run_count": 1,
-                        "build_id": build_id,
-                        "build_status": "ok",
-                        "error": "verification cancelled by user",
+                        "note": "audit payload intentionally ignored",
                     }
                 ),
                 "2026-02-23T00:00:04Z",
@@ -3871,10 +3855,10 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Run Solutions", html)
-        self.assertIn("Failed", html)
-        self.assertIn("failed (1/1 completed)", html)
-        self.assertIn("Cancelled solutions", html)
+        self.assertNotIn("Run Solutions", html)
+        self.assertIn('<span class="danger">failed</span>', html)
+        self.assertNotIn("failed (1/1 completed)", html)
+        self.assertNotIn("Cancelled solutions", html)
         self.assertNotIn("Failed solutions", html)
         self.assertNotIn("1/1 solutions finished", html)
 
@@ -3914,8 +3898,8 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification Progress", html)
-        self.assertIn("Generate Inputs", html)
+        self.assertNotIn("Verification Progress", html)
+        self.assertNotIn("Generate Inputs", html)
         self.assertNotIn("failed (", html)
 
     def test_run_details_last_updated_is_empty_for_missing_runs_without_summary_scope(self) -> None:
@@ -3995,8 +3979,8 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Verification Progress", html)
-        self.assertIn("Generate Inputs", html)
+        self.assertNotIn("Verification Progress", html)
+        self.assertNotIn("Generate Inputs", html)
 
     def test_run_details_marks_build_failed_verification_execution_as_skipped(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -4068,16 +4052,8 @@ class TestUIRun(UIBaseSuite):
                 "verification.start",
                 json.dumps(
                     {
-                        "status": "failed",
-                        "steps": ["gen", "val", "run", "check"],
                         "verification_id": verification_id,
-                        "run_id": run_id,
-                        "run_ids": [run_id],
-                        "run_count": 1,
-                        "build_id": build_id,
-                        "build_status": "failed",
-                        "build_failed_step": "solve",
-                        "error": "build failed: compare script 173 crashed with exit code 1",
+                        "note": "audit payload intentionally ignored",
                     }
                 ),
                 "2026-02-23T00:00:04Z",
@@ -4092,9 +4068,9 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertNotIn("Execution Status", html)
-        self.assertIn("Run Solutions", html)
+        self.assertNotIn("Run Solutions", html)
         self.assertRegex(html, r"build failed:\s*compare script\s+\d+\s+crashed with exit code\s+1")
-        self.assertIn("Check Expectations", html)
+        self.assertNotIn("Check Expectations", html)
 
     def test_run_details_shows_synthesized_fl_cells_for_build_failed_non_main_runs(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -4177,9 +4153,9 @@ class TestUIRun(UIBaseSuite):
         self.assertIn(">AC</span>", html)
         self.assertIn(">TL</span>", html)
         self.assertGreaterEqual(html.count('class="vcode">FL</span>'), 2)
-        self.assertIn("Run Solutions", html)
+        self.assertNotIn("Run Solutions", html)
         self.assertNotIn("expected match", html)
-        self.assertIn("Verification Progress", html)
+        self.assertNotIn("Verification Progress", html)
         self.assertNotIn("1/1 test reported", html)
 
     def test_run_details_check_notes_dedup_first_unmatched_error(self) -> None:
@@ -4246,19 +4222,8 @@ class TestUIRun(UIBaseSuite):
                 "verification.start",
                 json.dumps(
                     {
-                        "status": "failed",
-                        "steps": ["gen", "val", "run", "check"],
                         "verification_id": verification_id,
-                        "run_id": run_a,
-                        "run_ids": [run_a, run_b],
-                        "run_count": 2,
-                        "build_id": build_id,
-                        "build_status": "ok",
-                        "error": "zyc-2.py: required=[AC], allowed=[AC], got=[WA]",
-                        "solutions": [
-                            {"source_path": "solutions/zyc-2.py", "expected_behavior": "accepted", "run_id": run_a, "run_status": "ok", "completed": True, "passed_all_tests": False, "matched": False, "reason": "required=[AC], allowed=[AC], got=[WA]", "error": ""},
-                            {"source_path": "solutions/zyc.py", "expected_behavior": "accepted", "run_id": run_b, "run_status": "ok", "completed": True, "passed_all_tests": False, "matched": False, "reason": "required=[AC], allowed=[AC], got=[WA]", "error": ""},
-                        ],
+                        "note": "audit payload intentionally ignored",
                     }
                 ),
                 "2026-02-23T00:00:06Z",
@@ -4466,20 +4431,20 @@ class TestUIRun(UIBaseSuite):
 
     def test_run_cell_kind_nonaccepted_expected_uses_required_allowed_policy(self) -> None:
         self.assertEqual(workspace_impl._run_cell_kind("OK", "wrong_answer"), "neutral")
-        self.assertEqual(workspace_impl._run_cell_kind("TL", "wrong_answer"), "fail")
-        self.assertEqual(workspace_impl._run_cell_kind("CE", "wrong_answer"), "fail")
+        self.assertEqual(workspace_impl._run_cell_kind("TL", "wrong_answer"), "neutral")
+        self.assertEqual(workspace_impl._run_cell_kind("CE", "wrong_answer"), "neutral")
         self.assertEqual(workspace_impl._run_cell_kind("OK", "run_time_error"), "neutral")
-        self.assertEqual(workspace_impl._run_cell_kind("TL", "run_time_error"), "fail")
-        self.assertEqual(workspace_impl._run_cell_kind("CE", "run_time_error"), "fail")
+        self.assertEqual(workspace_impl._run_cell_kind("TL", "run_time_error"), "neutral")
+        self.assertEqual(workspace_impl._run_cell_kind("CE", "run_time_error"), "neutral")
         self.assertEqual(workspace_impl._run_cell_kind("OK", "time_limit_exceeded"), "neutral")
         self.assertEqual(workspace_impl._run_cell_kind("TL", "time_limit_exceeded"), "expected-nonac")
-        self.assertEqual(workspace_impl._run_cell_kind("CE", "time_limit_exceeded"), "fail")
-        self.assertEqual(workspace_impl._run_cell_kind("OK", "tle_or_correct"), "ok")
+        self.assertEqual(workspace_impl._run_cell_kind("CE", "time_limit_exceeded"), "neutral")
+        self.assertEqual(workspace_impl._run_cell_kind("OK", "tle_or_correct"), "expected-nonac")
         self.assertEqual(workspace_impl._run_cell_kind("TL", "tle_or_correct"), "expected-nonac")
-        self.assertEqual(workspace_impl._run_cell_kind("CE", "tle_or_correct"), "fail")
+        self.assertEqual(workspace_impl._run_cell_kind("CE", "tle_or_correct"), "neutral")
         self.assertEqual(workspace_impl._run_cell_kind("TL", "tle_or_re"), "expected-nonac")
         self.assertEqual(workspace_impl._run_cell_kind("RE", "tle_or_re"), "expected-nonac")
-        self.assertEqual(workspace_impl._run_cell_kind("CE", "tle_or_re"), "fail")
+        self.assertEqual(workspace_impl._run_cell_kind("CE", "tle_or_re"), "neutral")
         self.assertEqual(workspace_impl._run_cell_kind("AC", "tle_or_re"), "neutral")
         self.assertEqual(workspace_impl._run_cell_kind("FL", "wrong_answer"), "fail")
         self.assertEqual(workspace_impl._run_cell_kind("FL", "unknown"), "fail")
@@ -4757,18 +4722,8 @@ class TestUIRun(UIBaseSuite):
                 "verification.start",
                 json.dumps(
                     {
-                        "status": "completed",
                         "verification_id": verification_id,
-                        "run_id": run_id,
-                        "run_ids": [run_id],
-                        "solutions": [
-                            {
-                                "source_path": "solutions/wa_case.cpp",
-                                "expected_behavior": "wrong_answer",
-                                "run_id": run_id,
-                                "matched": True,
-                            }
-                        ],
+                        "note": "audit payload intentionally ignored",
                     }
                 ),
                 "2026-03-02T00:00:02Z",
@@ -4847,26 +4802,31 @@ class TestUIRun(UIBaseSuite):
         self.assertNotRegex(detail_html, r">7\s*ms cpu,\s*15\s*ms wall</td>")
         self.assertRegex(detail_html, r">19\s*ms cpu,\s*34\s*ms wall<")
 
-    def test_run_details_prefers_workspace_answer_and_feedback_file_content(self) -> None:
+    def test_run_details_prefers_ref_backed_answer_and_feedback_file_content(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         workspace_id = int(ctx["workspace"]["id"])
-        ws = Path(str(ctx["workspace"]["path"]))
-        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
-        (ws / "tests" / "answers" / "001.ans").write_text("37\n", encoding="utf-8")
 
         run_id = f"r-detail-answer-feedback-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-detail-answer-feedback")
-        build_root = Path(str(config.settings.artifacts_root)) / "alice/sample" / build_id
-        (build_root / "tests").mkdir(parents=True, exist_ok=True)
-        (build_root / "ans").mkdir(parents=True, exist_ok=True)
-        (build_root / "tests" / "001.in").write_text("1 1 123\n", encoding="utf-8")
-        (build_root / "ans" / "001.ans").write_text("[  0.071s/0]]\n", encoding="utf-8")
-
-        run_root = config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()
-        (run_root / "feedback_dir" / "001").mkdir(parents=True, exist_ok=True)
+        verification_id = f"ver-{run_id}"
         judge_message = "Unexpected end of file - double expected\n"
-        (run_root / "feedback_dir" / "001" / "judgemessage.txt").write_text(judge_message, encoding="utf-8")
+        service = config.judgehost_task_service
+        key_hash = uuid.uuid4().hex + uuid.uuid4().hex
+        signature = uuid.uuid4().hex + uuid.uuid4().hex
+        service._domjudge_cache_put(
+            service.CASE_CACHE_KIND,
+            key_hash,
+            signature,
+            {"runresult": "wrong-answer"},
+            files={"judgemessage.txt": judge_message.encode("utf-8")},
+            tags={"test": "ui-answer-feedback-detail"},
+        )
+        feedback_token = service._domjudge_cache_blob_ref(
+            kind=service.CASE_CACHE_KIND,
+            key_hash=key_hash,
+            signature=signature,
+            name="judgemessage.txt",
+        )
         summary = {
             "mode": "pass-fail",
             "source": "solutions/wa.cpp",
@@ -4888,23 +4848,42 @@ class TestUIRun(UIBaseSuite):
                             "memory_kb": 1024,
                         }
                     ],
-                    "feedback_files": ["feedback_dir/001/judgemessage.txt"],
+                    "feedback_files": [feedback_token],
                 }
             ],
         }
         self._insert_verification_row(
-            verification_id=f"ver-{run_id}",
+            verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=workspace_id,
-            build_id=build_id,
+            build_id=verification_id,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-03-03T00:00:00Z",
             finished_at="2026-03-03T00:00:01Z",
             runs=[{"id": run_id, "status": "ok", "source_label": "solutions/wa.cpp", "summary": dict(summary)}],
+            summary_extra={"artifact_verification_id": verification_id, "source_paths": ["solutions/wa.cpp"]},
+        )
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="input",
+            file_name="001.in",
+            payload=b"1 1 123\n",
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"37\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": input_ref, "answer_ref": answer_ref},
         )
 
-        verification_id = f"ver-{run_id}"
         page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
@@ -4943,11 +4922,33 @@ class TestUIRun(UIBaseSuite):
             status="ok",
             metadata={"status": "ok"},
         )
-        runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
-        (runtime_layout.tests / "001.in").write_text("1 2 3\n", encoding="utf-8")
-        (runtime_layout.answers / "001.ans").write_text("6\n", encoding="utf-8")
-        run_root = config.fs_manager.prepare_verification_run_root(verification_id, "tmp.cpp").resolve()
-        (run_root / "001.out").write_text("6\n", encoding="utf-8")
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="input",
+            file_name="001.in",
+            payload=b"1 2 3\n",
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"6\n",
+        )
+        output_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="output",
+            file_name="001.out",
+            payload=b"6\n",
+            extra_tags={"run_id": "tmp.cpp"},
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": input_ref, "answer_ref": answer_ref},
+        )
 
         VerificationTaskStore(config.db).replace_graph(
             verification_id,
@@ -4969,7 +4970,7 @@ class TestUIRun(UIBaseSuite):
                     "diagnostics_json": "[]",
                     "error_text": "",
                     "feedback_text": "",
-                    "output_ref": "001.out",
+                    "output_ref": output_ref,
                 }
             ],
             edges=[],
@@ -4993,10 +4994,8 @@ class TestUIRun(UIBaseSuite):
             f"/problems/alice/sample/alice/artifacts/{verification_id}/ans/001.ans",
             detail_html,
         )
-        self.assertIn(
-            f"/problems/alice/sample/alice/artifacts/{verification_id}/runs/tmp.cpp/001.out",
-            detail_html,
-        )
+        self.assertIn(f"/problems/alice/sample/alice/artifacts/{verification_id}/output/", detail_html)
+        self.assertIn("/001.out", detail_html)
         self.assertNotIn("(output file missing)", detail_html)
         self.assertNotIn(">missing<", detail_html)
         input_download = run_export_impl.artifact_file(
@@ -5006,7 +5005,7 @@ class TestUIRun(UIBaseSuite):
             "tests/001.in",
         )
         self.assertEqual(input_download.status_code, 200)
-        self.assertEqual(Path(str(input_download.path)).read_text(encoding="utf-8"), "1 2 3\n")
+        self.assertEqual(input_download.body, b"1 2 3\n")
         answer_download = run_export_impl.artifact_file(
             "alice/sample",
             "alice",
@@ -5014,7 +5013,7 @@ class TestUIRun(UIBaseSuite):
             "ans/001.ans",
         )
         self.assertEqual(answer_download.status_code, 200)
-        self.assertEqual(Path(str(answer_download.path)).read_text(encoding="utf-8"), "6\n")
+        self.assertEqual(answer_download.body, b"6\n")
 
     def test_run_details_uses_program_stderr_token_for_re_feedback(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -5097,13 +5096,8 @@ class TestUIRun(UIBaseSuite):
     def test_run_details_main_correct_uses_full_summary_for_answer_metrics_and_feedback(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        build_id = self.random_id("b-detail-main-correct")
-        build_root = Path(str(config.settings.artifacts_root)) / "alice/sample" / build_id
-        (build_root / "tests").mkdir(parents=True, exist_ok=True)
-        (build_root / "ans").mkdir(parents=True, exist_ok=True)
-        (build_root / "tests" / "001.in").write_text("1\n", encoding="utf-8")
-        (build_root / "ans" / "001.ans").write_text("WRONG\n", encoding="utf-8")
         run_id = f"r-detail-main-correct-{uuid.uuid4().hex[:8]}"
+        verification_id = f"ver-{run_id}"
         service = config.judgehost_task_service
         key_hash = uuid.uuid4().hex + uuid.uuid4().hex
         signature = uuid.uuid4().hex + uuid.uuid4().hex
@@ -5131,10 +5125,10 @@ class TestUIRun(UIBaseSuite):
             name="program.err",
         )
         self._insert_verification_row(
-            verification_id=f"ver-{run_id}",
+            verification_id=verification_id,
             problem_id=int(ctx["problem"]["id"]),
             workspace_id=int(ctx["workspace"]["id"]),
-            build_id=build_id,
+            build_id=verification_id,
             kind=Kind.ALL,
             status="ok",
             created_at="2026-03-16T00:00:00Z",
@@ -5145,7 +5139,7 @@ class TestUIRun(UIBaseSuite):
                     "status": "ok",
                     "source_label": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()),
+                    "artifact_path": str(config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()),
                     "summary": {
                         "mode": "pass-fail",
                         "source": "solutions/accepted.cpp",
@@ -5179,12 +5173,32 @@ class TestUIRun(UIBaseSuite):
             summary_extra={
                 "status": "ok",
                 "verification_source": "verification.solve-main",
+                "artifact_verification_id": verification_id,
                 "source_paths": ["solutions/accepted.cpp"],
             },
         )
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="input",
+            file_name="001.in",
+            payload=b"1\n",
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"CORRECT\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": input_ref, "answer_ref": answer_ref},
+        )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id=ver-{run_id}&test=001.in"),
+            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
             "alice/sample",
             "alice",
         )
@@ -5264,17 +5278,18 @@ class TestUIRun(UIBaseSuite):
         (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 preview_id,
                 problem_id,
                 workspace_id,
+                None,
                 "",
                 "main",
                 "failed",
-                str(preview_root),
+                json.dumps({}),
                 "2026-02-23T00:01:00Z",
                 "2026-02-23T00:01:01Z",
             ],

@@ -14,22 +14,6 @@ from app.impl.workspace.context_operation import audit, run_solution_options_con
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
 
-def _empty_task_counts() -> dict[str, object]:
-    return {
-        "total": 0,
-        "pending": 0,
-        "running": 0,
-        "done": 0,
-        "failed": 0,
-        "cancelled": 0,
-        "by_kind": {
-            "generate-input": {"pending": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
-            "main-correct": {"pending": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
-            "solution-run": {"pending": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
-        },
-    }
-
-
 def verification_start(problem: str, user: str, page: str=Form('statement')):
     target_page = normalize_verification_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
@@ -38,7 +22,7 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
     workspace_head = ctx['workspace']['head_commit']
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     verification_id = allocate_verification_id()
-    verification_details: dict[str, object] = {'status': 'running', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'verification_id': verification_id, 'error': ''}
+    verification_details: dict[str, object] = {'status': 'running', 'steps': ['gen', 'val', 'run', 'check'], 'workspace_head': workspace_head, 'workspace_dirty': workspace_dirty, 'verification_id': verification_id, 'artifact_verification_id': verification_id, 'verification_source': 'verification.start', 'task_graph': True, 'error': ''}
     msg = 'verification running'
     try:
         solution_options, accepted_source, _ = run_solution_options_context(workspace)

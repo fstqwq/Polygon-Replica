@@ -295,12 +295,12 @@
   <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Verification</a> and choose one.</p>
   {% endif %}
 </section>
-{% set verification_entries = detail_verification_logs.diagnostics if detail_verification_logs.diagnostics else [] %}
-{% set verification_error = (detail_verification_logs.error | default('') | trim) %}
-{% set verification_has_entries = (verification_entries | length) > 0 %}
-{% if verification_error or verification_has_entries %}
 <section>
   <h2>Diagnostics</h2>
+  {% set verification_entries = detail_verification_logs.diagnostics if detail_verification_logs.diagnostics else [] %}
+  {% set verification_error = (detail_verification_logs.error | default('') | trim) %}
+  {% set verification_has_entries = (verification_entries | length) > 0 %}
+  {% if verification_error or verification_has_entries %}
   <div class="compile-diagnostics-card">
     <div class="compile-diagnostics-head">
       <div><strong>{{ detail_verification_logs.title or 'Verification' }}</strong></div>
@@ -325,16 +325,12 @@
       </div>
       {% endfor %}
     </div>
-    <details class="compile-diagnostics-raw">
-      <summary>Raw log</summary>
-      <pre class="compile-diagnostics-log">{% for d in verification_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
-{% endfor %}</pre>
-    </details>
     {% endif %}
   </div>
+  {% else %}
+  <p class="muted">No diagnostics.</p>
+  {% endif %}
 </section>
-{% endif %}
 {% endif %}
 </div>
 {% endblock %}
-

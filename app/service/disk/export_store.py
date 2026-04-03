@@ -204,22 +204,6 @@ class ExportStore:
             "name": str(row["name"] or ""),
         }
 
-    def problem_workspace_id_by_slug(self, slug: str) -> int | None:
-        row = self.db.fetch_one(
-            """
-            SELECT w.id
-            FROM problems p
-            JOIN workspaces w ON w.problem_id=p.id
-            JOIN users u ON u.id=w.user_id
-            WHERE p.slug=? AND u.username=substr(p.slug, 1, instr(p.slug, '/') - 1)
-            LIMIT 1
-            """,
-            [slug],
-        )
-        if row is None:
-            return None
-        return int(row["id"])
-
     def insert_export_record(
         self,
         *,

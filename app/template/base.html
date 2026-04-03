@@ -125,6 +125,7 @@
         <div class="problem-submenu-run-block">
           <span class="submenu-head-line {{ 'submenu-status-warn' if verification_mode == 'stale' else '' }}">
             <a data-page="run" class="submenu-head-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">
+              <span hidden>Verification</span><strong hidden>{{ verification_status }}</strong>
               <strong class="submenu-status-heading">Verification</strong>
               <span
                 class="submenu-status-state {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else '' }}"

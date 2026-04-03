@@ -56,8 +56,6 @@ class RuntimeConfig:
     templates: Jinja2Templates = field(
         default_factory=lambda: Jinja2Templates(directory=str(RuntimeConfig.TEMPLATE_ROOT))
     )
-    run_execute_lock: threading.Lock = field(default_factory=threading.Lock)
-    run_execute_workers: set[WorkerFuture] = field(default_factory=set)
     preview_lock: threading.Lock = field(default_factory=threading.Lock)
     preview_inflight: set[str] = field(default_factory=set)
     export_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -130,6 +128,7 @@ class RuntimeConfig:
             self.workspace_service,
             self.artifact_service,
             self.judgehost_task_service,
+            judge_fs_index_service=self.judge_fs_index_service,
             constants=self.constants,
         )
         self.preview_service = PreviewService(

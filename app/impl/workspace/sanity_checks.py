@@ -12,7 +12,6 @@ SANITY_PENDING = "pending"
 SANITY_RUNNING = "running"
 SANITY_PASSED = "passed"
 SANITY_FAILED = "failed"
-SANITY_UNKNOWN = "unknown"
 SANITY_SKIPPED = "skipped"
 CUSTOM_SAMPLE_OUTPUT_CHECK = "custom_sample_output"
 

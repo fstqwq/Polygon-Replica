@@ -330,6 +330,23 @@ class TestPreview(SmokeBase):
                 calls.append((str(problem), str(username)))
                 return verification_id
 
+            def verification_artifact_ref(self, verification_id_arg: str, test_name: str, ref_key: str) -> str:
+                _ = verification_id_arg
+                if test_name == "001.in":
+                    return f"blob://{ref_key}/001"
+                if test_name == "002.in":
+                    return f"blob://{ref_key}/002"
+                return ""
+
+            def resolve_artifact_blob(self, token: str) -> bytes | None:
+                payloads = {
+                    "blob://input_ref/001": b"build-manual-input\n",
+                    "blob://answer_ref/001": b"build-manual-answer\n",
+                    "blob://input_ref/002": b"build-gen-input\n",
+                    "blob://answer_ref/002": b"build-gen-answer\n",
+                }
+                return payloads.get(token)
+
         old_verification_service = preview_service.verification_service
         try:
             preview_service.verification_service = _FakeVerificationService()
@@ -397,6 +414,19 @@ class TestPreview(SmokeBase):
             ):
                 _ = (problem, username, commit, ref, sample_only)
                 return verification_id
+
+            def verification_artifact_ref(self, verification_id_arg: str, test_name: str, ref_key: str) -> str:
+                _ = verification_id_arg
+                if test_name == "001.in":
+                    return f"blob://{ref_key}/001"
+                return ""
+
+            def resolve_artifact_blob(self, token: str) -> bytes | None:
+                payloads = {
+                    "blob://input_ref/001": b"custom-sample-input\n",
+                    "blob://answer_ref/001": b"custom-sample-answer\n",
+                }
+                return payloads.get(token)
 
         old_verification_service = preview_service.verification_service
         try:

@@ -9,7 +9,6 @@ from app.service.run.summary import normalize_diagnostics_for_db, truncate_inlin
 class TruncatedText(TypedDict):
     text: str
     truncated: bool
-    total_chars: int
 
 
 class CanonicalDiagnostics(TypedDict):

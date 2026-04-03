@@ -119,7 +119,7 @@ class AuthStore:
             admin_candidates = [0] if has_registered_user else [1, 0]
             for is_admin in admin_candidates:
                 try:
-                    conn.execute(
+                    cursor = conn.execute(
                         """
                         INSERT INTO users(
                             username,password_hash,password_salt,password_iters,password_updated_at,created_at,is_system_admin
@@ -128,10 +128,7 @@ class AuthStore:
                         """,
                         [username, verifier_hex, salt_hex, int(iterations), now_text, now_text, int(is_admin)],
                     )
-                    row = conn.execute("SELECT id FROM users WHERE username=?", [username]).fetchone()
-                    if row is None:
-                        raise RuntimeError("failed to create user")
-                    return int(row["id"])
+                    return int(cursor.lastrowid)
                 except sqlite3.IntegrityError as exc:
                     message = str(exc or "").strip().lower()
                     if "users.username" in message:
@@ -162,7 +159,8 @@ class AuthStore:
             )
             if has_registered_user:
                 raise ValueError("setup already completed")
-            existing = conn.execute("SELECT id,password_hash FROM users WHERE username=?", [username]).fetchone()
+            existing_cursor = conn.execute("SELECT id,password_hash FROM users WHERE username=?", [username])
+            existing = existing_cursor.fetchone()
             if existing is None:
                 try:
                     cursor = conn.execute(

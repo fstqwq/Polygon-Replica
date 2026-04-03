@@ -299,21 +299,7 @@ def _rollback_imported_problem(problem_slug: str) -> None:
     except Exception:
         pass
 
-    problem_row = config.db.fetch_one("SELECT id,repo_name FROM problems WHERE slug=?", [safe_slug])
-    if problem_row is None:
-        return
-    problem_id = int(problem_row["id"])
-    repo_name = str(problem_row["repo_name"] or "").strip()
-    workspace_rows = config.db.fetch_all("SELECT path FROM workspaces WHERE problem_id=?", [problem_id])
-    workspace_paths = [str(row["path"] or "").strip() for row in workspace_rows]
-    for table in ("contest_problems", "previews", "verifications", "exports", "workspaces", "repo_acl", "audit_log"):
-        config.db.execute(f"DELETE FROM {table} WHERE problem_id=?", [problem_id])
-    config.db.execute("DELETE FROM problems WHERE id=?", [problem_id])
-    for raw_path in workspace_paths:
-        if raw_path:
-            shutil.rmtree(Path(raw_path), ignore_errors=True)
-    if repo_name:
-        shutil.rmtree((config.settings.bare_root / repo_name).resolve(), ignore_errors=True)
+    config.workspace_service.delete_problem(safe_slug)
 
 
 def _rollback_imported_contest(contest_slug: str, imported_problem_slugs: list[str]) -> None:
@@ -321,19 +307,6 @@ def _rollback_imported_contest(contest_slug: str, imported_problem_slugs: list[s
     for problem_slug in reversed(imported_problem_slugs):
         _rollback_imported_problem(problem_slug)
     if safe_slug:
-        contest_row = config.db.fetch_one("SELECT id FROM contests WHERE slug=?", [safe_slug])
-        if contest_row is not None:
-            contest_id = int(contest_row["id"])
-            for table in (
-                "contest_artifacts",
-                "contest_jobs",
-                "contest_attachments",
-                "contest_properties",
-                "contest_problems",
-                "contest_members",
-            ):
-                config.db.execute(f"DELETE FROM {table} WHERE contest_id=?", [contest_id])
-            config.db.execute("DELETE FROM contests WHERE id=?", [contest_id])
         source_root = (config.contest_service.contest_sources_base() / safe_slug).resolve()
         if source_root.exists():
             shutil.rmtree(source_root, ignore_errors=True)

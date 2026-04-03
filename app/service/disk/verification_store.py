@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import secrets
-import time
 from pathlib import Path
 from typing import TypedDict
 
@@ -21,10 +20,6 @@ class VerificationRuntimeRow(TypedDict):
 class VerificationStatusRow(TypedDict):
     id: str
     status: str
-
-
-class WorkspaceVerificationListRow(TypedDict):
-    id: str
 
 
 class WorkspaceVerificationMetaRow(TypedDict):
@@ -156,23 +151,6 @@ class VerificationStore:
             return ""
         return str(row["status"] or "")
 
-    def wait_terminal_status(
-        self,
-        verification_id: str,
-        *,
-        timeout_sec: float,
-        poll_sec: float,
-    ) -> str:
-        if not verification_id:
-            return ""
-        deadline = time.monotonic() + max(0.5, float(timeout_sec))
-        while time.monotonic() < deadline:
-            status = self.status(verification_id)
-            if status in {Status.OK.value, Status.FAILED.value}:
-                return status
-            time.sleep(max(0.01, float(poll_sec)))
-        return ""
-
     def record_row(self, verification_id: str) -> VerificationRecordRow | None:
         row = self.db.fetch_one(
             """
@@ -265,28 +243,6 @@ class VerificationStore:
 
         return int(self.db.write_transaction(_tx)) > 0
 
-    def get_workspace_runtime_row(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        verification_id: str,
-    ) -> VerificationRuntimeRow | None:
-        row = self.db.fetch_one(
-            """
-            SELECT id,status
-            FROM verifications
-            WHERE id=? AND problem_id=? AND workspace_id=?
-            """,
-            [verification_id, problem_id, workspace_id],
-        )
-        if row is None:
-            return None
-        return {
-            "id": str(row["id"]),
-            "status": str(row["status"]),
-            "metadata": self._read_metadata(verification_id),
-        }
-
     def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
         if artifact_id.startswith("p-"):
             row = self.db.fetch_one(
@@ -307,28 +263,6 @@ class VerificationStore:
         if row is None:
             return ""
         return str(self._verification_root(verification_id))
-
-    def workspace_verification_list_rows(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        *,
-        limit: int,
-        kinds: tuple[str, ...] = (Kind.ALL.value, Kind.SAMPLE.value, Kind.CUSTOM.value),
-    ) -> list[WorkspaceVerificationListRow]:
-        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.SAMPLE.value, Kind.CUSTOM.value]
-        placeholders = ",".join(("?" for _ in kind_tokens))
-        rows = self.db.fetch_all(
-            f"""
-            SELECT id
-            FROM verifications
-            WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            [problem_id, workspace_id, *kind_tokens, max(1, int(limit))],
-        )
-        return [{"id": str(row["id"])} for row in rows]
 
     def list_rows(
         self,

@@ -45,9 +45,6 @@ class FsManager:
         self.preview_root = self.cache_artifacts_root / "previews"
         self.snapshot_root = self.runtime_root / "snapshots"
         self.judgehost_runs_root = self.runtime_root / "judgehost-runs"
-        self.judgehost_testcases_root = self.runtime_root / "judgehost-testcases"
-        self.export_root = self.artifacts_root / "exports"
-        self.contest_root = self.artifacts_root / "contests"
 
     def resolve_verification_root(self, verification_id: str) -> Path:
         safe_verification_id = self._normalize_token(verification_id, field_name="verification_id")
@@ -98,19 +95,6 @@ class FsManager:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def resolve_verification_runtime_root(self, verification_id: str) -> Path:
-        return self.resolve_verification_root(verification_id)
-
-    def verification_runtime_layout(self, verification_id: str) -> VerificationRuntimeLayout:
-        layout = self.verification_layout(verification_id)
-        return VerificationRuntimeLayout(
-            root=layout.root,
-            tests=layout.tests,
-            answers=layout.answers,
-            bin=layout.bin,
-            uploaded_sources=layout.uploaded_sources,
-        )
-
     def prepare_verification_runtime_layout(self, verification_id: str) -> VerificationRuntimeLayout:
         layout = self.prepare_verification_layout(verification_id)
         return VerificationRuntimeLayout(
@@ -143,19 +127,6 @@ class FsManager:
         layout.logs.mkdir(parents=True, exist_ok=True)
         layout.statement_preview.mkdir(parents=True, exist_ok=True)
         return layout
-
-    def resolve_snapshot_root(self, snapshot_id: str) -> Path:
-        safe_snapshot_id = self._normalize_token(snapshot_id, field_name="snapshot_id")
-        base = self.snapshot_root.resolve()
-        target = (base / safe_snapshot_id).resolve()
-        if target != base and base not in target.parents:
-            raise ValueError("snapshot_id escapes snapshot root")
-        return target
-
-    def prepare_snapshot_root(self, snapshot_id: str) -> Path:
-        root = self.resolve_snapshot_root(snapshot_id)
-        root.mkdir(parents=True, exist_ok=True)
-        return root
 
     def _normalize_token(self, value: str, *, field_name: str) -> str:
         token = value.strip()

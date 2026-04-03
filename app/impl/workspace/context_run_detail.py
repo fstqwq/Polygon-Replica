@@ -13,7 +13,7 @@ from app.main_util import (
     sanitize_log_text_for_ui,
 )
 
-from .context_operation import dedupe_preserve_order, _file_head_text, workspace_rel_file_exists
+from .context_operation import dedupe_preserve_order, workspace_rel_file_exists
 
 _C = config.constants
 
@@ -87,15 +87,6 @@ def _strip_runpipe_protocol_lines(raw: str) -> str:
 def _run_detail_preview_unavailable(message: str = 'missing') -> RunDetailPreview:
     return {'available': False, 'text': '', 'truncated': False, 'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES), 'download_href': '', 'message': message}
 
-def _run_detail_preview_from_path(path: Path, download_href: str) -> RunDetailPreview:
-    text, clipped = _file_head_text(path, _C.RUN_DETAIL_PREVIEW_MAX_BYTES)
-    normalized = sanitize_log_text_for_ui(text)
-    normalized = _strip_runpipe_protocol_lines(normalized)
-    if not normalized:
-        normalized = '(empty)'
-    return {'available': True, 'text': normalized, 'truncated': bool(clipped), 'limit': int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES), 'download_href': download_href, 'message': ''}
-
-
 def _run_detail_preview_from_bytes(blob: bytes, download_href: str = "") -> RunDetailPreview:
     limit = int(_C.RUN_DETAIL_PREVIEW_MAX_BYTES)
     data = blob
@@ -113,14 +104,6 @@ def _run_detail_preview_from_bytes(blob: bytes, download_href: str = "") -> RunD
         "download_href": download_href,
         "message": "",
     }
-
-def _run_detail_preview_is_noise(preview: RunDetailPreview) -> bool:
-    if not preview["available"]:
-        return True
-    text = preview["text"]
-    if not text or text == "(empty)":
-        return True
-    return bool(_RUNPIPE_PROTOCOL_TOKEN_RE.search(text))
 
 def _interactive_transcript_preview(preview: RunDetailPreview, *, line_limit: int = 24) -> InteractiveTranscriptPreview:
     if not preview["available"]:

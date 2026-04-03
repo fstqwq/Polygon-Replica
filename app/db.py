@@ -676,7 +676,6 @@ class DB:
 
     def _prepare_connection(self, conn: sqlite3.Connection) -> None:
         self._install_sql_trace(conn)
-        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
 
@@ -773,7 +772,11 @@ class DB:
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:
                 with self.conn() as conn:
-                    return conn.execute(sql, values).fetchone()
+                    cursor = conn.execute(sql, values)
+                    row = cursor.fetchone()
+                    if row is None:
+                        return None
+                    return sqlite3.Row(cursor, row)
             except sqlite3.OperationalError as exc:
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
@@ -786,7 +789,8 @@ class DB:
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:
                 with self.conn() as conn:
-                    return conn.execute(sql, values).fetchall()
+                    cursor = conn.execute(sql, values)
+                    return [sqlite3.Row(cursor, row) for row in cursor.fetchall()]
             except sqlite3.OperationalError as exc:
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))

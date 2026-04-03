@@ -12,10 +12,7 @@ from urllib.parse import quote_plus, urlencode
 
 from starlette.requests import Request
 
-from .common import (
-    SmokeBase,
-    _wait_for_run_execute_workers,
-)
+from .common import SmokeBase
 import app.impl.auth.api as auth_api_module
 import app.impl.contest.access as contest_access_module
 import app.impl.contest.overview as contest_overview_module
@@ -532,7 +529,6 @@ def _wait_for_row(sql: str, params: list[object], timeout_sec: float = 8.0):
 
 class UIBaseSuite(SmokeBase):
     def setUp(self) -> None:
-        _wait_for_run_execute_workers()
         super().setUp()
         self.problem = "alice/sample"
         self.user = "alice"

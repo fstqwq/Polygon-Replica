@@ -380,7 +380,7 @@ def _tests_without_spec(
             source_label = source_path.relative_to(snapshot).as_posix()
         except ValueError:
             source_label = source_path.as_posix()
-        for case_index in range(generator_runs):
+        for _ in range(generator_runs):
             tests_meta = {
                 "index": counter,
                 "kind": "gen",

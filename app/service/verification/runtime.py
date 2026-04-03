@@ -75,11 +75,6 @@ def effective_run_timeout_ms(
     return max(1, tl * 2 + slack_ms)
 
 
-def effective_run_timeout_sec(run_timeout_ms: int) -> int:
-    timeout_ms = max(1, int(run_timeout_ms))
-    return max(1, (timeout_ms + 999) // 1000)
-
-
 def load_problem_runtime_config(
     snapshot: object,
     *,

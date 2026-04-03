@@ -22,7 +22,6 @@ from app.service.judgehost.internal.shared import (
     _DOMJUDGE_CONTEST_ID_RE,
     _DOMJUDGE_PROTOCOL_TRACE_BYTES_RE,
     _DOMJUDGE_PROTOCOL_TRACE_RE,
-    _DOMJUDGE_SUBMIT_ID_RE,
     domjudge_config_from_constants,
     domjudge_hosts_payload,
     domjudge_languages_payload,
@@ -49,16 +48,6 @@ class JudgehostDomjudgeUtilsMixin:
     }
 
 
-
-    @staticmethod
-    def _domjudge_submit_id_from_run_id(run_id: str) -> str:
-        token = domjudge_text(run_id)
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", token).strip("-")
-        if not safe:
-            safe = f"r-{uuid.uuid4().hex[:12]}"
-        if not _DOMJUDGE_SUBMIT_ID_RE.fullmatch(safe):
-            safe = f"s-{uuid.uuid4().hex[:12]}"
-        return safe[:64]
 
     @staticmethod
     def _domjudge_contest_id(raw: object) -> str:
@@ -368,6 +357,7 @@ class JudgehostDomjudgeUtilsMixin:
         memory_kb: int,
         score_text: str,
         files: dict[str, bytes],
+        shortcut_eligible: bool,
     ) -> None:
         manifest_rows, manifest_digest = self._domjudge_manifest_from_files(files)
         key_hash = self._domjudge_cache_put(
@@ -381,6 +371,7 @@ class JudgehostDomjudgeUtilsMixin:
                 "wall_sec": float(max(0.0, wall_sec)),
                 "memory_kb": int(max(0, memory_kb)),
                 "score_text": domjudge_text(score_text),
+                "shortcut_eligible": bool(shortcut_eligible),
                 "manifest": manifest_rows,
                 "manifest_digest": manifest_digest,
             },
@@ -434,21 +425,17 @@ class JudgehostDomjudgeUtilsMixin:
             except Exception as exc:
                 logger.debug("failed to set executable bit on %s: %s", target, exc)
 
-    def _domjudge_testcase_cache_root(self) -> Path:
-        root = self._fs_manager.judgehost_testcases_root.resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+    def _domjudge_testcase_blob_ref(self, *, testcase_hash: str, signature: str, name: str) -> str:
+        return self._domjudge_cache_blob_ref(
+            kind=self.CASE_CACHE_KIND,
+            key_hash=testcase_hash,
+            signature=signature,
+            name=name,
+        )
 
     def clear_testcase_registry(self) -> None:
         with self._testcase_registry_lock:
             self._testcase_registry_by_hash.clear()
-
-    def _domjudge_testcase_cache_paths(self, testcase_hash: str) -> tuple[Path, Path]:
-        token = domjudge_lower_text(testcase_hash)
-        if not re.fullmatch(r"[0-9a-f]{64}", token):
-            token = sha256_hex_text(token, errors="replace")
-        case_root = (self._domjudge_testcase_cache_root() / token[:2] / token).resolve()
-        return ((case_root / "input.in").resolve(), (case_root / "answer.ans").resolve())
 
     def _domjudge_register_cached_testcase(
         self,
@@ -460,23 +447,46 @@ class JudgehostDomjudgeUtilsMixin:
         safe_hash = domjudge_lower_text(testcase_hash)
         if not re.fullmatch(r"[0-9a-f]{64}", safe_hash):
             safe_hash = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
+        testcase_signature = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
+        if not self._domjudge_cache_put(
+            self.CASE_CACHE_KIND,
+            safe_hash,
+            testcase_signature,
+            {
+                "schema": "testcase-artifact.v1",
+                "testcase_hash": safe_hash,
+                "input_sha256": sha256_hex_bytes(in_bytes),
+                "answer_sha256": sha256_hex_bytes(ans_bytes),
+            },
+            files={
+                "input.in": in_bytes,
+                "answer.ans": ans_bytes,
+            },
+            tags={
+                "testcase_hash": safe_hash,
+                "artifact_kind": "domjudge-testcase",
+            },
+        ):
+            raise RuntimeError("judge fs index testcase store is unavailable")
         now_text = now_iso()
-        in_path, ans_path = self._domjudge_testcase_cache_paths(safe_hash)
-        self._domjudge_ensure_bytes_file(in_path, in_bytes, executable=False)
-        self._domjudge_ensure_bytes_file(ans_path, ans_bytes, executable=False)
+        input_ref = self._domjudge_testcase_blob_ref(
+            testcase_hash=safe_hash,
+            signature=testcase_signature,
+            name="input.in",
+        )
+        answer_ref = self._domjudge_testcase_blob_ref(
+            testcase_hash=safe_hash,
+            signature=testcase_signature,
+            name="answer.ans",
+        )
         with self._testcase_registry_lock:
-            record = {
+            self._testcase_registry_by_hash[safe_hash] = {
                 "hash": safe_hash,
-                "input_path": str(in_path),
-                "answer_path": str(ans_path),
+                "input_ref": input_ref,
+                "answer_ref": answer_ref,
                 "updated_at": now_text,
             }
-            self._testcase_registry_by_hash[safe_hash] = dict(record)
-            marker_dir = self._domjudge_testcase_cache_root()
-            marker = (marker_dir / safe_hash).resolve()
-            if marker.parent == marker_dir:
-                marker.write_bytes(b"")
-        return (str(in_path), str(ans_path))
+        return (input_ref, answer_ref)
 
     @staticmethod
     def _domjudge_language_extensions(source_name: str) -> tuple[str, list[str]]:
@@ -634,6 +644,8 @@ class JudgehostDomjudgeUtilsMixin:
     ) -> str:
         payload_obj = {} if payload is None else payload
         explicit = domjudge_lower_text(payload_obj.get("task_kind"))
+        if explicit == "generate":
+            explicit = self._TASK_KIND_GENERATE_INPUT
         if explicit in self._TASK_KIND_SET:
             return explicit
         source = str(
@@ -645,15 +657,15 @@ class JudgehostDomjudgeUtilsMixin:
                 else ""
             )
         ).strip().lower()
-        legacy_compile_only = domjudge_bool(
+        compile_only_flag = domjudge_bool(
             compile_only if compile_only is not None else payload_obj.get("compile_only"),
             default=False,
         )
-        if legacy_compile_only:
+        if compile_only_flag:
             return self._TASK_KIND_COMPILE_ONLY
-        if source == self._TASK_KIND_GENERATE_INPUT:
+        if source == self._TASK_KIND_GENERATE_INPUT or source.endswith(f".{self._TASK_KIND_GENERATE_INPUT}"):
             return self._TASK_KIND_GENERATE_INPUT
-        if source == self._TASK_KIND_MAIN_CORRECT:
+        if source == self._TASK_KIND_MAIN_CORRECT or source.endswith(f".{self._TASK_KIND_MAIN_CORRECT}"):
             return self._TASK_KIND_MAIN_CORRECT
         return self._TASK_KIND_SOLUTION_RUN
 

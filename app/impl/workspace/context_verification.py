@@ -106,11 +106,6 @@ def _status_codes_display(codes: list[str] | tuple[str, ...]) -> str:
     return "[" + ", ".join(_status_codes(codes)) + "]"
 
 
-def _status_codes_join(codes: list[str] | tuple[str, ...]) -> str:
-    unique = _status_codes(codes)
-    return "/".join(unique) if unique else "--"
-
-
 def _status_rule_expected_display(expected_behavior: str) -> str:
     required_codes, allowed_codes = _expected_status_rule(expected_behavior)
     display_codes = _status_codes(required_codes if required_codes else allowed_codes)
@@ -133,14 +128,6 @@ def _run_observed_status_codes(run_status: str, summary: dict | None) -> list[st
     if token in {"", "-", "--"}:
         return []
     return [token]
-
-
-def _status_rule_expectation_display(expected_behavior: str) -> str:
-    required_codes, allowed_codes = _expected_status_rule(expected_behavior)
-    return (
-        f"required={_status_codes_display(required_codes)}, "
-        f"allowed={_status_codes_display(allowed_codes)}"
-    )
 
 
 def _status_rule_display(expected_behavior: str, run_status: str, summary: dict | None) -> str:
@@ -197,22 +184,6 @@ def _verification_solution_failure_hint(source_path: str, reason: str, error_tex
     else:
         detail = 'verification mismatch'
     return f'{source_label}: {detail}'
-
-def _verification_first_unmatched_hint(solutions: list[dict[str, object]] | None) -> str:
-    if not solutions:
-        return ''
-    for item in solutions:
-        if bool(item.get('matched')):
-            continue
-        if not bool(item.get('completed')):
-            continue
-        source_path = str(item.get('source_path') or '')
-        reason = str(item.get('reason') or '')
-        error_text = str(item.get('error') or '')
-        hint = _verification_solution_failure_hint(source_path, reason, error_text)
-        if hint:
-            return hint
-    return ''
 
 def _verification_stale_reason() -> str:
     return "changed: verification inputs"

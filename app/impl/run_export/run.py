@@ -40,23 +40,6 @@ from app.service.verification.types import Status
 _C = config.constants
 
 
-def _empty_task_counts() -> dict[str, object]:
-    return {
-        "total": 0,
-        "pending": 0,
-        "queued": 0,
-        "running": 0,
-        "done": 0,
-        "failed": 0,
-        "cancelled": 0,
-        "by_kind": {
-            "generate-input": {"pending": 0, "queued": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
-            "main-correct": {"pending": 0, "queued": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
-            "solution-run": {"pending": 0, "queued": 0, "running": 0, "done": 0, "failed": 0, "cancelled": 0},
-        },
-    }
-
-
 def _upload_filename_token(raw: str) -> str:
     token = Path(str(raw or "").strip()).name
     if token:
@@ -397,6 +380,9 @@ def run_execute(
             "async": True,
             "status": Status.QUEUED.value,
             "force_recompile": force_recompile_flag,
+            "task_graph": True,
+            "verification_source": "verification.start",
+            "steps": ["gen", "val", "run", "check"],
         }
         audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", run_execute_details)
         try:
@@ -411,6 +397,7 @@ def run_execute(
                 targets=dag_targets,
                 verification_id=verification_id,
                 initial_details=run_execute_details,
+                initial_summary=run_execute_details,
                 workspace_path=workspace,
                 selected_test_names=selected_test_names,
             )

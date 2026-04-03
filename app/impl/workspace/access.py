@@ -50,14 +50,6 @@ PageContext = TypedDict(
 def workspace_access_context(problem_id: int, user_id: int) -> WorkspaceAccessContext:
     return config.workspace_service.access_context(problem_id, user_id)
 
-
-def normalize_repo_role(raw: str) -> str:
-    role = raw.strip().lower()
-    if role in {"owner", "write", "read"}:
-        return role
-    raise ValueError("invalid role")
-
-
 def normalize_transferable_repo_role(raw: str) -> str:
     role = raw.strip().lower()
     if role in {"write", "read"}:

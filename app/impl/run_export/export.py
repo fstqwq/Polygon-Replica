@@ -77,7 +77,6 @@ def _export_recent_events(
         item = dict(row)
         details = _parse_export_audit_details(cast(str | None, item.get("details_json")))
         status = details["status"]
-        export_type = details["export_type"]
         source_commit = details["source_commit"]
         verification_id = details["verification_id"]
         filename = details["filename"]

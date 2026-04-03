@@ -2,7 +2,6 @@
 
 import threading
 from pathlib import Path
-
 from app.db import DB
 from app.service.disk.verification_store import VerificationStore
 from app.runtime_value import RuntimeValues
@@ -48,7 +47,6 @@ class Judgehost(
         self.db = db
         self._workspace_service = workspace_service
         self._fs_manager = fs_manager
-        self._settings = settings
         self._constants = constants
         self._lock = threading.Lock()
         self._enabled = False
@@ -61,7 +59,6 @@ class Judgehost(
         self._online_window_sec = 120
         self._max_source_bytes = 262144
         self._max_tests_per_task = 512
-        self._max_test_payload_bytes = 1048576
         self._include_build_payload = True
         self._max_binary_payload_bytes = 8388608
         self._lease_requeue_lock = threading.Lock()
@@ -160,15 +157,6 @@ class Judgehost(
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
         )
         return self.wait_for_task_result(task_id, timeout_sec=None)
-
-    def domjudge_work_root_for_task(self, task_id: str) -> Path | None:
-        job_row = self._judgehost_state_store.job_for_task(task_id)
-        if job_row is None:
-            return None
-        work_root = str(job_row["work_root"])
-        if not work_root:
-            return None
-        return Path(work_root).resolve()
 
     def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
         row = self._judgehost_state_store.case_output_for_task(task_id, test_name)

@@ -80,8 +80,6 @@ class TaskExecutionContext:
     pass_limit: int
     snapshot_root: Path
     uploaded_sources_root: Path
-    tests_root: Path
-    answers_root: Path
     source_file_by_path: dict[str, Path]
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
@@ -116,26 +114,6 @@ def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[
     )
 
 
-def _verification_cancel_requested(problem_id: int, actor_user_id: int, verification_id: str, *, limit: int = 240) -> bool:
-    safe_verification_id = normalize_run_id_token(verification_id)
-    if not safe_verification_id:
-        return False
-    rows = config.workspace_service.audit_details(
-        problem_id=int(problem_id),
-        actor_user_id=int(actor_user_id),
-        action="run.cancel",
-        limit=max(40, int(limit)),
-    )
-    for payload_text in rows:
-        try:
-            details = cast(dict[str, object], json.loads(payload_text))
-        except Exception:
-            continue
-        if normalize_run_id_token(details.get("verification_id")) == safe_verification_id:
-            return True
-    return False
-
-
 def _require_online_judgehost() -> None:
     try:
         status = cast(dict[str, object], config.judgehost_task_service.status())
@@ -152,10 +130,14 @@ def _answer_name(test_name: str) -> str:
     return f"{stem}.ans"
 
 
-def _read_required_bytes(path: Path, *, label: str) -> bytes:
-    if (not path.exists()) or (not path.is_file()) or path.is_symlink():
+def _verification_required_blob(verification_id: str, test_name: str, ref_key: str, *, label: str) -> bytes:
+    ref = config.verification_service.verification_artifact_ref(verification_id, test_name, ref_key)
+    if not ref:
         raise RuntimeError(f"{label} is missing")
-    return path.read_bytes()
+    blob = config.verification_service.resolve_artifact_blob(ref)
+    if blob is None:
+        raise RuntimeError(f"{label} is missing")
+    return blob
 
 
 def _build_graph(
@@ -556,36 +538,6 @@ def _verification_summary_from_tasks(
     return (verification_status, summary, counts)
 
 
-def _logical_runs_from_task_rows(rows: list[VerificationTaskRow]) -> list[LogicalRunSpec]:
-    ordered_rows = sorted(rows, key=lambda item: (int(item["queue_index"]), str(item["id"])))
-    logical_runs: list[LogicalRunSpec] = []
-    seen: set[str] = set()
-    for row in ordered_rows:
-        logical_run_id = normalize_run_id_token(str(row["logical_run_id"] or ""))
-        if (not logical_run_id) or logical_run_id in seen:
-            continue
-        seen.add(logical_run_id)
-        logical_runs.append(
-            LogicalRunSpec(
-                logical_run_id=logical_run_id,
-                source_path=str(row["source_path"] or ""),
-                expected_behavior=normalize_expected_behavior(str(row["expected_behavior"] or "unknown")),
-                task_kind=str(row["task_kind"] or ""),
-            )
-        )
-    return logical_runs
-
-
-def _test_names_from_task_rows(rows: list[VerificationTaskRow]) -> list[str]:
-    ordered_rows = sorted(rows, key=lambda item: (int(item["queue_index"]), str(item["id"])))
-    values: list[str] = []
-    for row in ordered_rows:
-        test_name = str(row["test_name"] or "")
-        if test_name and test_name not in values:
-            values.append(test_name)
-    return values
-
-
 def _effective_verification_kind(
     *,
     sample_only: bool,
@@ -743,8 +695,6 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
     test_name = str(task_row["test_name"])
     run_id = allocate_run_id()
     try:
-        if test_plan.source_kind == "manual":
-            (execution.tests_root / test_name).write_bytes(test_plan.execution_input_bytes)
         prepared = _prepared_payload_for_uploaded_source(
             source_label=test_plan.execution_source_name,
             run_id=run_id,
@@ -806,13 +756,23 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
     logical_run_id = str(task_row["logical_run_id"] or "")
     run_id = allocate_run_id()
     try:
-        input_bytes = _read_required_bytes(execution.tests_root / test_name, label=f"verification test {test_name}")
+        input_bytes = _verification_required_blob(
+            execution.verification_id,
+            test_name,
+            "input_ref",
+            label=f"verification test {test_name}",
+        )
         if task_kind == TASK_MAIN_CORRECT:
             answer_bytes = b""
             verification_source = TASK_MAIN_CORRECT
             expected_behavior = "accepted"
         else:
-            answer_bytes = _read_required_bytes(execution.answers_root / _answer_name(test_name), label=f"verification answer {test_name}")
+            answer_bytes = _verification_required_blob(
+                execution.verification_id,
+                test_name,
+                "answer_ref",
+                label=f"verification answer {test_name}",
+            )
             verification_source = TASK_SOLUTION_RUN
             expected_behavior = normalize_expected_behavior(task_row["expected_behavior"])
         source_name, source_bytes = _source_bytes_for_path(execution, source_path)
@@ -979,8 +939,6 @@ def run_workspace_verification_dag(
         verification_mode = execution_plan.mode
         verification_pass_limit = execution_plan.pass_limit
         uploaded_sources_root = runtime_layout.uploaded_sources
-        execution_tests_root = runtime_layout.tests
-        execution_answers_root = runtime_layout.answers
         source_file_by_path = dict(execution_plan.source_file_by_path)
         source_file_by_path.update(_materialize_uploaded_sources(layout_root=uploaded_sources_root, targets=targets))
         snapshot_resolved = execution_plan.snapshot_root.resolve()
@@ -1050,8 +1008,6 @@ def run_workspace_verification_dag(
             pass_limit=verification_pass_limit,
             snapshot_root=execution_plan.snapshot_root,
             uploaded_sources_root=uploaded_sources_root,
-            tests_root=execution_tests_root,
-            answers_root=execution_answers_root,
             source_file_by_path=source_file_by_path,
             test_plan_by_name=execution_plan.test_plan_by_name,
             run_verification_payload_base=execution_plan.run_verification_payload_base,

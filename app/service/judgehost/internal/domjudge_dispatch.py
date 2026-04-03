@@ -148,7 +148,7 @@ class JudgehostDomjudgeDispatchMixin:
                 if main_correct
                 else self._domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
             )
-            in_path_text, ans_path_text = self._domjudge_register_cached_testcase(
+            input_ref_text, answer_ref_text = self._domjudge_register_cached_testcase(
                 testcase_hash=testcase_hash,
                 in_bytes=in_bytes,
                 ans_bytes=ans_bytes,
@@ -164,8 +164,8 @@ class JudgehostDomjudgeDispatchMixin:
                     "testcase_hash": testcase_hash,
                     "testcase_input_hash": testcase_input_hash,
                     "testcase_answer_hash": testcase_answer_hash,
-                    "input_path": in_path_text,
-                    "answer_path": ans_path_text,
+                    "input_ref": input_ref_text,
+                    "answer_ref": answer_ref_text,
                     "status": "pending",
                 }
             )
@@ -550,12 +550,12 @@ class JudgehostDomjudgeDispatchMixin:
         testcase_hash = domjudge_lower_text(case_row["testcase_hash"])
         testcase_input_hash = domjudge_lower_text(case_row["testcase_input_hash"])
         testcase_answer_hash = domjudge_lower_text(case_row["testcase_answer_hash"])
-        answer_path = Path(domjudge_text(case_row["answer_path"])).resolve()
-        input_path = Path(domjudge_text(case_row["input_path"])).resolve()
-        if (not testcase_input_hash) and input_path.exists() and input_path.is_file():
-            testcase_input_hash = domjudge_sha256_bytes(input_path.read_bytes())
-        if (not testcase_answer_hash) and answer_path.exists() and answer_path.is_file():
-            testcase_answer_hash = domjudge_sha256_bytes(answer_path.read_bytes())
+        if not testcase_hash:
+            raise RuntimeError(f"missing testcase_hash for DOMjudge case {int(case_row['id'])}")
+        if not testcase_input_hash:
+            raise RuntimeError(f"missing testcase_input_hash for DOMjudge case {int(case_row['id'])}")
+        if not testcase_answer_hash:
+            raise RuntimeError(f"missing testcase_answer_hash for DOMjudge case {int(case_row['id'])}")
 
         force_recompile = domjudge_bool(job_row["force_recompile"], default=False)
         expected_behavior = domjudge_lower_text(job_row["expected_behavior"], default="unknown")
@@ -585,6 +585,8 @@ class JudgehostDomjudgeDispatchMixin:
         )
         if cached_exact is not None:
             cached_obj = cached_exact["value"]
+            if not domjudge_bool(cached_obj.get("shortcut_eligible"), default=True):
+                return None
             cached_runresult = domjudge_text(cached_obj.get("runresult"))
             cached_runresult = domjudge_rewrite_untrusted_runresult(
                 cached_runresult,
@@ -789,7 +791,21 @@ class JudgehostDomjudgeDispatchMixin:
         safe_task_id = domjudge_text(job_row["task_id"])
         if not grouped_job:
             task_row = self._task_by_id(safe_task_id)
-            if task_row is None or task_row.get("status") not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+            if task_row is None:
+                job_status = domjudge_lower_text(job_row["status"])
+                job_lease_owner = domjudge_text(job_row["lease_owner"])
+                if (not safe_task_id) or job_status not in {"queued", "leased"} or job_lease_owner not in {
+                    "",
+                    hostname,
+                    self._normalize_hostname("prequeue-cache"),
+                }:
+                    self._judgehost_state_store.cancel_jobs_for_runs(
+                        run_ids=[domjudge_text(job_row["run_id"])],
+                        final_status="failed",
+                        now_text=now_text,
+                    )
+                    return []
+            elif task_row.get("status") not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
                 self._judgehost_state_store.cancel_jobs_for_runs(
                     run_ids=[domjudge_text(job_row["run_id"])],
                     final_status="failed",
@@ -890,65 +906,70 @@ class JudgehostDomjudgeDispatchMixin:
             if refreshed is not None and int(refreshed["job_id"]) == active_job_id:
                 return []
 
-        leased = self.fetch_work(safe_host)
-        if not leased:
-            shared_job = self._judgehost_state_store.shared_pending_job(safe_host)
-            if shared_job is not None:
-                shared_job_id = int(shared_job["job_id"])
-                leased_cases = self._domjudge_lease_cases(shared_job_id, safe_host, cap)
-                if leased_cases:
-                    return leased_cases
-                self._domjudge_finalize_if_ready(shared_job_id)
-            return []
-        leased_task = leased[0]
-        task_id = domjudge_text(leased_task.get("task_id"))
-        try:
-            leased_payload = cast(dict[str, object] | None, leased_task.get("payload")) or {}
-            group_key = domjudge_text(leased_payload.get("domjudge_group_key"))
-            if group_key:
-                existing_group_job = self._judgehost_state_store.job_for_group_key(group_key)
-                reuse_group_job = (
-                    existing_group_job is not None
-                    and domjudge_text(existing_group_job["lease_owner"]) in {"", safe_host}
-                )
-                if reuse_group_job:
-                    active_job_id = int(existing_group_job["job_id"])
-                    self._domjudge_append_grouped_task(active_job_id, leased_task)
-                else:
-                    active_job_id = self._domjudge_prepare_job(safe_host, leased_task, group_key=group_key)
-                self._domjudge_absorb_grouped_tasks(
-                    job_id=active_job_id,
-                    hostname=safe_host,
-                    group_key=group_key,
-                )
-            else:
-                existing_job = self._judgehost_state_store.job_for_task(task_id) if task_id else None
-                active_job_id = (
-                    int(existing_job["job_id"]) if existing_job is not None else self._domjudge_prepare_job(safe_host, leased_task)
-                )
-        except Exception as exc:
-            error_text = str(exc)
-            if not error_text:
-                error_text = "invalid judgehost task payload"
-            logger.warning("invalid judgehost task dropped task_id=%s host=%s: %s", task_id, safe_host, error_text)
-            if task_id:
-                try:
-                    self.report_result(
-                        task_id=task_id,
-                        hostname=safe_host,
-                        payload={
-                            "run_status": "failed",
-                            "error": error_text,
-                            "summary": {"error": error_text},
-                        },
+        invalid_payload_drops = 0
+        while True:
+            leased = self.fetch_work(safe_host)
+            if not leased:
+                shared_job = self._judgehost_state_store.shared_pending_job(safe_host)
+                if shared_job is not None:
+                    shared_job_id = int(shared_job["job_id"])
+                    leased_cases = self._domjudge_lease_cases(shared_job_id, safe_host, cap)
+                    if leased_cases:
+                        return leased_cases
+                    self._domjudge_finalize_if_ready(shared_job_id)
+                return []
+            leased_task = leased[0]
+            task_id = domjudge_text(leased_task.get("task_id"))
+            try:
+                leased_payload = cast(dict[str, object] | None, leased_task.get("payload")) or {}
+                group_key = domjudge_text(leased_payload.get("domjudge_group_key"))
+                if group_key:
+                    existing_group_job = self._judgehost_state_store.job_for_group_key(group_key)
+                    reuse_group_job = (
+                        existing_group_job is not None
+                        and domjudge_text(existing_group_job["lease_owner"]) in {"", safe_host}
                     )
-                except Exception as report_exc:
-                    logger.warning("failed to mark invalid judgehost task as failed task_id=%s: %s", task_id, report_exc)
-            return []
+                    if reuse_group_job:
+                        active_job_id = int(existing_group_job["job_id"])
+                        self._domjudge_append_grouped_task(active_job_id, leased_task)
+                    else:
+                        active_job_id = self._domjudge_prepare_job(safe_host, leased_task, group_key=group_key)
+                    self._domjudge_absorb_grouped_tasks(
+                        job_id=active_job_id,
+                        hostname=safe_host,
+                        group_key=group_key,
+                    )
+                else:
+                    existing_job = self._judgehost_state_store.job_for_task(task_id) if task_id else None
+                    active_job_id = (
+                        int(existing_job["job_id"]) if existing_job is not None else self._domjudge_prepare_job(safe_host, leased_task)
+                    )
+            except Exception as exc:
+                error_text = str(exc)
+                if not error_text:
+                    error_text = "invalid judgehost task payload"
+                logger.warning("invalid judgehost task dropped task_id=%s host=%s: %s", task_id, safe_host, error_text)
+                if task_id:
+                    try:
+                        self.report_result(
+                            task_id=task_id,
+                            hostname=safe_host,
+                            payload={
+                                "run_status": "failed",
+                                "error": error_text,
+                                "summary": {"error": error_text},
+                            },
+                        )
+                    except Exception as report_exc:
+                        logger.warning("failed to mark invalid judgehost task as failed task_id=%s: %s", task_id, report_exc)
+                invalid_payload_drops += 1
+                if invalid_payload_drops >= 32:
+                    return []
+                continue
 
-        self._domjudge_apply_cache_shortcuts_for_job(active_job_id, hostname=safe_host)
-        leased_cases = self._domjudge_lease_cases(active_job_id, safe_host, cap)
-        if leased_cases:
-            return leased_cases
-        self._domjudge_finalize_if_ready(active_job_id)
-        return []
+            self._domjudge_apply_cache_shortcuts_for_job(active_job_id, hostname=safe_host)
+            leased_cases = self._domjudge_lease_cases(active_job_id, safe_host, cap)
+            if leased_cases:
+                return leased_cases
+            self._domjudge_finalize_if_ready(active_job_id)
+            return []

@@ -85,7 +85,3 @@ def effective_run_timeout_ms(
     return max(1, tl * 2 + slack_ms)
 
 
-def effective_run_timeout_sec(run_timeout_ms: object, *, max_timeout_sec: int) -> int:
-    timeout_ms = max(1, int(run_timeout_ms))
-    timeout_sec = max(1, (timeout_ms + 999) // 1000)
-    return max(1, min(int(max_timeout_sec), timeout_sec))

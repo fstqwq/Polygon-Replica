@@ -170,12 +170,6 @@ class WorkspaceDiskStore:
             raise RuntimeError(f"unable to ensure user row for {username}")
         return row
 
-    def user_context_by_username(self, username: str) -> dict[str, object] | None:
-        row = self.db.fetch_one("SELECT id,username FROM users WHERE username=?", [username])
-        if row is None:
-            return None
-        return {"id": int(row["id"]), "username": str(row["username"])}
-
     def repo_role(self, problem_id: int, user_id: int) -> str | None:
         row = self.db.fetch_one("SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?", [problem_id, user_id])
         if row is None:
@@ -374,12 +368,6 @@ class WorkspaceDiskStore:
             return ""
         return str(row["path"] or "")
 
-    def set_recent_verification_status(self, workspace_id: int, status: str) -> None:
-        self.db.execute(
-            "UPDATE workspaces SET recent_verification_status=? WHERE id=?",
-            [status, int(workspace_id)],
-        )
-
     def workspace_id(self, problem_id: int, user_id: int) -> int | None:
         row = self.db.fetch_one(
             "SELECT id FROM workspaces WHERE problem_id=? AND user_id=?",
@@ -554,30 +542,6 @@ class WorkspaceDiskStore:
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [int(actor_user_id), problem_id, action, json.dumps(details), now_iso()],
         )
-
-    def audit_detail_rows(
-        self,
-        *,
-        problem_id: int,
-        actor_user_id: int,
-        action: str,
-        limit: int,
-    ) -> list[str]:
-        rows = self.db.fetch_all(
-            """
-            SELECT details_json
-            FROM audit_log
-            WHERE problem_id=? AND actor_user_id=? AND action=?
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            [int(problem_id), int(actor_user_id), action, max(1, int(limit))],
-        )
-        result: list[str] = []
-        for row in rows:
-            result.append(str(row["details_json"] or ""))
-        return result
-
 
     def delete_problem_metadata(self, problem_id: int) -> list[str]:
         def _tx(conn: sqlite3.Connection) -> list[str]:

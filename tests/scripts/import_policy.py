@@ -77,10 +77,6 @@ def _module_name_for_path(path: Path) -> str:
     return rel.replace("/", ".")
 
 
-def _path_for_module(module_name: str) -> Path:
-    return ROOT / (module_name.replace(".", "/") + ".py")
-
-
 def _load_first_wave(path: Path) -> list[str]:
     if not path.exists():
         return []

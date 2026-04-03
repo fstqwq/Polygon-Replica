@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 from typing import TypedDict, cast
 from urllib.parse import quote_plus
@@ -20,42 +18,10 @@ class RuntimeProgress(TypedDict):
     log_href: str
 
 
-class VerificationDetailSummary(TypedDict, total=False):
-    error: str
-    failed_step: str
-    failed_test: str
-
-
 def _count_label(count: int, singular: str, plural: str | None = None) -> str:
     count_value = max(0, int(count))
     token = singular if count_value == 1 else (plural if plural is not None else f"{singular}s")
     return f"{count_value} {token}"
-
-def _count_files_with_suffix(directory: Path, suffix: str) -> int:
-    count = 0
-    suffix_token = suffix.lower()
-    if not suffix_token:
-        return 0
-    try:
-        if (not directory.exists()) or (not directory.is_dir()) or directory.is_symlink():
-            return 0
-    except OSError:
-        return 0
-    try:
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                name = entry.name
-                if not name.lower().endswith(suffix_token):
-                    continue
-                try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                except OSError:
-                    continue
-                count += 1
-    except Exception:
-        return 0
-    return count
 
 def _verification_tests_total(metadata: dict[str, object]) -> int:
     selected_test_names = cast(list[object], metadata.get("selected_test_names") or [])
@@ -271,10 +237,3 @@ def _bare_repo_head_commit(bare_repo: Path) -> str:
     proc = run_git(["git", "-C", str(bare_repo), "rev-parse", "--verify", "HEAD"])
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
-def _workspace_problem_mode(workspace: Path) -> str:
-    cfg_path = workspace / "config" / "problem.json"
-    try:
-        return json.loads(cfg_path.read_text(encoding="utf-8")).get("mode", "pass-fail").strip()
-    except Exception:
-        pass
-    return "pass-fail"

@@ -34,13 +34,14 @@ class _JudgeFsIndexEntry(TypedDict):
 
 
 class JudgeFsIndexService:
-    """Persistent filesystem index for judgehost testcase artifacts.
+    """Persistent filesystem index for judgehost testcase and verification artifacts.
 
     Layout:
-    - <cache_root>/judge-fs-index/v2/case/<hh>/<key_hash>/<signature>/
+    - <cache_root>/judge-fs-index/v2/<kind>/<hh>/<key_hash>/<signature>/
     """
 
     KIND_CASE = "case"
+    KIND_VERIFICATION = "verification"
 
     def __init__(self, cache_root: Path) -> None:
         self._root = (Path(cache_root).resolve() / "judge-fs-index" / "v2").resolve()
@@ -55,7 +56,7 @@ class JudgeFsIndexService:
     @staticmethod
     def _normalize_kind(kind: str) -> str:
         token = kind.strip().lower()
-        if token != JudgeFsIndexService.KIND_CASE:
+        if token not in {JudgeFsIndexService.KIND_CASE, JudgeFsIndexService.KIND_VERIFICATION}:
             raise RuntimeError("invalid judge fs index kind")
         return token
 
