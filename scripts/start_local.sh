@@ -7,11 +7,10 @@ if ! command -v uvicorn >/dev/null 2>&1 && [[ -f ".venv/bin/activate" ]]; then
 fi
 
 export POLYGON_REPLICA_DB=${POLYGON_REPLICA_DB:-/var/lib/polygon-replica/metadata.db}
-export POLYGON_REPLICA_BARE_ROOT=${POLYGON_REPLICA_BARE_ROOT:-/srv/git}
-export POLYGON_REPLICA_WORKSPACE_ROOT=${POLYGON_REPLICA_WORKSPACE_ROOT:-/srv/workspaces}
-export POLYGON_REPLICA_RUN_ROOT=${POLYGON_REPLICA_RUN_ROOT:-/srv/runs}
-export POLYGON_REPLICA_ARTIFACTS_ROOT=${POLYGON_REPLICA_ARTIFACTS_ROOT:-/var/lib/polygon-replica/artifacts}
-export POLYGON_REPLICA_CACHE_ROOT=${POLYGON_REPLICA_CACHE_ROOT:-/var/cache/polygon-replica}
+export POLYGON_REPLICA_BARE_ROOT=${POLYGON_REPLICA_BARE_ROOT:-/srv/polygon-replica/git}
+export POLYGON_REPLICA_WORKSPACE_ROOT=${POLYGON_REPLICA_WORKSPACE_ROOT:-/srv/polygon-replica/workspaces}
+export POLYGON_REPLICA_ARTIFACTS_ROOT=${POLYGON_REPLICA_ARTIFACTS_ROOT:-/srv/polygon-replica/export}
+export POLYGON_REPLICA_CACHE_ROOT=${POLYGON_REPLICA_CACHE_ROOT:-/tmp/polygon-replica}
 export POLYGON_REPLICA_AUTH_COOKIE_SECURE=1
 
 HOST=${POLYGON_REPLICA_HOST:-127.0.0.1}
@@ -44,7 +43,6 @@ mkdir -p \
   "$(dirname "$POLYGON_REPLICA_DB")" \
   "$POLYGON_REPLICA_BARE_ROOT" \
   "$POLYGON_REPLICA_WORKSPACE_ROOT" \
-  "$POLYGON_REPLICA_RUN_ROOT" \
   "$POLYGON_REPLICA_ARTIFACTS_ROOT" \
   "$POLYGON_REPLICA_CACHE_ROOT" \
   "$(dirname "$TLS_KEY")"

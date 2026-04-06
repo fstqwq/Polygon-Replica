@@ -29,7 +29,7 @@ fi
 RUNTIME_USER="${SUDO_USER:-$(id -un)}"
 RUNTIME_GROUP="$(id -gn "$RUNTIME_USER")"
 
-echo "[1/5] Installing system dependencies..."
+echo "[1/6] Installing system dependencies..."
 "${SUDO[@]}" apt-get update
 "${SUDO[@]}" apt-get install -y \
   git \
@@ -53,7 +53,7 @@ if command -v fmtutil-sys >/dev/null 2>&1; then
   "${SUDO[@]}" fmtutil-sys --byfmt pdflatex >/dev/null
 fi
 
-echo "[2/5] Configuring kernel user namespace settings..."
+echo "[2/6] Configuring kernel user namespace settings..."
 SYSCTL_FILE="/etc/sysctl.d/99-polygon-replica-sandbox.conf"
 TMP_SYSCTL="$(mktemp)"
 cat >"$TMP_SYSCTL" <<'EOF'
@@ -78,23 +78,21 @@ echo "  kernel.apparmor_restrict_unprivileged_userns=$APPARMOR_USERNS"
 
 echo "  Preparing runtime storage roots..."
 RUNTIME_DIRS=(
-  /srv/git
-  /srv/workspaces
-  /srv/runs
+  /srv/polygon-replica
+  /srv/polygon-replica/git
+  /srv/polygon-replica/workspaces
+  /srv/polygon-replica/export
   /var/lib/polygon-replica
-  /var/lib/polygon-replica/artifacts
   /var/lib/polygon-replica/tls
-  /var/cache/polygon-replica
+  /tmp/polygon-replica
 )
 "${SUDO[@]}" install -d -m 0755 "${RUNTIME_DIRS[@]}"
 "${SUDO[@]}" chown -R "${RUNTIME_USER}:${RUNTIME_GROUP}" \
-  /srv/git \
-  /srv/workspaces \
-  /srv/runs \
+  /srv/polygon-replica \
   /var/lib/polygon-replica \
-  /var/cache/polygon-replica
+  /tmp/polygon-replica
 
-echo "[3/5] Probing bubblewrap root-switch capability..."
+echo "[3/6] Probing bubblewrap root-switch capability..."
 PROBE_CMD=(bwrap --die-with-parent --new-session --ro-bind / / --chdir / -- /bin/sh -lc 'true')
 if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
   if ! sudo -u "$RUNTIME_USER" "${PROBE_CMD[@]}" >/dev/null 2>&1; then
@@ -201,21 +199,20 @@ else
 fi
 echo "  TeX vector font probe passed."
 
-echo "[4/5] Creating Python virtualenv and installing requirements..."
+echo "[4/6] Creating Python virtualenv and installing requirements..."
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
-echo "[5/5] Writing runtime environment file..."
+echo "[5/6] Writing runtime environment file..."
 TMP_ENV_FILE="$(mktemp)"
 cat >"$TMP_ENV_FILE" <<'EOF'
 export POLYGON_REPLICA_DB=/var/lib/polygon-replica/metadata.db
-export POLYGON_REPLICA_BARE_ROOT=/srv/git
-export POLYGON_REPLICA_WORKSPACE_ROOT=/srv/workspaces
-export POLYGON_REPLICA_RUN_ROOT=/srv/runs
-export POLYGON_REPLICA_ARTIFACTS_ROOT=/var/lib/polygon-replica/artifacts
-export POLYGON_REPLICA_CACHE_ROOT=/var/cache/polygon-replica
+export POLYGON_REPLICA_BARE_ROOT=/srv/polygon-replica/git
+export POLYGON_REPLICA_WORKSPACE_ROOT=/srv/polygon-replica/workspaces
+export POLYGON_REPLICA_ARTIFACTS_ROOT=/srv/polygon-replica/export
+export POLYGON_REPLICA_CACHE_ROOT=/tmp/polygon-replica
 export POLYGON_REPLICA_TLS_KEY_PATH=/var/lib/polygon-replica/tls/dev-localhost.key
 export POLYGON_REPLICA_TLS_CERT_PATH=/var/lib/polygon-replica/tls/dev-localhost.crt
 EOF
@@ -223,9 +220,17 @@ ENV_FILE="/etc/polygon-replica.env"
 "${SUDO[@]}" install -m 0644 "$TMP_ENV_FILE" "$ENV_FILE"
 rm -f "$TMP_ENV_FILE"
 
+echo "[6/6] Installing systemd service..."
+SERVICE_UNIT_SRC="$REPO_ROOT/scripts/systemd/polygon-replica.service"
+SERVICE_UNIT_DST="/etc/systemd/system/polygon-replica.service"
+"${SUDO[@]}" install -m 0644 "$SERVICE_UNIT_SRC" "$SERVICE_UNIT_DST"
+"${SUDO[@]}" systemctl daemon-reload
+"${SUDO[@]}" systemctl enable --now polygon-replica.service >/dev/null
+"${SUDO[@]}" systemctl is-active polygon-replica.service
+
 echo
 echo "Install completed."
 echo "Next steps:"
-echo "  source .venv/bin/activate"
-echo "  source /etc/polygon-replica.env"
-echo "  ./scripts/start_local.sh"
+echo "  Sync your worktree to /opt/polygon-replica on this host."
+echo "  Restart with: sudo systemctl restart polygon-replica.service"
+echo "  App health: http://127.0.0.1:8001/login"
