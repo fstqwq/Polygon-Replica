@@ -510,8 +510,7 @@ class TestJudgehostService(SmokeBase):
             }
         result = service.wait_for_task_result(task_id, timeout_sec=1.0)
         self.assertEqual(str(result.get("artifact_path") or ""), "")
-        run_root = config.fs_manager.resolve_verification_run_root(verification_id, run_id).resolve()
-        self.assertFalse(run_root.exists())
+        self.assertFalse((self._verification_artifact_root(verification_id) / "runs" / run_id).exists())
 
     def test_load_run_summary_falls_back_to_in_memory_task_without_recursing(self) -> None:
         service = config.judgehost_task_service
@@ -1161,7 +1160,7 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(first_feedback_token.endswith("judgemessage.txt"))
         self.assertEqual(service.resolve_artifact_blob(first_feedback_token), b"ok\n")
 
-        run_root = config.fs_manager.resolve_verification_run_root(str(run_row["verification_id"] or ""), run_id)
+        run_root = self._verification_artifact_root(str(run_row["verification_id"] or "")) / "runs" / run_id
         self.assertFalse((run_root / "001.out").exists())
 
     def test_domjudge_rewrites_untrusted_non_tl_result_when_cpu_exceeds_time_limit(self) -> None:
@@ -1944,8 +1943,135 @@ class TestJudgehostService(SmokeBase):
         java_script = service._domjudge_compile_script("submission.java").decode("utf-8")
         py_script = service._domjudge_compile_script("submission.py").decode("utf-8")
         self.assertIn('exec clang++ -O3 -std=gnu++20 -DNDEBUG -I. "$MAIN" -o "$DEST"', cpp_script)
-        self.assertIn('javac-custom --release 17 -encoding UTF-8 "$SRC"', java_script)
+        self.assertIn("javac-custom --release 17", java_script)
+        self.assertIn('-sourcepath . -d . "$@"', java_script)
         self.assertIn('"$PY" -X dev -m py_compile "$MAIN"', py_script)
+
+    def test_domjudge_java_compile_script_uses_detect_main_contract(self) -> None:
+        service = config.judgehost_task_service
+        java_script = service._domjudge_compile_script("submission.java").decode("utf-8")
+        java_compile_only_script = service._domjudge_compile_script(
+            "submission.java",
+            compile_only=True,
+        ).decode("utf-8")
+        self.assertIn("trying to detect main class", java_script)
+        self.assertIn('DetectMain.java', java_script)
+        self.assertIn('java -cp "$COMPILESCRIPTDIR" DetectMain', java_script)
+        self.assertIn("trying to detect main class", java_compile_only_script)
+        self.assertIn('DetectMain.java', java_compile_only_script)
+
+    def test_domjudge_java_compile_payload_includes_detect_main_source(self) -> None:
+        service = config.judgehost_task_service
+        precomputed = service._domjudge_precomputed_fields_from_payload(
+            {
+                "source_name": "TranslateMain.java",
+                "source_b64": base64.b64encode(
+                    b"public class TranslateMain { public static void main(String[] args) {} }\n"
+                ).decode("ascii"),
+                "entry_point": "TranslateMain",
+                "verification_payload": {
+                    "tests": [
+                        {
+                            "name": "001.in",
+                            "input_b64": "",
+                            "answer_b64": "",
+                        }
+                    ],
+                    "run_config_json": "{}",
+                    "problem_limits": {},
+                    "binaries_b64": {},
+                    "sources_b64": {},
+                },
+                "mode": "pass-fail",
+                "verification_source": "run.execute",
+            }
+        )
+        compile_files = list(precomputed.get("compile_files") or [])
+        file_names = [str(name) for name, _content, _is_exec in compile_files]
+        self.assertIn("run", file_names)
+        self.assertIn("DetectMain.java", file_names)
+
+    def test_prepare_enqueue_payload_renames_java_source_to_detected_entry_point(self) -> None:
+        service = config.judgehost_task_service
+        payload = service.prepare_enqueue_payload(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id="",
+            mode="pass-fail",
+            submission_path=None,
+            upload_content=(
+                b"public class TranslateMain {\n"
+                b"  public static void main(String[] args) {}\n"
+                b"}\n"
+            ),
+            upload_filename="java_translate.java",
+            run_id=f"r-java-entry-{uuid.uuid4().hex[:8]}",
+            selected_tests=[],
+            verification_id=f"ver-java-entry-{uuid.uuid4().hex[:8]}",
+            verification_run_ids=[],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        self.assertEqual(str(payload.get("source_name") or ""), "TranslateMain.java")
+        self.assertEqual(str(payload.get("entry_point") or ""), "TranslateMain")
+        precomputed = dict(payload.get("domjudge_precomputed") or {})
+        run_config = dict(precomputed.get("run_config") or {})
+        self.assertEqual(str(run_config.get("entry_point") or ""), "TranslateMain")
+
+    def test_domjudge_java_upload_is_sent_with_detected_entry_point_filename(self) -> None:
+        service = self._fresh_judgehost_service()
+        verification_id = f"ver-java-upload-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-java-upload-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path=None,
+            upload_content=(
+                b"public class TranslateMain {\n"
+                b"  public static void main(String[] args) {}\n"
+                b"}\n"
+            ),
+            upload_filename="java_translate.java",
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id=verification_id,
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            persist_verification_run=False,
+        )
+        service.domjudge_register_host("judgehost-java-upload")
+        leased = service.domjudge_fetch_work("judgehost-java-upload", max_batchsize=1)
+        self.assertEqual(len(leased), 1)
+        row = leased[0]
+        self.assertEqual(str(row.get("uuid") or ""), task_id)
+        submit_id = str(row.get("submitid") or "")
+        contest_id = str(row.get("contestid") or "")
+        source_files = service.domjudge_get_source_files(submit_id, contest_id=contest_id)
+        self.assertTrue(source_files)
+        self.assertEqual(str(source_files[0].get("filename") or ""), "TranslateMain.java")
+
+    def test_prepare_enqueue_payload_rejects_java_without_runnable_main_class(self) -> None:
+        service = config.judgehost_task_service
+        with self.assertRaisesRegex(RuntimeError, "no runnable main class found"):
+            service.prepare_enqueue_payload(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id="",
+                mode="pass-fail",
+                submission_path=None,
+                upload_content=b"class Helper {}\n",
+                upload_filename="helper.java",
+                run_id=f"r-java-missing-main-{uuid.uuid4().hex[:8]}",
+                selected_tests=[],
+                verification_id=f"ver-java-missing-main-{uuid.uuid4().hex[:8]}",
+                verification_run_ids=[],
+                expected_behavior="accepted",
+                verification_source="run.execute",
+            )
 
     def test_domjudge_config_and_task_output_limits_use_kb_units(self) -> None:
         service = config.judgehost_task_service
@@ -6458,4 +6584,3 @@ class TestJudgehostService(SmokeBase):
             int(tasks_b[0].get("judgetaskid") or 0),
             int(tasks_a[0].get("judgetaskid") or 0),
         )
-

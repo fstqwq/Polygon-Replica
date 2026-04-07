@@ -12,7 +12,6 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 class VerificationLayout:
     root: Path
     logs: Path
-    runs: Path
     tests: Path
     answers: Path
     bin: Path
@@ -64,7 +63,6 @@ class FsManager:
         return VerificationLayout(
             root=root,
             logs=root / "logs",
-            runs=root / "runs",
             tests=root / "tests",
             answers=root / "ans",
             bin=root / "bin",
@@ -75,25 +73,11 @@ class FsManager:
         layout = self.verification_layout(verification_id)
         layout.root.mkdir(parents=True, exist_ok=True)
         layout.logs.mkdir(parents=True, exist_ok=True)
-        layout.runs.mkdir(parents=True, exist_ok=True)
         layout.tests.mkdir(parents=True, exist_ok=True)
         layout.answers.mkdir(parents=True, exist_ok=True)
         layout.bin.mkdir(parents=True, exist_ok=True)
         layout.uploaded_sources.mkdir(parents=True, exist_ok=True)
         return layout
-
-    def resolve_verification_run_root(self, verification_id: str, run_id: str) -> Path:
-        root = self.resolve_verification_root(verification_id)
-        safe_run_id = self._normalize_token(run_id, field_name="run_id")
-        target = (root / "runs" / safe_run_id).resolve()
-        if root not in target.parents:
-            raise ValueError("run_id escapes verification root")
-        return target
-
-    def prepare_verification_run_root(self, verification_id: str, run_id: str) -> Path:
-        path = self.resolve_verification_run_root(verification_id, run_id)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
 
     def prepare_verification_runtime_layout(self, verification_id: str) -> VerificationRuntimeLayout:
         layout = self.prepare_verification_layout(verification_id)

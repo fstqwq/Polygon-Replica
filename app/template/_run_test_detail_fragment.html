@@ -37,6 +37,9 @@
   {% set col = detail_columns[loop.index0] %}
   {% set final_row = cell.detail.final_row if cell.detail and cell.detail.final_row else None %}
   {% if final_row %}
+  {% set diagnostics_entries = cell.detail.compile_diagnostics if cell.detail and cell.detail.compile_diagnostics else [] %}
+  {% set diagnostics_error = (cell.detail.compile_error_display if cell.detail and cell.detail.compile_error_display else '') %}
+  {% set has_diagnostics = diagnostics_error or (diagnostics_entries | length) > 0 %}
   {% set row_kind = final_row.kind if final_row.kind is defined else cell.kind %}
   {% set verdict_class = 'run-verdict-ok' if row_kind == 'ok' else 'run-verdict-unexpected' if row_kind == 'fail' else 'run-verdict-expected' if row_kind == 'expected-nonac' else 'muted' %}
   <section class="sol-card" data-run-id="{{ col.id }}">
@@ -66,6 +69,31 @@
         </tr>
       </tbody>
     </table>
+    {% if has_diagnostics %}
+    <div class="compile-diagnostics-card">
+      <div class="compile-diagnostics-head">
+        <div><strong>Diagnostics</strong></div>
+      </div>
+      {% if diagnostics_error %}
+      <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ diagnostics_error }}</p>
+      {% endif %}
+      {% if diagnostics_entries %}
+      <div class="compile-diagnostics-list" role="list">
+        {% for d in diagnostics_entries %}
+        {% set level = (d.level | default('') | lower) %}
+        {% if level not in ['error', 'warning', 'note'] %}
+        {% set level = 'other' %}
+        {% endif %}
+        <div class="compile-diagnostics-row compile-diagnostics-row-{{ level }}" role="listitem">
+          <span class="compile-diagnostics-level">{{ d.level_upper or (d.level | upper) }}</span>
+          <span class="compile-diagnostics-location">{{ d.location_display }}</span>
+          <span class="compile-diagnostics-message">{{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
     <div class="sol-output">
       {% if final_row.interactive_transcript and final_row.interactive_transcript.available %}
       <div class="transcript">
@@ -98,7 +126,7 @@
       {% if final_row.output_preview.truncated %}
       <div class="muted">Showing first {{ final_row.output_preview.limit }} bytes.</div>
       {% endif %}
-      {% else %}
+      {% elif not has_diagnostics %}
       <p class="muted empty-text">(output file missing)</p>
       {% endif %}
       {% endif %}

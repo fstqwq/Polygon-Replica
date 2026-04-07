@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
+import tempfile
 from pathlib import Path
 from typing import TypedDict
 
@@ -90,10 +92,26 @@ class VerificationStore:
     def save_metadata(self, verification_id: str, metadata: dict[str, object]) -> None:
         root = self._verification_root(verification_id)
         root.mkdir(parents=True, exist_ok=True)
-        self._metadata_path(verification_id).write_text(
-            json.dumps(dict(metadata), ensure_ascii=True, separators=(",", ":")),
-            encoding="utf-8",
+        target = self._metadata_path(verification_id)
+        payload_text = json.dumps(dict(metadata), ensure_ascii=True, separators=(",", ":"))
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{target.stem}-",
+            suffix=".tmp",
+            dir=str(target.parent),
+            text=True,
         )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                handle.write(payload_text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temp_path.replace(target)
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def metadata(self, verification_id: str) -> dict[str, object]:
         return self._read_metadata(verification_id)

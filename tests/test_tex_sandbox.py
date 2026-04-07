@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import resource
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import call, patch
 
 from app.service.sandbox.base import ExecSpec
 from app.service.sandbox.tex_backend import TexSandboxBackend
@@ -11,6 +13,31 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 
 @unittest.skipUnless(shutil.which("bwrap") and shutil.which("pdflatex"), "bwrap and pdflatex are required")
 class TestTexSandbox(unittest.TestCase):
+    def test_preexec_for_spec_does_not_set_nproc_limit(self) -> None:
+        backend = object.__new__(TexSandboxBackend)
+        spec = ExecSpec(
+            command=["true"],
+            timeout_sec=20,
+            memory_mb=1024,
+            process_limit=64,
+            output_kb=131072,
+        )
+        preexec = backend._preexec_for_spec(spec)
+        with patch("app.service.sandbox.tex_backend.os.setsid") as setsid_mock, patch(
+            "app.service.sandbox.tex_backend.resource.setrlimit"
+        ) as setrlimit_mock:
+            preexec()
+        setsid_mock.assert_called_once_with()
+        self.assertEqual(
+            setrlimit_mock.call_args_list,
+            [
+                call(resource.RLIMIT_CORE, (0, 0)),
+                call(resource.RLIMIT_CPU, (20, 21)),
+                call(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024)),
+                call(resource.RLIMIT_FSIZE, (131072 * 1024, 131072 * 1024)),
+            ],
+        )
+
     def test_tex_sandbox_compiles_in_root_switched_workspace(self) -> None:
         with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:
             workdir = Path(tmp) / "work"

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import threading
 import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.service.disk.verification_store import VerificationStore
 from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text
@@ -410,6 +412,155 @@ class TestVerificationTaskScheduler(SmokeBase):
             self.assertEqual(str(rows["vt-main"]["status"]), VerificationTaskStore.TASK_QUEUED)
         finally:
             coordinator.enqueue_cancel("test shutdown")
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
+
+    def test_finalize_generate_input_validator_rejection_fails_task_and_sets_fail_flag_reason(self) -> None:
+        from app.service.verification.task_result_finalize import finalize_verification_task_result
+
+        class _JudgehostTaskService:
+            def domjudge_case_output_for_task(self, judgehost_task_id: str, test_name: str) -> tuple[str, None, str]:
+                self.seen = (judgehost_task_id, test_name)
+                return ("", None, "")
+
+            def resolve_artifact_blob(self, output_ref: str, *, work_root: object = None) -> bytes | None:
+                self.seen_output_ref = output_ref
+                return b"bad-input\n"
+
+        fake_task_service = _JudgehostTaskService()
+        fake_config = SimpleNamespace(judgehost_task_service=fake_task_service)
+        task_row = {
+            "id": "vt-generate",
+            "verification_id": "ver-validator-reject",
+            "task_kind": "generate-input",
+            "test_name": "001.in",
+            "judgehost_task_id": "jt-generate",
+            "run_id": "r-generate",
+            "logical_run_id": "r-generate",
+        }
+        result = {
+            "status": "ok",
+            "summary": {
+                "tests": [
+                    {
+                        "verdict": "WA",
+                        "message": "validator rejected generated input",
+                        "output_ref": "cache://case/output/001.out",
+                        "time_ms": 7,
+                        "time_user_ms": 7,
+                        "time_wall_ms": 8,
+                        "memory_kb": 64,
+                    }
+                ]
+            },
+        }
+
+        with patch("app.impl.runtime.config.config", fake_config):
+            final_result = finalize_verification_task_result(task_row, result=result)
+
+        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.verdict, "WA")
+        self.assertEqual(final_result.fail_flag_reason, "validator rejected generated input")
+        self.assertEqual(final_result.error_text, "validator rejected generated input")
+        self.assertEqual(final_result.feedback_text, "validator rejected generated input")
+        self.assertEqual(final_result.output_ref, "cache://case/output/001.out")
+
+    def test_runtime_coordinator_cancels_successors_after_generate_input_validator_rejection(self) -> None:
+        store = _InMemoryTaskStore(
+            rows=[
+                _task_row(
+                    "vt-generate",
+                    task_kind="generate-input",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=1,
+                    source_path="generators/gen.cpp",
+                ),
+                _task_row(
+                    "vt-solution",
+                    task_kind="solution-run",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=2,
+                    source_path="solutions/ok.cpp",
+                    logical_run_id="r-solution",
+                ),
+            ],
+            edges=[("vt-generate", "vt-solution")],
+        )
+        publish_order: list[str] = []
+        final_result = TaskExecutionResult(
+            task_id="vt-generate",
+            status=VerificationTaskStore.TASK_FAILED,
+            verdict="WA",
+            run_id="r-generate",
+            judgehost_task_id="jt-vt-generate",
+            runtime_sec=0.01,
+            cpu_sec=0.01,
+            wall_sec=0.01,
+            memory_kb=1,
+            compile_log="",
+            diagnostics_json="[]",
+            error_text="validator rejected generated input for 001.in",
+            feedback_text="validator rejected generated input for 001.in",
+            output_ref="cache://case/output/001.out",
+            fail_flag_reason="validator rejected generated input for 001.in",
+        )
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            publish_order.append(task_id)
+            return TaskPublishResult(
+                task_id=task_id,
+                run_id=f"r-{task_id}",
+                judgehost_task_id=f"jt-{task_id}",
+            )
+
+        callbacks = VerificationRuntimeCallbacks(
+            publish_task=_publish,
+            resolve_case_result=lambda _task_id, _test_name: None,
+            cancel_queued_tasks=lambda _reason: None,
+            persist_state=lambda: {},
+        )
+        coordinator = VerificationRuntimeCoordinator(
+            "ver-validator-stop",
+            task_store=store,
+            callbacks=callbacks,
+            edges=[("vt-generate", "vt-solution")],
+        )
+        thread = threading.Thread(target=coordinator.run, daemon=True)
+        thread.start()
+        try:
+            self._wait_until(
+                lambda: publish_order == ["vt-generate"],
+                timeout=2.0,
+                interval=0.01,
+                message="generate-input task was not published",
+            )
+            coordinator.enqueue_case_reported(
+                "jt-vt-generate",
+                "001.in",
+                {"final_result": final_result},
+            )
+            self._wait_until(
+                lambda: store.fail_state("ver-validator-stop")[0],
+                timeout=2.0,
+                interval=0.01,
+                message="validator rejection did not set fail flag",
+            )
+            self._wait_until(
+                lambda: str({str(row["id"]): row for row in store.list_rows("ver-validator-stop")}["vt-solution"]["status"])
+                == VerificationTaskStore.TASK_CANCELLED,
+                timeout=2.0,
+                interval=0.01,
+                message="successor task was not cancelled after validator rejection",
+            )
+            rows = {str(row["id"]): row for row in store.list_rows("ver-validator-stop")}
+            self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStore.TASK_FAILED)
+            self.assertEqual(str(rows["vt-solution"]["status"]), VerificationTaskStore.TASK_CANCELLED)
+            self.assertEqual(publish_order, ["vt-generate"])
+            self.assertEqual(store.fail_state("ver-validator-stop"), (True, "validator rejected generated input for 001.in"))
+        finally:
+            if thread.is_alive():
+                coordinator.enqueue_cancel("test shutdown")
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
@@ -854,6 +1005,29 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertTrue(bool(diagnostics_rows[0].get("message_truncated")))
         self.assertEqual(parts.memory_kb, 123)
         self.assertAlmostEqual(parts.runtime_sec or 0.0, 0.01, places=3)
+
+    def test_summary_parts_synthesizes_error_text_for_ce_without_compile_detail(self) -> None:
+        from app.service.verification.task_result_finalize import _summary_parts
+
+        parts = _summary_parts(
+            {
+                "tests": [
+                    {
+                        "verdict": "CE",
+                        "message": "",
+                        "output_ref": "",
+                        "time_ms": 0,
+                        "time_user_ms": 0,
+                        "time_wall_ms": 0,
+                        "memory_kb": 0,
+                    }
+                ],
+            },
+            run_status="failed",
+            error_text="",
+        )
+        self.assertEqual(parts.verdict, "CE")
+        self.assertEqual(parts.error_text, "compile error")
 
     def test_ready_rows_require_all_parent_tasks_done(self) -> None:
         rows = [

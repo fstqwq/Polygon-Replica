@@ -3,6 +3,7 @@
 from .db_helpers import db_execute, db_fetch_one, write_preview_summary
 
 import asyncio
+import base64
 import io
 import os
 from unittest.mock import patch
@@ -33,7 +34,6 @@ from .ui_support import (
     git_commit,
     json,
     preview_page,
-    quote_plus,
     run_details_page,
     run_details_test_fragment,
     run_execute,
@@ -107,8 +107,6 @@ class TestUIRun(UIBaseSuite):
             run_id = str(item.get("id") or "").strip()
             if not run_id:
                 continue
-            run_root = config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()
-            run_root.mkdir(parents=True, exist_ok=True)
             summary_obj = dict(item.get("summary") or {})
             source_label = str(item.get("source_label") or summary_obj.get("source") or run_id).strip() or run_id
             expected_behavior = str(item.get("expected_behavior") or "unknown").strip() or "unknown"
@@ -120,7 +118,7 @@ class TestUIRun(UIBaseSuite):
                 "status": str(item.get("status") or status).strip().lower() or "running",
                 "source_label": source_label,
                 "expected_behavior": expected_behavior,
-                "artifact_path": str(item.get("artifact_path") or run_root),
+                "artifact_path": str(item.get("artifact_path") or verification_root),
                 "task_kind": str(item.get("task_kind") or "").strip(),
                 "summary": summary_obj,
             }
@@ -1217,7 +1215,7 @@ class TestUIRun(UIBaseSuite):
                 mode="pass-fail",
                 status="ok",
                 summary=_summary(verification_id, run_ids, source),
-                artifact_path=str(config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()),
+                artifact_path=str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
                 created_at=created_at,
                 finished_at=created_at,
                 verification_id=verification_id,
@@ -1692,7 +1690,7 @@ class TestUIRun(UIBaseSuite):
                     "status": "failed",
                     "source_label": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(config.fs_manager.prepare_verification_run_root(verification_id, "r-main-failed").resolve()),
+                    "artifact_path": str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
                     "summary": {
                         "mode": "interactive",
                         "source": "solutions/accepted.cpp",
@@ -1869,7 +1867,7 @@ class TestUIRun(UIBaseSuite):
         verification_id = f"inv-verif-task-status-{uuid.uuid4().hex[:8]}"
         run_id = f"r-verif-task-status-{uuid.uuid4().hex[:8]}"
         build_id = self.random_id("b-verif-lifecycle")
-        run_root = config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()
+        run_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         run_root.mkdir(parents=True, exist_ok=True)
         summary = {
             "mode": "pass-fail",
@@ -3099,9 +3097,6 @@ class TestUIRun(UIBaseSuite):
                                 "can_link": False,
                             }
                         ],
-                        "compile_diagnostics_total": 1,
-                        "compile_diagnostics_truncated": False,
-                        "compile_diagnostics_limit": 64,
                         "error": "wa.cpp:4:9: expected ';' before return",
                     },
                 }
@@ -3133,6 +3128,64 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("wa.cpp:4:9", html)
         self.assertIn("expected &#39;;&#39; before return", html)
         self.assertNotIn("verification-lifecycle-tabs", html)
+
+    def test_run_test_detail_fragment_shows_diagnostics_without_output_missing_for_ce(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-detail-ce-popup-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-detail-ce-popup-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-detail-ce-popup"),
+            kind=Kind.ALL,
+            status="failed",
+            created_at="2026-03-20T00:00:00Z",
+            finished_at="2026-03-20T00:00:02Z",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "failed",
+                    "source_label": "solutions/ce.cpp",
+                    "expected_behavior": "accepted",
+                    "artifact_path": "",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/ce.cpp",
+                        "verification_source": "verification.start",
+                        "tests": [
+                            {"test": "001.in", "verdict": "CE", "feedback_files": [], "message": ""},
+                        ],
+                        "compile_diagnostics": [
+                            {
+                                "level": "error",
+                                "file": "solutions/ce.cpp",
+                                "line": 7,
+                                "column": 3,
+                                "message": "expected ';' before return",
+                                "can_link": True,
+                            }
+                        ],
+                        "error": "solutions/ce.cpp:7:3: expected ';' before return",
+                    },
+                }
+            ],
+        )
+
+        detail = run_details_test_fragment(
+            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("Diagnostics", detail_html)
+        self.assertIn("solutions/ce.cpp:7:3", detail_html)
+        self.assertIn("expected &#39;;&#39; before return", detail_html)
+        self.assertNotIn("(output file missing)", detail_html)
 
     def test_run_details_ignores_runner_build_step_log_entries_when_rendering_verification_lifecycle(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -4293,92 +4346,11 @@ class TestUIRun(UIBaseSuite):
         self.assertIn('class="col-link"><span class="col-title">accepted.cpp</span></a>', html)
         self.assertNotIn(f"/problems/alice/sample/alice/run/details?verification_id={verification_id}", html)
 
-    def test_run_artifact_file_blocks_compile_log_download(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        run_id = f"r-ce-block-{uuid.uuid4().hex[:8]}"
-        run_root = config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()
-        run_root.mkdir(parents=True, exist_ok=True)
-        (run_root / "compile.log").write_text("compile error\n", encoding="utf-8")
-        self._insert_verification_run_row(
-            run_id=run_id,
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            build_id=self.random_id("b-ce-block"),
-            mode="pass-fail",
-            status="failed",
-            summary={},
-            artifact_path=str(run_root),
-            created_at="2026-02-23T00:00:00Z",
-            finished_at="2026-02-23T00:00:01Z",
-        )
-        with self.assertRaises(HTTPException) as raised:
-            run_export_impl.run_artifact_file("alice/sample", "alice", run_id, "compile.log")
-        self.assertEqual(int(raised.exception.status_code), 403)
-
-    def test_run_artifact_file_missing_reports_unavailable(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        run_id = f"r-artifact-missing-{uuid.uuid4().hex[:8]}"
-        self._insert_verification_row(
-            verification_id=f"ver-{run_id}",
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            build_id=self.random_id("b-artifact-missing"),
-            kind=Kind.ALL,
-            status="ok",
-            created_at="2026-03-07T00:00:00Z",
-            finished_at="2026-03-07T00:00:01Z",
-            runs=[{"id": run_id, "status": "ok", "summary": {}}],
-        )
-        with self.assertRaises(HTTPException) as raised:
-            run_export_impl.run_artifact_file("alice/sample", "alice", run_id, "feedback_dir/001/judgemessage.txt")
-        self.assertEqual(int(raised.exception.status_code), 404)
-        self.assertEqual(str(raised.exception.detail or ""), "artifact unavailable")
-
-    def test_run_artifact_file_serves_cache_blob_token(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        run_id = f"r-artifact-cache-{uuid.uuid4().hex[:8]}"
-        self._insert_verification_row(
-            verification_id=f"ver-{run_id}",
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            build_id=self.random_id("b-artifact-cache"),
-            kind=Kind.ALL,
-            status="ok",
-            created_at="2026-03-11T00:00:00Z",
-            finished_at="2026-03-11T00:00:01Z",
-            runs=[{"id": run_id, "status": "ok", "summary": {"mode": "pass-fail", "pass_limit": 2}}],
-            summary_extra={"mode": "pass-fail", "pass_limit": 2},
-        )
-        service = config.judgehost_task_service
-        key_hash = uuid.uuid4().hex + uuid.uuid4().hex
-        signature = uuid.uuid4().hex + uuid.uuid4().hex
-        service._domjudge_cache_put(
-            service.CASE_CACHE_KIND,
-            key_hash,
-            signature,
-            {"runresult": "correct"},
-            files={"program.out": b"line 1\nline 2\n"},
-            tags={"test": "cache-download"},
-        )
-        token = service._domjudge_cache_blob_ref(
-            kind=service.CASE_CACHE_KIND,
-            key_hash=key_hash,
-            signature=signature,
-            name="program.out",
-        )
-
-        resp = run_export_impl.run_artifact_file("alice/sample", "alice", run_id, token)
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.body, b"line 1\nline 2\n")
-        self.assertIn('attachment; filename="program.out"', str(resp.headers.get("content-disposition") or ""))
-        self.assertEqual(str(resp.headers.get("content-type") or ""), "text/plain; charset=utf-8")
-
     def test_run_details_transcript_preview_shows_download_link(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         token = "cache://judgehost-domjudge-case/" + ("a" * 64) + "/" + ("b" * 64) + "/program.out"
+        encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
+        download_href = f"/problems/alice/sample/alice/artifacts/ver-r-transcript/blob/{encoded}/program.out"
         detail_ctx = {
             "detail_rows": [
                 {
@@ -4399,7 +4371,7 @@ class TestUIRun(UIBaseSuite):
                                         "text": "> ping\n< pong\n",
                                         "truncated": False,
                                         "limit": 1024,
-                                        "download_href": f"/problems/alice/sample/alice/runs/r-transcript/artifacts/{quote_plus(token)}",
+                                        "download_href": download_href,
                                         "message": "",
                                     },
                                     "interactive_transcript": {
@@ -4426,7 +4398,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("Transcript (first 2 lines)", detail_html)
-        self.assertIn(f"/problems/alice/sample/alice/runs/r-transcript/artifacts/{quote_plus(token)}", detail_html)
+        self.assertIn(download_href, detail_html)
         self.assertIn(">download</a>", detail_html)
 
     def test_run_cell_kind_nonaccepted_expected_uses_required_allowed_policy(self) -> None:
@@ -5139,7 +5111,7 @@ class TestUIRun(UIBaseSuite):
                     "status": "ok",
                     "source_label": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "artifact_path": str(config.fs_manager.prepare_verification_run_root(verification_id, run_id).resolve()),
+                    "artifact_path": str(config.fs_manager.prepare_verification_root(verification_id).resolve()),
                     "summary": {
                         "mode": "pass-fail",
                         "source": "solutions/accepted.cpp",
@@ -5326,7 +5298,7 @@ class TestUIRun(UIBaseSuite):
             mode="pass-fail",
             status="failed",
             summary=run_summary,
-            artifact_path=str(config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()),
+            artifact_path=str(config.fs_manager.prepare_verification_root(f"ver-{run_id}").resolve()),
             created_at="2026-02-23T00:02:00Z",
             finished_at="2026-02-23T00:02:01Z",
         )

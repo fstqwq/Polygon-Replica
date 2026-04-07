@@ -219,9 +219,6 @@
     <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ col.error_display or col.error }}</p>
     {% endif %}
     {% if has_entries %}
-    {% if col.compile_diagnostics_truncated %}
-    <p class="muted">Showing first {{ col.compile_diagnostics_limit }} diagnostics ({{ col.compile_diagnostics_total }} total).</p>
-    {% endif %}
     <div class="compile-diagnostics-list" role="list">
       {% for d in entries %}
       {% set level = (d.level | default('') | lower) %}
@@ -257,9 +254,6 @@
     <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
     {% endif %}
     {% if verification_has_entries %}
-    {% if detail_verification_logs.diagnostics_truncated %}
-    <p class="muted">Showing first {{ detail_verification_logs.diagnostics_limit }} diagnostics ({{ detail_verification_logs.diagnostics_total }} total).</p>
-    {% endif %}
     <div class="compile-diagnostics-list" role="list">
       {% for d in verification_entries %}
       {% set level = (d.level | default('') | lower) %}
@@ -309,9 +303,6 @@
     <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
     {% endif %}
     {% if verification_has_entries %}
-    {% if detail_verification_logs.diagnostics_truncated %}
-    <p class="muted">Showing first {{ detail_verification_logs.diagnostics_limit }} diagnostics ({{ detail_verification_logs.diagnostics_total }} total).</p>
-    {% endif %}
     <div class="compile-diagnostics-list" role="list">
       {% for d in verification_entries %}
       {% set level = (d.level | default('') | lower) %}

@@ -14,6 +14,16 @@ from app.impl.workspace.context_ui import page_ctx
 _C = config.constants
 
 
+def _problem_slug_segment(value: str | object) -> str:
+    raw = form_text(value).strip()
+    if not raw:
+        return ""
+    parts = [segment for segment in raw.split("/") if segment]
+    if not parts:
+        return ""
+    return parts[-1]
+
+
 def switch_workspace(
     request: Request,
     problem: str = Form(...),
@@ -90,8 +100,9 @@ def problem_delete(request: Request, problem: str, user: str, confirm_problem: s
         return _sudo_redirect_for_destructive(next_path)
     msg = 'problem deleted'
     try:
-        expected = ctx['problem']['slug'].strip()
-        if form_text(confirm_problem).strip() != expected:
+        expected_slug = str(ctx['problem']['slug'] or "").strip()
+        expected = _problem_slug_segment(expected_slug)
+        if _problem_slug_segment(confirm_problem) != expected:
             raise ValueError('problem deletion confirmation mismatch')
         result = config.workspace_service.delete_problem(problem)
         warnings = result.get('fs_warnings') if isinstance(result, dict) else []
@@ -101,7 +112,7 @@ def problem_delete(request: Request, problem: str, user: str, confirm_problem: s
             None,
             'problem.delete',
             {
-                'problem_slug': expected,
+                'problem_slug': expected_slug,
                 'problem_id': int(ctx['problem']['id']),
                 'workspace_count': int(result.get('workspace_count', 0)) if isinstance(result, dict) else 0,
                 'fs_warnings': warning_rows,

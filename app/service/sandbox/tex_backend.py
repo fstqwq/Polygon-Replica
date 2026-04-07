@@ -224,14 +224,9 @@ class TexSandboxBackend(SandboxBackend):
         command.extend(str(token) for token in spec.command)
         return command, working_dir
 
-    def _effective_nproc_limit(self, process_limit: int) -> int:
-        requested = max(1, int(process_limit))
-        return max(requested, requested + 8)
-
     def _preexec_for_spec(self, spec: ExecSpec):
         timeout_sec = max(1, int(spec.timeout_sec))
         memory_mb = int(spec.memory_mb) if spec.memory_mb is not None else None
-        process_limit = int(spec.process_limit) if spec.process_limit is not None else None
         output_kb = int(spec.output_kb) if spec.output_kb is not None else None
 
         def _apply_limits() -> None:
@@ -241,9 +236,6 @@ class TexSandboxBackend(SandboxBackend):
             if memory_mb is not None:
                 as_limit = max(16, memory_mb) * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (as_limit, as_limit))
-            if process_limit is not None:
-                nproc = self._effective_nproc_limit(process_limit)
-                resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
             if output_kb is not None:
                 fsize = max(64, output_kb) * 1024
                 resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))

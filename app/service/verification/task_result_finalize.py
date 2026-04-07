@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -17,6 +16,7 @@ _COMPILE_LOG_CHAR_LIMIT = 16384
 _ERROR_TEXT_CHAR_LIMIT = 4096
 _FEEDBACK_TEXT_CHAR_LIMIT = 4096
 _COMPILE_DIAGNOSTICS_LIMIT = 64
+_ACCEPTING_VERDICTS = frozenset({"OK", "AC"})
 
 
 @dataclass(frozen=True)
@@ -153,6 +153,11 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
         cpu_sec = float(cpu_ms) / 1000.0
         wall_sec = float(wall_ms) / 1000.0
     feedback_meta = canonical_truncated_text(feedback_source, limit=_FEEDBACK_TEXT_CHAR_LIMIT)
+    final_error_text = error_text_meta["text"]
+    if verdict == "CE" and (not final_error_text) and diagnostics_json == "[]":
+        fallback_error = str(feedback_meta["text"] or "").strip() or "compile error"
+        fallback_meta = canonical_truncated_text(fallback_error, limit=_ERROR_TEXT_CHAR_LIMIT)
+        final_error_text = fallback_meta["text"]
     return _TaskSummaryParts(
         verdict=verdict,
         runtime_sec=runtime_sec,
@@ -161,10 +166,26 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
         memory_kb=memory_kb,
         compile_log=compile_log_meta["text"],
         diagnostics_json=diagnostics_json,
-        error_text=error_text_meta["text"],
+        error_text=final_error_text,
         feedback_text=feedback_meta["text"],
         output_ref=output_ref,
     )
+
+
+def _accepted_verdict(verdict: str) -> bool:
+    return str(verdict or "").upper() in _ACCEPTING_VERDICTS
+
+
+def _final_error_text(parts: _TaskSummaryParts, *, fallback: str) -> str:
+    error_text = str(parts.error_text or "").strip()
+    if error_text:
+        return error_text
+    feedback_text = str(parts.feedback_text or "").strip()
+    if feedback_text:
+        error_meta = canonical_truncated_text(feedback_text, limit=_ERROR_TEXT_CHAR_LIMIT)
+        return error_meta["text"]
+    fallback_meta = canonical_truncated_text(fallback, limit=_ERROR_TEXT_CHAR_LIMIT)
+    return fallback_meta["text"]
 
 
 def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
@@ -228,8 +249,12 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
         )
 
     if task_kind == TASK_GENERATE_INPUT:
-        if result_status != Status.OK.value:
-            fail_reason = error_text or f"generate-input failed on {test_name}"
+        generate_input_ok = result_status == Status.OK.value and _accepted_verdict(parts.verdict)
+        if not generate_input_ok:
+            fail_reason = _final_error_text(
+                parts,
+                fallback=error_text or f"validator rejected generated input for {test_name}",
+            )
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_FAILED,
@@ -242,7 +267,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 memory_kb=parts.memory_kb,
                 compile_log=parts.compile_log,
                 diagnostics_json=parts.diagnostics_json,
-                error_text=parts.error_text,
+                error_text=fail_reason,
                 feedback_text=parts.feedback_text,
                 output_ref=materialized_output_ref,
                 fail_flag_reason=fail_reason,

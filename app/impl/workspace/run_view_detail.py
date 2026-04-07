@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote_plus
 from app.impl.runtime.config import config
-from .artifact import verification_artifact_blob
+from .artifact import verification_artifact_blob, verification_blob_virtual_rel
 from .context import count_label
 from .problem_config import read_problem_config
 from .context_operation import (
@@ -238,8 +238,6 @@ def build_run_detail_context(
             tests: list[dict[str, object]] = []
             compile_log = ''
             compile_diagnostics: list[dict[str, object]] = []
-            compile_diagnostics_total = 0
-            compile_diagnostics_truncated = False
             error_text = ''
             max_time_ms = 0
             max_memory_kb = 0
@@ -277,12 +275,9 @@ def build_run_detail_context(
                 except Exception:
                     task_diagnostics = []
                 if task_diagnostics:
-                    compile_diagnostics_total += len(task_diagnostics)
                     compile_diagnostics.extend(task_diagnostics)
                 if (not error_text) and str(row['error_text'] or ''):
                     error_text = str(row['error_text'] or '')
-            if compile_diagnostics_total > len(compile_diagnostics):
-                compile_diagnostics_truncated = True
             summary: dict[str, object] = {
                 'mode': execute_mode,
                 'source': str(item['source_path']),
@@ -292,9 +287,6 @@ def build_run_detail_context(
                 'tests': tests,
                 'compile_log': compile_log,
                 'compile_diagnostics': compile_diagnostics,
-                'compile_diagnostics_total': int(compile_diagnostics_total),
-                'compile_diagnostics_truncated': bool(compile_diagnostics_truncated),
-                'compile_diagnostics_limit': int(_C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT),
                 'error': error_text,
                 'usage': {
                     'tests': len(tests),
@@ -638,13 +630,29 @@ def build_run_detail_context(
             summary = dict(row['summary'])
             source_label = row['source_label']
         _cap_summary_list(summary, 'tests', _C.RUN_DETAIL_TEST_LIST_LIMIT, 'tests_truncated', 'tests_total', 'tests_limit')
-        _cap_summary_list(summary, 'compile_diagnostics', _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT, 'compile_diagnostics_truncated', 'compile_diagnostics_total', 'compile_diagnostics_limit')
+        raw_compile_diags = list(cast(list[object], summary.get('compile_diagnostics') or []))
+        if raw_compile_diags:
+            summary['compile_diagnostics'] = raw_compile_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
         if include_row_details:
             _cap_run_test_feedback_files(summary, _C.RUN_TEST_FEEDBACK_FILE_LIST_LIMIT)
         compile_diags = summary.get('compile_diagnostics') or []
         if compile_diags:
             normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
+        detail_compile_diagnostics = list(cast(list[dict[str, object]], summary.get('compile_diagnostics') or []))
+        detail_compile_error = preserve_error_text(
+            (summary.get('error') or ''),
+            max_chars=1600,
+            max_lines=24,
+        )
+        if (not detail_compile_error) and detail_compile_diagnostics:
+            first_diag = detail_compile_diagnostics[0]
+            diag_location = str(first_diag.get('location_display') or '').strip()
+            diag_message = str(first_diag.get('message') or '').strip()
+            if diag_location and diag_message:
+                detail_compile_error = f'{diag_location}: {diag_message}'
+            elif diag_message:
+                detail_compile_error = diag_message
         source = _run_source_from_summary(summary)
         task_kind = _run_task_kind_from_summary(summary)
         is_main_correct_run = _is_main_correct_task_kind(task_kind)
@@ -801,7 +809,17 @@ def build_run_detail_context(
                         if verdict_token and verdict_token not in {'--', '-'}:
                             final_row = dict(candidate)
                             break
-                    detail_payload = {'verdict': verdict, 'verdict_short': verdict_short, 'time_display': f'{time_ms}ms', 'memory_display': memory_mb_text, 'feedback_display': feedback_display, 'pass_rows': pass_rows, 'final_row': final_row}
+                    detail_payload = {
+                        'verdict': verdict,
+                        'verdict_short': verdict_short,
+                        'time_display': f'{time_ms}ms',
+                        'memory_display': memory_mb_text,
+                        'feedback_display': feedback_display,
+                        'pass_rows': pass_rows,
+                        'final_row': final_row,
+                        'compile_error_display': detail_compile_error,
+                        'compile_diagnostics': detail_compile_diagnostics,
+                    }
                 all_tests.add(test_name)
                 tests_map[test_name] = {
                     'verdict': verdict,
@@ -876,6 +894,8 @@ def build_run_detail_context(
                         'feedback_display': '-',
                         'pass_rows': [pass_row],
                         'final_row': dict(pass_row),
+                        'compile_error_display': detail_compile_error,
+                        'compile_diagnostics': detail_compile_diagnostics,
                     }
                     detail_available = True
                 tests_map[test_name] = {
@@ -897,7 +917,7 @@ def build_run_detail_context(
                         max_memory_kb = memory_kb
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
-        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'compile_diagnostics_truncated': bool(summary.get('compile_diagnostics_truncated')), 'compile_diagnostics_total': int(summary.get('compile_diagnostics_total') or 0), 'compile_diagnostics_limit': int(summary.get('compile_diagnostics_limit') or 0), 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
+        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
         if not _is_solution_column_source(source_for_display):
             if include_row_details and task_kind in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
                 pass
@@ -1095,24 +1115,17 @@ def build_run_detail_context(
             virtual_rel = f'output/{safe_task_id}/{filename}'
             return _verification_artifact_preview(safe_verification_id, virtual_rel)
 
-        def _run_artifact_preview(run_id: str, rel_path: str) -> dict[str, object]:
-            safe_run_id = normalize_run_id_token(run_id)
+        def _verification_blob_preview(verification_id: str, rel_path: str) -> dict[str, object]:
+            safe_verification_id = (verification_id or '')
             safe_rel_path = (rel_path or '').lstrip('/')
-            if not problem_slug or not username or (not safe_run_id) or (not safe_rel_path):
+            if not problem_slug or not username or (not safe_rel_path) or (not is_canonical_artifact_id(safe_verification_id)):
                 return _run_detail_preview_unavailable('missing')
-            service = getattr(config, "judgehost_task_service", None)
-            if service is None:
+            if not safe_rel_path.startswith('cache://'):
                 return _run_detail_preview_unavailable('missing')
-            download_href = (
-                f'/problems/{problem_slug}/{username}/runs/{safe_run_id}/artifacts/{quote_plus(safe_rel_path)}'
-            )
-            try:
-                blob = service.resolve_artifact_blob(safe_rel_path)
-            except Exception:
-                blob = None
-            if blob is None:
+            virtual_rel = verification_blob_virtual_rel(safe_rel_path, filename=Path(safe_rel_path).name)
+            if not virtual_rel:
                 return _run_detail_preview_unavailable('missing')
-            return _run_detail_preview_from_bytes(blob, download_href)
+            return _verification_artifact_preview(safe_verification_id, virtual_rel)
 
         for test_name in target_tests:
             row_index = int(row_index_by_test.get(test_name) or 0)
@@ -1143,15 +1156,15 @@ def build_run_detail_context(
                             if output_task_id and source_verification_id:
                                 output_preview = _verification_output_preview(source_verification_id, output_task_id, test_name)
                             else:
-                                output_preview = _run_artifact_preview((col.get('id') or ''), output_rel)
+                                output_preview = _verification_blob_preview(source_verification_id, output_rel)
                         row_payload['output_preview'] = output_preview
                         checker_log_rel = (row_payload.get('checker_log_rel') or '')
                         feedback_rel = (row_payload.get('feedback_rel') or '')
                         feedback_preview = _run_detail_preview_unavailable('missing')
                         if feedback_rel:
-                            feedback_preview = _run_artifact_preview((col.get('id') or ''), feedback_rel)
+                            feedback_preview = _verification_blob_preview(source_verification_id, feedback_rel)
                         elif checker_log_rel:
-                            feedback_preview = _run_artifact_preview((col.get('id') or ''), checker_log_rel)
+                            feedback_preview = _verification_blob_preview(source_verification_id, checker_log_rel)
                         row_payload['feedback_preview'] = feedback_preview
                         if (row_payload.get('feedback_display') or '-') == '-':
                             if bool(feedback_preview.get('available')):
@@ -1276,9 +1289,6 @@ def build_run_detail_context(
         'error_display': '',
         'log_rows': [],
         'diagnostics': [],
-        'diagnostics_total': 0,
-        'diagnostics_truncated': False,
-        'diagnostics_limit': _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
     }
 
     if source_verification_id and problem_slug and username:
@@ -1287,16 +1297,11 @@ def build_run_detail_context(
         diagnostics_title = 'Verification'
         log_rows: list[dict[str, str]] = []
         diagnostics_rows: list[dict[str, object]] = []
-        diagnostics_total = 0
-        diagnostics_truncated = False
         for col in columns:
             raw_diags = col.get('compile_diagnostics') or []
             if not raw_diags:
                 continue
-            diagnostics_total = len(raw_diags)
-            capped_diags = raw_diags[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
-            diagnostics_truncated = diagnostics_total > len(capped_diags)
-            normalized_diags = _normalize_diagnostics(capped_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+            normalized_diags = _normalize_diagnostics(raw_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
             diagnostics_title = str(col.get('title') or 'Verification')
             break
@@ -1306,10 +1311,7 @@ def build_run_detail_context(
             if not verification_diags:
                 verification_diags = stage_generate.get('compile_diagnostics') or []
             if verification_diags:
-                diagnostics_total = len(verification_diags)
-                capped_diags = list(verification_diags)[: _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT]
-                diagnostics_truncated = diagnostics_total > len(capped_diags)
-                normalized_diags = _normalize_diagnostics(capped_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
+                normalized_diags = _normalize_diagnostics(list(verification_diags), _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
                 diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
                 diagnostics_title = 'Verification'
         if diagnostics_rows and (
@@ -1333,9 +1335,6 @@ def build_run_detail_context(
             'error_display': run_error_display(artifact_verification_error),
             'log_rows': log_rows,
             'diagnostics': diagnostics_rows,
-            'diagnostics_total': diagnostics_total,
-            'diagnostics_truncated': diagnostics_truncated,
-            'diagnostics_limit': _C.RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT,
         }
 
     return {

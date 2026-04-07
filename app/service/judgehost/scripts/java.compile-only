@@ -2,8 +2,9 @@
 
 DEST="$1" ; shift
 MEMLIMIT="$1" ; shift
-SRC="$1"
-MAINSOURCE="$SRC"
+MAINSOURCE="$1"
+MAINCLASS=""
+COMPILESCRIPTDIR="$(dirname "$0")"
 
 MEMSTACK=65536
 MEMJVM=65536
@@ -16,20 +17,35 @@ if [ $MEMLIMITJAVA -le 0 ]; then
 fi
 
 if [ -z "$ENTRY_POINT" ]; then
-	[ -n "$DEBUG" ] && echo "Info: no ENTRY_POINT provided, assuming 'Main'."
-	MAINCLASS="Main"
-	echo "Info: detected entry_point: $MAINCLASS"
+	[ -n "$DEBUG" ] && echo "Debug: no ENTRY_POINT provided, trying to detect main class."
 else
+	[ -n "$DEBUG" ] && echo "Debug: using main class provided by ENTRY_POINT='$ENTRY_POINT'."
 	MAINCLASS="$ENTRY_POINT"
 fi
 
-{{JAVA_COMPILE_CMD}} "$SRC"
+TMPFILE=$(mktemp domjudge_javac_output.XXXXXX) || exit 1
+{{JAVA_COMPILE_CMD}} -encoding UTF-8 -sourcepath . -d . "$@" 2> "$TMPFILE"
+EXITCODE=$?
+cat "$TMPFILE"
+rm -f "$TMPFILE"
+[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+
+{{JAVA_COMPILE_CMD}} "$COMPILESCRIPTDIR/DetectMain.java" > /dev/null 2>&1
 EXITCODE=$?
 [ "$EXITCODE" -ne 0 ] && exit $EXITCODE
 
-javap "$MAINCLASS" > /dev/null
-EXITCODE=$?
-[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+if [ -z "$MAINCLASS" ]; then
+	CLASSNAMES="$(find ./* -type f -regex '^.*\.class$' \
+	            | sed -e 's/\.class$//' -e 's/^\.\///' -e 's/\//./g')"
+	MAINCLASS=$(java -cp "$COMPILESCRIPTDIR" DetectMain "$(pwd)" $CLASSNAMES)
+	EXITCODE=$?
+	echo "Info: detected entry_point: $MAINCLASS"
+	[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+else
+	java -cp "$COMPILESCRIPTDIR" DetectMain "$(pwd)" $MAINCLASS > /dev/null
+	EXITCODE=$?
+	[ "$EXITCODE" -ne 0 ] && exit $EXITCODE
+fi
 
 cat > "$DEST" <<'EOF'
 #!/bin/sh

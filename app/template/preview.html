@@ -3,6 +3,7 @@
 {% set ns = namespace(latest=None) %}
 {% set preview_nav = ctx.nav_status.get('preview', {}) if ctx.nav_status is defined else {} %}
 {% set preview_is_stale = preview_nav.get('text') == 'stale' %}
+{% set preview_is_missing = preview_artifacts_missing %}
 {% if preview_id %}
   {% for p in previews %}
     {% if p.id == preview_id %}
@@ -101,6 +102,9 @@
       {% endif %}
     </div>
     {% endif %}
+    {% if preview_is_missing %}
+    <p class="muted">Preview artifacts expired from cache. Recompile to regenerate the PDF and latex.log.</p>
+    {% endif %}
     {% if preview_id %}
     {% if pdf_exists %}
     {% if preview_is_stale %}
@@ -123,7 +127,7 @@
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
       <button class="btn btn-primary primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
     </form>
-    {% else %}
+    {% elif not preview_is_missing and not preview_compile_failed %}
     <p class="muted">Latest preview has no PDF output.</p>
     {% endif %}
     {% if log_refs %}

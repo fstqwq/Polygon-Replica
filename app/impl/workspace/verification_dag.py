@@ -359,8 +359,6 @@ def _logical_run_summary(
     tests: list[dict[str, object]] = []
     compile_log = ""
     compile_diagnostics: list[dict[str, object]] = []
-    diagnostics_total = 0
-    diagnostics_truncated = False
     error_text = ""
     max_time_ms = 0
     max_memory_kb = 0
@@ -397,16 +395,11 @@ def _logical_run_summary(
         except Exception:
             task_diagnostics = []
         if task_diagnostics:
-            diagnostics_total += len(task_diagnostics)
             remaining = max(0, _COMPILE_DIAGNOSTICS_LIMIT - len(compile_diagnostics))
             if remaining > 0:
                 compile_diagnostics.extend(task_diagnostics[:remaining])
-            if len(task_diagnostics) > remaining:
-                diagnostics_truncated = True
         if (not error_text) and str(row["error_text"] or ""):
             error_text = str(row["error_text"] or "")
-    if diagnostics_total > len(compile_diagnostics):
-        diagnostics_truncated = True
     if fail_flag and (saw_cancelled or saw_pending) and (not saw_failed):
         saw_failed = True
     if saw_running:
@@ -435,9 +428,6 @@ def _logical_run_summary(
         "tests_total": len(test_names),
         "compile_log": compile_log,
         "compile_diagnostics": list(compile_diagnostics),
-        "compile_diagnostics_total": diagnostics_total,
-        "compile_diagnostics_truncated": bool(diagnostics_truncated),
-        "compile_diagnostics_limit": _COMPILE_DIAGNOSTICS_LIMIT,
         "error": error_text,
         "usage": {
             "tests": len(tests),

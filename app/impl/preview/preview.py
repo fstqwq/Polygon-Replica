@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.artifact import artifact_root, safe_artifact_path
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import (
     audit,
@@ -190,37 +189,19 @@ def preview_page(request: Request, problem: str, user: str):
     workspace = Path(ctx['workspace']['path'])
     problem_title = ctx["problem"]["name"]
     current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
+    workspace_head = str(ctx["workspace"].get("head_commit") or "")
     requested_preview_id = request.query_params.get("preview_id", "")
     preview_id = requested_preview_id
     message = ''
     previews = config.preview_service.list_workspace_previews(problem_id, workspace_id)
-
-    def _preview_has_visible_output(candidate_id: str) -> bool:
-        if not candidate_id:
-            return False
-        try:
-            artifact_root(problem, candidate_id)
-        except HTTPException:
-            return False
-        try:
-            safe_artifact_path(problem, candidate_id, 'statement_preview/statement.pdf')
-            return True
-        except HTTPException:
-            pass
-        try:
-            safe_artifact_path(problem, candidate_id, 'logs/latex.log')
-            return True
-        except HTTPException:
-            return False
     if not preview_id:
-        head_commit = ctx["workspace"].get("head_commit")
         dirty = bool(ctx['workspace'].get('dirty'))
-        if head_commit and (not dirty):
+        if workspace_head and (not dirty):
             cached_id = config.preview_service.find_cached_preview_id(
                 problem,
                 problem_id,
                 workspace_id,
-                source_commit=head_commit,
+                source_commit=workspace_head,
                 statement_signature=current_statement_signature,
                 allow_cache_mutation=False,
             )
@@ -237,19 +218,19 @@ def preview_page(request: Request, problem: str, user: str):
             )
             if cached_id:
                 preview_id = cached_id
-    if preview_id and (not requested_preview_id) and (not _preview_has_visible_output(preview_id)):
-        preview_id = ''
     safe_mode = statement_mode_from_ctx(ctx)
     statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode)
     log = ''
     log_truncated = False
     pdf_exists = False
+    preview_artifacts_missing = False
     log_refs = []
     log_refs_total = 0
     log_refs_truncated = False
     selected_preview_nav: dict[str, object] | None = None
     selected_preview_summary: dict[str, object] | None = None
     selected_preview_status = 'none'
+    selected_preview_row_status = 'none'
     preview_compile_failed = False
     preview_failed_stage = ''
     preview_failure_title = 'Compile failed.'
@@ -259,59 +240,57 @@ def preview_page(request: Request, problem: str, user: str):
     def _selected_preview_nav_status(candidate_id: str) -> dict[str, object]:
         if not candidate_id:
             return {'text': 'none', 'danger': True, 'warn': False}
-        row = config.preview_service.get_workspace_preview(problem_id, workspace_id, candidate_id)
-        if row is None:
+        state = config.preview_service.get_workspace_preview_state(
+            problem_id,
+            workspace_id,
+            candidate_id,
+            statement_signature=current_statement_signature,
+            workspace_head=workspace_head,
+        )
+        if state is None:
             return {'text': 'missing', 'danger': True, 'warn': False}
-        preview_status = row['status']
-        preview_text = preview_status
-        preview_danger = preview_status in {'none', 'missing', 'failed', 'error'}
-        preview_warn = False
-        if preview_status == 'ok':
-            has_pdf_output = False
-            try:
-                safe_artifact_path(problem, candidate_id, 'statement_preview/statement.pdf')
-                has_pdf_output = True
-            except HTTPException:
-                has_pdf_output = False
-            if not has_pdf_output:
-                return {'text': 'missing', 'danger': True, 'warn': False}
-            summary_obj = dict(row['summary'])
-            preview_signature = summary_obj.get("statement_signature", "")
-            preview_source_commit = row["source_commit"]
-            workspace_head = ctx["workspace"].get("head_commit")
-            stale_by_signature = bool(preview_signature and current_statement_signature and (preview_signature != current_statement_signature))
-            stale_by_head = bool((not preview_signature or not current_statement_signature) and preview_source_commit and workspace_head and (preview_source_commit != workspace_head))
-            if stale_by_signature or stale_by_head:
-                preview_text = 'stale'
-                preview_danger = False
-                preview_warn = True
-            else:
-                preview_text = 'ok'
-                preview_danger = False
+        preview_text = state['display_status']
+        preview_danger = preview_text in {'none', 'missing', 'failed', 'error'}
+        preview_warn = preview_text == 'stale'
+        if preview_text in {'ok', 'stale'}:
+            preview_danger = False
         return {'text': preview_text, 'danger': preview_danger, 'warn': preview_warn}
 
     if preview_id:
-        preview_row = config.preview_service.get_workspace_preview(problem_id, workspace_id, preview_id)
-        if preview_row is None:
+        lp = None
+        preview_state = config.preview_service.get_workspace_preview_state(
+            problem_id,
+            workspace_id,
+            preview_id,
+            statement_signature=current_statement_signature,
+            workspace_head=workspace_head,
+        )
+        if preview_state is None:
             preview_id = ''
         else:
-            selected_preview_status = preview_row['status']
-            summary_obj = dict(preview_row['summary'])
-            selected_preview_summary = summary_obj
-            preview_signature = summary_obj.get("statement_signature", "")
-            if (not requested_preview_id) and (preview_signature != current_statement_signature):
+            selected_preview_status = preview_state['display_status']
+            selected_preview_row_status = preview_state['row_status']
+            selected_preview_summary = dict(preview_state['summary'])
+            if (not requested_preview_id) and selected_preview_status in {'stale', 'missing'}:
                 preview_id = ''
     if preview_id:
-        try:
-            safe_artifact_path(problem, preview_id, 'statement_preview/statement.pdf')
-            pdf_exists = True
-        except HTTPException:
-            pdf_exists = False
-        try:
-            lp = safe_artifact_path(problem, preview_id, 'logs/latex.log')
-        except HTTPException:
-            lp = None
-        if lp is not None:
+        preview_state = config.preview_service.get_workspace_preview_state(
+            problem_id,
+            workspace_id,
+            preview_id,
+            statement_signature=current_statement_signature,
+            workspace_head=workspace_head,
+        )
+        if preview_state is None:
+            preview_id = ''
+        else:
+            pdf_exists = bool(preview_state['pdf_available'])
+            preview_artifacts_missing = selected_preview_status == 'missing'
+            if bool(preview_state['log_available']):
+                lp = config.fs_manager.resolve_preview_root(preview_id) / 'logs' / 'latex.log'
+            selected_preview_nav = _selected_preview_nav_status(preview_id)
+            preview_compile_failed = selected_preview_row_status in {'failed', 'error'}
+        if preview_id and lp is not None:
             latex_log_href = f'/problems/{problem}/{user}/artifacts/{preview_id}/logs/latex.log'
             raw_log, log_truncated = read_text_safe_limited(lp, _C.UI_LOG_TEXT_CHAR_LIMIT)
             redact_prefixes: list[tuple[str, str]] = [
@@ -332,8 +311,6 @@ def preview_page(request: Request, problem: str, user: str):
                         log_refs_truncated = True
                         continue
                     log_refs.append({'file': m.group('file'), 'line': int(m.group('line')), 'context': line})
-        selected_preview_nav = _selected_preview_nav_status(preview_id)
-        preview_compile_failed = selected_preview_status in {'failed', 'error'}
         if preview_compile_failed:
             if selected_preview_summary is not None:
                 preview_failed_stage = selected_preview_summary.get("failed_stage", "")
@@ -379,6 +356,7 @@ def preview_page(request: Request, problem: str, user: str):
             'log_truncated': log_truncated,
             'log_char_limit': _C.UI_LOG_TEXT_CHAR_LIMIT,
             'pdf_exists': pdf_exists,
+            'preview_artifacts_missing': preview_artifacts_missing,
             'log_refs': log_refs,
             'log_refs_total': log_refs_total,
             'log_refs_truncated': log_refs_truncated,
@@ -468,17 +446,26 @@ def preview_status(problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
+    workspace = Path(ctx['workspace']['path'])
+    problem_title = str(ctx['problem']['name'])
+    current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
+    workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
     with config.preview_lock:
         running = workspace_key in config.preview_inflight
-    row = config.preview_service.latest_workspace_preview(problem_id, workspace_id)
+    row = config.preview_service.latest_workspace_preview_state(
+        problem_id,
+        workspace_id,
+        statement_signature=current_statement_signature,
+        workspace_head=workspace_head,
+    )
     latest_preview_id = ''
-    latest_status = 'missing'
+    latest_status = 'none'
     latest_created_at = ''
     latest_finished_at = ''
     if row is not None:
         latest_preview_id = row['id']
-        latest_status = row['status']
+        latest_status = row['display_status']
         latest_created_at = row['created_at']
         latest_finished_at = row["finished_at"] or ""
     return JSONResponse(

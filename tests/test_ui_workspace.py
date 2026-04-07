@@ -209,8 +209,110 @@ class TestUIWorkspace(UIBaseSuite):
             ),
             problem=problem,
             user=username,
-            confirm_problem=problem,
+            confirm_problem=problem.rsplit("/", 1)[-1],
         )
+        self.assertEqual(deleted.status_code, 303)
+        self.assertEqual("/problems", deleted.headers.get("location", ""))
+        self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
+        self.assertFalse(ws.exists())
+        self.assertFalse(bare_repo.exists())
+
+    def test_problem_delete_route_accepts_fully_qualified_slug_confirmation(self) -> None:
+        username = f"pdelroute-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        problem = f"{username}/route-problem-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem, "Delete Problem Route Target")
+        workspace_service.grant_repo_access(problem, username, "owner")
+        ws = Path(workspace_service.ensure_workspace(problem, username))
+        row_before = db_fetch_one("SELECT id,repo_name FROM problems WHERE slug=?", [problem])
+        self.assertIsNotNone(row_before)
+        bare_repo = Path(config.settings.bare_root) / str(row_before["repo_name"])
+        self.assertTrue(ws.exists())
+        self.assertTrue(bare_repo.exists())
+        workspace_row = db_fetch_one(
+            "SELECT id FROM workspaces WHERE problem_id=? AND user_id=(SELECT id FROM users WHERE username=?)",
+            [int(row_before["id"]), username],
+        )
+        self.assertIsNotNone(workspace_row)
+        workspace_id = int(workspace_row["id"])
+        verification_id = f"ver-delete-history-{uuid.uuid4().hex[:8]}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(row_before["id"]),
+            workspace_id=workspace_id,
+            signature="",
+            kind="all",
+            status="failed",
+        )
+        from app.service.verification.task_store import VerificationTaskStore
+
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-delete-history-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/a.cpp",
+                    "logical_run_id": "r-delete-history",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "run_id": "r-delete-history",
+                    "judgehost_task_id": "jt-delete-history",
+                    "runtime_sec": 0.01,
+                    "cpu_sec": 0.01,
+                    "wall_sec": 0.01,
+                    "memory_kb": 1,
+                    "compile_log": "",
+                    "diagnostics_json": "[]",
+                    "error_text": "",
+                    "feedback_text": "",
+                    "output_ref": "",
+                }
+            ],
+            edges=[],
+        )
+        db_execute(
+            """
+            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                f"p-delete-history-{uuid.uuid4().hex[:8]}",
+                int(row_before["id"]),
+                workspace_id,
+                verification_id,
+                "",
+                "",
+                "ok",
+                "{}",
+                "2026-04-08T00:00:00Z",
+                "2026-04-08T00:00:01Z",
+            ],
+        )
+
+        sudo_resp = _sudo_with_password_proof(
+            auth_cookie,
+            password,
+            next_path=f"/problems/{problem}/{username}/workspace",
+        )
+        self.assertEqual(sudo_resp.status_code, 303)
+        sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
+        self.assertTrue(sudo_token)
+        both_cookie = f"{auth_cookie}; {SUDO_COOKIE_NAME}={sudo_token}"
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            deleted = client.post(
+                f"/problems/{problem}/{username}/problem/delete",
+                data={"confirm_problem": problem},
+                headers={"cookie": both_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
         self.assertEqual(deleted.status_code, 303)
         self.assertEqual("/problems", deleted.headers.get("location", ""))
         self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))

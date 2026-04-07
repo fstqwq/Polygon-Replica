@@ -4,7 +4,7 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from app.db import DB
 from app.runtime_value import RuntimeValues, build_runtime_values
@@ -25,6 +25,19 @@ from app.service.repository.workspace import WorkspaceService
 if TYPE_CHECKING:
     from app.service.platform.async_task_cache import AsyncTaskCacheService
     from app.service.verification.service import VerificationService
+
+
+class PreviewStateRow(TypedDict):
+    id: str
+    row_status: str
+    display_status: str
+    source_commit: str
+    source_ref: str
+    summary: dict[str, object]
+    created_at: str
+    finished_at: str
+    pdf_available: bool
+    log_available: bool
 
 
 class PreviewService:
@@ -389,6 +402,82 @@ class PreviewService:
     def _summary_statement_signature(self, summary: dict[str, object]) -> str:
         signature_obj = summary.get("statement_signature")
         return str(signature_obj).strip() if signature_obj is not None else ""
+
+    def _preview_file_availability(self, root: Path | None) -> tuple[bool, bool]:
+        if root is None:
+            return (False, False)
+        pdf_path = root / "statement_preview" / "statement.pdf"
+        log_path = root / "logs" / "latex.log"
+        pdf_available = self._is_safe_regular_file(root, pdf_path, root_resolved=root)
+        log_available = self._is_safe_regular_file(root, log_path, root_resolved=root)
+        return (pdf_available, log_available)
+
+    def get_workspace_preview_state(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        preview_id: str,
+        *,
+        statement_signature: str = "",
+        workspace_head: str = "",
+    ) -> PreviewStateRow | None:
+        row = self._store.get_workspace_preview(int(problem_id), int(workspace_id), str(preview_id or "").strip())
+        if row is None:
+            return None
+        root = self._preview_artifact_root(int(problem_id), int(workspace_id), str(preview_id or "").strip())
+        pdf_available, log_available = self._preview_file_availability(root)
+        summary = dict(row["summary"])
+        row_status = str(row["status"] or "").strip().lower() or "missing"
+        display_status = row_status
+        if row_status == "ok":
+            if not pdf_available:
+                display_status = "missing"
+            else:
+                preview_signature = self._summary_statement_signature(summary)
+                preview_source_commit = str(row["source_commit"] or "").strip()
+                safe_statement_signature = str(statement_signature or "").strip()
+                safe_workspace_head = str(workspace_head or "").strip()
+                stale_by_signature = bool(
+                    preview_signature and safe_statement_signature and (preview_signature != safe_statement_signature)
+                )
+                stale_by_head = bool(
+                    (not preview_signature or not safe_statement_signature)
+                    and preview_source_commit
+                    and safe_workspace_head
+                    and (preview_source_commit != safe_workspace_head)
+                )
+                display_status = "stale" if (stale_by_signature or stale_by_head) else "ok"
+        return {
+            "id": str(row["id"]),
+            "row_status": row_status,
+            "display_status": display_status,
+            "source_commit": str(row["source_commit"] or ""),
+            "source_ref": str(row["source_ref"] or ""),
+            "summary": summary,
+            "created_at": str(row["created_at"] or ""),
+            "finished_at": str(row["finished_at"] or ""),
+            "pdf_available": bool(pdf_available),
+            "log_available": bool(log_available),
+        }
+
+    def latest_workspace_preview_state(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        *,
+        statement_signature: str = "",
+        workspace_head: str = "",
+    ) -> PreviewStateRow | None:
+        latest = self._store.get_latest_workspace_preview(int(problem_id), int(workspace_id))
+        if latest is None:
+            return None
+        return self.get_workspace_preview_state(
+            int(problem_id),
+            int(workspace_id),
+            str(latest["id"] or ""),
+            statement_signature=statement_signature,
+            workspace_head=workspace_head,
+        )
 
     def _preview_artifact_root(
         self,

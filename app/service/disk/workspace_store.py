@@ -554,7 +554,7 @@ class WorkspaceDiskStore:
             for row in verification_rows:
                 if row is None:
                     continue
-                verification_id = str(row["id"] or "").strip()
+                verification_id = str(row[0] or "").strip()
                 if not verification_id:
                     continue
                 for task_row in task_store.list_rows(verification_id):
@@ -566,8 +566,12 @@ class WorkspaceDiskStore:
                             collected_run_ids.append(token)
             conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])
-            conn.execute("DELETE FROM verifications WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
+            conn.execute(
+                "DELETE FROM verification_tasks WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                [int(problem_id)],
+            )
+            conn.execute("DELETE FROM verifications WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM workspaces WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM audit_log WHERE problem_id=?", [int(problem_id)])

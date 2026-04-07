@@ -35,7 +35,7 @@ from app.impl.problem.solution import (
     solutions_set_tag,
 )
 from app.impl.problem.validator import validator_create_template, validator_save_source
-from app.impl.run_export.artifact import artifact_file, run_artifact_file
+from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_execute
 from app.impl.root.api import auth_password_meta, login_page
 from app.service.problem.test_spec import parse_gen_command_tokens
@@ -540,67 +540,6 @@ class TestSecurity(SmokeBase):
         self.assertTrue(self._first_flash_message(resp).strip())
         self.assertTrue(keep_abs.exists())
         self.assertFalse(marker.exists())
-
-    def _insert_invalid_run_root_row(self, run_id: str, root: Path, *, problem: str = "alice/sample", user: str = "alice") -> None:
-        ctx = workspace_service.workspace_context(problem, user, include_recent=False)
-        verification_id = f"ver-{run_id}"
-        db_execute(
-            """
-            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                verification_id,
-                int(ctx["problem"]["id"]),
-                int(ctx["workspace"]["id"]),
-                "",
-                "all",
-                "ok",
-                "",
-                "2026-02-28T00:00:00Z",
-                "2026-02-28T00:00:01Z",
-            ],
-        )
-        write_verification_summary(
-            verification_id,
-            {
-                "kind": "all",
-                "mode": "pass-fail",
-                "status": "ok",
-                "runs_order": [run_id],
-                "runs": {
-                    run_id: {
-                        "key": run_id,
-                        "status": "ok",
-                        "source_label": run_id,
-                        "expected_behavior": "unknown",
-                        "artifact_path": str(root),
-                        "task_kind": "",
-                        "summary": {},
-                    }
-                },
-            },
-        )
-
-    def test_run_artifact_file_rejects_path_traversal(self) -> None:
-        run_id = f"r-sec-run-{uuid.uuid4().hex[:8]}"
-        run_root = config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()
-        (run_root / "stdout.txt").write_text("ok\n", encoding="utf-8")
-        self._insert_invalid_run_root_row(run_id, run_root)
-        with self.assertRaises(HTTPException) as denied:
-            run_artifact_file("alice/sample", "alice", run_id, "../outside.txt")
-        self.assertEqual(denied.exception.status_code, 400)
-        self.assertIn("invalid run artifact path", str(denied.exception.detail).lower())
-
-    def test_run_artifact_file_blocks_compile_log_download(self) -> None:
-        run_id = f"r-sec-ce-{uuid.uuid4().hex[:8]}"
-        run_root = config.fs_manager.prepare_verification_run_root(f"ver-{run_id}", run_id).resolve()
-        (run_root / "compile.log").write_text("compile error\n", encoding="utf-8")
-        self._insert_invalid_run_root_row(run_id, run_root)
-        with self.assertRaises(HTTPException) as denied:
-            run_artifact_file("alice/sample", "alice", run_id, "compile.log")
-        self.assertEqual(denied.exception.status_code, 403)
-        self.assertIn("compile.log download is disabled", str(denied.exception.detail).lower())
 
     def test_run_execute_sanitizes_path_traversal_solution_paths_before_queue(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

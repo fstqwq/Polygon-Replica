@@ -2,20 +2,26 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from app.db import DB, IncompatibleSchemaError
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
-from app.impl.preview.preview import preview_page, preview_run
+from app.impl.preview.preview import preview_page, preview_run, preview_status
+from app.impl.run_export.artifact import artifact_file
 from app.impl.auth.internal.runtime import _startup_clear_all_caches
 from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
+from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job import _run_export_create_worker
+from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
 
 
@@ -172,6 +178,44 @@ class TestBackendMinimal(SmokeBase):
                 probe.init()
             backup_candidates = sorted(db_path.parent.glob(f"{db_path.name}.*.backup"))
             self.assertEqual(backup_candidates, [])
+
+    def test_verification_metadata_save_is_atomic_for_concurrent_readers(self) -> None:
+        from app.service.platform.fs.layout import FsManager
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            store = VerificationStore(
+                config.db,
+                FsManager(tmp_root / "cache", tmp_root / "export"),
+            )
+            verification_id = self.random_id("ver-metadata-atomic")
+            old_metadata = {"artifact_refs": {"001.in": {"input_ref": "cache://old"}}}
+            new_metadata = {
+                "artifact_refs": {"001.in": {"input_ref": "cache://new"}},
+                "selected_test_names": ["001.in"],
+            }
+            store.save_metadata(verification_id, old_metadata)
+            target_path = store._metadata_path(verification_id)
+            replace_started = threading.Event()
+            allow_replace = threading.Event()
+            original_replace = Path.replace
+
+            def _blocked_replace(path_self: Path, target: str | Path) -> Path:
+                if path_self.parent == target_path.parent and Path(target) == target_path:
+                    replace_started.set()
+                    self.assertEqual(store.metadata(verification_id), old_metadata)
+                    allow_replace.wait(timeout=2.0)
+                return original_replace(path_self, target)
+
+            worker = threading.Thread(target=lambda: store.save_metadata(verification_id, new_metadata), daemon=True)
+            with patch.object(Path, "replace", _blocked_replace):
+                worker.start()
+                self.assertTrue(replace_started.wait(timeout=2.0))
+                self.assertEqual(store.metadata(verification_id), old_metadata)
+                allow_replace.set()
+                worker.join(timeout=2.0)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(store.metadata(verification_id), new_metadata)
 
     def test_judgehost_compile_check_reads_full_diagnostics_from_transient_task_result(self) -> None:
         with (
@@ -358,6 +402,168 @@ class TestBackendMinimal(SmokeBase):
         self.assertIn("sample verification failed (ver-sample-123): main correct solution RE on 001.in: judge verdict RE", html)
         self.assertNotIn("Open full latex.log", html)
         self.assertNotIn("sample verification failed (ver-old): validator failed on tests/spec.json entry 1", html)
+
+    def test_preview_artifact_file_serves_statement_pdf_from_preview_root(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        preview_id = self.random_id("p-preview-artifact-pdf")
+        preview_root = config.fs_manager.prepare_preview_layout(preview_id).root
+        pdf_path = preview_root / "statement_preview" / "statement.pdf"
+        pdf_bytes = b"%PDF-1.4\n%preview\n"
+        pdf_path.write_bytes(pdf_bytes)
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                "",
+                "",
+                json.dumps({"pdf": "statement_preview/statement.pdf"}),
+            ],
+        )
+        response = artifact_file(self.problem, self.user, preview_id, "statement_preview/statement.pdf")
+        self.assertEqual(Path(response.path).resolve(), pdf_path.resolve())
+
+    def test_preview_page_projects_missing_when_ok_preview_artifacts_expire(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        preview_id = self.random_id("p-preview-expired")
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                str(ctx["workspace"].get("head_commit") or ""),
+                "main",
+                json.dumps(
+                    {
+                        "pdf": "statement_preview/statement.pdf",
+                        "statement_signature": statement_sources_signature(
+                            ws,
+                            problem_title=str(ctx["problem"]["name"]),
+                        ),
+                    }
+                ),
+            ],
+        )
+
+        resp = preview_page(
+            _request(
+                f"/problems/{self.problem}/{self.user}/preview",
+                f"preview_id={preview_id}",
+            ),
+            self.problem,
+            self.user,
+        )
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Preview artifacts expired from cache. Recompile to regenerate the PDF and latex.log.", html)
+        self.assertNotIn("PDF is ready.", html)
+        self.assertNotIn("Open in a new tab", html)
+        self.assertNotIn('class="pdf-preview"', html)
+
+    def test_preview_status_projects_missing_when_ok_preview_pdf_is_gone(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        preview_id = self.random_id("p-preview-status-missing")
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                str(ctx["workspace"].get("head_commit") or ""),
+                "main",
+                json.dumps(
+                    {
+                        "pdf": "statement_preview/statement.pdf",
+                        "statement_signature": statement_sources_signature(
+                            ws,
+                            problem_title=str(ctx["problem"]["name"]),
+                        ),
+                    }
+                ),
+            ],
+        )
+
+        resp = preview_status(self.problem, self.user)
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(str(payload.get("latest_preview_id") or ""), preview_id)
+        self.assertEqual(str(payload.get("latest_status") or ""), "missing")
+
+    def test_page_ctx_projects_missing_for_latest_ok_preview_without_pdf(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        preview_id = self.random_id("p-preview-nav-missing")
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                str(ctx["workspace"].get("head_commit") or ""),
+                "main",
+                json.dumps(
+                    {
+                        "pdf": "statement_preview/statement.pdf",
+                        "statement_signature": statement_sources_signature(
+                            ws,
+                            problem_title=str(ctx["problem"]["name"]),
+                        ),
+                    }
+                ),
+            ],
+        )
+
+        page = page_ctx(self.problem, self.user)
+        preview_nav = dict(page["nav_status"]["preview"])
+        self.assertEqual(str(preview_nav.get("text") or ""), "missing")
+        self.assertTrue(bool(preview_nav.get("danger")))
+        self.assertFalse(bool(preview_nav.get("warn")))
+
+    def test_preview_artifact_file_reports_expired_for_missing_preview_pdf(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        preview_id = self.random_id("p-preview-artifact-expired")
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                "",
+                "",
+                json.dumps({"pdf": "statement_preview/statement.pdf"}),
+            ],
+        )
+        with self.assertRaises(HTTPException) as exc:
+            artifact_file(self.problem, self.user, preview_id, "statement_preview/statement.pdf")
+        self.assertEqual(int(exc.exception.status_code), 404)
+        self.assertEqual(str(exc.exception.detail or ""), "preview artifact expired")
 
     def test_preview_worker_propagates_exception(self) -> None:
         with patch.object(config.preview_service, "compile_preview", side_effect=RuntimeError("preview failed")):

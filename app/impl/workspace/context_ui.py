@@ -16,7 +16,7 @@ from .access import (
     require_read_access,
     workspace_access_context,
 )
-from .artifact import artifact_version_number, safe_artifact_path
+from .artifact import artifact_version_number
 from .context import count_label
 from .context_operation import (
     _normalize_standard_checker_name,
@@ -209,49 +209,37 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     preview_text = preview_status
     preview_danger = preview_status in {'none', 'missing', 'failed', 'error'}
     preview_warn = False
-    if preview_status == 'ok':
-        preview_id = cast(str | None, _row_value(cast(dict[str, object] | None, latest_preview), 'id', '')) or ''
-        problem_slug_raw = _row_value(cast(dict[str, object], ctx['problem']), 'slug', '')
-        problem_slug = cast(str | None, problem_slug_raw) or ''
-        problem_id = _to_int(_row_value(ctx.get('problem'), 'id', 0))
-        workspace_id = _to_int(_row_value(ctx.get('workspace'), 'id', 0))
-        has_pdf = False
-        if preview_id and problem_slug:
-            try:
-                safe_artifact_path(problem_slug, preview_id, 'statement_preview/statement.pdf')
-                has_pdf = True
-            except HTTPException:
-                has_pdf = False
-        if not has_pdf:
+    preview_id = cast(str | None, _row_value(cast(dict[str, object] | None, latest_preview), 'id', '')) or ''
+    problem_id = _to_int(_row_value(ctx.get('problem'), 'id', 0))
+    workspace_id = _to_int(_row_value(ctx.get('workspace'), 'id', 0))
+    workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
+    workspace_path_text = cast(str | None, workspace_path_raw) or ''
+    problem_title_raw = _row_value(cast(dict[str, object], ctx['problem']), 'name', '')
+    problem_title = cast(str | None, problem_title_raw) or ''
+    workspace_head_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'head_commit', '')
+    workspace_head = cast(str | None, workspace_head_raw) or ''
+    current_signature = ''
+    if workspace_path_text:
+        try:
+            current_signature = statement_sources_signature(Path(workspace_path_text), problem_title=problem_title)
+        except Exception:
+            current_signature = ''
+    if preview_id and problem_id > 0 and (workspace_id > 0):
+        preview_state = config.preview_service.get_workspace_preview_state(
+            problem_id,
+            workspace_id,
+            preview_id,
+            statement_signature=current_signature,
+            workspace_head=workspace_head,
+        )
+        if preview_state is None:
             preview_text = 'missing'
             preview_danger = True
-        elif preview_id and problem_id > 0 and (workspace_id > 0):
-            preview_row = config.preview_service.get_workspace_preview(problem_id, workspace_id, preview_id)
-            if preview_row is None:
-                preview_text = 'missing'
-                preview_danger = True
-            else:
-                preview_source_commit = cast(str | None, _row_value(preview_row, 'source_commit', '')) or ''
-                summary_obj = dict(cast(dict[str, object], _row_value(preview_row, 'summary', {})))
-                preview_signature = cast(str | None, summary_obj.get('statement_signature')) or ''
-                workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
-                workspace_path_text = cast(str | None, workspace_path_raw) or ''
-                problem_title_raw = _row_value(cast(dict[str, object], ctx['problem']), 'name', '')
-                problem_title = cast(str | None, problem_title_raw) or ''
-                current_signature = ''
-                if workspace_path_text:
-                    try:
-                        current_signature = statement_sources_signature(Path(workspace_path_text), problem_title=problem_title)
-                    except Exception:
-                        current_signature = ''
-                workspace_head_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'head_commit', '')
-                workspace_head = cast(str | None, workspace_head_raw) or ''
-                stale_by_signature = bool(preview_signature and current_signature and (preview_signature != current_signature))
-                stale_by_head = bool((not preview_signature or not current_signature) and preview_source_commit and workspace_head and (preview_source_commit != workspace_head))
-                if stale_by_signature or stale_by_head:
-                    preview_text = 'stale'
-                    preview_danger = False
-                    preview_warn = True
+            preview_warn = False
+        else:
+            preview_text = str(preview_state['display_status'] or 'missing')
+            preview_warn = preview_text == 'stale'
+            preview_danger = preview_text in {'none', 'missing', 'failed', 'error'}
     nav['preview'] = {'text': preview_text, 'danger': preview_danger, 'warn': preview_warn}
     workspace_changes = cast(dict[str, object], ctx['workspace_changes'])
     changes_total = _to_int(workspace_changes.get('total'))

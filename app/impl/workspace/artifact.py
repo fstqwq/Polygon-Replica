@@ -1,4 +1,5 @@
 from __future__ import annotations
+import base64
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -66,6 +67,22 @@ def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, s
     if not safe_verification_id or not rel_norm:
         return None
     parts = Path(rel_norm).parts
+    if len(parts) == 3 and parts[0] == "blob":
+        encoded = str(parts[1] or "").strip()
+        filename = Path(parts[2]).name
+        if (not encoded) or (not filename):
+            return None
+        padding = "=" * ((4 - (len(encoded) % 4)) % 4)
+        try:
+            token = base64.urlsafe_b64decode((encoded + padding).encode("ascii")).decode("utf-8")
+        except Exception:
+            return None
+        if not token:
+            return None
+        blob = config.verification_service.resolve_artifact_blob(token)
+        if blob is None:
+            return None
+        return (blob, filename)
     if len(parts) == 3 and parts[0] == "output":
         task_id = str(parts[1] or "").strip()
         filename = Path(parts[2]).name
@@ -106,6 +123,15 @@ def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, s
             return None
         return (blob, filename)
     return None
+
+
+def verification_blob_virtual_rel(token: str, *, filename: str = "") -> str:
+    safe_token = str(token or "").strip()
+    if not safe_token:
+        return ""
+    encoded = base64.urlsafe_b64encode(safe_token.encode("utf-8")).decode("ascii").rstrip("=")
+    download_name = Path(filename).name or Path(safe_token).name or "artifact.bin"
+    return f"blob/{encoded}/{download_name}"
 
 
 def browser_file_response(file_path: Path) -> FileResponse:
@@ -151,33 +177,6 @@ def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
         int(ctx["workspace"]["id"]),
         run_id,
     )
-
-
-def workspace_run_artifact_root(ctx: dict, run_id: str) -> Path:
-    verification_id = workspace_verification_id_for_run(ctx, run_id)
-    if verification_id:
-        try:
-            root = config.fs_manager.resolve_verification_run_root(verification_id, run_id).resolve()
-        except Exception:
-            raise HTTPException(status_code=404, detail="run artifact directory not found")
-        if (not root.exists()) or (not root.is_dir()) or root.is_symlink():
-            raise HTTPException(status_code=404, detail="run artifact directory not found")
-        return root
-    raise HTTPException(status_code=404, detail="run not found in workspace")
-
-
-def safe_run_artifact_path(ctx: dict, run_id: str, rel: str) -> Path:
-    root = workspace_run_artifact_root(ctx, run_id)
-    norm_rel = rel.lstrip("/")
-    candidate = root / norm_rel
-    path = candidate.resolve()
-    if root not in path.parents and root != path:
-        raise HTTPException(status_code=400, detail="invalid run artifact path")
-    if contains_symlink_component(root, candidate):
-        raise HTTPException(status_code=404, detail="run artifact file not found")
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="run artifact file not found")
-    return path
 
 
 def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:

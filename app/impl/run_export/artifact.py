@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, Response
@@ -11,13 +10,10 @@ from app.impl.workspace.artifact import (
     assert_workspace_artifact_access,
     browser_file_response,
     export_download_filename,
-    safe_run_artifact_path,
+    safe_artifact_path,
     verification_artifact_blob,
-    workspace_run_artifact_root,
 )
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import contains_symlink_component
-from app.service.platform.process import is_canonical_artifact_id
 
 
 def _browser_blob_response(blob: bytes, filename: str) -> Response:
@@ -32,32 +28,6 @@ def _browser_blob_response(blob: bytes, filename: str) -> Response:
     if suffix in {".log", ".txt", ".tex", ".json", ".md", ".csv", ".xml", ".yaml", ".yml", ".in", ".out", ".ans"}:
         return Response(content=blob, media_type="text/plain; charset=utf-8", headers=headers)
     return Response(content=blob, media_type="application/octet-stream", headers=headers)
-
-
-def _verification_artifact_root(problem_id: int, verification_id: str) -> Path | None:
-    if (not verification_id) or (not is_canonical_artifact_id(verification_id)):
-        return None
-    artifact_path = config.verification_service.artifact_path_for_problem_artifact(int(problem_id), verification_id)
-    if not artifact_path:
-        return None
-    try:
-        root = Path(artifact_path).resolve()
-        base = config.fs_manager.cache_artifacts_root.resolve()
-    except Exception:
-        return None
-    try:
-        if (root != base and base not in root.parents) or (not root.exists()) or (not root.is_dir()) or root.is_symlink():
-            return None
-    except OSError:
-        return None
-    return root
-
-
-def _is_safe_regular_file(path: Path) -> bool:
-    try:
-        return path.exists() and path.is_file() and (not path.is_symlink())
-    except OSError:
-        return False
 
 
 def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
@@ -75,10 +45,15 @@ def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
             raise HTTPException(status_code=404, detail="artifact file not found")
     else:
         virtual_blob = verification_artifact_blob(verification_id, rel_norm)
-        if virtual_blob is None:
-            raise HTTPException(status_code=404, detail="artifact unavailable")
-        blob, filename = virtual_blob
-        return _browser_blob_response(blob, filename)
+        if virtual_blob is not None:
+            blob, filename = virtual_blob
+            return _browser_blob_response(blob, filename)
+        try:
+            file_path = safe_artifact_path(problem, verification_id, rel_norm)
+        except HTTPException as exc:
+            if str(verification_id or "").startswith("p-") and exc.status_code == 404:
+                raise HTTPException(status_code=404, detail="preview artifact expired")
+            raise
     if rel_norm.startswith('export/'):
         export_name = Path(rel_norm).name
         download_name = export_download_filename(ctx, verification_id, export_name)
@@ -102,46 +77,3 @@ def export_file(problem: str, user: str, export_id: str, filename: str):
         raise HTTPException(status_code=404, detail="artifact file not found")
     download_name = Path(filename).name or "package.zip"
     return FileResponse(file_path, filename=download_name)
-
-def run_artifact_file(problem: str, user: str, run_id: str, rel_path: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    rel_norm = rel_path.lstrip('/')
-    if ".." in Path(rel_norm).parts:
-        raise HTTPException(status_code=400, detail="invalid run artifact path")
-    if Path(rel_norm).name == 'compile.log':
-        raise HTTPException(status_code=403, detail='compile.log download is disabled')
-    if rel_norm.startswith("cache://"):
-        service = getattr(config, "judgehost_task_service", None)
-        if service is None:
-            raise HTTPException(status_code=404, detail="artifact unavailable")
-        blob = service.resolve_artifact_blob(rel_norm)
-        if blob is None:
-            raise HTTPException(status_code=404, detail="artifact unavailable")
-        return _browser_blob_response(blob, Path(rel_norm).name)
-    try:
-        file_path = safe_run_artifact_path(ctx, run_id, rel_path)
-    except HTTPException as exc:
-        detail = cast(str | None, getattr(exc, "detail", None))
-        if detail is None:
-            detail = ""
-        else:
-            detail = detail.strip()
-        if int(getattr(exc, "status_code", 500)) == 404 and (
-            detail.startswith("run artifact") or detail == "run not found in workspace"
-        ):
-            try:
-                run_root = workspace_run_artifact_root(ctx, run_id)
-                candidate = run_root / rel_path.lstrip("/")
-                if contains_symlink_component(run_root, candidate):
-                    raise
-            except HTTPException as inner_exc:
-                inner_detail = cast(str | None, getattr(inner_exc, "detail", None))
-                inner_text = "" if inner_detail is None else inner_detail.strip()
-                if inner_text == "run not found in workspace":
-                    raise HTTPException(status_code=404, detail="artifact unavailable")
-                raise
-            except Exception:
-                pass
-            raise HTTPException(status_code=404, detail="artifact unavailable")
-        raise
-    return browser_file_response(file_path)
