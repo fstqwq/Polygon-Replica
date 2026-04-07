@@ -151,7 +151,7 @@ class TestExport(SmokeBase):
         status = export_page_module._build_validation_status(
             {
                 "status": "ok",
-                "metadata": {
+                "details": {
                     "validation_status": "unknown",
                 },
             }
@@ -162,7 +162,7 @@ class TestExport(SmokeBase):
         status = export_page_module._build_validation_status(
             {
                 "status": "running",
-                "metadata": {
+                "details": {
                     "sanity_status": "failed",
                 },
             }

@@ -46,9 +46,9 @@ def _artifact_failure_details(artifact_verification_id: str) -> tuple[str, str]:
     safe_verification_id = normalize_run_id_token(artifact_verification_id)
     if not safe_verification_id:
         return ("", "")
-    metadata = config.verification_service.verification_metadata(safe_verification_id)
-    metadata_error = str(metadata.get("error") or "")
-    failed_test = Path(str(metadata.get("failed_test") or "")).name
+    detail = config.verification_service.verification_detail(safe_verification_id)
+    metadata_error = str(detail.get("error") or "")
+    failed_test = Path(str(detail.get("failed_test") or "")).name
     if failed_test.endswith(".in"):
         return (metadata_error, failed_test)
     record = config.verification_service.verification_record(safe_verification_id)
@@ -98,12 +98,10 @@ def record_async_run_failure(
         signature="",
         kind=Kind.CUSTOM.value,
         status=Status.FAILED.value,
-        metadata={
+        detail={
             "mode": str(mode or "pass-fail"),
             "error": detail_error,
             "failed_test": test_name,
-            "artifact_verification_id": normalize_run_id_token(artifact_verification_id),
-            "kind": Kind.CUSTOM.value,
             "source_paths": [safe_source],
         },
     )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
@@ -27,7 +26,7 @@ from app.service.disk.verification_store import VerificationStore
 
 class TestBackendMinimal(SmokeBase):
     def test_startup_clear_all_caches_wipes_cache_root_artifacts_and_runtime(self) -> None:
-        artifact_file = config.fs_manager.cache_artifacts_root / "verifications" / "ver-test" / "metadata.json"
+        artifact_file = config.fs_manager.cache_artifacts_root / "verifications" / "ver-test" / "logs" / "compile.log"
         runtime_file = config.fs_manager.runtime_root / "judgehost-runs" / "jt-test" / "stdout.txt"
         durable_log = config.fs_manager.runtime_root / "worker-queue-events.jsonl"
         artifact_file.parent.mkdir(parents=True, exist_ok=True)
@@ -179,43 +178,127 @@ class TestBackendMinimal(SmokeBase):
             backup_candidates = sorted(db_path.parent.glob(f"{db_path.name}.*.backup"))
             self.assertEqual(backup_candidates, [])
 
-    def test_verification_metadata_save_is_atomic_for_concurrent_readers(self) -> None:
-        from app.service.platform.fs.layout import FsManager
+    def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
+        config.workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        verification_id = self.random_id("ver-detail-db")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="sig-db-only",
+            kind="all",
+            status="running",
+            detail={
+                "mode": "pass-fail",
+                "pass_limit": 2,
+                "selected_test_names": ["001.in", "002.in"],
+                "source_paths": ["solutions/ac.cpp", "solutions/wa.cpp"],
+                "sanity_checks": ["custom_sample_output"],
+                "run_config_json": json.dumps({"checker_mode": "testlib", "pass_limit": 2}),
+                "tests_meta_rows": [
+                    {"index": 1, "kind": "manual", "desc": "manual", "source": "manual_validate.cpp"},
+                    {"index": 2, "kind": "gen", "desc": "gen 2", "source": "generators/gen.cpp", "command": "2", "payload_source": "tests/2"},
+                ],
+            },
+        )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_root = Path(tmpdir)
-            store = VerificationStore(
-                config.db,
-                FsManager(tmp_root / "cache", tmp_root / "export"),
-            )
-            verification_id = self.random_id("ver-metadata-atomic")
-            old_metadata = {"artifact_refs": {"001.in": {"input_ref": "cache://old"}}}
-            new_metadata = {
-                "artifact_refs": {"001.in": {"input_ref": "cache://new"}},
+        detail = config.verification_service.verification_detail(verification_id)
+        self.assertEqual(detail.get("pass_limit"), 2)
+        self.assertEqual(detail.get("selected_test_names"), ["001.in", "002.in"])
+        self.assertEqual(detail.get("source_paths"), ["solutions/ac.cpp", "solutions/wa.cpp"])
+        self.assertEqual(detail.get("sanity_checks"), ["custom_sample_output"])
+        self.assertEqual(str(detail.get("run_config_json") or ""), json.dumps({"checker_mode": "testlib", "pass_limit": 2}))
+        tests_meta_rows = detail.get("tests_meta_rows")
+        self.assertIsInstance(tests_meta_rows, list)
+        self.assertEqual(str((tests_meta_rows[1] or {}).get("test_name") or ""), "002.in")
+        self.assertFalse((config.fs_manager.cache_artifacts_root / "verifications" / verification_id / "metadata.json").exists())
+
+    def test_verification_artifact_refs_live_in_db_not_metadata(self) -> None:
+        config.workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        verification_id = self.random_id("ver-artifact-refs-db")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="",
+            kind="all",
+            status="running",
+            detail={"status": "running", "selected_test_names": ["001.in"]},
+        )
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="input",
+            file_name="001.in",
+            payload=b"1 2 3\n",
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"6\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": input_ref, "answer_ref": answer_ref},
+        )
+
+        self.assertEqual(
+            config.verification_service.verification_artifact_ref(verification_id, "001.in", "input_ref"),
+            input_ref,
+        )
+        self.assertEqual(
+            config.verification_service.verification_artifact_ref(verification_id, "001.in", "answer_ref"),
+            answer_ref,
+        )
+        metadata = config.verification_service.verification_detail(verification_id)
+        self.assertNotIn("artifact_refs", metadata)
+        row = config.db.fetch_one(
+            "SELECT input_ref,answer_ref FROM verification_artifact_refs WHERE verification_id=? AND test_name=?",
+            [verification_id, "001.in"],
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["input_ref"] or ""), input_ref)
+        self.assertEqual(str(row["answer_ref"] or ""), answer_ref)
+
+    def test_verification_detail_omits_redundant_runtime_fields(self) -> None:
+        config.workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        verification_id = self.random_id("ver-metadata-trimmed")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="sig-123",
+            kind="all",
+            status="running",
+            detail={
+                "mode": "pass-fail",
+                "pass_limit": 1,
+                "signature": "sig-123",
+                "kind": "all",
+                "artifact_verification_id": verification_id,
+                "task_graph": True,
+                "verification_source": "verification.start",
+                "steps": ["gen", "val", "run", "check"],
                 "selected_test_names": ["001.in"],
-            }
-            store.save_metadata(verification_id, old_metadata)
-            target_path = store._metadata_path(verification_id)
-            replace_started = threading.Event()
-            allow_replace = threading.Event()
-            original_replace = Path.replace
-
-            def _blocked_replace(path_self: Path, target: str | Path) -> Path:
-                if path_self.parent == target_path.parent and Path(target) == target_path:
-                    replace_started.set()
-                    self.assertEqual(store.metadata(verification_id), old_metadata)
-                    allow_replace.wait(timeout=2.0)
-                return original_replace(path_self, target)
-
-            worker = threading.Thread(target=lambda: store.save_metadata(verification_id, new_metadata), daemon=True)
-            with patch.object(Path, "replace", _blocked_replace):
-                worker.start()
-                self.assertTrue(replace_started.wait(timeout=2.0))
-                self.assertEqual(store.metadata(verification_id), old_metadata)
-                allow_replace.set()
-                worker.join(timeout=2.0)
-            self.assertFalse(worker.is_alive())
-            self.assertEqual(store.metadata(verification_id), new_metadata)
+            },
+        )
+        detail = config.verification_service.verification_detail(verification_id)
+        self.assertEqual(detail.get("mode"), "pass-fail")
+        self.assertEqual(detail.get("pass_limit"), 1)
+        self.assertEqual(detail.get("selected_test_names"), ["001.in"])
+        self.assertNotIn("signature", detail)
+        self.assertNotIn("kind", detail)
+        self.assertNotIn("artifact_verification_id", detail)
+        self.assertNotIn("task_graph", detail)
+        self.assertNotIn("verification_source", detail)
+        self.assertNotIn("steps", detail)
+        self.assertFalse((config.fs_manager.cache_artifacts_root / "verifications" / verification_id / "metadata.json").exists())
 
     def test_judgehost_compile_check_reads_full_diagnostics_from_transient_task_result(self) -> None:
         with (

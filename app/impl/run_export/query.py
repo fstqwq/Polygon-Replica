@@ -23,8 +23,8 @@ def _count_label(count: int, singular: str, plural: str | None = None) -> str:
     token = singular if count_value == 1 else (plural if plural is not None else f"{singular}s")
     return f"{count_value} {token}"
 
-def _verification_tests_total(metadata: dict[str, object]) -> int:
-    selected_test_names = cast(list[object], metadata.get("selected_test_names") or [])
+def _verification_tests_total(details: dict[str, object]) -> int:
+    selected_test_names = cast(list[object], details.get("selected_test_names") or [])
     return len([token for token in selected_test_names if str(token or "")])
 
 def _build_validated_count_from_log(validate_log: Path) -> int:
@@ -65,12 +65,12 @@ def _verification_runtime_progress(
         return result
     verification_row = config.verification_service.export_runtime_verification(int(problem_id), verification_id)
     verification_status = ""
-    verification_metadata: dict[str, object] = {}
+    verification_detail: dict[str, object] = {}
     if verification_row is not None:
         status_value = cast(str | None, verification_row["status"])
         if status_value is not None:
             verification_status = status_value
-            verification_metadata = dict(cast(dict[str, object], verification_row["metadata"]))
+            verification_detail = dict(cast(dict[str, object], verification_row["details"]))
     artifact_root = None
     if verification_id:
         try:
@@ -96,7 +96,7 @@ def _verification_runtime_progress(
     solve_log = logs_dir / "solve.log"
     failure_log = logs_dir / "failure.log"
     compile_log = logs_dir / "compile.log"
-    tests_total = _verification_tests_total(verification_metadata)
+    tests_total = _verification_tests_total(verification_detail)
     verification_rows = VerificationTaskStore(config.db).list_rows(verification_id)
     outputs_generated = len(
         [
@@ -117,7 +117,7 @@ def _verification_runtime_progress(
         if verification_status == "ok":
             result["detail"] = "packaging export bundle"
             return result
-        sanity_status = str(verification_metadata.get("sanity_status") or "")
+        sanity_status = str(verification_detail.get("sanity_status") or "")
         if sanity_status in {"pending", "running"}:
             result["detail"] = "sanity checks running"
             if validate_log.exists() and validate_log.is_file() and (not validate_log.is_symlink()):
@@ -157,12 +157,12 @@ def _verification_runtime_progress(
 
     if event_status == "failed":
         record = config.verification_service.verification_record(verification_id)
-        detail = str((record or {}).get("fail_reason") or verification_metadata.get("error") or "").strip()
+        detail = str((record or {}).get("fail_reason") or verification_detail.get("error") or "").strip()
         if not detail:
-            failed_step = cast(str | None, verification_metadata.get("failed_step"))
+            failed_step = cast(str | None, verification_detail.get("failed_step"))
             if failed_step is None:
                 failed_step = ""
-            failed_test = cast(str | None, verification_metadata.get("failed_test"))
+            failed_test = cast(str | None, verification_detail.get("failed_test"))
             if failed_test is None:
                 failed_test = ""
             if failed_step and failed_test:
@@ -175,7 +175,7 @@ def _verification_runtime_progress(
             result["log_href"] = _log_href("failure.log")
     if event_status == "failed":
         record = config.verification_service.verification_record(verification_id)
-        detail = str((record or {}).get("fail_reason") or verification_metadata.get("error") or "").strip()
+        detail = str((record or {}).get("fail_reason") or verification_detail.get("error") or "").strip()
         if detail:
             result["detail"] = detail
     return result
@@ -236,4 +236,3 @@ def _bare_repo_head_commit(bare_repo: Path) -> str:
         raise ValueError("import target bare repository path is invalid")
     proc = run_git(["git", "-C", str(bare_repo), "rev-parse", "--verify", "HEAD"])
     return proc.stdout.strip() if proc.returncode == 0 else ""
-

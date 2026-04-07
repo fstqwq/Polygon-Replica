@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .db_helpers import db_execute, db_fetch_one, write_preview_summary
 
@@ -79,7 +79,7 @@ class TestUIRun(UIBaseSuite):
         existing_finished_at = ""
         existing_signature = ""
         if existing_row is not None:
-            payload = config.verification_service.verification_metadata(verification_id)
+            payload = config.verification_service.verification_detail(verification_id)
             if isinstance(payload, dict):
                 existing_metadata = dict(payload)
             existing_created_at = str(existing_row["created_at"] or "").strip()
@@ -162,7 +162,7 @@ class TestUIRun(UIBaseSuite):
             signature=signature,
             kind=kind_token,
             status=status,
-            metadata=metadata,
+            detail=metadata,
         )
         db_execute(
             "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
@@ -205,7 +205,7 @@ class TestUIRun(UIBaseSuite):
             signature=str(signature or "").strip(),
             kind=str(kind or Kind.ALL).strip() or Kind.ALL.value,
             status=status,
-            metadata=summary_obj,
+            detail=summary_obj,
         )
         db_execute(
             "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
@@ -601,7 +601,7 @@ class TestUIRun(UIBaseSuite):
                 signature="deadbeef",
                 kind=Kind.ALL.value,
                 status="running",
-                metadata=dict(kwargs.get("initial_summary") or {}),
+                detail=dict(kwargs.get("initial_summary") or {}),
             )
             return True
 
@@ -629,7 +629,7 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertIsNotNone(verification_row)
         self.assertIn(str(verification_row["status"] or ""), {"running", "ok", "failed"})
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         self.assertEqual(str(metadata.get("artifact_verification_id") or ""), verification_id)
         self.assertTrue(bool(metadata.get("task_graph")))
 
@@ -656,7 +656,7 @@ class TestUIRun(UIBaseSuite):
         deadline = time.monotonic() + 8.0
         metadata: dict[str, object] = {}
         while time.monotonic() < deadline:
-            metadata = config.verification_service.verification_metadata(verification_id)
+            metadata = config.verification_service.verification_detail(verification_id)
             if metadata:
                 break
             time.sleep(0.05)
@@ -2993,7 +2993,7 @@ class TestUIRun(UIBaseSuite):
             assert rows
             self.assertEqual(str(rows[0]["id"] or ""), verification_id)
             self.assertEqual(str(rows[0]["status"] or ""), "running")
-            metadata = config.verification_service.verification_metadata(verification_id)
+            metadata = config.verification_service.verification_detail(verification_id)
             self.assertEqual(str(metadata.get("artifact_verification_id") or ""), verification_id)
             self.assertTrue(bool(metadata.get("task_graph")))
             self.assertEqual(str(metadata.get("verification_source") or ""), "verification.start")
@@ -3046,7 +3046,7 @@ class TestUIRun(UIBaseSuite):
             )
             self.assertIsNotNone(row)
             assert row
-            summary = config.verification_service.verification_metadata(str(row[0]["id"] or ""))
+            summary = config.verification_service.verification_detail(str(row[0]["id"] or ""))
             self.assertEqual(str(row[0]["status"] or ""), "running")
             self.assertTrue(bool(summary.get("task_graph")))
         finally:
@@ -4892,7 +4892,7 @@ class TestUIRun(UIBaseSuite):
             signature="",
             kind=Kind.ALL,
             status="ok",
-            metadata={"status": "ok"},
+            detail={"status": "ok"},
         )
         input_ref = config.verification_service.store_verification_blob(
             verification_id=verification_id,
@@ -5378,7 +5378,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(str(columns[0].get("got_short") or ""), "CE")
 
     def test_run_verification_details_prefers_verification_record_over_audit(self) -> None:
-        from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_snapshot
+        from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary
 
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -5420,13 +5420,13 @@ class TestUIRun(UIBaseSuite):
             ],
             summary_extra={"status": "running"},
         )
-        details_row = load_verification_detail_snapshot(problem_id, verification_id)
+        details_row = load_verification_detail_summary(problem_id, verification_id)
         self.assertEqual(str(details_row.get("created_at") or ""), "2026-03-12T00:00:02Z")
         details = details_row.get("details")
         self.assertIsInstance(details, dict)
         self.assertEqual(str(details.get("verification_id") or ""), verification_id)
-        self.assertEqual(details.get("runs_order"), ["r-detail-a"])
         self.assertEqual(str(details.get("status") or ""), "running")
+        self.assertFalse(bool(details.get("task_graph")))
 
     def test_run_list_prefers_verification_row_status_over_stale_summary_status(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -5466,7 +5466,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("failed", html)
 
     def test_run_details_prefers_verification_row_status_over_stale_summary_status(self) -> None:
-        from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_snapshot
+        from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary
 
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -5498,7 +5498,7 @@ class TestUIRun(UIBaseSuite):
             summary_extra={"status": "running", "error": "cancelled on service startup"},
         )
 
-        snapshot = load_verification_detail_snapshot(problem_id, verification_id)
+        snapshot = load_verification_detail_summary(problem_id, verification_id)
         details = snapshot.get("details")
         self.assertIsInstance(details, dict)
         self.assertEqual(str(details.get("status") or ""), "failed")

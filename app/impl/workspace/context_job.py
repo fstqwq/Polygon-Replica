@@ -95,10 +95,7 @@ def start_verification_job(
     if initial_details is not None:
         if signature and (not (initial_details.get("signature") or "")):
             initial_details["signature"] = signature
-        initial_details.setdefault("artifact_verification_id", verification_id)
-        initial_details.setdefault("task_graph", True)
         initial_details.setdefault("verification_source", "verification.start")
-        initial_details.setdefault("steps", ["gen", "val", "run", "check"])
     kind = _requested_verification_kind(selected_test_names=list(selected_test_names or []))
     with config.verification_lock:
         if key in config.verification_inflight:
@@ -111,19 +108,11 @@ def start_verification_job(
             with config.verification_lock:
                 config.verification_inflight.discard(key)
             raise
-    metadata = {
+    detail = {
         "mode": str(initial_details.get("mode") or "pass-fail") if initial_details is not None else "pass-fail",
         "pass_limit": int(initial_details.get("pass_limit") or 1) if initial_details is not None else 1,
-        "signature": signature,
-        "kind": kind,
         "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
         "selected_test_names": list(selected_test_names or []),
-        "artifact_verification_id": str(
-            initial_details.get("artifact_verification_id") or verification_id
-        ) if initial_details is not None else str(verification_id),
-        "task_graph": True,
-        "verification_source": str(initial_details.get("verification_source") or "verification.start") if initial_details is not None else "verification.start",
-        "steps": list(initial_details.get("steps") or ["gen", "val", "run", "check"]) if initial_details is not None else ["gen", "val", "run", "check"],
     }
     config.verification_service.begin_verification_record(
         verification_id=verification_id,
@@ -132,7 +121,7 @@ def start_verification_job(
         signature=signature,
         kind=kind,
         status=Status.RUNNING.value,
-        metadata=metadata,
+        detail=detail,
     )
     worker_ref: list[object] = [None]
 
@@ -154,11 +143,9 @@ def start_verification_job(
                     selected_test_names=selected_test_names or [],
                 )
             except Exception as exc:
-                metadata = dict(config.verification_service.verification_metadata(verification_id))
-                metadata["error"] = str(exc)
-                metadata["signature"] = signature
-                metadata["kind"] = kind
-                config.verification_service.persist_verification_metadata(verification_id, metadata)
+                detail = dict(config.verification_service.verification_detail(verification_id))
+                detail["error"] = str(exc)
+                config.verification_service.persist_verification_detail(verification_id, detail)
                 config.verification_service.update_verification_record_status(
                     verification_id,
                     status=Status.FAILED.value,
@@ -283,5 +270,3 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
             config.export_inflight.discard(key)
         raise
     return True
-
-

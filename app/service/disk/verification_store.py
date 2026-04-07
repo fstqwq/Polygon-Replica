@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-import os
 import secrets
-import tempfile
 from pathlib import Path
 from typing import TypedDict
 
@@ -13,22 +10,9 @@ from app.service.verification.types import ACTIVE, Kind, Status
 from app.setting import load_settings
 
 
-class VerificationRuntimeRow(TypedDict):
-    id: str
-    status: str
-    metadata: dict[str, object]
-
-
 class VerificationStatusRow(TypedDict):
     id: str
     status: str
-
-
-class WorkspaceVerificationMetaRow(TypedDict):
-    id: str
-    status: str
-    metadata: dict[str, object]
-
 
 class VerificationRecordRow(TypedDict):
     id: str
@@ -69,53 +53,6 @@ class VerificationStore:
     def _verification_root(self, verification_id: str) -> Path:
         return self._fs_manager.resolve_verification_root(verification_id)
 
-    def _metadata_path(self, verification_id: str) -> Path:
-        return (self._verification_root(verification_id) / "metadata.json").resolve()
-
-    def _read_metadata_text(self, verification_id: str) -> str:
-        path = self._metadata_path(verification_id)
-        try:
-            return path.read_text(encoding="utf-8")
-        except OSError:
-            return ""
-
-    def _read_metadata(self, verification_id: str) -> dict[str, object]:
-        text = self._read_metadata_text(verification_id)
-        if not text:
-            return {}
-        try:
-            payload = json.loads(text)
-        except Exception:
-            return {}
-        return dict(payload) if isinstance(payload, dict) else {}
-
-    def save_metadata(self, verification_id: str, metadata: dict[str, object]) -> None:
-        root = self._verification_root(verification_id)
-        root.mkdir(parents=True, exist_ok=True)
-        target = self._metadata_path(verification_id)
-        payload_text = json.dumps(dict(metadata), ensure_ascii=True, separators=(",", ":"))
-        fd, temp_name = tempfile.mkstemp(
-            prefix=f".{target.stem}-",
-            suffix=".tmp",
-            dir=str(target.parent),
-            text=True,
-        )
-        temp_path = Path(temp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-                handle.write(payload_text)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temp_path.replace(target)
-        finally:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-    def metadata(self, verification_id: str) -> dict[str, object]:
-        return self._read_metadata(verification_id)
-
     def _record_row(self, row: dict[str, object]) -> VerificationRecordRow:
         workspace_id_raw = row["workspace_id"]
         return {
@@ -128,23 +65,6 @@ class VerificationStore:
             "fail_reason": str(row["fail_reason"] or ""),
             "created_at": str(row["created_at"] or ""),
             "finished_at": str(row["finished_at"] or ""),
-        }
-
-    def get_runtime_row(self, problem_id: int, verification_id: str) -> VerificationRuntimeRow | None:
-        row = self.db.fetch_one(
-            """
-            SELECT id,status
-            FROM verifications
-            WHERE id=? AND problem_id=?
-            """,
-            [verification_id, problem_id],
-        )
-        if row is None:
-            return None
-        return {
-            "id": str(row["id"]),
-            "status": str(row["status"]),
-            "metadata": self._read_metadata(verification_id),
         }
 
     def get_status_row(self, problem_id: int, verification_id: str) -> VerificationStatusRow | None:
@@ -382,28 +302,6 @@ class VerificationStore:
             [artifact_id, problem_id, workspace_id],
         )
         return row is not None
-
-    def workspace_verification_meta(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        verification_id: str,
-    ) -> WorkspaceVerificationMetaRow | None:
-        row = self.db.fetch_one(
-            """
-            SELECT id,status
-            FROM verifications
-            WHERE id=? AND problem_id=? AND workspace_id=?
-            """,
-            [verification_id, problem_id, workspace_id],
-        )
-        if row is None:
-            return None
-        return {
-            "id": str(row["id"]),
-            "status": str(row["status"]),
-            "metadata": self._read_metadata(verification_id),
-        }
 
     def latest_problem_verification_id_for_signature(self, problem_id: int, signature: str) -> str:
         row = self.db.fetch_one(

@@ -6,8 +6,8 @@ from app.impl.runtime.config import config
 
 from .context_operation import dedupe_preserve_order
 from .context_run_detail import normalize_run_id_token, normalize_run_test_name_token
-VerificationSnapshot = TypedDict(
-    "VerificationSnapshot",
+VerificationDetailSummaryRow = TypedDict(
+    "VerificationDetailSummaryRow",
     {
         "details": dict[str, object],
         "created_at": str,
@@ -27,24 +27,24 @@ VerificationSummary = TypedDict(
     total=False,
 )
 
-def load_verification_detail_snapshot(problem_id: int, verification_id: str) -> VerificationSnapshot | dict[str, object]:
+def load_verification_detail_summary(problem_id: int, verification_id: str) -> VerificationDetailSummaryRow | dict[str, object]:
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return {}
     verification_row = config.verification_service.verification_record(safe_verification_id)
     if verification_row is None or int(verification_row['problem_id']) != int(problem_id):
         return {}
-    metadata = config.verification_service.verification_metadata(safe_verification_id)
-    snapshot = {
-        **metadata,
-        **config.verification_service.verification_runtime_snapshot(safe_verification_id),
+    detail = config.verification_service.verification_detail(safe_verification_id)
+    details = {
+        **detail,
+        **config.verification_service.verification_runtime_summary(safe_verification_id),
         'verification_id': safe_verification_id,
         'finished_at': verification_row['finished_at'],
     }
-    snapshot['status'] = verification_row['status']
-    snapshot['artifact_verification_id'] = str(metadata.get('artifact_verification_id') or safe_verification_id)
+    details['status'] = verification_row['status']
+    details['artifact_verification_id'] = safe_verification_id
     return {
-        'details': snapshot,
+        'details': details,
         'created_at': verification_row['created_at'],
     }
 
@@ -88,5 +88,3 @@ def _run_test_count_from_summary(summary: VerificationSummary | None) -> int:
         except Exception:
             return 0
     return 0
-
-

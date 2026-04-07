@@ -43,7 +43,7 @@ def judgehost_cases_for_run(service, run_id: str):
 
 
 def write_verification_summary(verification_id: str, summary: dict[str, object]) -> None:
-    config.verification_service.persist_verification_metadata(str(verification_id).strip(), dict(summary))
+    config.verification_service.persist_verification_detail(str(verification_id).strip(), dict(summary))
 
 
 def read_preview_summary(preview_id: str) -> dict[str, object]:

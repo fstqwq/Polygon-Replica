@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import zipfile
@@ -120,22 +120,22 @@ def _build_validation_status(verification_row: dict[str, object] | None) -> str:
     status = cast(str | None, verification_row.get("status"))
     if status is None:
         status = ""
-    metadata = dict(cast(dict[str, object], verification_row.get("metadata") or {}))
-    sanity_status = _parse_step_status(metadata.get("sanity_status"))
+    details = dict(cast(dict[str, object], verification_row.get("details") or {}))
+    sanity_status = _parse_step_status(details.get("sanity_status"))
     if sanity_status == "passed":
         return "validation passed"
     if sanity_status == "failed":
         return "validation failed"
     if sanity_status == "unknown":
         return "validation unknown"
-    validation_status = _parse_step_status(metadata.get("validation_status"))
+    validation_status = _parse_step_status(details.get("validation_status"))
     if validation_status == "passed":
         return "validation passed"
     if validation_status == "failed":
         return "validation failed"
     if validation_status == "unknown":
         return "validation unknown"
-    failed_step = _parse_step_status(metadata.get("failed_step"))
+    failed_step = _parse_step_status(details.get("failed_step"))
     if failed_step in {"validate", "sanity"}:
         return "validation failed"
     if status == "ok":
@@ -304,7 +304,7 @@ def export_page(request: Request, problem: str, user: str):
         )
         verification_meta = verification_meta_cache.get(verification_id)
         if verification_id and (verification_meta is None) and (verification_id not in verification_meta_cache):
-            verification_meta = config.verification_service.workspace_verification_meta(
+            verification_meta = config.verification_service.workspace_verification_detail(
                 int(problem_id),
                 int(workspace_id),
                 verification_id,
@@ -394,4 +394,3 @@ def export_create(problem: str, user: str, verification_id: str=Form(''), export
         audit(ctx['user']['id'], ctx['problem']['id'], 'export.create', initial_details)
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/{user}/export', status_code=303, message=msg)
-

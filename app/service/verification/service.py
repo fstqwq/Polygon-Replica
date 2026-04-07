@@ -4,8 +4,9 @@ import json
 import re
 import threading
 from pathlib import Path
+from typing import cast
 
-from app.db import DB
+from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
 from app.service.disk.verification_store import VerificationStore
@@ -44,6 +45,20 @@ DEFAULT_TIME_LIMIT_MS = 2000
 TIME_LIMIT_MIN_MS = 100
 TIME_LIMIT_MAX_MS = 30000
 
+_DETAIL_SCALAR_DEFAULTS: dict[str, object] = {
+    "mode": "pass-fail",
+    "pass_limit": 1,
+    "run_config_json": "",
+    "error": "",
+    "failed_step": "",
+    "failed_check": "",
+    "failed_test": "",
+    "sanity_status": "",
+    "sanity_checked_count": 0,
+    "validation_status": "",
+    "validated_count": 0,
+}
+
 class VerificationService:
     def __init__(
         self,
@@ -65,10 +80,14 @@ class VerificationService:
         self.apply_runtime_values(constants or build_runtime_values())
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
-        row = self._verification_store.get_runtime_row(int(problem_id), verification_id)
-        if row is None:
+        row = self.verification_record(verification_id)
+        if row is None or int(row["problem_id"]) != int(problem_id):
             return None
-        return row
+        return {
+            "id": str(row["id"] or ""),
+            "status": str(row["status"] or ""),
+            "details": self.verification_detail(verification_id),
+        }
 
     def has_export_detail_verification(self, problem_id: int, verification_id: str) -> bool:
         row = self._verification_store.get_status_row(int(problem_id), verification_id)
@@ -110,16 +129,20 @@ class VerificationService:
     def workspace_artifact_exists(self, problem_id: int, workspace_id: int, artifact_id: str) -> bool:
         return self._verification_store.workspace_artifact_exists(int(problem_id), int(workspace_id), artifact_id)
 
-    def workspace_verification_meta(
+    def workspace_verification_detail(
         self,
         problem_id: int,
         workspace_id: int,
         verification_id: str,
-    ) -> dict[str, str] | None:
-        row = self._verification_store.workspace_verification_meta(int(problem_id), int(workspace_id), verification_id)
+    ) -> dict[str, object] | None:
+        row = self._verification_store.workspace_verification_row(int(problem_id), int(workspace_id), verification_id)
         if row is None:
             return None
-        return row
+        return {
+            "id": str(row["id"] or ""),
+            "status": str(row["status"] or ""),
+            "details": self.verification_detail(verification_id),
+        }
 
     def latest_problem_verification_id_for_signature(self, problem_id: int, signature: str) -> str:
         return self._verification_store.latest_problem_verification_id_for_signature(int(problem_id), signature)
@@ -145,11 +168,224 @@ class VerificationService:
             return None
         return dict(row)
 
-    def verification_metadata(self, verification_id: str) -> dict[str, object]:
-        return self._verification_store.metadata(verification_id)
+    def _ordered_detail_tokens(self, verification_id: str, table_name: str, column_name: str) -> list[str]:
+        rows = self.db.fetch_all(
+            f"""
+            SELECT {column_name}
+            FROM {table_name}
+            WHERE verification_id=?
+            ORDER BY ordinal ASC
+            """,
+            [str(verification_id or "").strip()],
+        )
+        values: list[str] = []
+        for row in rows:
+            token = str(row[column_name] or "")
+            if token:
+                values.append(token)
+        return values
 
-    def persist_verification_metadata(self, verification_id: str, metadata: dict[str, object]) -> None:
-        self._verification_store.save_metadata(verification_id, metadata)
+    def _verification_tests_meta_rows(self, verification_id: str) -> list[dict[str, object]]:
+        rows = self.db.fetch_all(
+            """
+            SELECT ordinal,test_name,source_kind,source_id,is_sample,sample_input_custom,sample_output_custom,
+                   sample_output_validate,description,source_path,command_text,payload_source_path
+            FROM verification_tests_meta
+            WHERE verification_id=?
+            ORDER BY ordinal ASC
+            """,
+            [str(verification_id or "").strip()],
+        )
+        values: list[dict[str, object]] = []
+        for row in rows:
+            item: dict[str, object] = {
+                "index": max(1, int(row["ordinal"] or 0)),
+                "test_name": str(row["test_name"] or ""),
+                "kind": str(row["source_kind"] or ""),
+                "id": str(row["source_id"] or ""),
+                "sample": bool(int(row["is_sample"] or 0)),
+                "sample_input_custom": bool(int(row["sample_input_custom"] or 0)),
+                "sample_output_custom": bool(int(row["sample_output_custom"] or 0)),
+                "sample_output_validate": bool(int(row["sample_output_validate"] or 0)),
+                "desc": str(row["description"] or ""),
+                "source": str(row["source_path"] or ""),
+            }
+            command_text = str(row["command_text"] or "")
+            if command_text:
+                item["command"] = command_text
+            payload_source_path = str(row["payload_source_path"] or "")
+            if payload_source_path:
+                item["payload_source"] = payload_source_path
+            values.append(item)
+        return values
+
+    def verification_detail(self, verification_id: str) -> dict[str, object]:
+        safe_verification_id = str(verification_id or "").strip()
+        if not safe_verification_id:
+            return {}
+        row = self.db.fetch_one(
+            """
+            SELECT mode,pass_limit,run_config_json,error,failed_step,failed_check,failed_test,
+                   sanity_status,sanity_checked_count,validation_status,validated_count
+            FROM verifications
+            WHERE id=?
+            """,
+            [safe_verification_id],
+        )
+        if row is None:
+            return {}
+        return {
+            "mode": str(row["mode"] or _DETAIL_SCALAR_DEFAULTS["mode"]),
+            "pass_limit": int(row["pass_limit"] or _DETAIL_SCALAR_DEFAULTS["pass_limit"]),
+            "run_config_json": str(row["run_config_json"] or ""),
+            "error": str(row["error"] or ""),
+            "failed_step": str(row["failed_step"] or ""),
+            "failed_check": str(row["failed_check"] or ""),
+            "failed_test": str(row["failed_test"] or ""),
+            "sanity_status": str(row["sanity_status"] or ""),
+            "sanity_checked_count": int(row["sanity_checked_count"] or 0),
+            "validation_status": str(row["validation_status"] or ""),
+            "validated_count": int(row["validated_count"] or 0),
+            "selected_test_names": self._ordered_detail_tokens(safe_verification_id, "verification_selected_tests", "test_name"),
+            "source_paths": self._ordered_detail_tokens(safe_verification_id, "verification_source_paths", "source_path"),
+            "sanity_checks": self._ordered_detail_tokens(safe_verification_id, "verification_sanity_checks", "check_name"),
+            "tests_meta_rows": self._verification_tests_meta_rows(safe_verification_id),
+        }
+
+    def _replace_ordered_detail_tokens(
+        self,
+        conn,
+        verification_id: str,
+        *,
+        table_name: str,
+        column_name: str,
+        values: list[str],
+    ) -> None:
+        conn.execute(f"DELETE FROM {table_name} WHERE verification_id=?", [verification_id])
+        for ordinal, token in enumerate(values, start=1):
+            conn.execute(
+                f"INSERT INTO {table_name}(verification_id,ordinal,{column_name}) VALUES(?,?,?)",
+                [verification_id, ordinal, token],
+            )
+
+    def _replace_tests_meta_rows(
+        self,
+        conn,
+        verification_id: str,
+        *,
+        selected_test_names: list[str],
+        rows: list[dict[str, object]],
+    ) -> None:
+        conn.execute("DELETE FROM verification_tests_meta WHERE verification_id=?", [verification_id])
+        for position, raw in enumerate(rows, start=1):
+            item = dict(raw)
+            ordinal = max(1, int(item.get("index") or position))
+            test_name = str(item.get("test_name") or "")
+            if (not test_name) and position <= len(selected_test_names):
+                test_name = str(selected_test_names[position - 1] or "")
+            if not test_name:
+                test_name = f"{ordinal:03d}.in"
+            conn.execute(
+                """
+                INSERT INTO verification_tests_meta(
+                    verification_id,ordinal,test_name,source_kind,source_id,is_sample,
+                    sample_input_custom,sample_output_custom,sample_output_validate,
+                    description,source_path,command_text,payload_source_path
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    verification_id,
+                    ordinal,
+                    test_name,
+                    str(item.get("kind") or ""),
+                    str(item.get("id") or ""),
+                    1 if bool(item.get("sample")) else 0,
+                    1 if bool(item.get("sample_input_custom")) else 0,
+                    1 if bool(item.get("sample_output_custom")) else 0,
+                    1 if bool(item.get("sample_output_validate")) else 0,
+                    str(item.get("desc") or ""),
+                    str(item.get("source") or ""),
+                    str(item.get("command") or ""),
+                    str(item.get("payload_source") or ""),
+                ],
+            )
+
+    def persist_verification_detail(self, verification_id: str, detail: dict[str, object]) -> None:
+        safe_verification_id = str(verification_id or "").strip()
+        if not safe_verification_id:
+            return
+        payload = dict(detail)
+        scalar_values = {
+            "mode": str(payload.get("mode") or _DETAIL_SCALAR_DEFAULTS["mode"]),
+            "pass_limit": int(payload.get("pass_limit") or _DETAIL_SCALAR_DEFAULTS["pass_limit"]),
+            "run_config_json": str(payload.get("run_config_json") or ""),
+            "error": str(payload.get("error") or ""),
+            "failed_step": str(payload.get("failed_step") or ""),
+            "failed_check": str(payload.get("failed_check") or ""),
+            "failed_test": str(payload.get("failed_test") or ""),
+            "sanity_status": str(payload.get("sanity_status") or ""),
+            "sanity_checked_count": int(payload.get("sanity_checked_count") or 0),
+            "validation_status": str(payload.get("validation_status") or ""),
+            "validated_count": int(payload.get("validated_count") or 0),
+        }
+        selected_test_names = [str(item or "") for item in cast(list[object], payload.get("selected_test_names") or []) if str(item or "")]
+        source_paths = [str(item or "") for item in cast(list[object], payload.get("source_paths") or []) if str(item or "")]
+        sanity_checks = [str(item or "") for item in cast(list[object], payload.get("sanity_checks") or []) if str(item or "")]
+        tests_meta_rows = [dict(item) for item in cast(list[object], payload.get("tests_meta_rows") or []) if isinstance(item, dict)]
+
+        def _tx(conn) -> None:
+            conn.execute(
+                """
+                UPDATE verifications
+                SET mode=?,pass_limit=?,run_config_json=?,error=?,failed_step=?,failed_check=?,failed_test=?,
+                    sanity_status=?,sanity_checked_count=?,validation_status=?,validated_count=?
+                WHERE id=?
+                """,
+                [
+                    scalar_values["mode"],
+                    scalar_values["pass_limit"],
+                    scalar_values["run_config_json"],
+                    scalar_values["error"],
+                    scalar_values["failed_step"],
+                    scalar_values["failed_check"],
+                    scalar_values["failed_test"],
+                    scalar_values["sanity_status"],
+                    scalar_values["sanity_checked_count"],
+                    scalar_values["validation_status"],
+                    scalar_values["validated_count"],
+                    safe_verification_id,
+                ],
+            )
+            self._replace_ordered_detail_tokens(
+                conn,
+                safe_verification_id,
+                table_name="verification_selected_tests",
+                column_name="test_name",
+                values=selected_test_names,
+            )
+            self._replace_ordered_detail_tokens(
+                conn,
+                safe_verification_id,
+                table_name="verification_source_paths",
+                column_name="source_path",
+                values=source_paths,
+            )
+            self._replace_ordered_detail_tokens(
+                conn,
+                safe_verification_id,
+                table_name="verification_sanity_checks",
+                column_name="check_name",
+                values=sanity_checks,
+            )
+            self._replace_tests_meta_rows(
+                conn,
+                safe_verification_id,
+                selected_test_names=selected_test_names,
+                rows=tests_meta_rows,
+            )
+
+        self.db.write_transaction(_tx)
 
     def _verification_blob_ref(self, *, key_hash: str, signature: str, name: str) -> str:
         return domjudge_cache_blob_ref(
@@ -218,26 +454,52 @@ class VerificationService:
         return self._verification_blob_ref(key_hash=key_hash, signature=signature, name=safe_file_name)
 
     def verification_artifact_refs(self, verification_id: str) -> dict[str, dict[str, str]]:
-        metadata = self.verification_metadata(verification_id)
-        raw = metadata.get("artifact_refs")
-        if not isinstance(raw, dict):
+        safe_verification_id = str(verification_id or "").strip()
+        if not safe_verification_id:
             return {}
+        rows = self.db.fetch_all(
+            """
+            SELECT test_name,input_ref,answer_ref
+            FROM verification_artifact_refs
+            WHERE verification_id=?
+            ORDER BY test_name ASC
+            """,
+            [safe_verification_id],
+        )
         refs: dict[str, dict[str, str]] = {}
-        for test_name, item in raw.items():
-            if not isinstance(item, dict):
+        for row in rows:
+            test_name = str(row["test_name"] or "")
+            if not test_name:
                 continue
-            normalized = {
-                str(key): str(value)
-                for key, value in item.items()
-                if str(value or "")
-            }
-            refs[str(test_name)] = normalized
+            item: dict[str, str] = {}
+            input_ref = str(row["input_ref"] or "")
+            answer_ref = str(row["answer_ref"] or "")
+            if input_ref:
+                item["input_ref"] = input_ref
+            if answer_ref:
+                item["answer_ref"] = answer_ref
+            if item:
+                refs[test_name] = item
         return refs
 
     def verification_artifact_ref(self, verification_id: str, test_name: str, ref_key: str) -> str:
-        refs = self.verification_artifact_refs(verification_id)
-        item = refs.get(str(test_name), {})
-        return str(item.get(str(ref_key), "") or "")
+        safe_ref_key = str(ref_key or "").strip()
+        if safe_ref_key not in {"input_ref", "answer_ref"}:
+            return ""
+        row = self.db.fetch_one(
+            """
+            SELECT input_ref,answer_ref
+            FROM verification_artifact_refs
+            WHERE verification_id=? AND test_name=?
+            """,
+            [
+                str(verification_id or "").strip(),
+                str(test_name or "").strip(),
+            ],
+        )
+        if row is None:
+            return ""
+        return str(row[safe_ref_key] or "")
 
     def verification_task_output_ref(self, verification_id: str, task_id: str) -> tuple[str, str] | None:
         row = self.db.fetch_one(
@@ -256,27 +518,47 @@ class VerificationService:
         return self.judgehost_task_service.resolve_artifact_blob(token)
 
     def update_verification_artifact_refs(self, verification_id: str, test_name: str, refs: dict[str, str]) -> dict[str, object]:
+        safe_verification_id = str(verification_id or "").strip()
+        safe_test_name = str(test_name or "").strip()
+        if (not safe_verification_id) or (not safe_test_name):
+            return {}
+        normalized = {
+            str(key): str(value)
+            for key, value in dict(refs).items()
+            if str(key) in {"input_ref", "answer_ref"} and str(value or "")
+        }
+        if not normalized:
+            return self.verification_artifact_refs(safe_verification_id)
         with self._verification_inflight_lock:
-            metadata = self.verification_metadata(verification_id)
-            raw = metadata.get("artifact_refs")
-            artifact_refs: dict[str, dict[str, str]] = {}
-            if isinstance(raw, dict):
-                for raw_test_name, raw_item in raw.items():
-                    if not isinstance(raw_item, dict):
-                        continue
-                    artifact_refs[str(raw_test_name)] = {
-                        str(key): str(value)
-                        for key, value in raw_item.items()
-                        if str(value or "")
-                    }
-            current = dict(artifact_refs.get(str(test_name), {}))
-            current.update({str(key): str(value) for key, value in refs.items() if str(value or "")})
-            artifact_refs[str(test_name)] = current
-            metadata["artifact_refs"] = artifact_refs
-            self.persist_verification_metadata(verification_id, metadata)
-            return metadata
+            current_row = self.db.fetch_one(
+                """
+                SELECT input_ref,answer_ref
+                FROM verification_artifact_refs
+                WHERE verification_id=? AND test_name=?
+                """,
+                [safe_verification_id, safe_test_name],
+            )
+            input_ref = str((current_row["input_ref"] if current_row is not None else "") or "")
+            answer_ref = str((current_row["answer_ref"] if current_row is not None else "") or "")
+            if "input_ref" in normalized:
+                input_ref = normalized["input_ref"]
+            if "answer_ref" in normalized:
+                answer_ref = normalized["answer_ref"]
+            self.db.execute(
+                """
+                INSERT INTO verification_artifact_refs(verification_id,test_name,input_ref,answer_ref,updated_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(verification_id,test_name) DO UPDATE SET
+                    input_ref=excluded.input_ref,
+                    answer_ref=excluded.answer_ref,
+                    updated_at=excluded.updated_at
+                """,
+                [safe_verification_id, safe_test_name, input_ref, answer_ref, now_iso()],
+            )
+        return self.verification_artifact_refs(safe_verification_id)
 
-    def verification_runtime_snapshot(self, verification_id: str) -> dict[str, object]:
+
+    def verification_runtime_summary(self, verification_id: str) -> dict[str, object]:
         rows = VerificationTaskStore(self.db).list_rows_for_list(verification_id)
         counts = task_counts(rows)
         return {
@@ -290,12 +572,12 @@ class VerificationService:
         }
 
     def verification_run_ids(self, verification_id: str) -> list[str]:
-        snapshot = self.verification_runtime_snapshot(verification_id)
-        return list(snapshot["logical_run_ids"])
+        summary = self.verification_runtime_summary(verification_id)
+        return list(summary["logical_run_ids"])
 
     def verification_source_paths(self, verification_id: str) -> list[str]:
-        snapshot = self.verification_runtime_snapshot(verification_id)
-        return list(snapshot["source_paths"])
+        detail = self.verification_detail(verification_id)
+        return list(cast(list[str], detail.get("source_paths") or []))
 
     def list_workspace_verification_rows(
         self,
@@ -322,7 +604,7 @@ class VerificationService:
         signature: str = "",
         kind: str,
         status: str,
-        metadata: dict[str, object] | None = None,
+        detail: dict[str, object] | None = None,
     ) -> str:
         root = self._verification_store.create_or_update_record(
             self.fs_manager,
@@ -333,8 +615,8 @@ class VerificationService:
             kind=kind,
             status=status,
         )
-        if metadata is not None:
-            self._verification_store.save_metadata(verification_id, metadata)
+        if detail is not None:
+            self.persist_verification_detail(verification_id, detail)
         return root
 
     def cancel_verification_if_active(self, verification_id: str, *, reason: str, now_text: str) -> bool:

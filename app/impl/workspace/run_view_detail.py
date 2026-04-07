@@ -43,7 +43,7 @@ from app.service.problem.solution_metadata import (
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.platform.process import is_canonical_artifact_id
 from app.impl.workspace.run_view_lifecycle_card import (
-    load_verification_detail_snapshot,
+    load_verification_detail_summary,
     _verification_tests_meta_stats,
 )
 from app.impl.workspace.context_verification import (
@@ -377,12 +377,12 @@ def build_run_detail_context(
     if verification_record is not None and verification_record['workspace_id'] == workspace_id:
         task_rows = VerificationTaskStore(config.db).list_rows(verification_id_hint)
         has_task_graph = bool(task_rows)
-        verification_metadata = config.verification_service.verification_metadata(verification_id_hint)
+        verification_detail_payload = config.verification_service.verification_detail(verification_id_hint)
         verification_details = {
-            **verification_metadata,
-            **config.verification_service.verification_runtime_snapshot(verification_id_hint),
+            **verification_detail_payload,
+            **config.verification_service.verification_runtime_summary(verification_id_hint),
             'verification_id': verification_id_hint,
-            'artifact_verification_id': str(verification_metadata.get('artifact_verification_id') or verification_id_hint),
+            'artifact_verification_id': verification_id_hint,
             'status': verification_record['status'],
             'created_at': verification_record['created_at'],
             'finished_at': verification_record['finished_at'] or '',
@@ -1265,7 +1265,7 @@ def build_run_detail_context(
     last_updated = _latest_iso_timestamp(last_updated_candidates)
     verification_id = verification_id_hint
     if (not verification_details) and verification_id:
-        detail_snapshot = load_verification_detail_snapshot(problem_id, verification_id)
+        detail_snapshot = load_verification_detail_summary(problem_id, verification_id)
         detail_details = detail_snapshot.get('details')
         if detail_details is not None:
             verification_details = dict(detail_details)

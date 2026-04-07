@@ -205,7 +205,7 @@ def _verification_status_context(
     if row is None:
         return {'mode': 'none', 'display': 'none', 'last_status': 'none', 'run_id': '', 'run_ids': '', 'verification_id': '', 'error': '', 'created_at': '', 'stale': False, 'stale_reason': ''}
     verification_id = row['id']
-    metadata = config.verification_service.verification_metadata(verification_id)
+    detail = config.verification_service.verification_detail(verification_id)
     status_token = row['status']
     if status_token == 'ok':
         last_status = 'pass'
@@ -226,7 +226,7 @@ def _verification_status_context(
             current_signature = ''
     stale = bool(recorded_signature and current_signature and (recorded_signature != current_signature))
     record = config.verification_service.verification_record(verification_id) or {}
-    error_text = str(record.get("fail_reason") or metadata.get("error") or "")
+    error_text = str(record.get("fail_reason") or detail.get("error") or "")
     mode = 'stale' if stale else last_status
     stale_reason = _verification_stale_reason() if stale else ''
     return {

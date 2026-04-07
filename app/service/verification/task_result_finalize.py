@@ -65,11 +65,12 @@ def _persist_verification_artifact(
         file_name=file_name,
         payload=payload,
     )
-    config.verification_service.update_verification_artifact_refs(
-        verification_id,
-        test_name,
-        {ref_key: ref},
-    )
+    if ref_key in {"input_ref", "answer_ref"}:
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            test_name,
+            {ref_key: ref},
+        )
     return ref
 
 

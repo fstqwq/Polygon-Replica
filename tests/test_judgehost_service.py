@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .db_helpers import (
     db_execute,
@@ -166,7 +166,7 @@ class TestJudgehostService(SmokeBase):
             signature="",
             kind="all",
             status="running",
-            metadata={"verification_id": verification_id, "task_graph": True, "status": "running"},
+            detail={"verification_id": verification_id, "task_graph": True, "status": "running"},
         )
 
         run_id = f"r-immediate-finalize-{uuid.uuid4().hex[:8]}"
@@ -286,7 +286,6 @@ class TestJudgehostService(SmokeBase):
             self.assertFalse(coordinator_thread.is_alive())
 
     def _seed_verification_test_artifacts(self, verification_id: str, items: list[tuple[str, str, str]]) -> None:
-        artifact_refs: dict[str, dict[str, str]] = {}
         for test_name, input_text, answer_text in items:
             input_ref = config.verification_service.store_verification_blob(
                 verification_id=verification_id,
@@ -303,12 +302,15 @@ class TestJudgehostService(SmokeBase):
                 file_name=answer_name,
                 payload=answer_text.encode("utf-8"),
             )
-            artifact_refs[test_name] = {"input_ref": input_ref, "answer_ref": answer_ref}
-        metadata = config.verification_service.verification_metadata(verification_id)
-        metadata["artifact_refs"] = artifact_refs
+            config.verification_service.update_verification_artifact_refs(
+                verification_id,
+                test_name,
+                {"input_ref": input_ref, "answer_ref": answer_ref},
+            )
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata["selected_test_names"] = [test_name for test_name, _input, _answer in items]
         metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 1})
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
 
     def _seed_build_verification(self, verification_id: str) -> None:
         ws = Path(self._workspace_path())
@@ -332,7 +334,7 @@ class TestJudgehostService(SmokeBase):
             signature="",
             kind="all",
             status="ok",
-            metadata={},
+            detail={},
         )
         self._seed_verification_test_artifacts(verification_id, [("001.in", "ok\n", "ok\n")])
         db_execute(
@@ -1084,9 +1086,9 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-dom-mp-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-mp-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 2})
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
 
         service.enqueue_task(
             problem=self.problem,
@@ -1231,9 +1233,9 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "time_limit_ms": 6000})
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
 
         service.enqueue_task(
             problem=self.problem,
@@ -1805,9 +1807,9 @@ class TestJudgehostService(SmokeBase):
             "#include <bits/stdc++.h>\nint main(int, char**){return 0;}\n",
             encoding="utf-8",
         )
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 7})
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
 
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
@@ -1838,9 +1840,9 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata["run_config_json"] = json.dumps({"checker_mode": "testlib", "checker_args": [], "pass_limit": 7})
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
 
         payload = service.prepare_enqueue_payload(
             problem=self.problem,
@@ -3929,9 +3931,9 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-limits-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-limits-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata.pop("run_config_json", None)
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
         service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -4009,7 +4011,7 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-compare-compile-mem-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-compile-mem-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata["run_config_json"] = json.dumps(
             {
                 "checker_mode": "testlib",
@@ -4018,7 +4020,7 @@ class TestJudgehostService(SmokeBase):
                 "memory_limit_mb": run_mem_mb,
             }
         )
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
 
         service.enqueue_task(
             problem=self.problem,
@@ -4148,9 +4150,9 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"b-jh-multipass-default-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-multipass-default-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        metadata = config.verification_service.verification_metadata(verification_id)
+        metadata = config.verification_service.verification_detail(verification_id)
         metadata.pop("run_config_json", None)
-        config.verification_service.persist_verification_metadata(verification_id, metadata)
+        config.verification_service.persist_verification_detail(verification_id, metadata)
 
         service.enqueue_task(
             problem=self.problem,

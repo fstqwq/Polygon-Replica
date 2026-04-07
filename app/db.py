@@ -197,10 +197,65 @@ CREATE TABLE IF NOT EXISTS verifications (
     kind TEXT NOT NULL,
     status TEXT NOT NULL,
     fail_reason TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'pass-fail',
+    pass_limit INTEGER NOT NULL DEFAULT 1,
+    run_config_json TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    failed_step TEXT NOT NULL DEFAULT '',
+    failed_check TEXT NOT NULL DEFAULT '',
+    failed_test TEXT NOT NULL DEFAULT '',
+    sanity_status TEXT NOT NULL DEFAULT '',
+    sanity_checked_count INTEGER NOT NULL DEFAULT 0,
+    validation_status TEXT NOT NULL DEFAULT '',
+    validated_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     finished_at TEXT,
     FOREIGN KEY(problem_id) REFERENCES problems(id),
     FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_selected_tests (
+    verification_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    test_name TEXT NOT NULL,
+    PRIMARY KEY(verification_id, ordinal),
+    UNIQUE(verification_id, test_name),
+    FOREIGN KEY(verification_id) REFERENCES verifications(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_source_paths (
+    verification_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    source_path TEXT NOT NULL,
+    PRIMARY KEY(verification_id, ordinal),
+    FOREIGN KEY(verification_id) REFERENCES verifications(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_sanity_checks (
+    verification_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    check_name TEXT NOT NULL,
+    PRIMARY KEY(verification_id, ordinal),
+    FOREIGN KEY(verification_id) REFERENCES verifications(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_tests_meta (
+    verification_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    test_name TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT '',
+    source_id TEXT NOT NULL DEFAULT '',
+    is_sample INTEGER NOT NULL DEFAULT 0,
+    sample_input_custom INTEGER NOT NULL DEFAULT 0,
+    sample_output_custom INTEGER NOT NULL DEFAULT 0,
+    sample_output_validate INTEGER NOT NULL DEFAULT 0,
+    description TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL DEFAULT '',
+    command_text TEXT NOT NULL DEFAULT '',
+    payload_source_path TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(verification_id, ordinal),
+    UNIQUE(verification_id, test_name),
+    FOREIGN KEY(verification_id) REFERENCES verifications(id)
 );
 
 CREATE TABLE IF NOT EXISTS verification_tasks (
@@ -227,6 +282,16 @@ CREATE TABLE IF NOT EXISTS verification_tasks (
     created_at TEXT NOT NULL,
     FOREIGN KEY(verification_id) REFERENCES verifications(id),
     FOREIGN KEY(predecessor_task_id) REFERENCES verification_tasks(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_artifact_refs (
+    verification_id TEXT NOT NULL,
+    test_name TEXT NOT NULL,
+    input_ref TEXT NOT NULL DEFAULT '',
+    answer_ref TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(verification_id, test_name),
+    FOREIGN KEY(verification_id) REFERENCES verifications(id)
 );
 
 CREATE TABLE IF NOT EXISTS exports (
@@ -288,9 +353,14 @@ CREATE INDEX IF NOT EXISTS idx_verifications_problem_signature_created ON verifi
 CREATE INDEX IF NOT EXISTS idx_verifications_problem_workspace_signature_created ON verifications(problem_id, workspace_id, signature, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_verifications_kind_status ON verifications(kind, status);
 CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verifications(workspace_id, kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_verification_selected_tests_verification_ordinal ON verification_selected_tests(verification_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_verification_source_paths_verification_ordinal ON verification_source_paths(verification_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_verification_sanity_checks_verification_ordinal ON verification_sanity_checks(verification_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_verification_tests_meta_verification_ordinal ON verification_tests_meta(verification_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_task ON verification_tasks(verification_id, task_kind, source_path, test_name, id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON verification_tasks(verification_id, predecessor_task_id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_final ON verification_tasks(verification_id, final_status, task_kind);
+CREATE INDEX IF NOT EXISTS idx_verification_artifact_refs_verification_updated ON verification_artifact_refs(verification_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
@@ -355,6 +425,43 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "created_at",
         "finished_at",
     ),
+    "verification_artifact_refs": (
+        "verification_id",
+        "test_name",
+        "input_ref",
+        "answer_ref",
+        "updated_at",
+    ),
+    "verification_selected_tests": (
+        "verification_id",
+        "ordinal",
+        "test_name",
+    ),
+    "verification_source_paths": (
+        "verification_id",
+        "ordinal",
+        "source_path",
+    ),
+    "verification_sanity_checks": (
+        "verification_id",
+        "ordinal",
+        "check_name",
+    ),
+    "verification_tests_meta": (
+        "verification_id",
+        "ordinal",
+        "test_name",
+        "source_kind",
+        "source_id",
+        "is_sample",
+        "sample_input_custom",
+        "sample_output_custom",
+        "sample_output_validate",
+        "description",
+        "source_path",
+        "command_text",
+        "payload_source_path",
+    ),
     "verifications": (
         "id",
         "problem_id",
@@ -363,6 +470,17 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "kind",
         "status",
         "fail_reason",
+        "mode",
+        "pass_limit",
+        "run_config_json",
+        "error",
+        "failed_step",
+        "failed_check",
+        "failed_test",
+        "sanity_status",
+        "sanity_checked_count",
+        "validation_status",
+        "validated_count",
         "created_at",
         "finished_at",
     ),
@@ -513,7 +631,6 @@ class DB:
         if self._db_file_exists():
             with sqlite3.connect(self.path) as conn:
                 self._prepare_connection(conn)
-                self._migrate_existing_schema(conn)
                 self._validate_existing_schema(conn)
                 conn.executescript(SCHEMA_INDEXES)
                 conn.commit()
@@ -524,152 +641,6 @@ class DB:
             self._validate_existing_schema(conn)
             conn.executescript(SCHEMA_INDEXES)
             conn.commit()
-
-    def _migrate_existing_schema(self, conn: sqlite3.Connection) -> None:
-        conn.execute("PRAGMA foreign_keys=OFF")
-        try:
-            self._migrate_previews_table(conn)
-            self._migrate_contest_artifacts_table(conn)
-            self._migrate_verification_tasks_table(conn)
-        finally:
-            conn.execute("PRAGMA foreign_keys=ON")
-
-    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
-        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-        return {str(row[1]) for row in rows}
-
-    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            [table_name],
-        ).fetchone()
-        return row is not None
-
-    def _migrate_previews_table(self, conn: sqlite3.Connection) -> None:
-        if not self._table_exists(conn, "previews"):
-            return
-        columns = self._table_columns(conn, "previews")
-        if ("artifact_path" not in columns) and ("summary_json" in columns):
-            return
-        conn.execute("ALTER TABLE previews RENAME TO previews_old")
-        conn.execute(
-            """
-            CREATE TABLE previews (
-                id TEXT PRIMARY KEY,
-                problem_id INTEGER NOT NULL,
-                workspace_id INTEGER,
-                verification_id TEXT,
-                source_commit TEXT,
-                source_ref TEXT,
-                status TEXT NOT NULL,
-                summary_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                finished_at TEXT,
-                FOREIGN KEY(problem_id) REFERENCES problems(id),
-                FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
-                FOREIGN KEY(verification_id) REFERENCES verifications(id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
-            SELECT id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,'{}',created_at,finished_at
-            FROM previews_old
-            """
-        )
-        conn.execute("DROP TABLE previews_old")
-
-    def _migrate_contest_artifacts_table(self, conn: sqlite3.Connection) -> None:
-        if not self._table_exists(conn, "contest_artifacts"):
-            return
-        columns = self._table_columns(conn, "contest_artifacts")
-        if "artifact_path" not in columns:
-            return
-        conn.execute("ALTER TABLE contest_artifacts RENAME TO contest_artifacts_old")
-        conn.execute(
-            """
-            CREATE TABLE contest_artifacts (
-                id TEXT PRIMARY KEY,
-                contest_id INTEGER NOT NULL,
-                job_id TEXT,
-                artifact_type TEXT NOT NULL,
-                filename TEXT NOT NULL,
-                sha256 TEXT,
-                size_bytes INTEGER,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(contest_id) REFERENCES contests(id),
-                FOREIGN KEY(job_id) REFERENCES contest_jobs(id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO contest_artifacts(id,contest_id,job_id,artifact_type,filename,sha256,size_bytes,created_at)
-            SELECT id,contest_id,job_id,artifact_type,filename,sha256,size_bytes,created_at
-            FROM contest_artifacts_old
-            """
-        )
-        conn.execute("DROP TABLE contest_artifacts_old")
-
-    def _migrate_verification_tasks_table(self, conn: sqlite3.Connection) -> None:
-        if not self._table_exists(conn, "verification_tasks"):
-            return
-        columns = self._table_columns(conn, "verification_tasks")
-        required_columns = {
-            "logical_run_id",
-            "compile_log",
-            "diagnostics_json",
-            "error_text",
-            "feedback_text",
-            "output_ref",
-        }
-        if ("result_bundle_ref" not in columns) and required_columns.issubset(columns):
-            return
-        conn.execute("ALTER TABLE verification_tasks RENAME TO verification_tasks_old")
-        conn.execute(
-            """
-            CREATE TABLE verification_tasks (
-                id TEXT PRIMARY KEY,
-                verification_id TEXT NOT NULL,
-                predecessor_task_id TEXT,
-                task_kind TEXT NOT NULL,
-                source_path TEXT NOT NULL,
-                logical_run_id TEXT NOT NULL DEFAULT '',
-                test_name TEXT NOT NULL,
-                expected_behavior TEXT NOT NULL,
-                final_status TEXT NOT NULL,
-                verdict TEXT NOT NULL,
-                runtime_sec REAL,
-                cpu_sec REAL,
-                wall_sec REAL,
-                memory_kb INTEGER,
-                compile_log TEXT NOT NULL DEFAULT '',
-                diagnostics_json TEXT NOT NULL DEFAULT '[]',
-                error_text TEXT NOT NULL DEFAULT '',
-                feedback_text TEXT NOT NULL DEFAULT '',
-                output_ref TEXT NOT NULL DEFAULT '',
-                finished_at TEXT,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(verification_id) REFERENCES verifications(id),
-                FOREIGN KEY(predecessor_task_id) REFERENCES verification_tasks(id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO verification_tasks(
-                id,verification_id,predecessor_task_id,task_kind,source_path,logical_run_id,test_name,expected_behavior,
-                final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,compile_log,diagnostics_json,error_text,
-                feedback_text,output_ref,finished_at,created_at
-            )
-            SELECT
-                id,verification_id,predecessor_task_id,task_kind,source_path,'',test_name,expected_behavior,
-                final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,'','[]','','','',finished_at,created_at
-            FROM verification_tasks_old
-            """
-        )
-        conn.execute("DROP TABLE verification_tasks_old")
 
     def _db_file_exists(self) -> bool:
         return self.path.exists() and self.path.stat().st_size > 0

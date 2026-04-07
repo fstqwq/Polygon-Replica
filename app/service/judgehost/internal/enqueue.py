@@ -39,6 +39,24 @@ class JudgehostEnqueueMixin:
     def _normalize_status(value: object) -> str:
         return JudgehostEnqueueMixin._normalize_text(value).lower()
 
+    def _verification_artifact_ref(self, verification_id: str, test_name: str, ref_key: str) -> str:
+        safe_verification_id = JudgehostEnqueueMixin._normalize_text(verification_id)
+        safe_test_name = JudgehostEnqueueMixin._normalize_text(test_name)
+        safe_ref_key = JudgehostEnqueueMixin._normalize_text(ref_key)
+        if (not safe_verification_id) or (not safe_test_name) or safe_ref_key not in {"input_ref", "answer_ref"}:
+            return ""
+        row = self.db.fetch_one(
+            f"""
+            SELECT {safe_ref_key}
+            FROM verification_artifact_refs
+            WHERE verification_id=? AND test_name=?
+            """,
+            [safe_verification_id, safe_test_name],
+        )
+        if row is None:
+            return ""
+        return JudgehostEnqueueMixin._normalize_text(row[safe_ref_key])
+
     @staticmethod
     def _json_object(text: str) -> dict[str, object]:
         if not text:
@@ -423,7 +441,6 @@ class JudgehostEnqueueMixin:
         safe_verification_id = JudgehostEnqueueMixin._normalize_text(artifact_verification_id)
         if not safe_verification_id:
             return {}
-        verification_metadata = self._verification_store.metadata(safe_verification_id)
 
         wanted_tests: list[str] = []
         if selected_tests:
@@ -435,9 +452,17 @@ class JudgehostEnqueueMixin:
                     continue
                 wanted_tests.append(token)
         else:
-            selected_test_names = cast(list[object], verification_metadata.get("selected_test_names") or [])
-            for raw in selected_test_names:
-                token = Path(JudgehostEnqueueMixin._normalize_text(raw)).name
+            selected_test_rows = self.db.fetch_all(
+                """
+                SELECT test_name
+                FROM verification_selected_tests
+                WHERE verification_id=?
+                ORDER BY ordinal ASC
+                """,
+                [safe_verification_id],
+            )
+            for row in selected_test_rows:
+                token = Path(JudgehostEnqueueMixin._normalize_text(row["test_name"])).name
                 if not RUN_TEST_NAME_RE.fullmatch(token):
                     continue
                 if token in wanted_tests:
@@ -447,19 +472,19 @@ class JudgehostEnqueueMixin:
                     break
 
         tests_payload: list[dict[str, object]] = []
-        artifact_refs = verification_metadata.get("artifact_refs")
-        verification_artifact_refs = cast(dict[str, object], artifact_refs) if isinstance(artifact_refs, dict) else {}
         for test_name in wanted_tests:
-            test_artifact_refs = verification_artifact_refs.get(test_name)
-            test_artifact_map = cast(dict[str, object], test_artifact_refs) if isinstance(test_artifact_refs, dict) else {}
-            input_ref = JudgehostEnqueueMixin._normalize_text(test_artifact_map.get("input_ref"))
+            input_ref = JudgehostEnqueueMixin._normalize_text(
+                self._verification_artifact_ref(safe_verification_id, test_name, "input_ref")
+            )
             if not input_ref:
                 continue
             test_bytes = self.resolve_artifact_blob(input_ref)
             if test_bytes is None:
                 continue
             ans_name = f"{Path(test_name).stem}.ans"
-            answer_ref = JudgehostEnqueueMixin._normalize_text(test_artifact_map.get("answer_ref"))
+            answer_ref = JudgehostEnqueueMixin._normalize_text(
+                self._verification_artifact_ref(safe_verification_id, test_name, "answer_ref")
+            )
             ans_bytes = b""
             if answer_ref:
                 resolved_answer = self.resolve_artifact_blob(answer_ref)
@@ -478,11 +503,12 @@ class JudgehostEnqueueMixin:
 
         run_config_text = ""
         run_cfg_obj: dict[str, object] = {}
-        run_config_value = verification_metadata.get("run_config_json")
-        if isinstance(run_config_value, str):
-            run_config_text = run_config_value
-        elif isinstance(run_config_value, dict):
-            run_config_text = json.dumps(run_config_value, ensure_ascii=True, separators=(",", ":"))
+        verification_row = self.db.fetch_one(
+            "SELECT run_config_json FROM verifications WHERE id=?",
+            [safe_verification_id],
+        )
+        if verification_row is not None:
+            run_config_text = JudgehostEnqueueMixin._normalize_text(verification_row["run_config_json"])
         if run_config_text:
             run_cfg_obj = self._json_object(run_config_text)
 

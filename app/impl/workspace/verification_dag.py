@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import json
@@ -889,14 +889,11 @@ def run_workspace_verification_dag(
             kind=kind,
             status=Status.FAILED.value,
         )
-        config.verification_service.persist_verification_metadata(
+        config.verification_service.persist_verification_detail(
             verification_id,
             {
                 "mode": verification_mode,
                 "pass_limit": verification_pass_limit,
-                "task_graph": True,
-                "signature": signature,
-                "kind": kind,
                 "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
                 "selected_test_names": list(selected_test_names or []),
                 "error": str(exc),
@@ -973,14 +970,11 @@ def run_workspace_verification_dag(
             kind=effective_kind,
             status=Status.RUNNING.value,
         )
-        config.verification_service.persist_verification_metadata(
+        config.verification_service.persist_verification_detail(
             verification_id,
             {
                 "mode": verification_mode,
                 "pass_limit": verification_pass_limit,
-                "task_graph": True,
-                "signature": signature,
-                "kind": effective_kind,
                 "source_paths": [item.source_path for item in visible_logical_runs],
                 "selected_test_names": list(test_names),
                 "sanity_checks": list(sanity_checks),
@@ -1103,14 +1097,14 @@ def run_workspace_verification_dag(
             unregister_verification_runtime_coordinator(verification_id)
         _refresh_state()
         record = config.verification_service.verification_record(verification_id) or {}
-        metadata = config.verification_service.verification_metadata(verification_id)
+        detail = config.verification_service.verification_detail(verification_id)
         rows = task_store.list_rows(verification_id)
         fail_flag, fail_reason = task_store.fail_state(verification_id)
         _status, summary, _counts = _verification_summary_from_tasks(
             verification_id=verification_id,
             artifact_verification_id=verification_id,
-            mode=normalize_problem_mode(metadata.get("mode"), verification_mode),
-            pass_limit=normalize_pass_limit(metadata.get("pass_limit"), verification_pass_limit),
+            mode=normalize_problem_mode(detail.get("mode"), verification_mode),
+            pass_limit=normalize_pass_limit(detail.get("pass_limit"), verification_pass_limit),
             logical_runs=graph.logical_runs,
             rows=rows,
             test_names=test_names,
@@ -1119,9 +1113,9 @@ def run_workspace_verification_dag(
         )
         if _status == Status.OK.value and sanity_checks:
             sanity_status = SANITY_RUNNING
-            updated_metadata = dict(metadata)
-            updated_metadata["sanity_status"] = sanity_status
-            config.verification_service.persist_verification_metadata(verification_id, updated_metadata)
+            updated_detail = dict(detail)
+            updated_detail["sanity_status"] = sanity_status
+            config.verification_service.persist_verification_detail(verification_id, updated_detail)
             sanity_result = run_verification_sanity_checks(
                 problem=problem,
                 user=user,
@@ -1130,19 +1124,19 @@ def run_workspace_verification_dag(
                 logs_dir=layout.logs,
                 test_plans=selected_test_plans,
             )
-            metadata = config.verification_service.verification_metadata(verification_id)
-            updated_metadata = dict(metadata)
+            detail = config.verification_service.verification_detail(verification_id)
+            updated_detail = dict(detail)
             sanity_status = sanity_result.status
-            updated_metadata["sanity_status"] = sanity_status
-            updated_metadata["sanity_checked_count"] = int(sanity_result.checked_count)
-            updated_metadata["validation_status"] = sanity_result.status
-            updated_metadata["validated_count"] = int(sanity_result.checked_count)
+            updated_detail["sanity_status"] = sanity_status
+            updated_detail["sanity_checked_count"] = int(sanity_result.checked_count)
+            updated_detail["validation_status"] = sanity_result.status
+            updated_detail["validated_count"] = int(sanity_result.checked_count)
             if sanity_result.status == SANITY_FAILED:
-                updated_metadata["failed_step"] = "sanity"
-                updated_metadata["failed_check"] = sanity_result.check_name
-                updated_metadata["failed_test"] = sanity_result.failed_test
-                updated_metadata["error"] = sanity_result.error
-                config.verification_service.persist_verification_metadata(verification_id, updated_metadata)
+                updated_detail["failed_step"] = "sanity"
+                updated_detail["failed_check"] = sanity_result.check_name
+                updated_detail["failed_test"] = sanity_result.failed_test
+                updated_detail["error"] = sanity_result.error
+                config.verification_service.persist_verification_detail(verification_id, updated_detail)
                 config.verification_service.update_verification_record_status(
                     verification_id,
                     status=Status.FAILED.value,
@@ -1154,12 +1148,12 @@ def run_workspace_verification_dag(
                 summary["status"] = Status.FAILED.value
                 summary["error"] = sanity_result.error
             else:
-                updated_metadata.pop("failed_step", None)
-                updated_metadata.pop("failed_check", None)
-                updated_metadata.pop("failed_test", None)
+                updated_detail.pop("failed_step", None)
+                updated_detail.pop("failed_check", None)
+                updated_detail.pop("failed_test", None)
                 if sanity_result.status == SANITY_PASSED:
-                    updated_metadata.pop("error", None)
-                config.verification_service.persist_verification_metadata(verification_id, updated_metadata)
+                    updated_detail.pop("error", None)
+                config.verification_service.persist_verification_detail(verification_id, updated_detail)
                 config.verification_service.update_verification_record_status(
                     verification_id,
                     status=Status.OK.value,
@@ -1170,10 +1164,10 @@ def run_workspace_verification_dag(
                 record["fail_reason"] = ""
                 summary["status"] = Status.OK.value
         elif sanity_checks and sanity_status == SANITY_PENDING:
-            metadata = config.verification_service.verification_metadata(verification_id)
-            updated_metadata = dict(metadata)
-            updated_metadata["sanity_status"] = SANITY_SKIPPED
-            config.verification_service.persist_verification_metadata(verification_id, updated_metadata)
+            detail = config.verification_service.verification_detail(verification_id)
+            updated_detail = dict(detail)
+            updated_detail["sanity_status"] = SANITY_SKIPPED
+            config.verification_service.persist_verification_detail(verification_id, updated_detail)
             sanity_status = SANITY_SKIPPED
         audit(
             actor_user_id,

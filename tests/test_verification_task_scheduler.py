@@ -168,7 +168,7 @@ class TestVerificationTaskScheduler(SmokeBase):
             signature="",
             kind="all",
             status="running",
-            metadata={"status": "running"},
+            detail={"status": "running"},
         )
 
     def test_effective_verification_status_waits_for_pending_sanity_checks(self) -> None:
@@ -837,7 +837,7 @@ class TestVerificationTaskScheduler(SmokeBase):
 
         verification_id = "ver-startup-reconcile"
         self._insert_verification_row(verification_id)
-        config.verification_service.persist_verification_metadata(
+        config.verification_service.persist_verification_detail(
             verification_id,
             {
                 "verification_id": verification_id,

@@ -568,6 +568,26 @@ class WorkspaceDiskStore:
             conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
             conn.execute(
+                "DELETE FROM verification_artifact_refs WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                [int(problem_id)],
+            )
+            conn.execute(
+                "DELETE FROM verification_selected_tests WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                [int(problem_id)],
+            )
+            conn.execute(
+                "DELETE FROM verification_source_paths WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                [int(problem_id)],
+            )
+            conn.execute(
+                "DELETE FROM verification_sanity_checks WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                [int(problem_id)],
+            )
+            conn.execute(
+                "DELETE FROM verification_tests_meta WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                [int(problem_id)],
+            )
+            conn.execute(
                 "DELETE FROM verification_tasks WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
                 [int(problem_id)],
             )

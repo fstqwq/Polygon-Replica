@@ -179,8 +179,8 @@ class PreviewService:
             raise RuntimeError(f"sample verification missing: {verification_id}")
         verification_status = str(verification_row["status"]).strip().lower()
         if verification_status != "ok":
-            metadata_payload = self._verification_store.metadata(verification_id)
-            error_text = str(verification_row["fail_reason"] or metadata_payload.get("error") or "").strip()
+            detail_payload = self.verification_service.verification_detail(verification_id)
+            error_text = str(verification_row["fail_reason"] or detail_payload.get("error") or "").strip()
             if error_text:
                 raise RuntimeError(f"sample verification failed ({verification_id}): {error_text}")
             raise RuntimeError(f"sample verification failed ({verification_id})")
