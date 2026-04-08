@@ -1,6 +1,10 @@
 # Frontend Refactoring Plan
 
-This document replaces the remote draft with a plan aligned to the current codebase in `UI`.
+This document is the merged plan for the current `UI` workspace.
+
+It combines:
+- the local code-validated refactoring plan for the current frontend structure
+- the newer color-direction update pulled from `yonghao`
 
 It is intentionally based on the code that exists now:
 - CSS lives in `app/static/style.css`
@@ -8,7 +12,7 @@ It is intentionally based on the code that exists now:
 - templates live in `app/template/` (not `app/templates/`)
 - reusable template partials already exist, for example `app/template/_component_forms.html`
 
-The goal is to improve maintainability without mixing too many kinds of change in one pass.
+The goal is to improve maintainability without mixing too many kinds of change in one pass, while still allowing an intentional visual refresh for the neutral palette.
 
 ---
 
@@ -32,6 +36,10 @@ These points were verified against the current workspace before updating this pl
   - one inline-form layout rule
   - dirty / failed row highlighting
 - wide run-details layout currently depends on `:has(...)` selectors
+- the current neutral palette is visually weak in key places:
+  - topbar `#e5e7eb` is too close to page background `#f3f4f6`
+  - default and primary buttons are both dark and are not visually well separated
+  - the gray family is still a mix of Gray and Slate values
 
 ### Template facts already confirmed
 
@@ -63,19 +71,22 @@ These points were verified against the current workspace before updating this pl
 
 ## Refactoring Principles
 
-1. **Prefer mechanical passes first.**
-   Token substitution and markup extraction should happen before subjective visual cleanup.
+1. **Keep code-validated facts ahead of abstract cleanup.**
+   The plan should reflect the code that exists now, not an assumed frontend shape.
 
-2. **Do not combine token cleanup with file splitting.**
+2. **Allow one intentional visual palette change, then go back to mechanical cleanup.**
+   The color refresh is the exception; later CSS cleanup should stay largely mechanical.
+
+3. **Do not combine token cleanup with file splitting.**
    Keep behavior-preserving cleanup separate from file reorganization.
 
-3. **Fix proven issues before chasing ideal abstractions.**
+4. **Fix proven issues before chasing ideal abstractions.**
    Example: add a pending submit guard to password-proof flows before extracting shared helpers.
 
-4. **Use existing template patterns.**
+5. **Use existing template patterns.**
    New macros should follow the current partial naming style such as `_component_forms.html`.
 
-5. **Keep validation page-driven.**
+6. **Keep validation page-driven.**
    Every phase should name the affected pages and interactions to re-check.
 
 ---
@@ -84,7 +95,7 @@ These points were verified against the current workspace before updating this pl
 
 **Goal:** measure the current frontend before making structural edits.
 
-**Why first:** several later phases are intended to be mechanical. Baseline counts and screenshots make regressions easier to catch.
+**Why first:** several later phases are intended to be mechanical, while the color refresh is intentionally visual. Baseline counts and screenshots make regressions easier to catch.
 
 ### Work
 
@@ -109,9 +120,133 @@ A short baseline note or checklist committed alongside the refactor branch, not 
 
 ---
 
-## Phase 1: Finish the Color Token Pass
+## Phase 1: Refresh the Neutral Color Scheme
 
-**Goal:** reduce hardcoded color usage without changing layout or component structure.
+**Goal:** improve hierarchy and visual identity before the mechanical token cleanup pass.
+
+**Risk:** medium because this is a deliberate UI change across many pages.
+
+### Why this phase exists
+
+The newer `yonghao` update correctly identifies that the current neutral palette is too flat:
+- topbar and page background are too close in value
+- default and primary buttons are both dark, so the action hierarchy is weak
+- neutral values mix multiple Tailwind gray families without a clear direction
+
+This phase should introduce a stronger neutral palette and a clear topbar anchor, while leaving semantic success / warning / danger status colors largely intact.
+
+### Proposed palette direction
+
+Use a dark Slate-based topbar and standardize the neutral family around Slate.
+
+Recommended token targets:
+
+```css
+:root {
+  --bg: #f1f5f9;
+  --bg-topbar: #1e293b;
+  --bg-topbar-hover: #334155;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --surface-subtle: #f8fafc;
+  --surface-hover: #eef2f7;
+
+  --line: #cbd5e1;
+  --line-strong: #94a3b8;
+
+  --text: #0f172a;
+  --text-secondary: #334155;
+  --muted: #64748b;
+
+  --link: #2563eb;
+  --focus-ring: #93c5fd;
+
+  --btn-primary-bg: #0f172a;
+  --btn-primary-bg-hover: #1e293b;
+  --btn-primary-border: #0f172a;
+  --btn-primary-text: #ffffff;
+
+  --btn-bg: #ffffff;
+  --btn-bg-hover: #f1f5f9;
+  --btn-border: #94a3b8;
+  --btn-text: #0f172a;
+}
+```
+
+### Scope
+
+This phase should focus on the places where the palette shift is load-bearing:
+- topbar
+- brand / tagline / top action text
+- main menu hover / active treatment
+- default vs primary button separation
+- neutral page surfaces and borders
+
+### Specific implementation direction
+
+#### 1. Topbar becomes the anchor band
+
+Move the topbar to `--bg-topbar` and ensure text inside it is designed for dark background use.
+
+Review these areas together rather than piecemeal:
+- `.topbar`
+- brand/logo text
+- tagline text
+- user/session text
+- top action links
+
+#### 2. Main menu becomes dark-surface aware
+
+Current active and hover states should be retuned for the dark topbar:
+- inactive links should be lower-contrast white
+- hover states should use `--bg-topbar-hover`
+- active state can stay light if it clearly reads as selected against the dark bar
+
+#### 3. Buttons gain visible hierarchy
+
+The remote update is correct that default and primary buttons are currently too similar.
+
+Target distinction:
+- primary buttons: dark filled
+- default buttons: white or light neutral with border
+- ghost/link-like buttons: remain visually lighter
+
+#### 4. Keep submenu and content area light
+
+Do **not** push the dark treatment into the whole app shell. The problem submenu and content panels should remain light so the topbar does the anchoring work without making the workspace feel heavy.
+
+#### 5. Keep semantic status colors mostly stable
+
+Do not redesign success/warning/error semantics in this phase. Reuse the existing status family unless a contrast problem is found during review.
+
+### Gray-family direction
+
+This merged plan adopts a deliberate neutral-family choice:
+- standardize the neutral palette on **Slate**
+- remove Gray-vs-Slate drift during follow-up token cleanup
+
+This is acceptable here because the visual change is intentional and happens before the mechanical token pass.
+
+### Validation
+
+- screenshot every major page type before and after
+- verify white text on `--bg-topbar` remains comfortably readable
+- verify links remain legible on white surfaces
+- verify muted text still passes practical readability on white cards
+- verify flash messages inside the topbar area remain readable
+- verify submenu warn/danger indicators still stand out
+
+### Exit criteria
+
+- the topbar clearly separates navigation from page content
+- default and primary buttons are visually distinct
+- the neutral family has a clear direction for later tokenization
+
+---
+
+## Phase 2: Finish the Color Token Pass
+
+**Goal:** reduce hardcoded color usage after the palette direction is chosen.
 
 **Risk:** low if kept mechanical.
 
@@ -123,15 +258,13 @@ Work only in `app/static/style.css`.
 
 - add missing token names for repeated literals that are still clearly reused
 - replace repeated bare hex values with `var(...)` references
-- keep visually distinct families separate instead of forcing premature unification
-  - gray vs slate surfaces
-  - status tones
-  - neutral table backgrounds
+- align remaining neutral literals to the chosen Slate-based palette from Phase 1
+- keep semantic status families separate instead of collapsing them into one bucket
 
 ### Specifically validated candidates
 
-The remote draft was directionally right, but this pass should be based on the actual remaining literals in the local file, including areas like:
-- topbar background
+This pass should be based on the actual remaining literals in the local file, including areas like:
+- topbar background and hover states
 - zebra table row backgrounds
 - PDF preview background
 - any remaining status backgrounds or borders
@@ -140,22 +273,23 @@ The remote draft was directionally right, but this pass should be based on the a
 
 - do **not** reorganize selectors yet
 - do **not** split the CSS file yet
-- do **not** rename every token for aesthetic consistency if the current name is already clear enough
+- do **not** turn every one-off literal into a fake shared token if reuse is not real
 
 ### Exit criteria
 
 - repeated literals are tokenized
-- only one-off literals remain where keeping a literal is clearer than inventing a fake shared token
+- neutral colors consistently follow the chosen palette direction
+- only true one-off literals remain where keeping a literal is clearer than inventing a fake shared token
 
 ---
 
-## Phase 2: Clean Up CSS Cascade Hotspots
+## Phase 3: Clean Up CSS Cascade Hotspots
 
 **Goal:** reduce the fragile parts of the stylesheet without broad visual churn.
 
 **Risk:** low to medium.
 
-### 2.1 Remove unnecessary `!important`
+### 3.1 Remove unnecessary `!important`
 
 Target the removable cases first:
 - tag-select state classes
@@ -169,7 +303,7 @@ Keep defensive hidden-state rules when they are semantically correct:
 
 Those are not the same category as accidental specificity fights and should not be removed just to hit zero.
 
-### 2.2 Replace `:has(...)`-driven run-details layout switching
+### 3.2 Replace `:has(...)`-driven run-details layout switching
 
 Current wide-layout behavior is tied to selectors like the compact run-details block inside `.page-grid.page-grid-wide`.
 
@@ -179,7 +313,7 @@ Recommended direction:
 - add a compact run-details body/layout class in `app/template/run_details.html`
 - switch the layout rules in `app/static/style.css` to target that class directly
 
-### 2.3 Fold repeated inline diagnostics styles into CSS
+### 3.3 Fold repeated inline diagnostics styles into CSS
 
 Move the repeated wrapping styles from `app/template/run_details.html` into `.compile-diagnostics-error` in `app/static/style.css`.
 
@@ -192,13 +326,13 @@ Move the repeated wrapping styles from `app/template/run_details.html` into `.co
 
 ---
 
-## Phase 3: Extract Repeated Template Structures
+## Phase 4: Extract Repeated Template Structures
 
 **Goal:** reduce duplicated Jinja markup while staying close to current template conventions.
 
 **Risk:** low.
 
-### 3.1 Popup dialog macro
+### 4.1 Popup dialog macro
 
 Create a shared partial in the existing style, for example:
 - `app/template/_component_dialogs.html`
@@ -220,7 +354,7 @@ The macro should handle only the shared shell:
 
 Do not over-generalize form bodies into the same macro.
 
-### 3.2 Change-badge macro
+### 4.2 Change-badge macro
 
 Extract the duplicated change-badge block shared by:
 - `app/template/base.html`
@@ -228,9 +362,9 @@ Extract the duplicated change-badge block shared by:
 
 This is a strong candidate because the duplicated markup is effectively identical.
 
-### 3.3 Truncation-note macro only where repetition is genuinely uniform
+### 4.3 Truncation-note macro only where repetition is genuinely uniform
 
-The remote draft treated truncation notes as one reusable shape, but the current codebase has several variants:
+The current codebase has several variants:
 - first N characters
 - first N bytes
 - first shown of total items
@@ -246,13 +380,13 @@ Do this only if a small macro clearly improves readability. Otherwise leave the 
 
 ---
 
-## Phase 4: Fix the Real JavaScript Issues First
+## Phase 5: Fix the Real JavaScript Issues First
 
 **Goal:** improve correctness before doing bigger JS deduplication.
 
 **Risk:** medium.
 
-### 4.1 Add an in-flight submit guard to password-proof forms
+### 5.1 Add an in-flight submit guard to password-proof forms
 
 This is the most concrete JS bug in the current code.
 
@@ -268,21 +402,21 @@ Recommended behavior:
 - reset or clear the pending state on failure paths
 - set `passwordPrepared = "1"` only immediately before the final programmatic submit
 
-### 4.2 Move tests sample toggle wiring into `ui.js`
+### 5.2 Move tests sample toggle wiring into `ui.js`
 
 The inline `syncSampleForm()` block in `app/template/tests.html` should move into `app/static/ui.js` and be initialized from the central ready hook.
 
 This is a clear win because it removes page-local behavior from the template without needing a new abstraction layer.
 
-### 4.3 Debounce judgehost table filtering
+### 5.3 Debounce judgehost table filtering
 
 Add a small debounce around `initSettingsJudgehostTableFilter()` input handling.
 
 A short delay such as ~150ms is enough. Keep the filtering logic itself unchanged.
 
-### 4.4 Only then consider proof-helper extraction
+### 5.4 Only then consider proof-helper extraction
 
-The remote draft proposed a shared `initProofForm()` early. That may still be worthwhile, but it should happen **after** the pending-state fix is in place and only if the resulting helper stays readable.
+A shared proof helper may still be worthwhile, but it should happen **after** the pending-state fix is in place and only if the resulting helper stays readable.
 
 The helper should account for the fact that the four flows are similar but not identical:
 - login fetches metadata remotely
@@ -290,7 +424,7 @@ The helper should account for the fact that the four flows are similar but not i
 - settings handles both current and next password material
 - sudo is simpler than settings but not identical to login
 
-### What to remove from the old draft
+### What to remove from the older draft
 
 Do **not** keep “fix CodeMirror duplicate draft listeners” as an active task. The current code already guards that path.
 
@@ -302,13 +436,13 @@ Do **not** keep “fix CodeMirror duplicate draft listeners” as an active task
 
 ---
 
-## Phase 5: Consolidate Repeated Component Patterns
+## Phase 6: Consolidate Repeated Component Patterns
 
 **Goal:** standardize component families once tokens and major duplication are under control.
 
 **Risk:** medium.
 
-### 5.1 Status/tone consolidation
+### 6.1 Status/tone consolidation
 
 Unify repeated status color usage across:
 - flash notifications
@@ -318,7 +452,7 @@ Unify repeated status color usage across:
 
 This phase should reuse semantic tokens rather than collapsing everything into one selector family.
 
-### 5.2 Button tier cleanup
+### 6.2 Button tier cleanup
 
 Inventory current button-like classes and converge them into a small set of stable tiers:
 - primary
@@ -327,7 +461,7 @@ Inventory current button-like classes and converge them into a small set of stab
 
 Do this carefully because button classes are used across workspace, settings, tests, and root pages.
 
-### 5.3 Table base patterns
+### 6.3 Table base patterns
 
 Introduce a shared table base only after verifying which tables truly share:
 - structure
@@ -344,7 +478,7 @@ Do not force every table onto one abstraction if it creates more overrides than 
 
 ---
 
-## Phase 6: Normalize Spacing and Typography
+## Phase 7: Normalize Spacing and Typography
 
 **Goal:** reduce arbitrary spacing and type scales after component patterns are stable.
 
@@ -352,7 +486,8 @@ Do not force every table onto one abstraction if it creates more overrides than 
 
 ### Why later
 
-The remote draft placed spacing very early. In practice it is safer after:
+Spacing cleanup is safer after:
+- the color refresh is settled
 - colors are tokenized
 - cascade hotspots are fixed
 - repeated component structures are consolidated
@@ -378,7 +513,7 @@ Otherwise spacing cleanup fights moving targets.
 
 ---
 
-## Phase 7: Split the CSS File Last
+## Phase 8: Split the CSS File Last
 
 **Goal:** make the stylesheet maintainable after semantic cleanup has settled.
 
@@ -407,7 +542,7 @@ Keep the entry file small and split by responsibility, for example:
 - auth
 - utilities
 
-Exact filenames can follow the final selector distribution after Phases 1-6.
+Exact filenames can follow the final selector distribution after Phases 1-7.
 
 ### Asset loading note
 
@@ -440,20 +575,21 @@ This is operational hygiene, not structural frontend cleanup. It should not bloc
 ## Suggested Execution Order
 
 1. Phase 0 baseline
-2. Phase 1 color tokens
-3. Phase 2 cascade cleanup
-4. Phase 3 template extraction
-5. Phase 4 JS correctness fixes
-6. Phase 5 component consolidation
-7. Phase 6 spacing and typography normalization
-8. Phase 7 CSS file split
-9. static asset versioning as a small opportunistic follow-up
+2. Phase 1 color scheme refresh
+3. Phase 2 color token pass
+4. Phase 3 cascade cleanup
+5. Phase 4 template extraction
+6. Phase 5 JS correctness fixes
+7. Phase 6 component consolidation
+8. Phase 7 spacing and typography normalization
+9. Phase 8 CSS file split
+10. static asset versioning as a small opportunistic follow-up
 
 ### Parallelizable work
 
 Safe to run in parallel if different people are involved:
-- Phase 3 template extraction
-- Phase 4 JS correctness fixes
+- Phase 4 template extraction
+- Phase 5 JS correctness fixes
 - static asset versioning
 
 Everything that heavily edits `style.css` should stay serialized.
@@ -488,6 +624,7 @@ Everything that heavily edits `style.css` should stay serialized.
 ### Presentation checks
 
 - topbar and submenu colors
+- button hierarchy and contrast
 - table zebra striping and dirty/failed row emphasis
 - tag-select status appearance
 - popup open/close styling
@@ -506,16 +643,3 @@ These are not goals of this plan:
 - broad accessibility audit
 - rewriting the server-rendered frontend architecture
 - forcing all template repetition into macros when local inline markup is clearer
-
----
-
-## Summary of Changes vs. the Remote Draft
-
-This updated plan intentionally corrects several points from the remote draft:
-- it uses the real template path: `app/template/`
-- it recognizes four password-proof flows, not three
-- it removes the already-fixed CodeMirror duplicate-listener issue from active scope
-- it treats hidden-state `!important` rules as intentional defensive behavior
-- it notes that `style.css` and `ui.js` already have cache-busting query strings
-- it moves spacing normalization later so it does not interfere with more mechanical cleanup passes
-- it keeps CSS file splitting as the final step instead of mixing it with semantic cleanup
