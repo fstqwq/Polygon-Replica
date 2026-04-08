@@ -82,6 +82,10 @@ def _clear_workspace_tree(workspace: Path) -> None:
         child.unlink(missing_ok=True)
 
 
+def _is_forbidden_workspace_path(path: Path) -> bool:
+    return any(part.lower() == ".git" for part in path.parts)
+
+
 class NativePackageImportService:
     def import_package(
         self,
@@ -118,7 +122,7 @@ class NativePackageImportService:
             if not repo_entries:
                 raise ValueError("native package is missing repo payload")
 
-            _clear_workspace_tree(workspace)
+            files_to_write: list[tuple[Path, bytes]] = []
             for rel in sorted(repo_entries):
                 rel_path = Path(rel)
                 if len(rel_path.parts) < 2:
@@ -126,7 +130,13 @@ class NativePackageImportService:
                 target_rel = Path(*rel_path.parts[1:])
                 if not target_rel.parts:
                     continue
+                if _is_forbidden_workspace_path(target_rel):
+                    raise ValueError("native package contains forbidden repository metadata")
                 payload = _read_bytes_from_zip(zf, entry_map[rel])
+                files_to_write.append((target_rel, payload))
+
+            _clear_workspace_tree(workspace)
+            for target_rel, payload in files_to_write:
                 target = workspace / target_rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(payload)
