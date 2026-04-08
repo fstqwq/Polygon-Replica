@@ -235,6 +235,8 @@
     var table = document.querySelector("[data-judgehost-table='1']");
     if (!filterInput || !table) return;
 
+    var debounceTimer = 0;
+
     function applyFilter() {
       var needle = String(filterInput.value || "").trim().toLowerCase();
       var rows = table.querySelectorAll("[data-judgehost-row='1']");
@@ -247,7 +249,17 @@
       });
     }
 
-    filterInput.addEventListener("input", applyFilter);
+    function scheduleApplyFilter() {
+      if (debounceTimer) {
+        window.clearTimeout(debounceTimer);
+      }
+      debounceTimer = window.setTimeout(function () {
+        debounceTimer = 0;
+        applyFilter();
+      }, 120);
+    }
+
+    filterInput.addEventListener("input", scheduleApplyFilter);
     filterInput.addEventListener("change", applyFilter);
     applyFilter();
   }
@@ -1002,6 +1014,40 @@
     };
   }
 
+  function initTestsSampleForms() {
+    var forms = document.querySelectorAll("form[data-sample-form='1']");
+    if (!forms.length) return;
+
+    function syncSampleForm(form) {
+      var toggle = form.querySelector("[data-sample-toggle='1']");
+      var group = form.querySelector("[data-sample-output-validate-group='1']");
+      if (!toggle || !group) {
+        return;
+      }
+      var checkbox = group.querySelector("input[name='sample_output_validate']");
+      var visible = !!toggle.checked;
+      group.hidden = !visible;
+      if (checkbox) {
+        checkbox.disabled = !visible;
+      }
+    }
+
+    forms.forEach(syncSampleForm);
+    document.addEventListener("change", function (event) {
+      var target = event.target;
+      if (!(target instanceof HTMLInputElement)) {
+        return;
+      }
+      if (target.getAttribute("data-sample-toggle") !== "1") {
+        return;
+      }
+      var form = target.closest("form[data-sample-form='1']");
+      if (form instanceof HTMLFormElement) {
+        syncSampleForm(form);
+      }
+    });
+  }
+
   function initTestsEditorAutoFocusNewest() {
     if (window.location.pathname.indexOf("/tests") < 0) return;
     var rows = document.querySelectorAll(".tests-editor-item");
@@ -1392,8 +1438,13 @@
     if (!form) return;
     form.addEventListener("submit", function (ev) {
       if (form.dataset.passwordPrepared === "1") return;
+      if (form.dataset.passwordPending === "1") {
+        ev.preventDefault();
+        return;
+      }
       ev.preventDefault();
       if (!requireWebCrypto()) return;
+      form.dataset.passwordPending = "1";
 
       (async function () {
         var usernameEl = form.querySelector("input[name='username']");
@@ -1402,6 +1453,7 @@
         var proofEl = form.querySelector("input[name='password_proof']");
         if (!usernameEl || !passwordEl || !csrfEl || !proofEl) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
@@ -1411,6 +1463,7 @@
         var csrfToken = String(csrfEl.value || "").trim();
         if (!password || !csrfToken) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
@@ -1420,8 +1473,7 @@
         qs.set("csrf_token", csrfToken);
         var resp = await fetch("/auth/password-meta?" + qs.toString(), { credentials: "same-origin" });
         if (!resp.ok) {
-          window.alert("Failed to prepare password proof.");
-          return;
+          throw new Error("password meta fetch failed");
         }
 
         var meta = await resp.json();
@@ -1429,6 +1481,7 @@
         var iters = Number(meta.iters || 0);
         if (!/^[0-9a-f]{32}$/.test(salt) || !Number.isFinite(iters) || iters <= 0) {
           window.alert("Invalid password metadata.");
+          delete form.dataset.passwordPending;
           return;
         }
 
@@ -1436,8 +1489,10 @@
         proofEl.value = await sha256Hex(csrfToken + verifier);
         passwordEl.value = await sha256Hex(csrfToken + password);
         form.dataset.passwordPrepared = "1";
+        delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
+        delete form.dataset.passwordPending;
         window.alert("Failed to prepare password proof.");
       });
     });
@@ -1449,8 +1504,13 @@
 
     form.addEventListener("submit", function (ev) {
       if (form.dataset.passwordPrepared === "1") return;
+      if (form.dataset.passwordPending === "1") {
+        ev.preventDefault();
+        return;
+      }
       ev.preventDefault();
       if (!requireWebCrypto()) return;
+      form.dataset.passwordPending = "1";
 
       (async function () {
         var passwordEl = form.querySelector("input[name='password']");
@@ -1462,6 +1522,7 @@
         var proofEl = form.querySelector("input[name='password_proof']");
         if (!passwordEl || !confirmEl || !csrfEl || !saltEl || !itersEl || !verifierEl || !proofEl) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
@@ -1474,15 +1535,18 @@
 
         if (password !== confirm) {
           window.alert("Password confirmation does not match.");
+          delete form.dataset.passwordPending;
           return;
         }
         if (!password || !csrfToken) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
         if (!/^[0-9a-f]{32}$/.test(salt) || !Number.isFinite(iters) || iters <= 0) {
           window.alert("Invalid password metadata.");
+          delete form.dataset.passwordPending;
           return;
         }
 
@@ -1492,8 +1556,10 @@
         passwordEl.value = await sha256Hex(csrfToken + password);
         confirmEl.value = await sha256Hex(csrfToken + confirm);
         form.dataset.passwordPrepared = "1";
+        delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
+        delete form.dataset.passwordPending;
         window.alert("Failed to prepare password proof.");
       });
     });
@@ -1505,8 +1571,13 @@
 
     form.addEventListener("submit", function (ev) {
       if (form.dataset.passwordPrepared === "1") return;
+      if (form.dataset.passwordPending === "1") {
+        ev.preventDefault();
+        return;
+      }
       ev.preventDefault();
       if (!requireWebCrypto()) return;
+      form.dataset.passwordPending = "1";
 
       (async function () {
         var currentEl = form.querySelector("input[name='current_password']");
@@ -1523,6 +1594,7 @@
 
         if (!currentEl || !nextEl || !confirmEl || !csrfEl || !currentSaltEl || !currentItersEl || !currentProofEl || !newSaltEl || !newItersEl || !newVerifierEl || !newProofEl) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
@@ -1538,19 +1610,23 @@
 
         if (nextPassword !== confirmPassword) {
           window.alert("Password confirmation does not match.");
+          delete form.dataset.passwordPending;
           return;
         }
         if (!currentPassword || !nextPassword || !csrfToken) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
         if (!/^[0-9a-f]{32}$/.test(currentSalt) || !/^[0-9a-f]{32}$/.test(newSalt)) {
           window.alert("Invalid password metadata.");
+          delete form.dataset.passwordPending;
           return;
         }
         if (!Number.isFinite(currentIters) || currentIters <= 0 || !Number.isFinite(newIters) || newIters <= 0) {
           window.alert("Invalid password metadata.");
+          delete form.dataset.passwordPending;
           return;
         }
 
@@ -1563,8 +1639,10 @@
         nextEl.value = await sha256Hex(csrfToken + nextPassword);
         confirmEl.value = await sha256Hex(csrfToken + confirmPassword);
         form.dataset.passwordPrepared = "1";
+        delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
+        delete form.dataset.passwordPending;
         window.alert("Failed to prepare password proof.");
       });
     });
@@ -1576,8 +1654,13 @@
 
     form.addEventListener("submit", function (ev) {
       if (form.dataset.passwordPrepared === "1") return;
+      if (form.dataset.passwordPending === "1") {
+        ev.preventDefault();
+        return;
+      }
       ev.preventDefault();
       if (!requireWebCrypto()) return;
+      form.dataset.passwordPending = "1";
 
       (async function () {
         var passwordEl = form.querySelector("input[name='password']");
@@ -1587,6 +1670,7 @@
         var proofEl = form.querySelector("input[name='password_proof']");
         if (!passwordEl || !csrfEl || !saltEl || !itersEl || !proofEl) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
@@ -1597,11 +1681,13 @@
         var iters = Number(itersEl.value || 0);
         if (!password || !csrfToken) {
           form.dataset.passwordPrepared = "1";
+          delete form.dataset.passwordPending;
           form.submit();
           return;
         }
         if (!/^[0-9a-f]{32}$/.test(salt) || !Number.isFinite(iters) || iters <= 0) {
           window.alert("Invalid password metadata.");
+          delete form.dataset.passwordPending;
           return;
         }
 
@@ -1609,8 +1695,10 @@
         proofEl.value = await sha256Hex(csrfToken + verifier);
         passwordEl.value = await sha256Hex(csrfToken + password);
         form.dataset.passwordPrepared = "1";
+        delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
+        delete form.dataset.passwordPending;
         window.alert("Failed to prepare password proof.");
       });
     });
@@ -2321,6 +2409,7 @@
     initRunDetailsToggle();
     initLifecycleTabs();
     initRunExecuteSelectors();
+    initTestsSampleForms();
     initTestsEditorAutoFocusNewest();
     initTagSelects();
     initPopupDialogs();

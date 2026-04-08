@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 {% set ns = namespace(latest=None) %}
 {% set preview_nav = ctx.nav_status.get('preview', {}) if ctx.nav_status is defined else {} %}
@@ -158,28 +159,14 @@
   </section>
 </div>
 
-<div id="statement-draft-popup" class="ui-popup-overlay statement-draft-popup" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="statement-draft-popup-title">
-    <div class="ui-popup-header">
-      <h2 id="statement-draft-popup-title" class="ui-popup-title">Draft History</h2>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('statement-draft-popup', 'Draft History', overlay_class='statement-draft-popup') %}
       <p class="muted" data-statement-draft-status="1">Loading local drafts...</p>
       <p class="flash" data-statement-draft-error="1" hidden></p>
       <p class="muted" data-statement-draft-empty="1" hidden>No local drafts yet.</p>
       <div class="statement-draft-list" data-statement-draft-list="1"></div>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
-<div id="statement-settings-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="statement-settings-popup-title">
-    <div class="ui-popup-header">
-      <h2 id="statement-settings-popup-title" class="ui-popup-title">Edit Statement Settings</h2>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('statement-settings-popup', 'Edit Statement Settings') %}
       <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/save">
         <div class="form-row">
           <label for="general-problem-name">Problem name</label>
@@ -214,9 +201,7 @@
           <button class="btn" type="submit">Save</button>
         </div>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
 <section>
   <h2>Statement attachments</h2>

@@ -1,0 +1,26 @@
+{% macro ui_popup(popup_id, title, overlay_class='', dialog_class='', content_id='', title_tag='h2', title_class='ui-popup-title') -%}
+<div id="{{ popup_id }}" class="ui-popup-overlay{% if overlay_class %} {{ overlay_class }}{% endif %}" data-popup-overlay="1" hidden>
+  <div class="ui-popup-dialog{% if dialog_class %} {{ dialog_class }}{% endif %}" role="dialog" aria-modal="true" aria-labelledby="{{ popup_id }}-title">
+    <div class="ui-popup-header">
+      <{{ title_tag }} id="{{ popup_id }}-title"{% if title_class %} class="{{ title_class }}"{% endif %}>{{ title }}</{{ title_tag }}>
+      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
+    </div>
+    <div class="ui-popup-content"{% if content_id %} id="{{ content_id }}"{% endif %}>
+      {{ caller() }}
+    </div>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro change_badges(counts) -%}
+<div class="change-badges">
+  {% if counts.added %}<span class="change-chip change-added">+{{ counts.added }} added</span>{% endif %}
+  {% if counts.modified %}<span class="change-chip change-modified">~{{ counts.modified }} modified</span>{% endif %}
+  {% if counts.deleted %}<span class="change-chip change-deleted">-{{ counts.deleted }} deleted</span>{% endif %}
+  {% if counts.renamed %}<span class="change-chip change-renamed">R{{ counts.renamed }} renamed</span>{% endif %}
+  {% if counts.untracked %}<span class="change-chip change-untracked">?{{ counts.untracked }} untracked</span>{% endif %}
+  {% if counts.conflicted %}<span class="change-chip change-conflicted">!{{ counts.conflicted }} conflicted</span>{% endif %}
+  {% if counts.typechange %}<span class="change-chip change-typechange">T{{ counts.typechange }} type</span>{% endif %}
+  {% if counts.other %}<span class="change-chip change-other">{{ counts.other }} other</span>{% endif %}
+</div>
+{%- endmacro %}

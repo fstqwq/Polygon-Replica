@@ -1,4 +1,5 @@
 {% extends "root_base.html" %}
+{% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <h1 class="page-title">Settings</h1>
 {% include "_flash_message.html" %}
@@ -101,13 +102,7 @@
       </form>
     </section>
 
-    <div id="judgehost-gen-script-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-      <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="judgehost-gen-script-popup-title">
-        <div class="ui-popup-header">
-          <h2 id="judgehost-gen-script-popup-title" class="ui-popup-title">Generate Judgehost Script</h2>
-          <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-        </div>
-        <div class="ui-popup-content">
+    {% call ui_popup('judgehost-gen-script-popup', 'Generate Judgehost Script') %}
           <div class="form-row">
             <label for="judgehost_gen_script_cpuids">CPU IDs</label>
             <input
@@ -140,9 +135,7 @@
             <label for="judgehost_gen_script_output">Commands</label>
             <textarea id="judgehost_gen_script_output" rows="10" readonly spellcheck="false" data-gen-script-output="1"></textarea>
           </div>
-        </div>
-      </div>
-    </div>
+    {% endcall %}
     <h3>Judgehost Status</h3>
     <p class="muted">
       enabled=<code>{{ 'true' if jh.get('enabled') else 'false' }}</code>,

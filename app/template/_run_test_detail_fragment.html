@@ -75,7 +75,7 @@
         <div><strong>Diagnostics</strong></div>
       </div>
       {% if diagnostics_error %}
-      <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ diagnostics_error }}</p>
+      <p class="compile-diagnostics-error">{{ diagnostics_error }}</p>
       {% endif %}
       {% if diagnostics_entries %}
       <div class="compile-diagnostics-list" role="list">
