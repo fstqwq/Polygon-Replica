@@ -16,6 +16,7 @@ from app.impl.run_export import export as export_page_module
 from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.runtime.config import config
 from app.service.platform.git_process import run_git
+from app.service.importing.native import NATIVE_MARKER, NativePackageImportService
 
 db = config.db
 export_service = config.export_service
@@ -382,6 +383,21 @@ class TestExport(SmokeBase):
             self.assertIn("validation_passes: 2", problem_yaml)
             self.assertIn("timelimit = 2", domjudge_ini)
             self.assertTrue(any(name.endswith("/output_validators/interactor/interactor_" + token + ".cpp") for name in zf.namelist()))
+
+    def test_native_import_rejects_git_metadata_paths(self) -> None:
+        ws = Path(self._workspace_path())
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                NATIVE_MARKER,
+                json.dumps({"package_type": "native", "problem_name": "blocked git metadata"}),
+            )
+            zf.writestr("repo/.git/config", "[filter \"evil\"]\n")
+            zf.writestr("repo/tests/spec.json", json.dumps({"tests": []}))
+
+        service = NativePackageImportService()
+        with self.assertRaisesRegex(ValueError, "forbidden repository metadata"):
+            service.import_package(ws, "native-git-metadata.zip", payload.getvalue())
 
     def test_native_export_roundtrip_preserves_canonical_repo_state(self) -> None:
         ws = Path(self._workspace_path())
