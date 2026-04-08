@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text
+from app.service.platform.error_text import sanitize_log_text_for_ui
+from app.service.verification.task_metadata import canonical_diagnostics, diagnostics_json_text
 from app.service.verification.task_scheduler import TaskExecutionResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.test_rows import build_verification_test_row
@@ -12,9 +13,6 @@ from app.service.verification.types import Status
 TASK_GENERATE_INPUT = "generate-input"
 TASK_MAIN_CORRECT = "main-correct"
 
-_COMPILE_LOG_CHAR_LIMIT = 16384
-_ERROR_TEXT_CHAR_LIMIT = 4096
-_FEEDBACK_TEXT_CHAR_LIMIT = 4096
 _COMPILE_DIAGNOSTICS_LIMIT = 64
 _ACCEPTING_VERDICTS = frozenset({"OK", "AC"})
 
@@ -31,6 +29,39 @@ class _TaskSummaryParts:
     error_text: str
     feedback_text: str
     output_ref: str
+
+
+def _normalized_error_text(value: str) -> str:
+    normalized = sanitize_log_text_for_ui(str(value or ""))
+    lines = normalized.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    trimmed_lines = [str(line or "").rstrip() for line in lines]
+    while trimmed_lines and (not trimmed_lines[0].strip()):
+        trimmed_lines.pop(0)
+    while trimmed_lines and (not trimmed_lines[-1].strip()):
+        trimmed_lines.pop()
+    if not trimmed_lines:
+        return ""
+    return "\n".join(trimmed_lines)
+
+
+def verification_task_fail_reason(
+    task_row: VerificationTaskRow,
+    *,
+    error_text: str,
+    fallback: str = "",
+) -> str:
+    detail_text = _normalized_error_text(str(error_text or fallback))
+    origin_tokens = [
+        str(task_row["task_kind"] or "").strip(),
+        str(task_row["source_path"] or "").strip(),
+        str(task_row["test_name"] or "").strip(),
+    ]
+    origin_text = " / ".join(token for token in origin_tokens if token)
+    if origin_text and detail_text:
+        return f"{origin_text}: {detail_text}"
+    if origin_text:
+        return origin_text
+    return detail_text
 
 
 def _answer_name(test_name: str) -> str:
@@ -125,16 +156,12 @@ def _verdict_from_summary(summary: dict[str, object], run_status: str) -> str:
 
 def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: str) -> _TaskSummaryParts:
     verdict = _verdict_from_summary(summary, run_status)
-    compile_log_source = str(summary.get("error") or error_text or "")
-    compile_log_meta = canonical_truncated_text(compile_log_source, limit=_COMPILE_LOG_CHAR_LIMIT)
     diagnostics_meta = canonical_diagnostics(
         cast(list[dict[str, object]] | list[object] | None, summary.get("compile_diagnostics") or []),
         list_limit=_COMPILE_DIAGNOSTICS_LIMIT,
-        message_limit=_ERROR_TEXT_CHAR_LIMIT,
+        message_limit=4096,
     )
     diagnostics_json = diagnostics_json_text(diagnostics_meta["rows"])
-    error_value = str(error_text or summary.get("error") or "")
-    error_text_meta = canonical_truncated_text(error_value, limit=_ERROR_TEXT_CHAR_LIMIT)
     tests = cast(list[dict[str, object]], summary.get("tests") or [])
     feedback_source = ""
     output_ref = ""
@@ -153,22 +180,20 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
         runtime_sec = float(runtime_ms) / 1000.0
         cpu_sec = float(cpu_ms) / 1000.0
         wall_sec = float(wall_ms) / 1000.0
-    feedback_meta = canonical_truncated_text(feedback_source, limit=_FEEDBACK_TEXT_CHAR_LIMIT)
-    final_error_text = error_text_meta["text"]
+    final_error_text = _normalized_error_text(str(error_text or summary.get("error") or ""))
+    feedback_text = _normalized_error_text(feedback_source)
     if verdict == "CE" and (not final_error_text) and diagnostics_json == "[]":
-        fallback_error = str(feedback_meta["text"] or "").strip() or "compile error"
-        fallback_meta = canonical_truncated_text(fallback_error, limit=_ERROR_TEXT_CHAR_LIMIT)
-        final_error_text = fallback_meta["text"]
+        final_error_text = feedback_text or "compile error"
     return _TaskSummaryParts(
         verdict=verdict,
         runtime_sec=runtime_sec,
         cpu_sec=cpu_sec,
         wall_sec=wall_sec,
         memory_kb=memory_kb,
-        compile_log=compile_log_meta["text"],
+        compile_log=_normalized_error_text(str(summary.get("error") or error_text or "")),
         diagnostics_json=diagnostics_json,
         error_text=final_error_text,
-        feedback_text=feedback_meta["text"],
+        feedback_text=feedback_text,
         output_ref=output_ref,
     )
 
@@ -183,10 +208,8 @@ def _final_error_text(parts: _TaskSummaryParts, *, fallback: str) -> str:
         return error_text
     feedback_text = str(parts.feedback_text or "").strip()
     if feedback_text:
-        error_meta = canonical_truncated_text(feedback_text, limit=_ERROR_TEXT_CHAR_LIMIT)
-        return error_meta["text"]
-    fallback_meta = canonical_truncated_text(fallback, limit=_ERROR_TEXT_CHAR_LIMIT)
-    return fallback_meta["text"]
+        return _normalized_error_text(feedback_text)
+    return _normalized_error_text(fallback)
 
 
 def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
@@ -246,7 +269,11 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
             error_text=parts.error_text,
             feedback_text="",
             output_ref="",
-            fail_flag_reason=fail_reason if task_kind == TASK_MAIN_CORRECT else "",
+            fail_flag_reason=(
+                verification_task_fail_reason(task_row, error_text=fail_reason)
+                if task_kind == TASK_MAIN_CORRECT
+                else ""
+            ),
         )
 
     if task_kind == TASK_GENERATE_INPUT:
@@ -271,12 +298,11 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 error_text=fail_reason,
                 feedback_text=parts.feedback_text,
                 output_ref=materialized_output_ref,
-                fail_flag_reason=fail_reason,
+                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_reason),
             )
         output_blob = materialized_output_blob
         if output_blob is None:
             fail_message = f"generated input output missing for {test_name}"
-            fail_meta = canonical_truncated_text(fail_message, limit=_ERROR_TEXT_CHAR_LIMIT)
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_FAILED,
@@ -289,10 +315,10 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 memory_kb=parts.memory_kb,
                 compile_log=parts.compile_log,
                 diagnostics_json=parts.diagnostics_json,
-                error_text=fail_meta["text"],
+                error_text=fail_message,
                 feedback_text=parts.feedback_text,
                 output_ref=materialized_output_ref,
-                fail_flag_reason=fail_message,
+                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
             )
         _persist_verification_artifact(
             verification_id=verification_id,
@@ -321,12 +347,12 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     task_status = VerificationTaskStore.TASK_DONE if result_status == Status.OK.value else VerificationTaskStore.TASK_FAILED
     fail_flag_reason = ""
     if task_kind == TASK_MAIN_CORRECT and task_status != VerificationTaskStore.TASK_DONE:
-        fail_flag_reason = error_text or f"main correct failed on {test_name}"
+        final_error = _final_error_text(parts, fallback=error_text or f"main correct failed on {test_name}")
+        fail_flag_reason = verification_task_fail_reason(task_row, error_text=final_error)
     if task_kind == TASK_MAIN_CORRECT and task_status == VerificationTaskStore.TASK_DONE:
         output_bytes = materialized_output_blob
         if output_bytes is None:
             fail_message = f"main correct output missing for {test_name}"
-            fail_meta = canonical_truncated_text(fail_message, limit=_ERROR_TEXT_CHAR_LIMIT)
             return TaskExecutionResult(
                 task_id=task_id,
                 status=VerificationTaskStore.TASK_FAILED,
@@ -339,10 +365,10 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 memory_kb=parts.memory_kb,
                 compile_log=parts.compile_log,
                 diagnostics_json=parts.diagnostics_json,
-                error_text=fail_meta["text"],
+                error_text=fail_message,
                 feedback_text=parts.feedback_text,
                 output_ref=materialized_output_ref,
-                fail_flag_reason=fail_message,
+                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
             )
         _persist_verification_artifact(
             verification_id=verification_id,

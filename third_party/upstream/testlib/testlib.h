@@ -3057,7 +3057,6 @@ NORETURN void InStream::quit(TResult result, const char *msg) {
         testlibFinalizeGuard.quitCount++;
 
     std::string message(msg);
-    message = trim(message);
 
     if (__testlib_hasTestCase) {
         if (result != _ok && result != _points)

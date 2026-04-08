@@ -1325,7 +1325,6 @@ def build_run_detail_context(
                 artifact_verification_error = f'{diag_location}: {diag_message}'
             elif diag_message:
                 artifact_verification_error = diag_message
-        artifact_verification_error = preserve_error_text(artifact_verification_error)
         verification_logs = {
             'available': True,
             'title': diagnostics_title,

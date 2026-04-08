@@ -4644,6 +4644,52 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("<h2>Diagnostics</h2>", html)
         self.assertNotIn("Compile Diagnostics", html)
 
+    def test_run_details_reuses_verification_fail_reason_in_task_status_and_diagnostics(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-fail-reason-source-{uuid.uuid4().hex[:8]}"
+        fail_reason = (
+            "main-correct / solutions/std.py / 001.in: Traceback (most recent call last):\n"
+            "  File \"solutions/std.py\", line 1, in <module>\n"
+            "ZeroDivisionError: division by zero"
+        )
+        self._insert_stage_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            kind=Kind.ALL,
+            status="failed",
+            summary={
+                "mode": "interactive",
+                "pass_limit": 10,
+            },
+            created_at="2026-04-08T00:00:00Z",
+            finished_at="2026-04-08T00:00:01Z",
+        )
+        db_execute(
+            "UPDATE verifications SET fail_reason=? WHERE id=?",
+            [fail_reason, verification_id],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("Task Status", html)
+        self.assertIn("<h2>Diagnostics</h2>", html)
+        self.assertIn('<p class="danger" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">', html)
+        self.assertIn(
+            '<p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">',
+            html,
+        )
+        self.assertIn("Traceback (most recent call last):", html)
+        self.assertIn("ZeroDivisionError: division by zero", html)
+
     def test_run_details_falls_back_to_verification_expected_behavior_for_cell_colors(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)

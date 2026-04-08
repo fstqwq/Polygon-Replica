@@ -3494,13 +3494,16 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(cleaned.decode("utf-8"), "hello\n")
 
-    def test_domjudge_feedback_line_parser_prefers_error_line_and_redacts_internal_path(self) -> None:
+    def test_domjudge_feedback_text_preserves_multiline_and_redacts_internal_path(self) -> None:
         from app.service.judgehost.runtime import (
-            domjudge_feedback_line_from_bytes,
-            domjudge_feedback_line_from_text,
+            domjudge_feedback_text_from_bytes,
+            domjudge_feedback_text_from_text,
         )
 
-        self.assertEqual(domjudge_feedback_line_from_text("\n\nfailed on pass 2\nignored"), "failed on pass 2")
+        self.assertEqual(
+            domjudge_feedback_text_from_text("\n\nfailed on pass 2\nignored"),
+            "failed on pass 2\nignored",
+        )
         compile_output = (
             "\n"
             "/opt/domjudge/judgehost/judgings/judgedaemon-2-2/endpoint-default/executable/compare/123/"
@@ -3509,12 +3512,12 @@ class TestJudgehostService(SmokeBase):
             "b0e49bdbe272b5206d97ca5e888a7b00/build/validator.cpp:4:35: error: expected ';' before 'inf'\n"
         )
         self.assertEqual(
-            domjudge_feedback_line_from_text(compile_output),
-            "validator.cpp:4:35: error: expected ';' before 'inf'",
+            domjudge_feedback_text_from_text(compile_output),
+            "validator.cpp: In function 'void EachTestCase()':\nvalidator.cpp:4:35: error: expected ';' before 'inf'",
         )
         self.assertEqual(
-            domjudge_feedback_line_from_bytes(compile_output.encode("utf-8")),
-            "validator.cpp:4:35: error: expected ';' before 'inf'",
+            domjudge_feedback_text_from_bytes(compile_output.encode("utf-8")),
+            "validator.cpp: In function 'void EachTestCase()':\nvalidator.cpp:4:35: error: expected ';' before 'inf'",
         )
 
     def test_domjudge_add_judging_run_endpoint_accepts_large_multipart_payload(self) -> None:

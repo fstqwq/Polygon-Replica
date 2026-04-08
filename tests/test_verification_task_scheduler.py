@@ -127,6 +127,8 @@ class _InMemoryTaskStore:
         return (self._fail_flag, self._fail_reason)
 
     def set_fail_flag(self, verification_id: str, *, reason: str) -> None:
+        if self._fail_flag:
+            return
         self._fail_flag = True
         self._fail_reason = reason
 
@@ -433,6 +435,7 @@ class TestVerificationTaskScheduler(SmokeBase):
             "id": "vt-generate",
             "verification_id": "ver-validator-reject",
             "task_kind": "generate-input",
+            "source_path": "generators/gen.cpp",
             "test_name": "001.in",
             "judgehost_task_id": "jt-generate",
             "run_id": "r-generate",
@@ -444,7 +447,7 @@ class TestVerificationTaskScheduler(SmokeBase):
                 "tests": [
                     {
                         "verdict": "WA",
-                        "message": "validator rejected generated input",
+                        "message": "validator rejected generated input\nline 2 detail",
                         "output_ref": "cache://case/output/001.out",
                         "time_ms": 7,
                         "time_user_ms": 7,
@@ -460,9 +463,12 @@ class TestVerificationTaskScheduler(SmokeBase):
 
         self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
         self.assertEqual(final_result.verdict, "WA")
-        self.assertEqual(final_result.fail_flag_reason, "validator rejected generated input")
-        self.assertEqual(final_result.error_text, "validator rejected generated input")
-        self.assertEqual(final_result.feedback_text, "validator rejected generated input")
+        self.assertEqual(
+            final_result.fail_flag_reason,
+            "generate-input / generators/gen.cpp / 001.in: validator rejected generated input\nline 2 detail",
+        )
+        self.assertEqual(final_result.error_text, "validator rejected generated input\nline 2 detail")
+        self.assertEqual(final_result.feedback_text, "validator rejected generated input\nline 2 detail")
         self.assertEqual(final_result.output_ref, "cache://case/output/001.out")
 
     def test_runtime_coordinator_cancels_successors_after_generate_input_validator_rejection(self) -> None:
@@ -502,7 +508,7 @@ class TestVerificationTaskScheduler(SmokeBase):
             error_text="validator rejected generated input for 001.in",
             feedback_text="validator rejected generated input for 001.in",
             output_ref="cache://case/output/001.out",
-            fail_flag_reason="validator rejected generated input for 001.in",
+            fail_flag_reason="generate-input / generators/gen.cpp / 001.in: validator rejected generated input for 001.in",
         )
 
         def _publish(row: dict[str, object]) -> TaskPublishResult:
@@ -557,7 +563,10 @@ class TestVerificationTaskScheduler(SmokeBase):
             self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStore.TASK_FAILED)
             self.assertEqual(str(rows["vt-solution"]["status"]), VerificationTaskStore.TASK_CANCELLED)
             self.assertEqual(publish_order, ["vt-generate"])
-            self.assertEqual(store.fail_state("ver-validator-stop"), (True, "validator rejected generated input for 001.in"))
+            self.assertEqual(
+                store.fail_state("ver-validator-stop"),
+                (True, "generate-input / generators/gen.cpp / 001.in: validator rejected generated input for 001.in"),
+            )
         finally:
             if thread.is_alive():
                 coordinator.enqueue_cancel("test shutdown")
@@ -1067,3 +1076,14 @@ class TestVerificationTaskScheduler(SmokeBase):
         store.set_fail_flag(verification_id, reason="main failed")
         self.assertEqual(store.fail_state(verification_id), (True, "main failed"))
         self.assertIsNotNone(VerificationStore(config.db).record_row(verification_id))
+
+    def test_task_store_keeps_first_fail_flag_reason(self) -> None:
+        verification_id = f"ver-task-store-first-{self.test_id}"
+        self._insert_verification_row(verification_id)
+        store = VerificationTaskStore(config.db)
+        store.set_fail_flag(verification_id, reason="generate-input / generators/gen.cpp / 001.in: validator failed")
+        store.set_fail_flag(verification_id, reason="verification cancelled by user")
+        self.assertEqual(
+            store.fail_state(verification_id),
+            (True, "generate-input / generators/gen.cpp / 001.in: validator failed"),
+        )

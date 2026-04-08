@@ -21,6 +21,7 @@ from app.service.verification.task_scheduler import (
     unregister_verification_runtime_coordinator,
 )
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.task_result_finalize import verification_task_fail_reason
 from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
 from app.service.verification.types import is_cancel_reason
@@ -728,7 +729,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             run_id=run_id,
             judgehost_task_id="",
             error_text=str(exc),
-            fail_flag_reason=str(exc),
+            fail_flag_reason=verification_task_fail_reason(task_row, error_text=str(exc)),
         )
         return TaskPublishResult(
             task_id=task_id,
@@ -796,7 +797,11 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
         )
         return TaskPublishResult(task_id=task_id, run_id=run_id, judgehost_task_id=judgehost_task_id)
     except Exception as exc:
-        fail_flag_reason = str(exc) if task_kind == TASK_MAIN_CORRECT else ""
+        fail_flag_reason = (
+            verification_task_fail_reason(task_row, error_text=str(exc))
+            if task_kind == TASK_MAIN_CORRECT
+            else ""
+        )
         result = _empty_task_result(
             task_id=task_id,
             status=VerificationTaskStore.TASK_FAILED,
@@ -818,6 +823,10 @@ def _publish_task(task_row: VerificationTaskRow, *, execution: TaskExecutionCont
     test_name = str(task_row["test_name"])
     test_plan = execution.test_plan_by_name.get(test_name)
     if test_plan is None:
+        missing_reason = verification_task_fail_reason(
+            task_row,
+            error_text=f"verification test plan missing for {test_name}",
+        )
         result = _empty_task_result(
             task_id=str(task_row["id"]),
             status=VerificationTaskStore.TASK_FAILED,
@@ -825,7 +834,7 @@ def _publish_task(task_row: VerificationTaskRow, *, execution: TaskExecutionCont
             run_id="",
             judgehost_task_id="",
             error_text=f"verification test plan missing for {test_name}",
-            fail_flag_reason=f"verification test plan missing for {test_name}",
+            fail_flag_reason=missing_reason,
         )
         return TaskPublishResult(
             task_id=str(task_row["id"]),

@@ -461,6 +461,8 @@ class VerificationTaskStore:
             )
 
     def set_fail_flag(self, verification_id: str, *, reason: str) -> None:
+        if verification_id in self._fail_reason_by_verification_id:
+            return
         self._fail_reason_by_verification_id[verification_id] = reason
 
     def fail_state(self, verification_id: str) -> tuple[bool, str]:

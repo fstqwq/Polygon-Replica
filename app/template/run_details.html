@@ -46,7 +46,7 @@
       <strong>Task Status</strong>
     </div>
     {% if detail_fail_flag %}
-    <p class="danger">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
+    <p class="danger" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
     {% endif %}
     {% if detail_task_counts %}
     <p class="muted">

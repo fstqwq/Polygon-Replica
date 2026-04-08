@@ -18,8 +18,8 @@ from app.service.judgehost.domjudge.cache import domjudge_json_hash, domjudge_so
 from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domjudge_script_hash_field, domjudge_script_id
 from app.service.judgehost.runtime import (
     domjudge_bool,
-    domjudge_feedback_line_from_bytes,
-    domjudge_feedback_line_from_text,
+    domjudge_feedback_text_from_bytes,
+    domjudge_feedback_text_from_text,
     domjudge_parse_float,
     domjudge_parse_int,
     domjudge_parse_meta_text,
@@ -93,7 +93,7 @@ class JudgehostDomjudgeResultsMixin:
                 break
             blob = self._domjudge_read_artifact_blob(work_root, token)
             if blob is not None:
-                feedback_text = domjudge_feedback_line_from_bytes(blob)
+                feedback_text = domjudge_feedback_text_from_bytes(blob)
         return feedback_text, feedback_files
 
     def _domjudge_update_verification_run_case_progress(
@@ -500,7 +500,7 @@ class JudgehostDomjudgeResultsMixin:
             if compile_text.strip():
                 message = compile_text.strip()
             compile_error_summary = message
-            compile_error_task = domjudge_feedback_line_from_text(message, max_chars=320) or "compilation failed"
+            compile_error_task = domjudge_feedback_text_from_text(message) or "compilation failed"
             compile_diag.append(
                 {
                     "level": "error",
