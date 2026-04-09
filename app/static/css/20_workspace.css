@@ -46,7 +46,7 @@
 }
 
 .danger-zone {
-  border: 1px solid #fca5a5;
+  border: 1px solid var(--tag-fail-border);
   background: #fff7f7;
   margin: 10px 0 0;
 }
@@ -61,14 +61,14 @@
 }
 
 .danger-zone-body {
-  border-top: 1px solid #fca5a5;
+  border-top: 1px solid var(--tag-fail-border);
   display: grid;
   gap: 8px;
   padding: var(--space-4);
 }
 
 .danger-zone-delete {
-  border: 1px solid #fca5a5;
+  border: 1px solid var(--tag-fail-border);
   background: var(--surface);
   padding: var(--space-3);
 }
@@ -550,7 +550,7 @@
 }
 
 .workspace-diff-file.active {
-  border-color: #0f172a;
+  border-color: var(--text);
   background: var(--surface-alt);
 }
 
@@ -594,7 +594,7 @@
 
 .workspace-diff-line-add {
   background: var(--surface-success);
-  color: #166534;
+  color: var(--ok);
 }
 
 .workspace-diff-line-del {
@@ -604,7 +604,7 @@
 
 .workspace-diff-line-hunk {
   background: var(--surface-info);
-  color: #1d4ed8;
+  color: var(--tag-info-fg);
 }
 
 .workspace-diff-line-head {

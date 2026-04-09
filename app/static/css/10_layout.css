@@ -54,27 +54,27 @@
 }
 
 .top-event-success {
-  border-color: #86efac;
-  background: #f0fdf4;
-  color: #166534;
+  border-color: var(--tag-ok-border);
+  background: var(--tag-ok-bg);
+  color: var(--tag-ok-fg);
 }
 
 .top-event-warning {
-  border-color: #fed7aa;
+  border-color: var(--warn-line);
   background: var(--surface-warning);
-  color: #9a3412;
+  color: var(--warn-text);
 }
 
 .top-event-error {
-  border-color: #fca5a5;
-  background: var(--surface-danger);
-  color: #b91c1c;
+  border-color: var(--tag-fail-border);
+  background: var(--tag-fail-bg);
+  color: var(--tag-fail-fg);
 }
 
 .top-event-info {
-  border-color: #93c5fd;
-  background: var(--surface-info);
-  color: #1d4ed8;
+  border-color: var(--tag-info-border);
+  background: var(--tag-info-bg);
+  color: var(--tag-info-fg);
 }
 
 .top-event-text {

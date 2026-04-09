@@ -72,12 +72,12 @@
 
 .tests-kind-manual {
   background: var(--surface-success);
-  border-color: #86efac;
+  border-color: var(--tag-ok-border);
 }
 
 .tests-kind-gen {
   background: var(--surface-info);
-  border-color: #93c5fd;
+  border-color: var(--tag-info-border);
 }
 
 .tests-editor-actions {
