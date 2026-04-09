@@ -42,6 +42,17 @@
   --tag-neutral-fg: #334155;
   --tag-neutral-bg: #f8fafc;
   --tag-neutral-border: #cbd5e1;
+  --change-added: #16a34a;
+  --change-modified: #2563eb;
+  --change-deleted: #dc2626;
+  --change-renamed: #9333ea;
+  --change-other: #0f766e;
+  --transcript-left-bg: #ecfeff;
+  --transcript-right-bg: #eef2ff;
+  --diagnostics-error-bg: #fee2e2;
+  --diagnostics-warning-bg: #fef3c7;
+  --diagnostics-note-bg: #dbeafe;
+  --table-row-alt: #fcfcfd;
   --btn-bg: #ffffff;
   --btn-bg-hover: #f1f5f9;
   --btn-border: #94a3b8;

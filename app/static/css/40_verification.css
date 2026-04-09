@@ -721,11 +721,11 @@ section.verification-header-section {
 }
 
 .transcript-left .transcript-bubble {
-  background: #ecfeff;
+  background: var(--transcript-left-bg);
 }
 
 .transcript-right .transcript-bubble {
-  background: #eef2ff;
+  background: var(--transcript-right-bg);
 }
 
 .sol-output-head {
@@ -840,7 +840,7 @@ section.verification-header-section {
 }
 
 .compile-diagnostics-row-warning {
-  background: #fffbeb;
+  background: var(--surface-warning);
   border-color: #fcd34d;
 }
 
@@ -863,19 +863,19 @@ section.verification-header-section {
 }
 
 .compile-diagnostics-row-error .compile-diagnostics-level {
-  background: #fee2e2;
+  background: var(--diagnostics-error-bg);
   border-color: #fecaca;
   color: #b91c1c;
 }
 
 .compile-diagnostics-row-warning .compile-diagnostics-level {
-  background: #fef3c7;
+  background: var(--diagnostics-warning-bg);
   border-color: #fcd34d;
   color: #92400e;
 }
 
 .compile-diagnostics-row-note .compile-diagnostics-level {
-  background: #dbeafe;
+  background: var(--diagnostics-note-bg);
   border-color: #93c5fd;
   color: #1d4ed8;
 }

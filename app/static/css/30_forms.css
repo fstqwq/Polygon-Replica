@@ -430,7 +430,7 @@ th {
 }
 
 tbody tr:nth-child(even) td {
-  background: #fcfcfd;
+  background: var(--table-row-alt);
 }
 
 tbody tr:nth-child(odd) td {

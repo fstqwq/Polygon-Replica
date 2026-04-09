@@ -448,26 +448,26 @@
 }
 
 .change-added {
-  color: #16a34a;
+  color: var(--change-added);
 }
 
 .change-modified {
-  color: #2563eb;
+  color: var(--change-modified);
 }
 
 .change-deleted,
 .change-conflicted {
-  color: #dc2626;
+  color: var(--change-deleted);
 }
 
 .change-renamed,
 .change-typechange {
-  color: #9333ea;
+  color: var(--change-renamed);
 }
 
 .change-untracked,
 .change-other {
-  color: #0f766e;
+  color: var(--change-other);
 }
 
 .change-list {
@@ -501,29 +501,29 @@
 }
 
 .change-item.change-added .change-code {
-  color: #16a34a;
+  color: var(--change-added);
 }
 
 .change-item.change-modified .change-code {
-  color: #2563eb;
+  color: var(--change-modified);
 }
 
 .change-item.change-deleted .change-code {
-  color: #dc2626;
+  color: var(--change-deleted);
 }
 
 .change-item.change-renamed .change-code,
 .change-item.change-typechange .change-code {
-  color: #9333ea;
+  color: var(--change-renamed);
 }
 
 .change-item.change-conflicted .change-code {
-  color: #dc2626;
+  color: var(--change-deleted);
 }
 
 .change-item.change-untracked .change-code,
 .change-item.change-other .change-code {
-  color: #0f766e;
+  color: var(--change-other);
 }
 
 .workspace-diff-files {
@@ -555,26 +555,26 @@
 }
 
 .workspace-diff-file.workspace-diff-file-added {
-  border-left: 3px solid #16a34a;
+  border-left: 3px solid var(--change-added);
 }
 
 .workspace-diff-file.workspace-diff-file-modified {
-  border-left: 3px solid #2563eb;
+  border-left: 3px solid var(--change-modified);
 }
 
 .workspace-diff-file.workspace-diff-file-deleted,
 .workspace-diff-file.workspace-diff-file-conflicted {
-  border-left: 3px solid #dc2626;
+  border-left: 3px solid var(--change-deleted);
 }
 
 .workspace-diff-file.workspace-diff-file-renamed,
 .workspace-diff-file.workspace-diff-file-typechange {
-  border-left: 3px solid #9333ea;
+  border-left: 3px solid var(--change-renamed);
 }
 
 .workspace-diff-file.workspace-diff-file-untracked,
 .workspace-diff-file.workspace-diff-file-other {
-  border-left: 3px solid #0f766e;
+  border-left: 3px solid var(--change-other);
 }
 
 .workspace-diff-view {
