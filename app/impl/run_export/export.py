@@ -213,7 +213,10 @@ def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict
     if not package_root:
         return result
     prefix = f"{package_root}/"
-    has_pdf = f"{package_root}/statement/problem.en.pdf" in names
+    has_pdf = any(
+        name.startswith(f"{package_root}/statement/problem.") and name.endswith(".pdf")
+        for name in names
+    )
     solutions_total = 0
     solutions_correct = 0
     tests_total = 0

@@ -1,8 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -22,7 +22,12 @@ from app.service.statement.constant import (
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
 )
-from app.service.statement.context import statement_editor_content_rel
+from app.service.statement.context import (
+    normalize_statement_language,
+    pick_statement_language,
+    statement_languages,
+)
+from app.service.statement.render import ensure_statement_language_sources
 from app.service.statement.signature import statement_sources_signature
 
 _C = config.constants
@@ -77,8 +82,11 @@ def statement_mode_from_ctx(ctx: dict) -> str:
     return ctx["general_cfg"]["mode"]
 
 
-def statement_editor_section_paths(workspace: Path) -> dict[str, Path]:
-    section_root = statement_editor_content_rel(workspace).parent
+def statement_editor_section_paths(language: str) -> dict[str, Path]:
+    safe_language = normalize_statement_language(language)
+    if not safe_language:
+        raise ValueError("statement language is required")
+    section_root = Path("statement-sections") / safe_language
     return {
         "legend": section_root / "legend.tex",
         "input": section_root / "input.tex",
@@ -92,8 +100,49 @@ def normalize_statement_target_page(page: str) -> str:
     return page if page in {"statement", "preview"} else "preview"
 
 
-def statement_editor_sections(workspace: Path, mode: str) -> tuple[list[dict[str, object]], dict[str, str], bool]:
-    section_paths = statement_editor_section_paths(workspace)
+def resolve_statement_page_language(workspace: Path, requested_language: object) -> str:
+    available_languages = statement_languages(workspace)
+    safe_requested = normalize_statement_language(requested_language)
+    if safe_requested and safe_requested in available_languages:
+        return safe_requested
+    return pick_statement_language(workspace)
+
+
+def selected_statement_language(workspace: Path, requested_language: object) -> str:
+    safe_requested = normalize_statement_language(requested_language)
+    if not safe_requested:
+        return pick_statement_language(workspace)
+    available_languages = statement_languages(workspace)
+    if safe_requested in available_languages:
+        return safe_requested
+    if (not available_languages) and safe_requested == pick_statement_language(workspace):
+        return safe_requested
+    raise ValueError(f"unknown statement language: {safe_requested}")
+
+
+def statement_redirect_url(
+    problem: str,
+    user: str,
+    page: str,
+    *,
+    language: str = "",
+    preview_id: str = "",
+) -> str:
+    base = f"/problems/{problem}/{user}/{normalize_statement_target_page(page)}"
+    query: dict[str, str] = {}
+    safe_language = normalize_statement_language(language)
+    safe_preview_id = str(preview_id or "").strip()
+    if safe_language:
+        query["language"] = safe_language
+    if safe_preview_id:
+        query["preview_id"] = safe_preview_id
+    if not query:
+        return base
+    return f"{base}?{urlencode(query)}"
+
+
+def statement_editor_sections(workspace: Path, mode: str, language: str) -> tuple[list[dict[str, object]], dict[str, str], bool]:
+    section_paths = statement_editor_section_paths(language)
     interaction_enabled = mode != "pass-fail"
     specs: tuple[tuple[str, str, str, str], ...] = (
         ("legend", "legend_tex", "Legend", ""),
@@ -191,6 +240,10 @@ def preview_page(request: Request, problem: str, user: str):
     current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     requested_preview_id = request.query_params.get("preview_id", "")
+    available_languages = statement_languages(workspace)
+    current_language = resolve_statement_page_language(workspace, request.query_params.get("language", ""))
+    if current_language not in available_languages:
+        available_languages = [current_language, *available_languages]
     preview_id = requested_preview_id
     message = ''
     previews = config.preview_service.list_workspace_previews(problem_id, workspace_id)
@@ -201,6 +254,7 @@ def preview_page(request: Request, problem: str, user: str):
                 problem,
                 problem_id,
                 workspace_id,
+                language=current_language,
                 source_commit=workspace_head,
                 statement_signature=current_statement_signature,
                 allow_cache_mutation=False,
@@ -212,6 +266,7 @@ def preview_page(request: Request, problem: str, user: str):
                 problem,
                 problem_id,
                 workspace_id,
+                language=current_language,
                 source_commit=None,
                 statement_signature=current_statement_signature,
                 allow_cache_mutation=False,
@@ -219,7 +274,7 @@ def preview_page(request: Request, problem: str, user: str):
             if cached_id:
                 preview_id = cached_id
     safe_mode = statement_mode_from_ctx(ctx)
-    statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode)
+    statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode, current_language)
     log = ''
     log_truncated = False
     pdf_exists = False
@@ -246,6 +301,7 @@ def preview_page(request: Request, problem: str, user: str):
             candidate_id,
             statement_signature=current_statement_signature,
             workspace_head=workspace_head,
+            language=current_language,
         )
         if state is None:
             return {'text': 'missing', 'danger': True, 'warn': False}
@@ -264,6 +320,7 @@ def preview_page(request: Request, problem: str, user: str):
             preview_id,
             statement_signature=current_statement_signature,
             workspace_head=workspace_head,
+            language=current_language,
         )
         if preview_state is None:
             preview_id = ''
@@ -280,6 +337,7 @@ def preview_page(request: Request, problem: str, user: str):
             preview_id,
             statement_signature=current_statement_signature,
             workspace_head=workspace_head,
+            language=current_language,
         )
         if preview_state is None:
             preview_id = ''
@@ -374,15 +432,31 @@ def preview_page(request: Request, problem: str, user: str):
             'memory_limit_max_mb': _C.GENERAL_MEMORY_LIMIT_MAX_MB,
             'return_page': return_page,
             'statement_mode': safe_mode,
+            'available_languages': available_languages,
+            'current_language': current_language,
         },
     )
 
-def preview_run(problem: str, user: str, page: str=Form('statement')):
+def preview_run(
+    problem: str,
+    user: str,
+    page: str = Form('statement'),
+    language: str = Form(''),
+):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
+    workspace = Path(ctx['workspace']['path'])
+    try:
+        current_language = selected_statement_language(workspace, language)
+    except ValueError as exc:
+        return redirect_response(
+            statement_redirect_url(problem, user, target_page, language=resolve_statement_page_language(workspace, language)),
+            status_code=303,
+            message=str(exc),
+        )
     workspace_head = ctx["workspace"].get("head_commit")
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
     workspace_key = f'{problem_id}:{workspace_id}'
@@ -399,7 +473,7 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
         'error': '',
     }
     msg = 'preview compile failed'
-    base = f'/problems/{problem}/{user}/{target_page}'
+    base = statement_redirect_url(problem, user, target_page, language=current_language)
     with config.preview_lock:
         if workspace_key in config.preview_inflight:
             details['status'] = 'running'
@@ -409,7 +483,7 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
             return redirect_response(base, status_code=303, message='preview compile already running')
         config.preview_inflight.add(workspace_key)
     try:
-        preview_id = config.preview_service.compile_preview(problem, user)
+        preview_id = config.preview_service.compile_preview(problem, user, language=current_language)
         details['preview_id'] = preview_id
         row = config.preview_service.get_workspace_preview(problem_id, workspace_id, details['preview_id'])
         if row is None:
@@ -439,15 +513,19 @@ def preview_run(problem: str, user: str, page: str=Form('statement')):
     redirect_url = base
     preview_id = details["preview_id"]
     if preview_id:
-        redirect_url = f'{base}?preview_id={preview_id}'
+        redirect_url = statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id)
     return redirect_response(redirect_url, status_code=303, message=msg)
 
-def preview_status(problem: str, user: str):
+def preview_status(problem: str, user: str, language: str = ""):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
     workspace = Path(ctx['workspace']['path'])
     problem_title = str(ctx['problem']['name'])
+    try:
+        current_language = selected_statement_language(workspace, language)
+    except ValueError:
+        current_language = pick_statement_language(workspace)
     current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
     workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
@@ -458,6 +536,7 @@ def preview_status(problem: str, user: str):
         workspace_id,
         statement_signature=current_statement_signature,
         workspace_head=workspace_head,
+        language=current_language,
     )
     latest_preview_id = ''
     latest_status = 'none'
@@ -471,6 +550,7 @@ def preview_status(problem: str, user: str):
     return JSONResponse(
         {
             'running': bool(running),
+            'language': current_language,
             'latest_preview_id': latest_preview_id,
             'latest_status': latest_status,
             'latest_created_at': latest_created_at,
@@ -487,14 +567,24 @@ def preview_save(
     interaction_tex: str=Form(''),
     notes_tex: str=Form(''),
     page: str=Form('statement'),
+    language: str=Form(''),
+    preview_id: str=Form(''),
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
+    try:
+        current_language = selected_statement_language(workspace, language)
+    except ValueError as exc:
+        return redirect_response(
+            statement_redirect_url(problem, user, target_page, language=resolve_statement_page_language(workspace, language), preview_id=preview_id),
+            status_code=303,
+            message=str(exc),
+        )
     statement_mode = statement_mode_from_ctx(ctx)
     with config.workspace_service.workspace_lock(workspace):
-        section_paths = statement_editor_section_paths(workspace)
+        section_paths = statement_editor_section_paths(current_language)
         write_plan = {
             'legend': legend_tex,
             'input': input_tex,
@@ -519,16 +609,36 @@ def preview_save(
             'output_bytes': len(output_tex.encode('utf-8')),
             'notes_bytes': len(notes_tex.encode('utf-8')),
             'interaction_bytes': len(interaction_tex.encode('utf-8')) if statement_mode != 'pass-fail' else 0,
+            'language': current_language,
         },
     )
-    return redirect_response(f'/problems/{problem}/{user}/{target_page}', status_code=303, message='statement saved')
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
+        status_code=303,
+        message='statement saved',
+    )
 
-def statement_attachment_delete(problem: str, user: str, path: str=Form(...), page: str=Form('statement')):
+def statement_attachment_delete(
+    problem: str,
+    user: str,
+    path: str = Form(...),
+    page: str = Form('statement'),
+    language: str = Form(''),
+    preview_id: str = Form(''),
+):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    section_dir_rel = statement_editor_section_paths(workspace)['legend'].parent.as_posix()
+    try:
+        current_language = selected_statement_language(workspace, language)
+    except ValueError as exc:
+        return redirect_response(
+            statement_redirect_url(problem, user, target_page, language=resolve_statement_page_language(workspace, language), preview_id=preview_id),
+            status_code=303,
+            message=str(exc),
+        )
+    section_dir_rel = statement_editor_section_paths(current_language)['legend'].parent.as_posix()
     message = 'attachment deleted'
     try:
         safe_rel = normalize_workspace_rel_path(path)
@@ -549,5 +659,38 @@ def statement_attachment_delete(problem: str, user: str, path: str=Form(...), pa
         message = str(exc)
     except HTTPException as exc:
         message = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/{target_page}', status_code=303, message=message)
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
+
+
+def statement_language_add(
+    problem: str,
+    user: str,
+    language: str = Form(...),
+    page: str = Form('statement'),
+    preview_id: str = Form(''),
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    message = 'statement language created'
+    try:
+        safe_language = normalize_statement_language(language)
+        if not safe_language:
+            raise ValueError('statement language is required')
+        with config.workspace_service.workspace_lock(workspace):
+            ensure_statement_language_sources(workspace, safe_language)
+        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.language.add', {'language': safe_language})
+    except (RuntimeError, ValueError, OSError) as exc:
+        safe_language = ""
+        message = str(exc)
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=safe_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
 

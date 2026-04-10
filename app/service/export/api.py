@@ -14,8 +14,9 @@ from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
+from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.platform.git_process import run_git
-from app.service.platform.latex_process import run_pdflatex
+from app.service.platform.latex_process import detect_latex_engine, run_latex
 
 
 class ExportService:
@@ -469,6 +470,20 @@ class ExportService:
             f"externalid = {slug}\n"
         )
 
+    def _statement_export_languages(self, snapshot: Path) -> list[str]:
+        languages = statement_languages(snapshot)
+        if languages:
+            return languages
+        return [pick_statement_language(snapshot)]
+
+    @staticmethod
+    def _statement_export_suffix(language: str) -> str:
+        if language == "english":
+            return "en"
+        if language == "chinese":
+            return "zh"
+        return language
+
     def _copy_statement_tree(self, snapshot: Path, dst_statement: Path, *, problem_name: str) -> None:
         dst_statement.mkdir(parents=True, exist_ok=True)
         src_statement = snapshot / "statement"
@@ -479,23 +494,31 @@ class ExportService:
         if src_sections.exists() and src_sections.is_dir() and not src_sections.is_symlink():
             self._copy_dir_contents(src_sections, dst_statement.parent / "statement-sections")
 
-        shutil.copy2(render_statement_main(snapshot / "statement", problem_title=problem_name), dst_statement / "problem.en.tex")
+        for language in self._statement_export_languages(snapshot):
+            rendered = render_statement_main(snapshot / "statement", problem_title=problem_name, language=language)
+            suffix = self._statement_export_suffix(language)
+            shutil.copy2(rendered, dst_statement / f"problem.{suffix}.tex")
 
-    def _try_compile_statement_pdf(self, snapshot: Path, dst_statement: Path) -> bool:
-        try:
-            rendered = render_statement_main(snapshot / "statement")
-        except Exception:
-            return False
-        workdir = rendered.parent
-        proc = run_pdflatex(rendered.name, cwd=workdir, timeout_sec=self.STATEMENT_PDF_TIMEOUT_SEC)
-        if proc.returncode != 0:
-            return False
-        pdf_path = rendered.with_suffix(".pdf")
-        if not pdf_path.exists() or not pdf_path.is_file():
-            return False
+    def _try_compile_statement_pdf(self, snapshot: Path, dst_statement: Path, *, problem_name: str) -> bool:
+        compiled_any = False
         dst_statement.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(pdf_path, dst_statement / "problem.en.pdf")
-        return True
+        for language in self._statement_export_languages(snapshot):
+            try:
+                rendered = render_statement_main(snapshot / "statement", problem_title=problem_name, language=language)
+            except Exception:
+                continue
+            workdir = rendered.parent
+            engine = detect_latex_engine(rendered)
+            proc = run_latex(rendered.name, cwd=workdir, timeout_sec=self.STATEMENT_PDF_TIMEOUT_SEC, engine=engine)
+            if proc.returncode != 0:
+                continue
+            pdf_path = rendered.with_suffix(".pdf")
+            if not pdf_path.exists() or not pdf_path.is_file():
+                continue
+            suffix = self._statement_export_suffix(language)
+            shutil.copy2(pdf_path, dst_statement / f"problem.{suffix}.pdf")
+            compiled_any = True
+        return compiled_any
 
     def _copy_secret_and_sample_data(self, snapshot: Path, package_root: Path) -> None:
         secret_dir = package_root / "data" / "secret"
@@ -581,7 +604,7 @@ class ExportService:
         self._copy_secret_and_sample_data(snapshot, package_root)
         statement_dir = package_root / "statement"
         self._copy_statement_tree(snapshot, statement_dir, problem_name=problem_name)
-        self._try_compile_statement_pdf(snapshot, statement_dir)
+        self._try_compile_statement_pdf(snapshot, statement_dir, problem_name=problem_name)
         validator_source = self._effective_validator_source(snapshot, strict=False)
         self._copy_named_component(validator_source, package_root / "input_validators")
         self._copy_output_validator_component(

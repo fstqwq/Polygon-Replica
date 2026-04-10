@@ -8,6 +8,7 @@ from app.impl.preview.preview import (
     preview_run,
     preview_save,
     preview_status,
+    statement_language_add,
     statement_attachment_delete,
 )
 
@@ -37,5 +38,10 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/{user}/statement/attachments/delete",
     statement_attachment_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/statement/languages/add",
+    statement_language_add,
     methods=["POST"],
 )

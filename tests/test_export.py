@@ -798,7 +798,8 @@ class TestExport(SmokeBase):
         )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
 
-        def _compile_ok(_statement_root: Path, dst_statement: Path) -> bool:
+        def _compile_ok(_statement_root: Path, dst_statement: Path, *, problem_name: str) -> bool:
+            self.assertTrue(str(problem_name or "").strip())
             dst_statement.mkdir(parents=True, exist_ok=True)
             (dst_statement / "problem.en.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             return True
@@ -822,6 +823,64 @@ class TestExport(SmokeBase):
                 break
         self.assertTrue(package_root)
         self.assertIn(f"{package_root}/statement/problem.en.pdf", names)
+
+    def test_export_emits_multilanguage_statement_tex_and_pdf_names(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_multi_lang_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "statement-sections" / "chinese").mkdir(parents=True, exist_ok=True)
+        (ws / "statement-sections" / "chinese" / "name.tex").write_text("Chinese Title\n", encoding="utf-8")
+        (ws / "statement-sections" / "chinese" / "legend.tex").write_text("Chinese Body\n", encoding="utf-8")
+        (ws / "statement-sections" / "japanese").mkdir(parents=True, exist_ok=True)
+        (ws / "statement-sections" / "japanese" / "name.tex").write_text("Japanese Title\n", encoding="utf-8")
+        (ws / "statement-sections" / "japanese" / "legend.tex").write_text("Japanese Body\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [
+                rel,
+                f"{rel}.desc",
+                *self._seed_export_tests(ws, "001"),
+                "statement-sections/chinese/name.tex",
+                "statement-sections/chinese/legend.tex",
+                "statement-sections/japanese/name.tex",
+                "statement-sections/japanese/legend.tex",
+            ],
+            f"test export statement multi language {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+
+        def _compile_ok(_statement_root: Path, dst_statement: Path, *, problem_name: str) -> bool:
+            self.assertTrue(str(problem_name or "").strip())
+            dst_statement.mkdir(parents=True, exist_ok=True)
+            for name in ("problem.en.pdf", "problem.zh.pdf", "problem.japanese.pdf"):
+                (dst_statement / name).write_bytes(b"%PDF-1.4\n%%EOF\n")
+            return True
+
+        with patch.object(export_service, "_try_compile_statement_pdf", side_effect=_compile_ok):
+            archive = export_service.create_export(
+                self.problem,
+                "",
+                "icpc",
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+            )
+
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+        package_root = ""
+        for name in names:
+            if name.endswith("/problem.yaml"):
+                package_root = name.split("/", 1)[0]
+                break
+        self.assertTrue(package_root)
+        self.assertIn(f"{package_root}/statement/problem.en.tex", names)
+        self.assertIn(f"{package_root}/statement/problem.zh.tex", names)
+        self.assertIn(f"{package_root}/statement/problem.japanese.tex", names)
+        self.assertIn(f"{package_root}/statement/problem.en.pdf", names)
+        self.assertIn(f"{package_root}/statement/problem.zh.pdf", names)
+        self.assertIn(f"{package_root}/statement/problem.japanese.pdf", names)
 
     def test_export_skips_statement_pdf_when_export_compile_fails(self) -> None:
         ws = Path(self._workspace_path())

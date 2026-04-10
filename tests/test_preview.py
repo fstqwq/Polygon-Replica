@@ -24,6 +24,7 @@ from app.service.statement.constant import (
 )
 from app.impl.workspace.sample_output_validation import validate_custom_sample_outputs
 from app.impl.workspace.verification_dag_plan import VerificationTestPlan
+from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
@@ -59,6 +60,56 @@ class TestPreview(SmokeBase):
         self.assertEqual((ws / STATEMENT_STYLE_REL).read_text(encoding="utf-8"), expected_olymp)
         self.assertTrue(callable(preview_service.compile_preview))
 
+    def test_statement_languages_sort_english_then_chinese_then_alphabetical(self) -> None:
+        ws = self._workspace_path()
+        root = ws / "statement-sections"
+        (root / "japanese").mkdir(parents=True, exist_ok=True)
+        (root / "arabic").mkdir(parents=True, exist_ok=True)
+        (root / "chinese").mkdir(parents=True, exist_ok=True)
+        self.assertEqual(statement_languages(ws), ["english", "chinese", "arabic", "japanese"])
+        self.assertEqual(pick_statement_language(ws), "english")
+
+    def test_find_cached_preview_id_is_partitioned_by_language(self) -> None:
+        ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+
+        def _insert_preview(preview_id: str, language: str) -> None:
+            layout = config.fs_manager.prepare_preview_layout(preview_id)
+            (layout.statement_preview / "statement.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+            (layout.logs / "latex.log").write_text("ok\n", encoding="utf-8")
+            db_execute(
+                """
+                INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,created_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                [preview_id, problem_id, workspace_id, "head-123", "main", "ok", "{}", "2026-04-11T00:00:00Z"],
+            )
+            write_preview_summary(
+                preview_id,
+                {
+                    "pdf": "statement_preview/statement.pdf",
+                    "statement_signature": "sig-123",
+                    "language": language,
+                },
+            )
+
+        english_id = f"p-{uuid.uuid4().hex[:12]}"
+        chinese_id = f"p-{uuid.uuid4().hex[:12]}"
+        _insert_preview(english_id, "english")
+        _insert_preview(chinese_id, "chinese")
+
+        resolved = preview_service.find_cached_preview_id(
+            "alice/sample",
+            problem_id,
+            workspace_id,
+            language="chinese",
+            source_commit="head-123",
+            statement_signature="sig-123",
+            allow_cache_mutation=False,
+        )
+        self.assertEqual(resolved, chinese_id)
+
     def test_statement_template_renders_into_main_tex(self) -> None:
         ws = self._workspace_path()
         statement = ws / "statement"
@@ -82,7 +133,7 @@ class TestPreview(SmokeBase):
         (statement / "statements.ftl").write_text(statements_ftl, encoding="utf-8")
         (statement / "problem.tex").write_text(problem_template, encoding="utf-8")
         (sections / "legend.tex").write_text("Rendered content.\n", encoding="utf-8")
-        out = render_statement_main(statement, problem_title="Rendered Title")
+        out = render_statement_main(statement, problem_title="Rendered Title", language="english")
         rendered = out.read_text(encoding="utf-8")
         self.assertIn("\\usepackage{olymp}", rendered)
         self.assertIn("\\import{rendered/english/}{./problem.tex}", rendered)
@@ -96,14 +147,14 @@ class TestPreview(SmokeBase):
         statement = ws / "statement"
         (statement / "olymp.sty").unlink(missing_ok=True)
         with self.assertRaisesRegex(RuntimeError, r"statement olymp style \(statement/olymp\.sty\) is missing"):
-            render_statement_main(statement, problem_title="Rendered Title")
+            render_statement_main(statement, problem_title="Rendered Title", language="english")
 
     def test_statement_template_render_fails_when_main_template_missing(self) -> None:
         ws = self._workspace_path()
         statement = ws / "statement"
         (statement / "statements.ftl").unlink(missing_ok=True)
         with self.assertRaisesRegex(RuntimeError, r"statement template \(statement/statements\.ftl\) is missing"):
-            render_statement_main(statement, problem_title="Rendered Title")
+            render_statement_main(statement, problem_title="Rendered Title", language="english")
 
     def test_statement_template_problem_name_comes_from_problem_title(self) -> None:
         ws = self._workspace_path()
@@ -114,7 +165,7 @@ class TestPreview(SmokeBase):
             "\\end{problem}\n"
         )
         (statement / "problem.tex").write_text(problem_template, encoding="utf-8")
-        out = render_statement_main(statement, problem_title="Preview Saved Title")
+        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
         self.assertIn("\\begin{problem}{Preview Saved Title}", rendered_problem)
@@ -129,7 +180,7 @@ class TestPreview(SmokeBase):
         (sections / "output.tex").write_text("OUTPUT_MARKER_20260302\n", encoding="utf-8")
         (sections / "notes.tex").write_text("NOTES_MARKER_20260302\n", encoding="utf-8")
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title")
+        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
 
@@ -156,7 +207,7 @@ class TestPreview(SmokeBase):
             encoding="utf-8",
         )
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title")
+        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
 
@@ -180,7 +231,7 @@ class TestPreview(SmokeBase):
             encoding="utf-8",
         )
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title")
+        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
 
@@ -213,7 +264,7 @@ class TestPreview(SmokeBase):
             encoding="utf-8",
         )
 
-        out = render_statement_main(statement, problem_title="Preview Saved Title")
+        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
         _ = out.read_text(encoding="utf-8")
         self.assertEqual((statement / "rendered" / "english" / "sample.001.in").read_text(encoding="utf-8"), "custom-input\n")
         self.assertEqual((statement / "rendered" / "english" / "sample.001.ans").read_text(encoding="utf-8"), "custom-output\n")
@@ -501,7 +552,7 @@ class TestPreview(SmokeBase):
             "_copy_sample_payloads_from_verification",
             side_effect=_fake_sync,
         ), patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         self.assertEqual(int(calls["find_cached"]), 0)
         self.assertEqual(int(calls["sync"]), 1)
@@ -628,7 +679,7 @@ class TestPreview(SmokeBase):
             encoding="utf-8",
         )
         (statement / "problem.tex").write_text("\\begin{problem}{${problem.name}}{stdin}{stdout}{1 second}{1 megabyte}\\end{problem}\n", encoding="utf-8")
-        out = render_statement_main(statement, problem_title="Preview Title")
+        out = render_statement_main(statement, problem_title="Preview Title", language="english")
         rendered = out.read_text(encoding="utf-8")
         self.assertIn("\\def\\ShortProblemTitle{}", rendered)
 
@@ -650,7 +701,7 @@ class TestPreview(SmokeBase):
             side_effect=RuntimeError("stop-before-compile"),
         ):
             with self.assertRaisesRegex(RuntimeError, "stop-before-compile"):
-                preview_service.compile_preview("alice/sample", "alice")
+                preview_service.compile_preview("alice/sample", "alice", language="english")
 
         self.assertTrue(calls)
         self.assertTrue(all(signature is not None for _, signature in calls))
@@ -675,7 +726,7 @@ class TestPreview(SmokeBase):
             )
 
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         cmd = [str(token) for token in (captured.get("command") or [])]
         self.assertTrue(cmd)
@@ -705,7 +756,7 @@ class TestPreview(SmokeBase):
             )
 
         with patch.object(preview_service, "tex_passes", 2), patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         self.assertEqual(int(calls["count"]), 2)
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
@@ -729,7 +780,7 @@ class TestPreview(SmokeBase):
             )
 
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT verification_id FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
@@ -752,7 +803,7 @@ class TestPreview(SmokeBase):
             )
 
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
@@ -761,6 +812,7 @@ class TestPreview(SmokeBase):
         self.assertEqual(str(summary.get("pdf") or ""), "statement_preview/statement.pdf")
         self.assertTrue(str(summary.get("statement_signature") or "").strip())
         self.assertTrue(str(summary.get("preview_ref") or "").strip())
+        self.assertEqual(str(summary.get("language") or ""), "english")
         self.assertNotIn("error", summary)
 
     def test_compile_preview_failure_summary_contract_fields_stable(self) -> None:
@@ -781,7 +833,7 @@ class TestPreview(SmokeBase):
             )
 
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
@@ -791,6 +843,7 @@ class TestPreview(SmokeBase):
         self.assertEqual(int(summary.get("returncode") or 0), 1)
         self.assertTrue(str(summary.get("statement_signature") or "").strip())
         self.assertTrue(str(summary.get("preview_ref") or "").strip())
+        self.assertEqual(str(summary.get("language") or ""), "english")
         log_text = (config.fs_manager.resolve_preview_root(preview_id) / "logs" / "latex.log").read_text(
             encoding="utf-8",
             errors="replace",
@@ -830,7 +883,7 @@ class TestPreview(SmokeBase):
             )
 
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
@@ -863,7 +916,7 @@ class TestPreview(SmokeBase):
             )
 
         with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
-            preview_id = preview_service.compile_preview("alice/sample", "alice")
+            preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)

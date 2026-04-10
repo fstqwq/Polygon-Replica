@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -21,7 +21,7 @@ from app.service.statement.constant import (
     TESTS_ANSWERS_DIR_REL,
     _read_required_text,
 )
-from app.service.statement.context import pick_statement_language
+from app.service.statement.context import normalize_statement_language
 from app.service.statement.ftl.renderer import render_ftl_template
 
 
@@ -178,9 +178,24 @@ def _copy_tree_without_symlinks(src: Path, dst: Path) -> None:
             shutil.copy2(source_file, target_file)
 
 
-def _seed_polygon_statement_sources(workspace: Path) -> None:
+def _statement_language_seed_defaults() -> dict[str, str]:
+    return {
+        "name.tex": DEFAULT_PROBLEM_TITLE + "\n",
+        "legend.tex": "",
+        "input.tex": "",
+        "output.tex": "",
+        "interaction.tex": "",
+        "scoring.tex": "",
+        "notes.tex": "",
+    }
+
+
+def ensure_statement_language_sources(workspace: Path, language: str) -> None:
+    safe_language = normalize_statement_language(language)
+    if not safe_language:
+        raise RuntimeError("statement language is required")
     statement_root = workspace / STATEMENT_DIR
-    sections_root = workspace / STATEMENT_SECTIONS_DIR / "english"
+    sections_root = workspace / STATEMENT_SECTIONS_DIR / safe_language
     statement_root.mkdir(parents=True, exist_ok=True)
     sections_root.mkdir(parents=True, exist_ok=True)
     if not (workspace / STATEMENT_TEMPLATE_REL).exists():
@@ -189,20 +204,17 @@ def _seed_polygon_statement_sources(workspace: Path) -> None:
         (workspace / STATEMENT_PROBLEM_REL).write_text(DEFAULT_STATEMENT_PROBLEM_TEMPLATE, encoding="utf-8")
     if not (workspace / STATEMENT_STYLE_REL).exists():
         (workspace / STATEMENT_STYLE_REL).write_text(default_olymp_sty_text(), encoding="utf-8")
-    defaults = {
-        "name.tex": DEFAULT_PROBLEM_TITLE + "\n",
-        "legend.tex": "",
-        "input.tex": "",
-        "output.tex": "",
-        "notes.tex": "",
-    }
-    for rel, content in defaults.items():
+    for rel, content in _statement_language_seed_defaults().items():
         path = sections_root / rel
         if not path.exists():
             path.write_text(content, encoding="utf-8")
 
 
-def _render_polygon_statement(workspace: Path, statement_root: Path, problem_title: str | None = None) -> Path:
+def _seed_polygon_statement_sources(workspace: Path) -> None:
+    ensure_statement_language_sources(workspace, "english")
+
+
+def _render_polygon_statement(workspace: Path, statement_root: Path, problem_title: str | None = None, *, language: str) -> Path:
     template_text = _read_required_text(
         workspace / STATEMENT_TEMPLATE_REL,
         label=f"statement template ({STATEMENT_TEMPLATE_REL.as_posix()})",
@@ -213,15 +225,17 @@ def _render_polygon_statement(workspace: Path, statement_root: Path, problem_tit
         label=f"statement olymp style ({STATEMENT_STYLE_REL.as_posix()})",
     )
 
-    language = pick_statement_language(workspace)
-    rendered_lang_root = workspace / STATEMENT_RENDERED_DIR_REL / language
+    safe_language = normalize_statement_language(language)
+    if not safe_language:
+        raise RuntimeError("statement language is required")
+    rendered_lang_root = workspace / STATEMENT_RENDERED_DIR_REL / safe_language
     shutil.rmtree(rendered_lang_root, ignore_errors=True)
     rendered_lang_root.mkdir(parents=True, exist_ok=True)
-    _copy_tree_without_symlinks(workspace / STATEMENT_SECTIONS_DIR / language, rendered_lang_root)
+    _copy_tree_without_symlinks(workspace / STATEMENT_SECTIONS_DIR / safe_language, rendered_lang_root)
     sample_tests = _collect_sample_tests(workspace, rendered_lang_root)
     problem_ctx = _problem_context_for_language(
         workspace,
-        language,
+        safe_language,
         problem_title,
         sample_tests=sample_tests,
     )
@@ -229,8 +243,8 @@ def _render_polygon_statement(workspace: Path, statement_root: Path, problem_tit
         problem_template_text,
         {
             "problem": problem_ctx,
-            "language": language,
-            "contest": {"name": "", "location": "", "date": "", "language": language},
+            "language": safe_language,
+            "contest": {"name": "", "location": "", "date": "", "language": safe_language},
             "shortProblemTitle": False,
             "providedStatementsCommands": [],
             "statements": [],
@@ -241,11 +255,11 @@ def _render_polygon_statement(workspace: Path, statement_root: Path, problem_tit
     rendered_main = render_ftl_template(
         template_text,
         {
-            "contest": {"name": "", "location": "", "date": "", "language": language},
-            "language": language,
+            "contest": {"name": "", "location": "", "date": "", "language": safe_language},
+            "language": safe_language,
             "shortProblemTitle": True,
             "providedStatementsCommands": [],
-            "statements": [{"path": f"rendered/{language}/", "file": "problem.tex"}],
+            "statements": [{"path": f"rendered/{safe_language}/", "file": "problem.tex"}],
             "problem": problem_ctx,
         },
     )
@@ -267,7 +281,7 @@ def render_statement_problem_assets_for_language(
         workspace / STATEMENT_STYLE_REL,
         label=f"statement olymp style ({STATEMENT_STYLE_REL.as_posix()})",
     )
-    safe_language = str(language or "").strip()
+    safe_language = normalize_statement_language(language)
     if not safe_language:
         raise RuntimeError("statement language is required")
     language_root = workspace / STATEMENT_SECTIONS_DIR / safe_language
@@ -303,6 +317,6 @@ def seed_statement_sources(workspace: Path) -> None:
     _seed_polygon_statement_sources(workspace)
 
 
-def render_statement_main(statement_root: Path, problem_title: str | None = None) -> Path:
+def render_statement_main(statement_root: Path, problem_title: str | None = None, *, language: str) -> Path:
     workspace = statement_root.parent
-    return _render_polygon_statement(workspace, statement_root, problem_title=problem_title)
+    return _render_polygon_statement(workspace, statement_root, problem_title=problem_title, language=language)

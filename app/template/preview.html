@@ -34,6 +34,21 @@
         <a class="linkish statement-summary-edit" href="#statement-settings-popup" data-popup-open="statement-settings-popup">Edit metadata</a>
       </div>
     </div>
+    <div class="inline-meta-row">
+      <form class="inline-form" method="get" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/{{ return_page if return_page is defined else 'statement' }}">
+        {% if preview_id %}
+        <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+        {% endif %}
+        <label for="statement-language-select">Language</label>
+        <select id="statement-language-select" name="language">
+          {% for language in available_languages %}
+          <option value="{{ language }}" {% if language == current_language %}selected{% endif %}>{{ language }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn" type="submit">Switch</button>
+      </form>
+      <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
+    </div>
 
     <form
       method="post"
@@ -44,6 +59,10 @@
       data-draft-scope-page="{{ return_page if return_page is defined else 'preview' }}"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <input type="hidden" name="language" value="{{ current_language }}" />
+      {% if preview_id %}
+      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+      {% endif %}
       {% for section in statement_sections %}
       {% if section.enabled %}
       {% set editor_height = 230 if section.key in ['input', 'output'] else 460 %}
@@ -89,6 +108,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <input type="hidden" name="language" value="{{ current_language }}" />
       <button class="btn primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
     </form>
     {% endif %}
@@ -126,6 +146,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <input type="hidden" name="language" value="{{ current_language }}" />
       <button class="btn primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
     </form>
     {% elif not preview_is_missing and not preview_compile_failed %}
@@ -168,6 +189,10 @@
 
 {% call ui_popup('statement-settings-popup', 'Edit Statement Settings') %}
       <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/save">
+        <input type="hidden" name="language" value="{{ current_language }}" />
+        {% if preview_id %}
+        <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+        {% endif %}
         <div class="form-row">
           <label for="general-problem-name">Problem name</label>
           <input
@@ -203,6 +228,19 @@
       </form>
 {% endcall %}
 
+{% call ui_popup('statement-language-popup', 'Add Statement Language') %}
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/languages/add">
+        <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
+        {% if preview_id %}
+        <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+        {% endif %}
+        <label for="statement-language-add">Language token</label>
+        <input id="statement-language-add" type="text" name="language" placeholder="chinese" required />
+        <p class="muted">Priority stays <code>english</code>, then <code>chinese</code>, then alphabetical.</p>
+        <button class="btn" type="submit">Add Language</button>
+      </form>
+{% endcall %}
+
 <section>
   <h2>Statement attachments</h2>
   <div class="inline-meta-row">
@@ -223,6 +261,10 @@
         <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/attachments/delete" data-confirm-message="Delete attachment {{ row.path }}? This cannot be undone; uncommitted changes will be lost.">
           <input type="hidden" name="path" value="{{ row.path }}" />
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
+          <input type="hidden" name="language" value="{{ current_language }}" />
+          {% if preview_id %}
+          <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+          {% endif %}
           <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
         </form>
       </td>

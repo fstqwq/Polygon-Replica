@@ -13,7 +13,7 @@ from app.db import DB, IncompatibleSchemaError
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
-from app.impl.preview.preview import preview_page, preview_run, preview_status
+from app.impl.preview.preview import preview_page, preview_run, preview_status, statement_language_add
 from app.impl.run_export.artifact import artifact_file
 from app.impl.auth.internal.runtime import _startup_clear_all_caches
 from app.impl.runtime.config import config
@@ -433,10 +433,72 @@ class TestBackendMinimal(SmokeBase):
             resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
-            f"/problems/{self.problem}/{self.user}/statement?preview_id={preview_id}",
+            f"/problems/{self.problem}/{self.user}/statement?language=english&preview_id={preview_id}",
             resp.headers.get("location", ""),
         )
         self.assertIn("sample verification failed.", _flash_messages_from_response(resp))
+
+    def test_preview_page_uses_requested_language_sections(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        english_dir = ws / "statement-sections" / "english"
+        chinese_dir = ws / "statement-sections" / "chinese"
+        english_dir.mkdir(parents=True, exist_ok=True)
+        chinese_dir.mkdir(parents=True, exist_ok=True)
+        (english_dir / "legend.tex").write_text("English legend body.\n", encoding="utf-8")
+        (chinese_dir / "legend.tex").write_text("Chinese legend body.\n", encoding="utf-8")
+
+        resp = preview_page(
+            _request(
+                f"/problems/{self.problem}/{self.user}/statement",
+                "language=chinese",
+            ),
+            self.problem,
+            self.user,
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Chinese legend body.", html)
+        self.assertIn('name="language" value="chinese"', html)
+        self.assertIn('<option value="chinese" selected>', html)
+
+    def test_statement_language_add_creates_seed_files_and_redirects_to_language(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        resp = statement_language_add(self.problem, self.user, language="japanese", page="statement")
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(
+            f"/problems/{self.problem}/{self.user}/statement?language=japanese",
+            resp.headers.get("location", ""),
+        )
+        for rel in (
+            "name.tex",
+            "legend.tex",
+            "input.tex",
+            "output.tex",
+            "interaction.tex",
+            "scoring.tex",
+            "notes.tex",
+        ):
+            self.assertTrue((ws / "statement-sections" / "japanese" / rel).is_file(), rel)
+
+    def test_preview_run_accepts_default_english_when_no_language_directories_exist(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        sections_root = ws / "statement-sections"
+        if sections_root.exists():
+            for path in sorted(sections_root.rglob("*"), reverse=True):
+                if path.is_file():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+            sections_root.rmdir()
+        preview_id = self.random_id("p-preview-no-language-dirs")
+        with patch.object(config.preview_service, "compile_preview", return_value=preview_id):
+            resp = preview_run(self.problem, self.user, page="statement", language="english")
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(
+            f"/problems/{self.problem}/{self.user}/statement?language=english&preview_id={preview_id}",
+            resp.headers.get("location", ""),
+        )
 
     def test_preview_page_shows_full_sample_build_failure_detail(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -588,6 +650,49 @@ class TestBackendMinimal(SmokeBase):
         payload = json.loads(resp.body.decode("utf-8"))
         self.assertEqual(str(payload.get("latest_preview_id") or ""), preview_id)
         self.assertEqual(str(payload.get("latest_status") or ""), "missing")
+
+    def test_preview_status_can_target_explicit_language(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        chinese_dir = ws / "statement-sections" / "chinese"
+        chinese_dir.mkdir(parents=True, exist_ok=True)
+        preview_id = self.random_id("p-preview-status-chinese")
+        preview_root = config.fs_manager.prepare_preview_layout(preview_id).root
+        (preview_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+        (preview_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%zh\n")
+        (preview_root / "logs").mkdir(parents=True, exist_ok=True)
+        (preview_root / "logs" / "latex.log").write_text("ok\n", encoding="utf-8")
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                str(ctx["workspace"].get("head_commit") or ""),
+                "main",
+                json.dumps(
+                    {
+                        "pdf": "statement_preview/statement.pdf",
+                        "language": "chinese",
+                        "statement_signature": statement_sources_signature(
+                            ws,
+                            problem_title=str(ctx["problem"]["name"]),
+                        ),
+                    }
+                ),
+            ],
+        )
+
+        resp = preview_status(self.problem, self.user, language="chinese")
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(str(payload.get("language") or ""), "chinese")
+        self.assertEqual(str(payload.get("latest_preview_id") or ""), preview_id)
+        self.assertEqual(str(payload.get("latest_status") or ""), "ok")
 
     def test_page_ctx_projects_missing_for_latest_ok_preview_without_pdf(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

@@ -39,9 +39,12 @@ echo "[1/6] Installing system dependencies..."
   texlive-latex-base \
   texlive-latex-recommended \
   texlive-latex-extra \
+  texlive-xetex \
   texlive-science \
+  texlive-lang-chinese \
   texlive-lang-cyrillic \
   texlive-fonts-recommended \
+  fonts-noto-cjk \
   cm-super \
   util-linux \
   bubblewrap \
@@ -51,6 +54,7 @@ echo "  Initializing TeX formats..."
 if command -v fmtutil-sys >/dev/null 2>&1; then
   "${SUDO[@]}" mktexlsr >/dev/null 2>&1 || true
   "${SUDO[@]}" fmtutil-sys --byfmt pdflatex >/dev/null
+  "${SUDO[@]}" fmtutil-sys --byfmt xelatex >/dev/null
 fi
 
 echo "[2/6] Configuring kernel user namespace settings..."
@@ -146,6 +150,48 @@ pdflatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmp
   fi
 fi
 echo "  pdflatex probe passed."
+
+echo "  Probing XeLaTeX runtime (fontspec + xeCJK)..."
+if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  if ! sudo -u "$RUNTIME_USER" /bin/sh -lc '
+tmpd="$(mktemp -d)"
+cat >"$tmpd/main.tex" <<EOF
+\documentclass{article}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{TeX Gyre Termes}
+\setCJKmainfont{Noto Serif CJK SC}
+\begin{document}
+XeLaTeX probe 你好
+\end{document}
+EOF
+xelatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1
+'; then
+    echo "xelatex runtime probe failed for user: $RUNTIME_USER." >&2
+    echo "Install: texlive-xetex texlive-lang-chinese fonts-noto-cjk" >&2
+    exit 1
+  fi
+else
+  if ! /bin/sh -lc '
+tmpd="$(mktemp -d)"
+cat >"$tmpd/main.tex" <<EOF
+\documentclass{article}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{TeX Gyre Termes}
+\setCJKmainfont{Noto Serif CJK SC}
+\begin{document}
+XeLaTeX probe 你好
+\end{document}
+EOF
+xelatex -interaction=nonstopmode -halt-on-error -output-directory "$tmpd" "$tmpd/main.tex" >/dev/null 2>&1
+'; then
+    echo "xelatex runtime probe failed." >&2
+    echo "Install: texlive-xetex texlive-lang-chinese fonts-noto-cjk" >&2
+    exit 1
+  fi
+fi
+echo "  xelatex probe passed."
 
 echo "  Probing TeX T2A encoding support (t2aenc.def)..."
 if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlencode
 
 from fastapi import Form, HTTPException
 
@@ -13,6 +14,7 @@ from app.impl.workspace.problem_config import coerce_int, normalize_problem_mode
 from app.impl.workspace.problem_config import normalize_pass_limit
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
+from app.service.statement.context import normalize_statement_language, pick_statement_language, statement_languages
 
 _C = config.constants
 
@@ -25,6 +27,8 @@ def general_save(
     mode: Annotated[str, Form()] = 'pass-fail',
     pass_limit: Annotated[str, Form()] = '1',
     problem_name: Annotated[str, Form()] = '',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -48,7 +52,21 @@ def general_save(
         audit(ctx['user']['id'], ctx['problem']['id'], 'general.save', {'time_limit_ms': safe_time_limit, 'memory_limit_mb': safe_memory, 'mode': safe_mode, 'pass_limit': safe_pass_limit, 'problem_name': safe_problem_name})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/statement', status_code=303, message=msg)
+    query: dict[str, str] = {}
+    safe_language = normalize_statement_language(language)
+    available_languages = statement_languages(workspace)
+    if safe_language and (
+        safe_language in available_languages
+        or ((not available_languages) and safe_language == pick_statement_language(workspace))
+    ):
+        query['language'] = safe_language
+    safe_preview_id = str(preview_id or '').strip()
+    if safe_preview_id:
+        query['preview_id'] = safe_preview_id
+    redirect_url = f'/problems/{problem}/{user}/statement'
+    if query:
+        redirect_url = f'{redirect_url}?{urlencode(query)}'
+    return redirect_response(redirect_url, status_code=303, message=msg)
 
 
 

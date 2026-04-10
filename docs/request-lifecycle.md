@@ -86,6 +86,7 @@ Current judgehost auth accepts configured credentials for DOMjudge-compatible cl
 
 ### Preview
 - statement preview pages and compile/recompile actions
+- statement language add action under `/statement/languages/add`
 
 ### Run and export
 - `/problems/{problem}/{user}/run`
@@ -120,6 +121,48 @@ Current runtime model:
 - run execution is async and uses the verification task graph internally
 - export jobs are async worker-queue jobs
 - contest build/package jobs are async worker-queue jobs
+
+## Statement Language Resolution
+
+Statement requests use a two-step rule:
+1. at the route/impl boundary, resolve the current language
+2. pass that concrete language through the statement workflow
+
+Current resolution source:
+- language directories under `statement-sections/*`
+
+Current default ordering:
+- `english`
+- `chinese`
+- all remaining language directories alphabetically
+
+Current rules by layer:
+- `preview_page()` may pick a default language when the request URL has no `language`
+- `preview_run()`, `preview_save()`, attachment actions, and export calls carry an explicit `language`
+- render and preview services consume explicit language tokens
+- preview cache keys and preview summaries are partitioned by language
+
+There is no current `statement/language.txt` request dependency.
+
+## Statement Request Flow
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Impl as app/impl/preview/preview.py
+    participant Ctx as app/service/statement/context.py
+    participant Preview as app/service/statement/preview.py
+    participant Render as app/service/statement/render.py
+
+    Browser->>Impl: GET /statement?language=...
+    Impl->>Ctx: discover languages / pick default if needed
+    Impl-->>Browser: HTML with current language
+    Browser->>Impl: POST save or compile with hidden language
+    Impl->>Preview: compile_preview(..., language)
+    Preview->>Render: render_statement_main(..., language)
+    Render-->>Preview: statement/main.tex
+    Preview-->>Browser: redirect with language + preview_id
+```
 
 ## Verification/Run Detail Downloads
 

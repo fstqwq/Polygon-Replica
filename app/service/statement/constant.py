@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -9,7 +9,6 @@ STATEMENT_TEMPLATE_REL = STATEMENT_DIR / "statements.ftl"
 STATEMENT_PROBLEM_REL = STATEMENT_DIR / "problem.tex"
 STATEMENT_STYLE_REL = STATEMENT_DIR / "olymp.sty"
 STATEMENT_MAIN_REL = STATEMENT_DIR / "main.tex"
-STATEMENT_LANGUAGE_REL = STATEMENT_DIR / "language.txt"
 STATEMENT_RENDERED_DIR_REL = STATEMENT_DIR / "rendered"
 STATEMENT_SECTIONS_DIR = Path("statement-sections")
 TESTS_ANSWERS_DIR_REL = Path("tests/answers")

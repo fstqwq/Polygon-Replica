@@ -15,12 +15,14 @@ from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_hex_json
 from app.service.sandbox.base import ExecSpec, SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
+from app.service.platform.latex_process import detect_latex_engine
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
 from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.repository.workspace import WorkspaceService
+from app.service.statement.context import normalize_statement_language
 
 if TYPE_CHECKING:
     from app.service.platform.async_task_cache import AsyncTaskCacheService
@@ -263,8 +265,8 @@ class PreviewService:
     def _latex_compile_error_detail(self, output_text: str, returncode: int | None) -> str:
         text = str(output_text or "")
         low = text.lower()
-        if ("can't find the format file" in low) and ("pdflatex.fmt" in low):
-            return "missing LaTeX format pdflatex.fmt; run `fmtutil -user --byfmt pdflatex` (or `sudo fmtutil-sys --byfmt pdflatex`)"
+        if "can't find the format file" in low:
+            return "missing LaTeX format file; run `fmtutil-sys --all` to regenerate"
         missing_pkg = re.search("File `([^`]+\\.sty)' not found", text)
         if missing_pkg is not None:
             pkg_name = str(missing_pkg.group(1) or "").strip()
@@ -293,6 +295,7 @@ class PreviewService:
         source_ref: str,
         statement_signature: str,
         dynamic_samples: bool,
+        language: str = "",
     ) -> str:
         payload = {
             "schema": "preview-ref.v1",
@@ -302,18 +305,28 @@ class PreviewService:
             "source_ref": str(source_ref or "").strip(),
             "statement_signature": str(statement_signature or "").strip(),
             "dynamic_samples": bool(dynamic_samples),
+            "language": str(language or "").strip(),
         }
         return sha256_hex_json(payload, ensure_ascii=True)
+
+    def _summary_language(self, summary: dict[str, object]) -> str:
+        raw = summary.get("language")
+        safe_language = normalize_statement_language(raw)
+        return safe_language or "english"
 
     def find_cached_preview_id(
         self,
         problem: str,
         problem_id: int,
         workspace_id: int,
+        language: str,
         source_commit: str | None = None,
         statement_signature: str | None = None,
         allow_cache_mutation: bool = True,
     ) -> str | None:
+        safe_language = normalize_statement_language(language)
+        if not safe_language:
+            raise RuntimeError("preview language is required")
         source = str(source_commit or "").strip()
         signature = str(statement_signature or "").strip()
         cache_key = {
@@ -321,7 +334,8 @@ class PreviewService:
             "workspace_id": int(workspace_id),
             "source_commit": source if source_commit is not None else "__dirty__",
             "statement_signature": signature,
-            "schema": "v2",
+            "language": safe_language,
+            "schema": "v3",
         }
 
         def _cached_preview_still_valid(preview_id: str) -> bool:
@@ -340,6 +354,8 @@ class PreviewService:
                 return False
             row = self._store.get_workspace_preview(int(problem_id), int(workspace_id), preview_id)
             if row is None:
+                return False
+            if self._summary_language(dict(row["summary"])) != safe_language:
                 return False
             if row["status"].strip().lower() != "ok":
                 return False
@@ -368,6 +384,8 @@ class PreviewService:
         )
         for row in rows:
             preview_id = str(row["id"] or "").strip()
+            if self._summary_language(dict(row["summary"])) != safe_language:
+                continue
             if signature:
                 cached_signature = self._summary_statement_signature(row["summary"])
                 if cached_signature != signature:
@@ -420,6 +438,7 @@ class PreviewService:
         *,
         statement_signature: str = "",
         workspace_head: str = "",
+        language: str = "",
     ) -> PreviewStateRow | None:
         row = self._store.get_workspace_preview(int(problem_id), int(workspace_id), str(preview_id or "").strip())
         if row is None:
@@ -427,6 +446,9 @@ class PreviewService:
         root = self._preview_artifact_root(int(problem_id), int(workspace_id), str(preview_id or "").strip())
         pdf_available, log_available = self._preview_file_availability(root)
         summary = dict(row["summary"])
+        safe_language = normalize_statement_language(language)
+        if safe_language and self._summary_language(summary) != safe_language:
+            return None
         row_status = str(row["status"] or "").strip().lower() or "missing"
         display_status = row_status
         if row_status == "ok":
@@ -467,17 +489,33 @@ class PreviewService:
         *,
         statement_signature: str = "",
         workspace_head: str = "",
+        language: str = "",
     ) -> PreviewStateRow | None:
-        latest = self._store.get_latest_workspace_preview(int(problem_id), int(workspace_id))
-        if latest is None:
-            return None
-        return self.get_workspace_preview_state(
-            int(problem_id),
-            int(workspace_id),
-            str(latest["id"] or ""),
-            statement_signature=statement_signature,
-            workspace_head=workspace_head,
-        )
+        safe_language = normalize_statement_language(language)
+        if not safe_language:
+            latest = self._store.get_latest_workspace_preview(int(problem_id), int(workspace_id))
+            if latest is None:
+                return None
+            return self.get_workspace_preview_state(
+                int(problem_id),
+                int(workspace_id),
+                str(latest["id"] or ""),
+                statement_signature=statement_signature,
+                workspace_head=workspace_head,
+            )
+        rows = self._store.list_workspace_previews(int(problem_id), int(workspace_id))
+        for row in rows:
+            state = self.get_workspace_preview_state(
+                int(problem_id),
+                int(workspace_id),
+                str(row["id"] or ""),
+                statement_signature=statement_signature,
+                workspace_head=workspace_head,
+                language=safe_language,
+            )
+            if state is not None:
+                return state
+        return None
 
     def _preview_artifact_root(
         self,
@@ -530,9 +568,12 @@ class PreviewService:
             return
         self._store.delete_previews(problem_id, workspace_id, terminal_ids)
 
-    def compile_preview(self, problem: str, username: str) -> str:
+    def compile_preview(self, problem: str, username: str, language: str) -> str:
         ctx = self.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
+        safe_language = normalize_statement_language(language)
+        if not safe_language:
+            raise RuntimeError("preview language is required")
         problem_title = str(ctx["problem"]["name"]).strip()
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
@@ -567,6 +608,7 @@ class PreviewService:
                     problem,
                     problem_id,
                     workspace_id,
+                    language=safe_language,
                     source_commit=head,
                     statement_signature=statement_signature,
                 )
@@ -578,6 +620,7 @@ class PreviewService:
                     problem,
                     problem_id,
                     workspace_id,
+                    language=safe_language,
                     source_commit=None,
                     statement_signature=statement_signature,
                 )
@@ -598,6 +641,7 @@ class PreviewService:
                 source_ref=str(source_ref or ""),
                 statement_signature=str(statement_signature or ""),
                 dynamic_samples=bool(dynamic_samples),
+                language=safe_language,
             )
             preview_id = f"p-{uuid.uuid4().hex[:12]}"
             preview_layout = self.fs_manager.prepare_preview_layout(preview_id)
@@ -613,13 +657,15 @@ class PreviewService:
 
         log = preview_layout.logs / "latex.log"
         status = "ok"
-        summary: dict[str, object] = {"statement_signature": statement_signature, "preview_ref": preview_ref}
+        summary: dict[str, object] = {"statement_signature": statement_signature, "preview_ref": preview_ref, "language": safe_language}
         sample_sync: dict[str, object] | None = None
 
         def _summary_with_sample(payload: dict[str, object]) -> dict[str, object]:
             out = dict(payload or {})
             if "preview_ref" not in out:
                 out["preview_ref"] = preview_ref
+            if "language" not in out:
+                out["language"] = safe_language
             if sample_sync is not None and "sample_sync" not in out:
                 out["sample_sync"] = sample_sync
             return out
@@ -632,7 +678,8 @@ class PreviewService:
                     sample_verification_id_text = str(sample_verification_id_obj).strip()
                     sample_verification_id = sample_verification_id_text if sample_verification_id_text else None
                 summary["sample_sync"] = sample_sync
-            tex = render_statement_main(snapshot / "statement", problem_title=problem_title)
+            tex = render_statement_main(snapshot / "statement", problem_title=problem_title, language=safe_language)
+            engine = detect_latex_engine(tex)
 
             try:
                 final_proc = None
@@ -641,7 +688,7 @@ class PreviewService:
                     proc = self.sandbox.run(
                         ExecSpec(
                             command=[
-                                "pdflatex",
+                                engine,
                                 "-interaction=nonstopmode",
                                 "-halt-on-error",
                                 str(tex.name),
@@ -768,7 +815,8 @@ class PreviewService:
                         "workspace_id": int(workspace_id),
                         "source_commit": source_commit if source_commit else "__dirty__",
                         "statement_signature": str(statement_signature or "").strip(),
-                        "schema": "v2",
+                        "language": safe_language,
+                        "schema": "v3",
                     },
                     {"preview_id": preview_id},
                     tags={

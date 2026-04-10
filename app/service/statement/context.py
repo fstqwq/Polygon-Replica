@@ -1,53 +1,49 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from app.service.statement.constant import STATEMENT_LANGUAGE_REL, STATEMENT_SECTIONS_DIR
+from app.service.statement.constant import STATEMENT_SECTIONS_DIR
+
+_LANGUAGE_PRIORITY = ("english", "chinese")
+_LANGUAGE_TOKEN_RE = re.compile(r"[^a-z0-9-]+")
 
 
 def statement_languages(workspace: Path) -> list[str]:
+    """Return available languages sorted by priority: english, chinese, then alphabetical."""
     root = workspace / STATEMENT_SECTIONS_DIR
     if not root.exists() or not root.is_dir() or root.is_symlink():
         return []
-    result: list[str] = []
+    raw: list[str] = []
     try:
-        for child in sorted(root.iterdir(), key=lambda p: p.name):
+        for child in root.iterdir():
             if child.is_symlink() or not child.is_dir():
                 continue
-            token = str(child.name or "").strip()
+            token = child.name.strip()
             if token:
-                result.append(token)
+                raw.append(token)
     except OSError:
         return []
-    return result
+
+    def _sort_key(lang: str) -> tuple[int, str]:
+        try:
+            return (_LANGUAGE_PRIORITY.index(lang), lang)
+        except ValueError:
+            return (len(_LANGUAGE_PRIORITY), lang)
+
+    return sorted(raw, key=_sort_key)
 
 
-def read_statement_language(workspace: Path) -> str:
-    marker = workspace / STATEMENT_LANGUAGE_REL
-    try:
-        if marker.exists() and marker.is_file() and (not marker.is_symlink()):
-            token = str(marker.read_text(encoding="utf-8")).strip()
-            if token:
-                return token
-    except OSError:
-        return ""
-    return ""
+def normalize_statement_language(raw: object) -> str:
+    token = str(raw or "").strip().lower().replace("_", "-")
+    token = _LANGUAGE_TOKEN_RE.sub("-", token)
+    token = re.sub(r"-{2,}", "-", token).strip("-")
+    return token
 
 
 def pick_statement_language(workspace: Path) -> str:
-    configured = read_statement_language(workspace)
+    """Return the first language by priority order, defaulting to ``"english"``."""
     languages = statement_languages(workspace)
-    if configured and configured in languages:
-        return configured
-    if "english" in languages:
-        return "english"
     if languages:
         return languages[0]
     return "english"
-
-
-def statement_editor_content_rel(workspace: Path) -> Path:
-    language = pick_statement_language(workspace)
-    return STATEMENT_SECTIONS_DIR / language / "legend.tex"
-
-

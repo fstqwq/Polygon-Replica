@@ -51,6 +51,15 @@ interactors/
 generators/
 solutions/
 statement/
+statement-sections/
+  english/
+    name.tex
+    legend.tex
+    input.tex
+    output.tex
+    interaction.tex
+    scoring.tex
+    notes.tex
 tests/
   spec.json
   manual/
@@ -61,6 +70,8 @@ Important notes:
 - `tests/spec.json` is the ordered test specification.
 - `tests/manual/` stores authored manual input files.
 - `tests/answers/` stores authored answer files when the problem uses committed answers.
+- `statement/` stores shared statement template assets.
+- `statement-sections/<language>/` stores authored statement content for one language.
 - Generated tests are described in `tests/spec.json`; they are not committed as derived runtime outputs.
 
 ## Verification and Run Inputs
@@ -89,9 +100,43 @@ Verification checks that each solution's observed result matches the expected be
 
 Statement editing stays in the workspace. Preview compile is synchronous and writes derived files under cache-root preview artifacts.
 
+Current statement language model:
+- the source of truth is the set of directories under `statement-sections/`
+- there is no separate `language.txt`
+- default language order is `english`, then `chinese`, then all other directories alphabetically
+
+Current editing flow:
+- opening the statement page without `?language=` picks the default language from directory order
+- once the page resolves a language, save/compile actions keep carrying that explicit language
+- adding a language creates `statement-sections/<language>/` and seeds:
+  - `name.tex`
+  - `legend.tex`
+  - `input.tex`
+  - `output.tex`
+  - `interaction.tex`
+  - `scoring.tex`
+  - `notes.tex`
+
+Current preview behavior:
+- preview compile runs for one language at a time
+- preview cache identity includes the resolved language
+- preview status is tracked per language
+- derived preview files stay in preview artifacts; authored statement sources stay in Git-backed workspace files
+
 Current preview inputs can also reuse verification artifact refs for sample sync:
 - `input_ref`
 - `answer_ref`
+
+## Statement Export
+
+Statement export walks every discovered language directory in the snapshot.
+
+Current naming rules:
+- `english` -> `problem.en.tex` and `problem.en.pdf`
+- `chinese` -> `problem.zh.tex` and `problem.zh.pdf`
+- every other language -> `problem.<language>.tex` and `problem.<language>.pdf`
+
+The shared statement template is common across languages. The language-specific part is the content under `statement-sections/<language>/`.
 
 ## Git Operations Exposed in the UI
 
