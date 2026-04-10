@@ -332,6 +332,7 @@ textarea.textarea-md {
   min-height: 220px;
 }
 
+/* Button tiers: use .btn/.button-link for default actions, add .primary-action for primary actions, and use .linkish/.danger-link for ghost or destructive links. */
 .btn,
 .button-link {
   font: inherit;
@@ -368,14 +369,12 @@ textarea.textarea-md {
   cursor: not-allowed;
 }
 
-.btn-primary,
 .primary-action {
   border-color: var(--btn-primary-border);
   background: var(--btn-primary-bg);
   color: var(--btn-primary-text);
 }
 
-.btn-primary:hover:not(:disabled),
 .primary-action:hover:not(:disabled) {
   background: var(--btn-primary-bg-hover);
 }

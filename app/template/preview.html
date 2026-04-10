@@ -89,7 +89,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <button class="btn btn-primary primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
+      <button class="btn primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
     </form>
     {% endif %}
     {% if preview_compile_failed %}
@@ -126,7 +126,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <button class="btn btn-primary primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
+      <button class="btn primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
     </form>
     {% elif not preview_is_missing and not preview_compile_failed %}
     <p class="muted">Latest preview has no PDF output.</p>

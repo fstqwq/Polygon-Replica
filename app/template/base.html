@@ -188,7 +188,7 @@
         {% if ctx.workspace_needs_update %}
         <div class="workspace-update-row">
           <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull">
-            <button class="btn button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
+            <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
           </form>
         </div>
         {% endif %}

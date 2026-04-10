@@ -45,7 +45,7 @@
         <label for="problem-name">Problem Name (for create)</label>
         <input id="problem-name" name="problem_name" value="" placeholder="used only when problem id is new" />
         <input type="hidden" name="page" value="statement" />
-        <button class="btn btn-primary primary-action" type="submit">Open</button>
+        <button class="btn primary-action" type="submit">Open</button>
         <datalist id="problem-list">
           {% for row in entries %}
           <option value="{{ row.slug }}">{{ row.name }}</option>
