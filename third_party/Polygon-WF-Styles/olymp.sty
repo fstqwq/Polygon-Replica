@@ -1,17 +1,36 @@
 %
-% Macros for the contest problems
-% for MikTeX: use latex.exe
-% License: https://github.com/GassaFM/olymp.sty/blob/master/LICENSE
-% Authors: https://github.com/GassaFM/olymp.sty/blob/master/AUTHORS
+% Macros for contest problem statements.
+%
+% Upstream: https://github.com/GassaFM/olymp.sty
+% License:  https://github.com/GassaFM/olymp.sty/blob/master/LICENSE
+% Authors:  https://github.com/GassaFM/olymp.sty/blob/master/AUTHORS
+%
+% This is the Polygon-Replica fork, based on fstqwq/Polygon-WF-Styles.
+% Fork:     https://github.com/fstqwq/Polygon-WF-Styles
+% Modifications from upstream:
+%   - Dual-engine support: works with both pdflatex and xelatex.
+%     Under xelatex, fontspec + TeX Gyre fonts replace the legacy
+%     times/fontenc/inputenc stack.  This enables CJK support when
+%     paired with xeCJK in the document preamble (statements.ftl).
+%   - Sample table layout adapted to the WF problem format.
 %
 
 \ProvidesPackage{olymp}
 
 \makeatletter
 \usepackage{verbatim}
-\RequirePackage{times}
-\RequirePackage[T1]{fontenc}
-\RequirePackage[utf8]{inputenc}
+\RequirePackage{ifxetex}
+\ifxetex
+  % XeLaTeX: use fontspec for OpenType font loading
+  \RequirePackage{fontspec}
+  \setmainfont{TeX Gyre Termes}
+  \setsansfont{TeX Gyre Heros}
+  \setmonofont{TeX Gyre Cursor}
+\else
+  \RequirePackage{times}
+  \RequirePackage[T1]{fontenc}
+  \RequirePackage[utf8]{inputenc}
+\fi
 \RequirePackage[colorlinks=true,implicit=false]{hyperref}
 
 \providecommand{\wfCurrentProblemName}{}

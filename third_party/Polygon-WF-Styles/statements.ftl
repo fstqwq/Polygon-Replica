@@ -1,8 +1,17 @@
 \documentclass [11pt, a4paper, oneside] {article}
 
-\usepackage [T1] {fontenc}
-\usepackage [utf8] {inputenc}
-\usepackage [english] {babel}
+% --- Engine-adaptive font loading ---
+% This template is compiled with xelatex when fontspec is present (see below).
+% The engine is auto-detected by latex_process.detect_latex_engine().
+\usepackage {fontspec}
+\usepackage {xeCJK}
+
+% CJK fonts: serif body + sans headings (standard CJK typographic convention).
+% ItalicFont=<self> prevents "font shape undefined" warnings (CJK has no italic).
+\setCJKmainfont{Noto Serif CJK SC}[ItalicFont=Noto Serif CJK SC]
+\setCJKsansfont{Noto Sans CJK SC}[ItalicFont=Noto Sans CJK SC]
+\setCJKmonofont{Noto Sans CJK SC}
+
 \usepackage {amsmath}
 \usepackage {amssymb}
 \usepackage {olymp}
@@ -15,13 +24,9 @@
 \usepackage [normalem] {ulem}
 %\usepackage {hyperref}
 \usepackage {import}
-\usepackage {ifpdf}
 \usepackage {xparse}
 \usepackage {wrapfig}
 \usepackage {comment}
-\ifpdf
-  \DeclareGraphicsRule{*}{mps}{*}{}
-\fi
 
 \intentionallyblankpagestrue
 
