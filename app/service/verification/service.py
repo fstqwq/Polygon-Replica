@@ -28,7 +28,7 @@ from app.service.verification.read_model import (
 )
 from app.service.verification.runtime import load_problem_runtime_config
 from app.service.verification.signature import verification_signature
-from app.service.verification.source import resolve_standard_checker_source, select_checker_source, select_source
+from app.service.verification.source import select_source
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
 
@@ -38,9 +38,7 @@ from app.service.judgehost.api import Judgehost
 CPP_EXTENSIONS = (".cpp", ".cc", ".cxx", ".c++")
 SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
 GENERATOR_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
-STANDARD_CHECKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 RUN_TEST_NAME_RE = re.compile(r"^[0-9]{3}\.in$")
-STANDARD_CHECKER_ROOT = (Path(__file__).resolve().parents[3] / "third_party" / "upstream" / "testlib" / "checkers").resolve()
 DEFAULT_TIME_LIMIT_MS = 2000
 TIME_LIMIT_MIN_MS = 100
 TIME_LIMIT_MAX_MS = 30000
@@ -644,24 +642,17 @@ class VerificationService:
     def apply_runtime_values(self, values: RuntimeValues) -> None:
         _ = values
 
-    def _resolve_standard_checker_source(self, checker_standard: str) -> Path | None:
-        return resolve_standard_checker_source(
-            checker_standard,
-            standard_checker_root=STANDARD_CHECKER_ROOT,
-            name_pattern=STANDARD_CHECKER_NAME_RE,
-        )
-
     def _select_checker_source(
         self,
         snapshot: Path,
         build_cfg: dict,
         snapshot_resolved: Path | None = None,
     ) -> Path | None:
-        return select_checker_source(
-            snapshot=snapshot,
-            build_cfg=build_cfg,
-            standard_checker_root=STANDARD_CHECKER_ROOT,
-            standard_checker_name_re=STANDARD_CHECKER_NAME_RE,
+        return select_source(
+            snapshot,
+            build_cfg,
+            "checker_source",
+            "checkers",
             cpp_extensions=CPP_EXTENSIONS,
             snapshot_resolved=snapshot_resolved,
         )
@@ -697,7 +688,6 @@ class VerificationService:
             "generator_sources": [],
             "validator_args": [],
             "checker_args": [],
-            "checker_standard": "",
         }
         path = snapshot / "config" / "build.json"
         if path.exists():
@@ -705,7 +695,6 @@ class VerificationService:
                 cfg.update(dict(json.loads(path.read_text(encoding="utf-8"))))
             except json.JSONDecodeError:
                 pass
-        cfg["checker_standard"] = cfg["checker_standard"].strip()
         try:
             cfg["compile_jobs"] = max(0, min(16, int(cfg.get("compile_jobs", 0))))
         except Exception:

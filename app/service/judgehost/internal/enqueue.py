@@ -559,28 +559,17 @@ class JudgehostEnqueueMixin:
         if problem_memory_limit_mb < 0:
             problem_memory_limit_mb = 0
 
+        interactive_mode = JudgehostEnqueueMixin._normalize_status(mode) == "interactive"
         checker_source: Path | None = None
-        checker_standard_obj = run_cfg_obj.get("checker_standard")
-        if checker_standard_obj is None:
-            checker_standard_obj = build_cfg_obj.get("checker_standard")
-        checker_standard = JudgehostEnqueueMixin._normalize_text(checker_standard_obj)
-        repo_root = Path(__file__).resolve().parents[4]
-        if checker_standard:
-            token = checker_standard[5:] if checker_standard.startswith("std::") else checker_standard
-            if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", token):
-                std_root = (repo_root / "third_party" / "upstream" / "testlib" / "checkers").resolve()
-                source = (std_root / token).resolve()
-                if source.exists() and source.is_file():
-                    checker_source = source
-        if checker_source is None:
+        if not interactive_mode:
             checker_source_token = cast(str | None, build_cfg_obj.get("checker_source"))
             if checker_source_token is None:
                 checker_source_token = ""
             checker_source = _safe_workspace_rel_file(checker_source_token)
-        if checker_source is None:
-            checker_source = _safe_workspace_rel_file("checkers/checker.cpp")
-        if checker_source is None:
-            checker_source = _first_cpp_under("checkers")
+            if checker_source is None:
+                checker_source = _safe_workspace_rel_file("checkers/checker.cpp")
+            if checker_source is None:
+                checker_source = _first_cpp_under("checkers")
 
         validator_source_token = cast(str | None, build_cfg_obj.get("validator_source"))
         if validator_source_token is None:
@@ -591,7 +580,6 @@ class JudgehostEnqueueMixin:
         if validator_source is None:
             validator_source = _first_cpp_under("validators")
 
-        interactive_mode = JudgehostEnqueueMixin._normalize_status(mode) == "interactive"
         interactor_source: Path | None = None
         if interactive_mode:
             interactor_source_token = cast(str | None, build_cfg_obj.get("interactor_source"))

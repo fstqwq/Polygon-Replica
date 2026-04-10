@@ -14,25 +14,16 @@ from app.main_util import (
 from app.service.problem.test_spec import parse_gen_command_tokens
 
 from .context_operation import (
-    _canonical_standard_checker_name,
     dedupe_preserve_order,
     generator_sources_from_build_cfg,
     _list_cpp_sources,
     read_build_config,
-    resolve_standard_checker_path,
     workspace_rel_file_exists,
 )
 from .test_spec import read_tests_spec, tests_spec_read_payload
 
 _C = config.constants
-def _checker_standard_from_build_cfg(build_cfg: dict[str, object]) -> str:
-    raw = build_cfg.get('checker_standard') or ''
-    if not raw:
-        return ''
-    try:
-        return _canonical_standard_checker_name(raw)
-    except ValueError:
-        return ''
+
 
 def _component_repo_source_from_build_cfg(workspace: Path, build_cfg: dict, config_key: str, folder: str, default_filename: str) -> tuple[str, bool]:
     configured = normalize_workspace_rel_path(build_cfg.get(config_key))
@@ -216,15 +207,20 @@ def interactor_status_context(workspace: Path) -> dict:
 
 def checker_status_context(workspace: Path) -> dict:
     build_cfg, _ = read_build_config(workspace)
-    standard = _checker_standard_from_build_cfg(build_cfg)
-    if standard:
-        valid = True
-        try:
-            resolve_standard_checker_path(standard)
-        except ValueError:
-            valid = False
-        return {'mode': 'standard', 'display': standard, 'standard_checker': standard, 'standard_valid': valid, 'repo_source': '', 'repo_source_exists': False}
     repo_source, repo_exists = _component_repo_source_from_build_cfg(workspace, build_cfg, 'checker_source', 'checkers', 'checker.cpp')
+    standard_name = ''
+    if repo_exists:
+        from app.service.verification.standard_checker import detect_standard_checker
+        from app.service.platform.workspace_path import safe_workspace_path
+        try:
+            abs_path = safe_workspace_path(workspace, repo_source)
+            detected = detect_standard_checker(abs_path)
+            if detected:
+                standard_name = f'std::{detected}'
+        except Exception:
+            pass
+    if standard_name:
+        return {'mode': 'standard', 'display': standard_name, 'standard_checker': standard_name, 'standard_valid': True, 'repo_source': repo_source, 'repo_source_exists': True}
     return {'mode': 'repository' if repo_exists else 'missing', 'display': _source_basename_label(repo_source) if repo_exists else 'missing', 'standard_checker': '', 'standard_valid': True, 'repo_source': repo_source, 'repo_source_exists': bool(repo_exists)}
 
 

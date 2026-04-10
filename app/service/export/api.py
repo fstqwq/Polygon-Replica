@@ -31,8 +31,6 @@ class ExportService:
         "run_time_error",
         "rejected",
     )
-    STANDARD_CHECKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-    STANDARD_CHECKER_ROOT = (Path(__file__).resolve().parents[2] / "third_party" / "upstream" / "testlib" / "checkers").resolve()
     STATEMENT_PDF_TIMEOUT_SEC = 60
 
     def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path):
@@ -271,42 +269,8 @@ class ExportService:
                 return None
         return self._find_first_source(snapshot / "validators")
 
-    def _resolve_standard_checker_source(self, checker_standard: str) -> Path | None:
-        raw = str(checker_standard or "").strip()
-        if not raw:
-            return None
-        checker_name = raw[5:] if raw.startswith("std::") else raw
-        checker_name = checker_name.strip()
-        if not checker_name:
-            raise ValueError("checker_standard is empty")
-        if "/" in checker_name or "\\" in checker_name:
-            raise ValueError("checker_standard is invalid")
-        if not checker_name.endswith(".cpp"):
-            checker_name += ".cpp"
-        if not self.STANDARD_CHECKER_NAME_RE.fullmatch(checker_name):
-            raise ValueError("checker_standard is invalid")
-        source = (self.STANDARD_CHECKER_ROOT / checker_name).resolve()
-        try:
-            source.relative_to(self.STANDARD_CHECKER_ROOT)
-        except ValueError as exc:
-            raise ValueError("checker_standard is invalid") from exc
-        try:
-            if source.is_symlink() or not source.exists() or not source.is_file():
-                raise ValueError(f"configured standard checker does not exist: std::{checker_name}")
-        except OSError as exc:
-            raise ValueError("standard checker catalog is unavailable") from exc
-        return source
-
     def _effective_checker_source(self, snapshot: Path, strict: bool) -> Path | None:
         build_cfg = self._load_build_config(snapshot)
-        checker_standard = checker_standard.strip() if isinstance(checker_standard := build_cfg.get("checker_standard"), str) else ""
-        if checker_standard:
-            source = self._resolve_standard_checker_source(checker_standard)
-            if source is not None:
-                return source
-            if strict:
-                raise ValueError("checker_standard is configured but invalid")
-            return None
         checker_source = checker_source.strip() if isinstance(checker_source := build_cfg.get("checker_source"), str) else ""
         if checker_source:
             try:

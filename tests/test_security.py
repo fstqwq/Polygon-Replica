@@ -577,11 +577,13 @@ class TestSecurity(SmokeBase):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         cfg = ws / "config" / "build.json"
         cfg.parent.mkdir(parents=True, exist_ok=True)
-        cfg.write_text(json.dumps({"checker_standard": "std::wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
+        from app.service.verification.standard_checker import copy_standard_checker
+        copy_standard_checker("wcmp.cpp", ws / "checkers")
+        cfg.write_text(json.dumps({"checker_source": "checkers/wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
         resp = checker_set_standard(problem="alice/sample", user="alice", checker_name="../../evil")
         self.assertEqual(resp.status_code, 303)
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("invalid standard checker name", messages[0].lower())
         payload = json.loads(cfg.read_text(encoding="utf-8"))
-        self.assertEqual(str(payload.get("checker_standard") or ""), "std::wcmp.cpp")
+        self.assertEqual(payload.get("checker_source"), "checkers/wcmp.cpp")

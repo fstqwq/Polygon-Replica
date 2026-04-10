@@ -12,6 +12,7 @@ from typing import TypedDict, cast
 
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
+from app.service.verification.standard_checker import copy_standard_checker
 from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
@@ -123,7 +124,6 @@ ComponentImportSummary = TypedDict(
     "ComponentImportSummary",
     {
         "testlib_source": str,
-        "checker_standard": str | None,
         "checker_source": str | None,
         "checker_import_warning": str,
         "validator_source": str | None,
@@ -683,7 +683,6 @@ class PolygonPackageImportService:
 
         checker_name = meta["checker_name"]
         checker_source_path = meta["checker_source"]
-        checker_standard: str | None = None
         imported_checker_source: str | None = None
         checker_import_warning = ""
         imported_interactor_source = self._copy_source_from_zip(
@@ -705,11 +704,12 @@ class PolygonPackageImportService:
             if checker_name or checker_source_path:
                 checker_import_warning = "Polygon package checker ignored for interactive problem; edit the Interactor section instead"
             build_cfg.pop("checker_source", None)
-            build_cfg.pop("checker_standard", None)
         elif checker_name.startswith("std::"):
-            checker_standard = checker_name
-            build_cfg["checker_standard"] = checker_name
-            build_cfg.pop("checker_source", None)
+            try:
+                imported_checker_source = copy_standard_checker(checker_name, workspace / "checkers")
+                build_cfg["checker_source"] = imported_checker_source
+            except ValueError:
+                build_cfg.pop("checker_source", None)
         else:
             imported_checker_source = self._copy_source_from_zip(
                 zf,
@@ -723,7 +723,6 @@ class PolygonPackageImportService:
                 build_cfg["checker_source"] = imported_checker_source
             else:
                 build_cfg.pop("checker_source", None)
-            build_cfg.pop("checker_standard", None)
 
         used = {checker_source_path, meta["interactor_source"], *validator_sources}
         generator_names = {
@@ -753,7 +752,6 @@ class PolygonPackageImportService:
 
         return {
             "testlib_source": imported_testlib,
-            "checker_standard": checker_standard,
             "checker_source": imported_checker_source,
             "checker_import_warning": checker_import_warning,
             "validator_source": validator_source,

@@ -19,7 +19,6 @@ from .access import (
 from .artifact import artifact_version_number
 from .context import count_label
 from .context_operation import (
-    _normalize_standard_checker_name,
     _solutions_status_context,
     _tests_spec_status_context,
 )
@@ -279,23 +278,19 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     checker_status = cast(dict[str, object], ctx['checker_status'])
     checker_display = cast(str | None, checker_status.get('display')) or 'unknown'
     checker_mode = cast(str | None, checker_status.get('mode')) or ''
-    checker_standard_invalid = checker_mode == 'standard' and (not bool(checker_status.get('standard_valid')))
+    checker_applies = mode_text != 'interactive'
     checker_hint = ''
-    if checker_mode == 'standard':
-        checker_standard_raw = checker_status.get('standard_checker')
-        raw_standard = cast(str | None, checker_standard_raw) or checker_display
-        if raw_standard:
-            canonical = raw_standard
-            description = 'general-purpose standard checker from testlib'
-            try:
-                standard_name = _normalize_standard_checker_name(raw_standard)
-                canonical = f'std::{standard_name}'
-                description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(standard_name, description))
-            except ValueError:
-                if not canonical.startswith('std::'):
-                    canonical = f'std::{canonical}'
-            checker_hint = f'{canonical} - {description}'
-    nav['checker'] = {'text': checker_display, 'danger': checker_mode in {'missing', 'none'} or checker_display in {'unknown', 'error', 'missing'} or checker_standard_invalid, 'hint': checker_hint}
+    if checker_applies and checker_mode == 'standard':
+        standard_checker = cast(str | None, checker_status.get('standard_checker')) or ''
+        if standard_checker:
+            std_name = standard_checker[5:] if standard_checker.startswith('std::') else standard_checker
+            description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(std_name, 'general-purpose standard checker from testlib'))
+            checker_hint = f'{standard_checker} - {description}'
+    nav['checker'] = {
+        'text': checker_display if checker_applies else 'uses interactor',
+        'danger': checker_applies and (checker_mode in {'missing', 'none'} or checker_display in {'unknown', 'error', 'missing'}),
+        'hint': checker_hint,
+    }
     interactor_status = cast(dict[str, object], ctx['interactor_status'])
     interactor_mode = cast(str | None, interactor_status.get('mode')) or ''
     interactor_display = cast(str | None, interactor_status.get('display')) or 'missing'
@@ -323,8 +318,10 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     solutions_danger = solutions_mode != 'ready'
     nav['solutions'] = {'text': solutions_text, 'danger': solutions_danger}
     pipeline_blockers: list[str] = []
-    if checker_mode in {'missing', 'none'} or checker_display in {'unknown', 'error', 'missing'} or checker_standard_invalid:
+    if checker_applies and (checker_mode in {'missing', 'none'} or checker_display in {'unknown', 'error', 'missing'}):
         pipeline_blockers.append('checker')
+    if mode_text == 'interactive' and interactor_mode in {'missing', 'none', 'invalid'}:
+        pipeline_blockers.append('interactor')
     if validator_mode in {'missing', 'none', 'invalid'}:
         pipeline_blockers.append('validator')
     if tests_mode in {'empty', 'invalid', 'missing', 'none'}:

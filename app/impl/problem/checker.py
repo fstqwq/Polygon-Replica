@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -12,12 +12,15 @@ from app.impl.workspace.context_component_status import checker_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
+from app.service.verification.standard_checker import copy_standard_checker
 
 _C = config.constants
 
 
 def checker_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
+    if ctx.get('problem_mode') == 'interactive':
+        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
     checker_status = checker_status_context(workspace)
     standard_checker_options = standard_checker_catalog()
@@ -40,6 +43,8 @@ def checker_page(request: Request, problem: str, user: str):
 
 def checker_view_standard(request: Request, problem: str, user: str, checker_name: str=''):
     ctx = page_ctx(problem, user)
+    if ctx.get('problem_mode') == 'interactive':
+        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
     checker_status = checker_status_context(workspace)
     selected = checker_name.strip()
@@ -64,23 +69,20 @@ def checker_view_standard(request: Request, problem: str, user: str, checker_nam
 
 def checker_set_standard(problem: str, user: str, checker_name: str=Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    if ctx.get('problem_mode') == 'interactive':
+        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'checker updated'
     try:
         normalized_name, _ = resolve_standard_checker_path(checker_name)
         canonical = f'std::{normalized_name}'
-        removed_repo_checker = False
         with config.workspace_service.workspace_lock(workspace):
+            checker_rel = copy_standard_checker(normalized_name, workspace / 'checkers')
             build_cfg, cfg_path = read_build_config(workspace)
-            build_cfg['checker_standard'] = canonical
-            build_cfg.pop('checker_source', None)
+            build_cfg['checker_source'] = checker_rel
             write_build_config(cfg_path, build_cfg)
-            checker_cpp = safe_workspace_path(workspace, 'checkers/checker.cpp')
-            if checker_cpp.exists() and checker_cpp.is_file():
-                checker_cpp.unlink()
-                removed_repo_checker = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'checker.set_standard', {'checker': canonical, 'removed_checker_cpp': removed_repo_checker})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'checker.set_standard', {'checker': canonical})
         msg = f'checker set to {canonical}'
     except ValueError as exc:
         msg = str(exc)
@@ -92,13 +94,14 @@ def checker_set_standard(problem: str, user: str, checker_name: str=Form(...)):
 
 def checker_create_template(problem: str, user: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    if ctx.get('problem_mode') == 'interactive':
+        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'checker template created'
     try:
         with config.workspace_service.workspace_lock(workspace):
             build_cfg, cfg_path = read_build_config(workspace)
-            build_cfg.pop('checker_standard', None)
             write_build_config(cfg_path, build_cfg)
             checker_path = 'checkers/checker.cpp'
             checker_abs = safe_workspace_path(workspace, checker_path)
@@ -117,6 +120,8 @@ def checker_create_template(problem: str, user: str):
 
 def checker_save_source(problem: str, user: str, path: str=Form('checkers/checker.cpp'), content: str=Form('')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    if ctx.get('problem_mode') == 'interactive':
+        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     target = 'checkers/checker.cpp'
@@ -130,7 +135,6 @@ def checker_save_source(problem: str, user: str, path: str=Form('checkers/checke
             build_cfg, cfg_path = read_build_config(workspace)
             cfg_existed_before = bool(cfg_path.exists() and cfg_path.is_file() and (not cfg_path.is_symlink()))
             cfg_previous_text = cfg_path.read_text(encoding='utf-8') if cfg_existed_before else ''
-            build_cfg.pop('checker_standard', None)
             build_cfg['checker_source'] = target
             write_build_config(cfg_path, build_cfg)
             config.git_service.write_file(workspace, target, content)

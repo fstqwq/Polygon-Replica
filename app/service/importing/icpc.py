@@ -747,10 +747,8 @@ class ICPCPackageImportService:
         checker_source = components["checker_source"]
         if checker_source:
             build_cfg["checker_source"] = checker_source
-            build_cfg.pop("checker_standard", None)
         else:
             build_cfg.pop("checker_source", None)
-            build_cfg.pop("checker_standard", None)
 
         interactor_source = components["interactor_source"]
         if interactor_source:

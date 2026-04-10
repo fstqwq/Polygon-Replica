@@ -144,8 +144,9 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn("/problems/alice/sample/alice/checker", loc)
 
         build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
-        self.assertEqual(build_cfg.get("checker_standard"), "std::fcmp.cpp")
-        self.assertFalse((ws / rel).exists())
+        self.assertEqual(build_cfg.get("checker_source"), "checkers/fcmp.cpp")
+        self.assertNotIn("checker_standard", build_cfg)
+        self.assertTrue((ws / "checkers/fcmp.cpp").exists())
 
         after = checker_page(_request("/problems/alice/sample/alice/checker"), "alice/sample", "alice")
         self.assertEqual(after.status_code, 200)
@@ -185,8 +186,8 @@ class TestUIComponents(UIBaseSuite):
         set_standard = checker_set_standard(problem="alice/sample", user="alice", checker_name="std::fcmp.cpp")
         self.assertEqual(set_standard.status_code, 303)
         cfg_before = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
-        self.assertEqual(str(cfg_before.get("checker_standard") or ""), "std::fcmp.cpp")
-        self.assertFalse((ws / rel).exists())
+        self.assertEqual(cfg_before.get("checker_source"), "checkers/fcmp.cpp")
+        self.assertTrue((ws / "checkers/fcmp.cpp").exists())
 
         failed = checker_save_source(
             problem="alice/sample",
@@ -202,8 +203,8 @@ class TestUIComponents(UIBaseSuite):
         self.assertFalse((ws / rel).exists())
 
         cfg_after = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
-        self.assertEqual(str(cfg_after.get("checker_standard") or ""), "std::fcmp.cpp")
-        self.assertNotIn("checker_source", cfg_after)
+        self.assertEqual(cfg_after.get("checker_source"), "checkers/fcmp.cpp")
+        self.assertNotIn("checker_standard", cfg_after)
 
     def test_generators_page_supports_template_and_source_save(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -333,7 +334,9 @@ class TestUIComponents(UIBaseSuite):
             target.unlink()
         cfg_path = ws / "config" / "build.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(json.dumps({"checker_standard": "std::wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
+        from app.service.verification.standard_checker import copy_standard_checker
+        copy_standard_checker("wcmp.cpp", ws / "checkers")
+        cfg_path.write_text(json.dumps({"checker_source": "checkers/wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
 
         page = checker_page(
             _request_with_cookie(
