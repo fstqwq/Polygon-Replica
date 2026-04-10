@@ -123,14 +123,8 @@ def _problem_context_for_language(
     sample_tests: list[dict[str, str]] | None = None,
 ) -> dict[str, object]:
     cfg = _safe_read_json(workspace / "config" / "problem.json")
-    input_file_obj = cfg.get("input_file", "stdin")
-    input_file = input_file_obj.strip() if isinstance(input_file_obj, str) else "stdin"
-    if not input_file:
-        input_file = "stdin"
-    output_file_obj = cfg.get("output_file", "stdout")
-    output_file = output_file_obj.strip() if isinstance(output_file_obj, str) else "stdout"
-    if not output_file:
-        output_file = "stdout"
+    input_file = "standard input"
+    output_file = "standard output"
     time_limit_ms_obj = cfg.get("time_limit_ms", 2000)
     try:
         time_limit_ms = int(time_limit_ms_obj)

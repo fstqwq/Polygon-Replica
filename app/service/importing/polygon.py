@@ -844,8 +844,6 @@ class PolygonPackageImportService:
         if bool(meta.get("has_multipass_property")) and explicit_run_count in {"", "1"}:
             raise ValueError("multipass Polygon package is missing explicit pass limit")
         mode = "interactive" if components["interactor_source"] else "pass-fail"
-        cfg["input_file"] = "stdin"
-        cfg["output_file"] = "stdout"
         cfg["time_limit_ms"] = meta["time_limit_ms"]
         cfg["memory_limit_mb"] = max(1, meta["memory_limit_bytes"] // (1024 * 1024))
         cfg["mode"] = mode

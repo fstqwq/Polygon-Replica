@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -58,21 +58,6 @@ def normalize_pass_limit(raw: object, default: int = 1) -> int:
     return value
 
 
-def sanitize_stdio_name(raw: str, fallback: str, label: str) -> str:
-    value = raw.strip()
-    if not value:
-        return fallback
-    if len(value) > 128:
-        raise ValueError(f"{label} is too long")
-    if any((ch.isspace() for ch in value)):
-        raise ValueError(f"{label} cannot contain spaces")
-    if "/" in value or "\\" in value:
-        raise ValueError(f"{label} cannot contain path separators")
-    if value in {".", ".."}:
-        raise ValueError(f"{label} is invalid")
-    return value
-
-
 def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, object], Path]:
     cfg_path = safe_workspace_path(workspace, str(_C.GENERAL_CONFIG_REL))
     payload: dict[str, object] = {}
@@ -89,23 +74,7 @@ def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, o
         if "pass_limit" not in payload:
             raise ValueError("problem.json missing pass_limit")
     mode = normalize_problem_mode(cast(str | None, payload.get("mode")), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
-    input_file = cast(str | None, payload.get("input_file"))
-    if input_file is None:
-        input_file = str(_C.GENERAL_CONFIG_DEFAULTS["input_file"])
-    output_file = cast(str | None, payload.get("output_file"))
-    if output_file is None:
-        output_file = str(_C.GENERAL_CONFIG_DEFAULTS["output_file"])
     ui_cfg = {
-        "input_file": sanitize_stdio_name(
-            input_file,
-            str(_C.GENERAL_CONFIG_DEFAULTS["input_file"]),
-            "input file",
-        ),
-        "output_file": sanitize_stdio_name(
-            output_file,
-            str(_C.GENERAL_CONFIG_DEFAULTS["output_file"]),
-            "output file",
-        ),
         "time_limit_ms": coerce_int(
             payload.get("time_limit_ms"),
             int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),

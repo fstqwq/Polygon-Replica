@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import shlex
@@ -6,7 +6,6 @@ from pathlib import Path
 
 from app.runtime_value import RuntimeValues, build_runtime_values
 
-TESTS_SPEC_VERSION: int = 2
 TESTS_SPEC_MAX_ITEMS: int = 4096
 TESTS_SPEC_MANUAL_MAX_CHARS: int = 262144
 TESTS_SPEC_GEN_COMMAND_MAX_CHARS: int = 1024
@@ -16,14 +15,12 @@ TESTS_SPEC_ID_RE = None
 
 
 def apply_runtime_values(values: RuntimeValues) -> None:
-    global TESTS_SPEC_VERSION
     global TESTS_SPEC_MAX_ITEMS
     global TESTS_SPEC_MANUAL_MAX_CHARS
     global TESTS_SPEC_GEN_COMMAND_MAX_CHARS
     global TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS
     global TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS
     global TESTS_SPEC_ID_RE
-    TESTS_SPEC_VERSION = int(values.TESTS_SPEC_VERSION)
     TESTS_SPEC_MAX_ITEMS = int(values.TESTS_SPEC_MAX_ITEMS)
     TESTS_SPEC_MANUAL_MAX_CHARS = int(values.TESTS_SPEC_MANUAL_MAX_CHARS)
     TESTS_SPEC_GEN_COMMAND_MAX_CHARS = int(values.TESTS_SPEC_GEN_COMMAND_MAX_CHARS)
@@ -280,10 +277,7 @@ def dumps_tests_spec(entries: list[dict]) -> str:
         if not normalized_sample_validate:
             dumped_row["sample_output_validate"] = False
         dumped_tests.append(dumped_row)
-    payload = {
-        "version": TESTS_SPEC_VERSION,
-        "tests": dumped_tests,
-    }
+    payload = {"tests": dumped_tests}
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 

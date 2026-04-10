@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import json
@@ -708,24 +708,23 @@ class ICPCPackageImportService:
             parsed_memory_limit_mb = _memory_limit_mb_from_text(header_memory)
             memory_limit_mb = parsed_memory_limit_mb if parsed_memory_limit_mb is not None else 1024
 
-        input_file = header.get("input_file", "")
-        if not input_file:
-            input_file = "stdin"
-        output_file = header.get("output_file", "")
-        if not output_file:
-            output_file = "stdout"
+        file_io_warning = ""
+        raw_input_file = str(header.get("input_file", "") or "").strip()
+        raw_output_file = str(header.get("output_file", "") or "").strip()
+        if raw_input_file and raw_input_file.lower() not in {"stdin", "standard input", ""}:
+            file_io_warning = f"package specifies file I/O (input: {raw_input_file}); forced to stdin/stdout"
+        elif raw_output_file and raw_output_file.lower() not in {"stdout", "standard output", ""}:
+            file_io_warning = f"package specifies file I/O (output: {raw_output_file}); forced to stdin/stdout"
         mode = meta["mode"]
         pass_limit = int(meta["pass_limit"])
 
-        cfg["input_file"] = input_file
-        cfg["output_file"] = output_file
         cfg["time_limit_ms"] = _coerce_int(time_limit_ms, 2000, min_value=1)
         cfg["memory_limit_mb"] = _coerce_int(memory_limit_mb, 1024, min_value=1)
         cfg["mode"] = mode
         cfg["pass_limit"] = pass_limit
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "problem.json").write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return cfg
+        return {"cfg": cfg, "file_io_warning": file_io_warning}
 
     def _write_build_config(
         self,
@@ -811,9 +810,11 @@ class ICPCPackageImportService:
             )
             solutions_summary = self._import_solutions(zf, entry_map, workspace)
             components_summary = self._import_components(zf, entry_map, workspace, meta)
-            problem_cfg = self._write_problem_config(workspace, meta, statement_summary)
+            problem_result = self._write_problem_config(workspace, meta, statement_summary)
+            problem_cfg = problem_result["cfg"]
+            file_io_warning = problem_result.get("file_io_warning", "")
             build_cfg = self._write_build_config(workspace, meta, components_summary, solutions_summary)
-            return {
+            result: dict[str, object] = {
                 "package_name": package_name,
                 "title": meta["title"],
                 "statement": statement_summary,
@@ -824,3 +825,6 @@ class ICPCPackageImportService:
                 "build_cfg": build_cfg,
                 "domjudge": domjudge_meta,
             }
+            if file_io_warning:
+                result["file_io_warning"] = file_io_warning
+            return result
