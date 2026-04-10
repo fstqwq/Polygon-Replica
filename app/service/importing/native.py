@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from app.service.problem.test_spec import load_tests_spec
 
 
-NATIVE_MARKER = "polygonlike-native.json"
+NATIVE_PACKAGE_ANCHOR = "config/problem.json"
 ZIP_MAX_BYTES = 256 * 1024 * 1024
 ZIP_MAX_FILE_BYTES = 64 * 1024 * 1024
 ZIP_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
@@ -34,7 +34,7 @@ def _normalize_zip_path(raw: str) -> str:
     return "/".join(parts)
 
 
-def _entry_map_from_zip(zf: zipfile.ZipFile, marker: str) -> dict[str, zipfile.ZipInfo]:
+def _entry_map_from_zip(zf: zipfile.ZipFile, anchor: str) -> dict[str, zipfile.ZipInfo]:
     raw: dict[str, zipfile.ZipInfo] = {}
     for info in zf.infolist():
         if info.is_dir():
@@ -43,12 +43,12 @@ def _entry_map_from_zip(zf: zipfile.ZipFile, marker: str) -> dict[str, zipfile.Z
         if not normalized:
             continue
         raw[normalized] = info
-    if marker in raw:
+    if anchor in raw:
         return raw
-    candidates = sorted([p for p in raw if p.endswith(f"/{marker}")], key=len)
+    candidates = sorted([p for p in raw if p.endswith(f"/{anchor}")], key=len)
     if not candidates:
-        raise ValueError(f"{marker} not found in package")
-    prefix = candidates[0][: -len(marker)]
+        raise ValueError(f"{anchor} not found in package")
+    prefix = candidates[0][: -len(anchor)]
     mapped: dict[str, zipfile.ZipInfo] = {}
     for path, info in raw.items():
         if not path.startswith(prefix):
@@ -56,32 +56,18 @@ def _entry_map_from_zip(zf: zipfile.ZipFile, marker: str) -> dict[str, zipfile.Z
         rel = path[len(prefix) :]
         if rel:
             mapped[rel] = info
-    if marker not in mapped:
-        raise ValueError(f"{marker} not found in package")
+    if anchor not in mapped:
+        raise ValueError(f"{anchor} not found in package")
     return mapped
 
 
-def _read_bytes_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
-    if int(info.file_size) > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    with zf.open(info, "r") as fh:
-        raw = fh.read(ZIP_MAX_FILE_BYTES + 1)
-    if len(raw) > ZIP_MAX_FILE_BYTES:
-        raise ValueError(f"zip entry too large: {info.filename}")
-    return raw
-
-
-def _validated_native_repo_entries(
+def _validated_native_entries(
     entry_map: dict[str, zipfile.ZipInfo],
-    repo_entries: list[str],
 ) -> list[tuple[Path, zipfile.ZipInfo, str]]:
     validated: list[tuple[Path, zipfile.ZipInfo, str]] = []
     total_size = 0
-    for rel in sorted(repo_entries):
-        rel_path = Path(rel)
-        if len(rel_path.parts) < 2:
-            continue
-        target_rel = Path(*rel_path.parts[1:])
+    for rel in sorted(entry_map):
+        target_rel = Path(rel)
         if not target_rel.parts:
             continue
         if _is_forbidden_workspace_path(target_rel):
@@ -139,6 +125,18 @@ def _is_forbidden_workspace_path(path: Path) -> bool:
     return any(str(part or "").startswith(".") for part in path.parts)
 
 
+def _read_title_from_problem_config(workspace: Path) -> str:
+    cfg_path = workspace / "config" / "problem.json"
+    try:
+        if cfg_path.exists() and cfg_path.is_file() and not cfg_path.is_symlink():
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return str(payload.get("name") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
 class NativePackageImportService:
     def import_package(
         self,
@@ -156,26 +154,9 @@ class NativePackageImportService:
             raise ValueError("package file is too large")
 
         with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
-            entry_map = _entry_map_from_zip(zf, NATIVE_MARKER)
-            marker_info = entry_map.get(NATIVE_MARKER)
-            if marker_info is None:
-                raise ValueError(f"{NATIVE_MARKER} not found in package")
-            try:
-                marker_payload = json.loads(_read_bytes_from_zip(zf, marker_info).decode("utf-8"))
-            except Exception as exc:
-                raise ValueError("invalid native package marker") from exc
-            if not isinstance(marker_payload, dict):
-                raise ValueError("invalid native package marker")
-            package_type = str(marker_payload.get("package_type") or "").strip()
-            if package_type != "native":
-                raise ValueError("invalid native package marker")
-            title = str(marker_payload.get("problem_name") or "").strip()
+            entry_map = _entry_map_from_zip(zf, NATIVE_PACKAGE_ANCHOR)
 
-            repo_entries = [rel for rel in entry_map if rel.startswith("repo/") and rel != "repo/"]
-            if not repo_entries:
-                raise ValueError("native package is missing repo payload")
-
-            files_to_write = _validated_native_repo_entries(entry_map, repo_entries)
+            files_to_write = _validated_native_entries(entry_map)
             staging_root = workspace.parent / f".native-import-{uuid.uuid4().hex}"
             written_total = 0
             try:
@@ -191,6 +172,7 @@ class NativePackageImportService:
             finally:
                 shutil.rmtree(staging_root, ignore_errors=True)
 
+        title = _read_title_from_problem_config(workspace)
         tests_total = 0
         try:
             tests_total = len(load_tests_spec(workspace / "tests" / "spec.json"))

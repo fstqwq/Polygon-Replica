@@ -17,7 +17,7 @@ from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.runtime.config import config
 from app.service.importing import native as native_import_module
 from app.service.platform.git_process import run_git
-from app.service.importing.native import NATIVE_MARKER, NativePackageImportService
+from app.service.importing.native import NativePackageImportService
 
 db = config.db
 export_service = config.export_service
@@ -389,31 +389,25 @@ class TestExport(SmokeBase):
         ws = Path(self._workspace_path())
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(
-                NATIVE_MARKER,
-                json.dumps({"package_type": "native", "problem_name": "blocked git metadata"}),
-            )
-            zf.writestr("repo/.git/config", "[filter \"evil\"]\n")
-            zf.writestr("repo/tests/spec.json", json.dumps({"tests": []}))
+            zf.writestr("config/problem.json", json.dumps({"mode": "pass-fail", "pass_limit": 1}))
+            zf.writestr(".git/config", "[filter \"evil\"]\n")
+            zf.writestr("tests/spec.json", json.dumps({"tests": []}))
 
         service = NativePackageImportService()
-        with self.assertRaisesRegex(ValueError, r"forbidden hidden path: repo/\.git/config"):
+        with self.assertRaisesRegex(ValueError, r"forbidden hidden path: \.git/config"):
             service.import_package(ws, "native-git-metadata.zip", payload.getvalue())
 
     def test_native_import_rejects_hidden_workspace_paths(self) -> None:
         service = NativePackageImportService()
-        blocked_paths = ["repo/.env", "repo/a/.hidden/file", "repo/.gitignore"]
+        blocked_paths = [".env", "a/.hidden/file", ".gitignore"]
         for blocked_path in blocked_paths:
             with self.subTest(blocked_path=blocked_path):
                 ws = Path(self._workspace_path())
                 payload = io.BytesIO()
                 with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    zf.writestr(
-                        NATIVE_MARKER,
-                        json.dumps({"package_type": "native", "problem_name": "blocked hidden path"}),
-                    )
+                    zf.writestr("config/problem.json", json.dumps({"mode": "pass-fail", "pass_limit": 1}))
                     zf.writestr(blocked_path, "hidden\n")
-                    zf.writestr("repo/tests/spec.json", json.dumps({"tests": []}))
+                    zf.writestr("tests/spec.json", json.dumps({"tests": []}))
 
                 with self.assertRaisesRegex(ValueError, rf"forbidden hidden path: {re.escape(blocked_path)}"):
                     service.import_package(ws, "native-hidden-path.zip", payload.getvalue())
@@ -424,12 +418,9 @@ class TestExport(SmokeBase):
         sentinel.write_text("keep\n", encoding="utf-8")
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(
-                NATIVE_MARKER,
-                json.dumps({"package_type": "native", "problem_name": "too large extracted payload"}),
-            )
-            zf.writestr("repo/a.txt", "1234567890")
-            zf.writestr("repo/b.txt", "abcdefghij")
+            zf.writestr("config/problem.json", json.dumps({"mode": "pass-fail", "pass_limit": 1}))
+            zf.writestr("a.txt", "1234567890")
+            zf.writestr("b.txt", "abcdefghij")
 
         service = NativePackageImportService()
         with patch.object(native_import_module, "ZIP_MAX_EXTRACTED_BYTES", 16):

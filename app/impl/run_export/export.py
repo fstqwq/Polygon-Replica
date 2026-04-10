@@ -177,17 +177,16 @@ def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
             names = [name for name in zf.namelist() if name and not name.endswith("/")]
-            native_marker = next((name for name in names if name.endswith("/polygonlike-native.json")), "")
-            if native_marker:
-                package_root = native_marker[: -len("polygonlike-native.json")]
-                repo_prefix = f"{package_root}repo/"
+            native_anchor = next((name for name in names if name.endswith("/config/problem.json")), "")
+            if native_anchor:
+                package_root = native_anchor[: -len("config/problem.json")]
                 solutions_total = sum(
                     1
                     for name in names
-                    if name.startswith(f"{repo_prefix}solutions/") and Path(name).suffix.lower() in {".cpp", ".cc", ".cxx", ".c", ".py", ".java", ".kt", ".go", ".rs", ".pas"}
+                    if name.startswith(f"{package_root}solutions/") and Path(name).suffix.lower() in {".cpp", ".cc", ".cxx", ".c", ".py", ".java", ".kt", ".go", ".rs", ".pas"}
                 )
                 tests_total = 0
-                tests_spec_name = f"{repo_prefix}tests/spec.json"
+                tests_spec_name = f"{package_root}tests/spec.json"
                 if tests_spec_name in names:
                     try:
                         tests_payload = json.loads(zf.read(tests_spec_name).decode("utf-8", errors="replace"))

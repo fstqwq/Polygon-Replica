@@ -19,7 +19,7 @@ from app.impl.run_export.query import (
     _count_label,
 )
 from app.service.importing.icpc import ICPCPackageImportService
-from app.service.importing.native import NATIVE_MARKER, NativePackageImportService
+from app.service.importing.native import NATIVE_PACKAGE_ANCHOR, NativePackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
 from app.service.platform.git_process import run_git
 
@@ -201,16 +201,13 @@ def _detect_problem_package_format(package_payload: bytes) -> str:
             names = zf.namelist()
     except Exception as exc:
         raise ValueError(f"invalid zip package: {exc}") from exc
-    has_problem_xml = _is_package_marker(names, "problem.xml")
-    has_problem_yaml = _is_package_marker(names, "problem.yaml")
-    has_native_marker = _is_package_marker(names, NATIVE_MARKER)
-    if has_native_marker:
-        return "native"
-    if has_problem_xml:
+    if _is_package_marker(names, "problem.xml"):
         return "polygon"
-    if has_problem_yaml:
+    if _is_package_marker(names, "problem.yaml"):
         return "icpc"
-    raise ValueError(f"unsupported package format: expected problem.xml (Polygon), problem.yaml (ICPC), or {NATIVE_MARKER} (native)")
+    if _is_package_marker(names, NATIVE_PACKAGE_ANCHOR):
+        return "native"
+    raise ValueError("unsupported package format: expected problem.xml (Polygon), problem.yaml (ICPC), or config/problem.json (native)")
 
 
 def _finalize_imported_problem(problem: str, actor_user: str, workspace: Path, package_format: str) -> str:

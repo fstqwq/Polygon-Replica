@@ -632,27 +632,9 @@ class ExportService:
         *,
         package_root: Path,
         snapshot: Path,
-        problem_name: str,
-        source_commit: str,
     ) -> None:
         package_root.mkdir(parents=True, exist_ok=True)
-        (package_root / "polygonlike-native.json").write_text(
-            json.dumps(
-                {
-                    "package_type": "native",
-                    "version": 1,
-                    "problem_name": str(problem_name or "").strip(),
-                    "source_commit": str(source_commit or "").strip(),
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        repo_dir = package_root / "repo"
-        repo_dir.mkdir(parents=True, exist_ok=True)
-        self._copy_dir_contents(snapshot, repo_dir)
+        self._copy_dir_contents(snapshot, package_root)
 
     def _export_problem_root(self, problem_slug: str) -> Path:
         return self.artifacts_root / "exports" / self._archive_filename_slug(problem_slug)
@@ -746,8 +728,6 @@ class ExportService:
                 self._build_native_package(
                     package_root=package_root,
                     snapshot=snapshot,
-                    problem_name=problem_row["name"],
-                    source_commit=resolved_source_commit,
                 )
 
             preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"
