@@ -243,8 +243,12 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertEqual(str(build_cfg.get("interactor_source") or ""), "interactors/interactor.cpp")
         self.assertTrue(str(build_cfg.get("accepted_solution_source") or "").startswith("solutions/"))
         self.assertEqual(str(build_cfg.get("validator_source") or ""), "validators/validator.cpp")
+        self.assertFalse((ws / "checkers" / "checker.cpp").exists())
         self.assertEqual(list(build_cfg.get("generator_sources") or []), [])
         self.assertIsNone(build_cfg.get("max_passes"))
+        components_summary = result.get("components") if isinstance(result.get("components"), dict) else {}
+        self.assertIsNone(components_summary.get("checker_source"))
+        self.assertIn("checker ignored", str(result.get("warnings") or []))
 
         imported_testlib = (ws / "third_party" / "testlib" / "testlib.h").read_bytes()
         upstream_testlib = Path("third_party/upstream/testlib/testlib.h").read_bytes()

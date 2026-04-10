@@ -127,7 +127,6 @@ class TestICPCPackageImport(SmokeBase):
         build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
         self.assertEqual(str(build_cfg.get("interactor_source") or ""), "interactors/interactor.cpp")
         self.assertFalse(bool(str(build_cfg.get("checker_source") or "").strip()))
-        self.assertFalse(bool(build_cfg.get("require_checker", True)))
 
     def test_import_icpc_package_without_accepted_submission_does_not_create_fallback_solution(self) -> None:
         ws = self._workspace_path()

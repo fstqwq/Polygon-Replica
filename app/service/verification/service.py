@@ -688,9 +688,6 @@ class VerificationService:
     def _load_build_config(self, snapshot: Path) -> dict:
         cfg = {
             "generator_runs": 3,
-            "require_generator": False,
-            "require_validator": True,
-            "require_checker": True,
             "compile_jobs": 0,
             "validate_jobs": 0,
             "solve_jobs": 0,

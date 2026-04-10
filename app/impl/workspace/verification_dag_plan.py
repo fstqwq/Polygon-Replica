@@ -135,10 +135,14 @@ def _shared_source_payloads(
         "validators",
         snapshot_resolved=snapshot_resolved,
     )
-    checker_source = verification_service._select_checker_source(
-        snapshot,
-        build_cfg,
-        snapshot_resolved=snapshot_resolved,
+    checker_source = (
+        None
+        if mode == "interactive"
+        else verification_service._select_checker_source(
+            snapshot,
+            build_cfg,
+            snapshot_resolved=snapshot_resolved,
+        )
     )
     interactor_source = verification_service._select_source(
         snapshot,
@@ -155,12 +159,6 @@ def _shared_source_payloads(
     if Path(accepted_source_path).suffix.lower() not in SOLUTION_SOURCE_EXTENSIONS:
         raise RuntimeError("accepted solution source must be .cpp/.cc/.cxx/.c++/.py/.java")
     accepted_source = resolve_source(snapshot, accepted_source_path, snapshot_resolved=snapshot_resolved)
-    require_validator = bool(build_cfg.get("require_validator", True))
-    require_checker = bool(build_cfg.get("require_checker", True))
-    if require_validator and validator_source is None:
-        raise RuntimeError("validator source is required")
-    if require_checker and checker_source is None:
-        raise RuntimeError("checker source is required")
     if mode == "interactive" and interactor_source is None:
         raise RuntimeError("interactor source is required for interactive mode")
     source_file_by_path = {

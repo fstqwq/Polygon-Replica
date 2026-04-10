@@ -125,6 +125,7 @@ ComponentImportSummary = TypedDict(
         "testlib_source": str,
         "checker_standard": str | None,
         "checker_source": str | None,
+        "checker_import_warning": str,
         "validator_source": str | None,
         "interactor_source": str | None,
         "generator_sources": list[str],
@@ -661,29 +662,6 @@ class PolygonPackageImportService:
 
         imported_testlib = self._write_maintained_testlib(workspace)
 
-        checker_name = meta["checker_name"]
-        checker_source_path = meta["checker_source"]
-        checker_standard: str | None = None
-        imported_checker_source: str | None = None
-        if checker_name.startswith("std::"):
-            checker_standard = checker_name
-            build_cfg["checker_standard"] = checker_name
-            build_cfg.pop("checker_source", None)
-        else:
-            imported_checker_source = self._copy_source_from_zip(
-                zf,
-                entries,
-                checker_source_path,
-                workspace,
-                "checkers",
-                "checker.cpp",
-            )
-            if imported_checker_source:
-                build_cfg["checker_source"] = imported_checker_source
-            else:
-                build_cfg.pop("checker_source", None)
-            build_cfg.pop("checker_standard", None)
-
         validator_source: str | None = None
         validator_sources = meta["validator_sources"]
         if validator_sources:
@@ -703,6 +681,11 @@ class PolygonPackageImportService:
         else:
             build_cfg.pop("validator_source", None)
 
+        checker_name = meta["checker_name"]
+        checker_source_path = meta["checker_source"]
+        checker_standard: str | None = None
+        imported_checker_source: str | None = None
+        checker_import_warning = ""
         imported_interactor_source = self._copy_source_from_zip(
             zf,
             entries,
@@ -717,6 +700,30 @@ class PolygonPackageImportService:
             build_cfg["interactor_source"] = imported_interactor_source
         else:
             build_cfg.pop("interactor_source", None)
+
+        if interactor_source:
+            if checker_name or checker_source_path:
+                checker_import_warning = "Polygon package checker ignored for interactive problem; edit the Interactor section instead"
+            build_cfg.pop("checker_source", None)
+            build_cfg.pop("checker_standard", None)
+        elif checker_name.startswith("std::"):
+            checker_standard = checker_name
+            build_cfg["checker_standard"] = checker_name
+            build_cfg.pop("checker_source", None)
+        else:
+            imported_checker_source = self._copy_source_from_zip(
+                zf,
+                entries,
+                checker_source_path,
+                workspace,
+                "checkers",
+                "checker.cpp",
+            )
+            if imported_checker_source:
+                build_cfg["checker_source"] = imported_checker_source
+            else:
+                build_cfg.pop("checker_source", None)
+            build_cfg.pop("checker_standard", None)
 
         used = {checker_source_path, meta["interactor_source"], *validator_sources}
         generator_names = {
@@ -748,6 +755,7 @@ class PolygonPackageImportService:
             "testlib_source": imported_testlib,
             "checker_standard": checker_standard,
             "checker_source": imported_checker_source,
+            "checker_import_warning": checker_import_warning,
             "validator_source": validator_source,
             "interactor_source": interactor_source,
             "generator_sources": generator_sources,
@@ -896,6 +904,10 @@ class PolygonPackageImportService:
                     encoding="utf-8",
                 )
             problem_cfg = self._write_problem_config(workspace, meta, component_summary)
+            warnings: list[str] = []
+            checker_warning = component_summary["checker_import_warning"]
+            if checker_warning:
+                warnings.append(checker_warning)
             return {
                 "package_name": package_name.strip(),
                 "title": meta["title"],
@@ -904,4 +916,5 @@ class PolygonPackageImportService:
                 "components": component_summary,
                 "solutions": solutions_summary,
                 "problem_cfg": problem_cfg,
+                "warnings": warnings,
             }
