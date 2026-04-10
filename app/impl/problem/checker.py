@@ -78,7 +78,7 @@ def checker_set_standard(problem: str, user: str, checker_name: str=Form(...)):
         normalized_name, _ = resolve_standard_checker_path(checker_name)
         canonical = f'std::{normalized_name}'
         with config.workspace_service.workspace_lock(workspace):
-            checker_rel = copy_standard_checker(normalized_name, workspace / 'checkers')
+            checker_rel = copy_standard_checker(normalized_name, workspace)
             build_cfg, cfg_path = read_build_config(workspace)
             build_cfg['checker_source'] = checker_rel
             write_build_config(cfg_path, build_cfg)

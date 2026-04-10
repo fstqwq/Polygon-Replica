@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import re
-
-
-STANDARD_CHECKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def is_safe_source_in_dir(root: Path, path: Path, root_resolved: Path | None = None) -> bool:
@@ -72,22 +68,6 @@ def resolve_source(snapshot: Path, rel_path: str, snapshot_resolved: Path | None
     return p
 
 
-def normalize_standard_checker_name(raw: str, name_pattern=None) -> str:
-    value = str(raw or "").strip()
-    if value.startswith("std::"):
-        value = value[5:]
-    if not value:
-        raise RuntimeError("checker_standard is empty")
-    if "/" in value or "\\" in value:
-        raise RuntimeError("checker_standard is invalid")
-    if not value.endswith(".cpp"):
-        value += ".cpp"
-    pattern = name_pattern if name_pattern is not None else STANDARD_CHECKER_NAME_RE
-    if not pattern.fullmatch(value):
-        raise RuntimeError("checker_standard is invalid")
-    return value
-
-
 def select_source(
     snapshot: Path,
     build_cfg: dict,
@@ -102,4 +82,3 @@ def select_source(
     if configured:
         return resolve_source(snapshot, str(configured), snapshot_resolved=snapshot_resolved)
     return find_source_with_extensions(snapshot, folder, cpp_extensions, preferred=preferred)
-

@@ -21,7 +21,7 @@ from app.impl.root.contest_import import (
 from app.impl.run_export.import_source import (
     build_import_slug_hint,
     import_package_as_new_problem,
-    import_statement_language_warning,
+    import_package_warnings,
 )
 from app.service.importing.contest import PolygonContestImportService
 
@@ -401,9 +401,9 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
         package_format_obj = imported.get("package_format")
         package_format = package_format_obj.strip() if isinstance(package_format_obj, str) else "package"
         msg = f"{package_format} package imported as {target_problem} ({_count_label(total_tests, 'test')})"
-        language_warning = import_statement_language_warning(imported)
-        if language_warning:
-            msg = f"{msg}; warning: {language_warning}"
+        warnings = import_package_warnings(imported)
+        if warnings:
+            msg = f"{msg}; warning: {'; '.join(warnings)}"
         return redirect_response(f"/problems/{target_problem}/{gctx['user']['username']}/statement", status_code=303, message=msg)
     except Exception as exc:
         msg = str(exc)
@@ -635,9 +635,9 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             imported_problem_slug = imported_problem_slug_obj.strip() if isinstance(imported_problem_slug_obj, str) else ""
             if not imported_problem_slug:
                 raise RuntimeError(f"failed to import problem package #{idx}")
-            language_warning = import_statement_language_warning(imported)
-            if language_warning:
-                import_warnings.append(f"{imported_problem_slug}: {language_warning}")
+            warnings = import_package_warnings(imported)
+            for warning in warnings:
+                import_warnings.append(f"{imported_problem_slug}: {warning}")
             problem_id = config.workspace_service.known_problem_id(imported_problem_slug)
             if problem_id is None:
                 raise RuntimeError(f"imported problem missing: {imported_problem_slug}")

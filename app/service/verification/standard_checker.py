@@ -11,6 +11,8 @@ import os
 import shutil
 from pathlib import Path
 
+from app.service.platform.workspace_path import safe_workspace_path
+
 
 def _standard_checker_root() -> Path:
     return (Path(__file__).resolve().parents[3] / "third_party" / "upstream" / "testlib" / "checkers").resolve()
@@ -65,8 +67,8 @@ def detect_standard_checker(source_path: Path) -> str | None:
     return standard_checker_hash_map().get(h)
 
 
-def copy_standard_checker(name: str, target_dir: Path) -> str:
-    """Copy a standard checker into *target_dir* and return the repo-relative path.
+def copy_standard_checker(name: str, workspace: Path) -> str:
+    """Copy a standard checker into *workspace* and return the repo-relative path.
 
     *name* can be ``"wcmp"``, ``"wcmp.cpp"``, or ``"std::wcmp.cpp"``.
     Returns a path like ``"checkers/wcmp.cpp"``.
@@ -84,7 +86,8 @@ def copy_standard_checker(name: str, target_dir: Path) -> str:
         raise ValueError(f"invalid standard checker name: {name}")
     if source.is_symlink() or not source.exists() or not source.is_file():
         raise ValueError(f"standard checker not found: {name}")
+    target_dir = safe_workspace_path(workspace, "checkers")
     target_dir.mkdir(parents=True, exist_ok=True)
-    dest = target_dir / token
+    dest = safe_workspace_path(workspace, f"checkers/{token}")
     shutil.copy2(source, dest)
     return f"checkers/{token}"

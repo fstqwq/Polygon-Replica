@@ -578,7 +578,7 @@ class TestSecurity(SmokeBase):
         cfg = ws / "config" / "build.json"
         cfg.parent.mkdir(parents=True, exist_ok=True)
         from app.service.verification.standard_checker import copy_standard_checker
-        copy_standard_checker("wcmp.cpp", ws / "checkers")
+        copy_standard_checker("wcmp.cpp", ws)
         cfg.write_text(json.dumps({"checker_source": "checkers/wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
         resp = checker_set_standard(problem="alice/sample", user="alice", checker_name="../../evil")
         self.assertEqual(resp.status_code, 303)

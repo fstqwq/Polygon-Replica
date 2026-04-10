@@ -56,6 +56,7 @@ ImportedPackageResult = TypedDict(
         "statement": ImportedStatementSummary,
         "components": dict[str, object],
         "solutions": dict[str, object],
+        "warnings": list[str],
     },
     total=False,
 )
@@ -296,19 +297,20 @@ def import_package_as_new_problem(
                 pass
         raise
 
-def import_statement_language_warning(import_result: dict[str, object] | None) -> str:
+def import_package_warnings(import_result: dict[str, object] | None) -> list[str]:
     if import_result is None:
-        return ""
+        return []
     result = cast(ImportedPackageResult | None, import_result.get("result"))
     if result is None:
-        return ""
+        return []
+    warnings = [text for item in (result.get("warnings") or []) if (text := str(item).strip())]
     statement = result.get("statement")
     if statement is None:
-        return ""
+        return warnings
     warning = cast(str | None, statement.get("language_warning"))
-    if warning is None:
-        return ""
-    return warning
+    if warning:
+        warnings.append(warning)
+    return warnings
 
 def export_import(problem: str, user: str, package_upload: UploadFile | None=File(None), problem_slug: str=Form('')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -334,9 +336,9 @@ def export_import(problem: str, user: str, package_upload: UploadFile | None=Fil
         total_tests = int(imported["total_tests"])
         package_format = cast(str, imported["package_format"])
         msg = f"{package_format} package imported as {target_problem} ({_count_label(total_tests, 'test')})"
-        language_warning = import_statement_language_warning(imported)
-        if language_warning:
-            msg = f"{msg}; warning: {language_warning}"
+        warnings = import_package_warnings(imported)
+        if warnings:
+            msg = f"{msg}; warning: {'; '.join(warnings)}"
         return redirect_response(f'/problems/{target_problem}/{actor_user}/statement', status_code=303, message=msg)
     except ValueError as exc:
         msg = str(exc)

@@ -335,7 +335,7 @@ class TestUIComponents(UIBaseSuite):
         cfg_path = ws / "config" / "build.json"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         from app.service.verification.standard_checker import copy_standard_checker
-        copy_standard_checker("wcmp.cpp", ws / "checkers")
+        copy_standard_checker("wcmp.cpp", ws)
         cfg_path.write_text(json.dumps({"checker_source": "checkers/wcmp.cpp"}, indent=2) + "\n", encoding="utf-8")
 
         page = checker_page(
@@ -1051,4 +1051,3 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertNotIn("registerValidation", html)
-

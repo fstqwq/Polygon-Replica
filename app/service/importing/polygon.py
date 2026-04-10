@@ -706,9 +706,10 @@ class PolygonPackageImportService:
             build_cfg.pop("checker_source", None)
         elif checker_name.startswith("std::"):
             try:
-                imported_checker_source = copy_standard_checker(checker_name, workspace / "checkers")
+                imported_checker_source = copy_standard_checker(checker_name, workspace)
                 build_cfg["checker_source"] = imported_checker_source
-            except ValueError:
+            except ValueError as exc:
+                checker_import_warning = str(exc)
                 build_cfg.pop("checker_source", None)
         else:
             imported_checker_source = self._copy_source_from_zip(
