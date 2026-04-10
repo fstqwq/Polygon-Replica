@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_component_dialogs.html" import change_badges %}
 {% block content %}
 <h1 class="page-title">Working Copy</h1>
 {% include "_flash_message.html" %}
@@ -36,16 +37,7 @@
     {% set upstream_rev = ('v' ~ upstream_rev_raw) if upstream_rev_raw is not none else 'missing' %}
     <p class="workspace-revision-inline">Based on <strong>{{ local_rev }}</strong> / upstream <strong>{{ upstream_rev }}</strong></p>
     {% if change_rows %}
-    <div class="change-badges">
-      {% if ctx.workspace_changes.counts.added %}<span class="change-chip change-added">+{{ ctx.workspace_changes.counts.added }} added</span>{% endif %}
-      {% if ctx.workspace_changes.counts.modified %}<span class="change-chip change-modified">~{{ ctx.workspace_changes.counts.modified }} modified</span>{% endif %}
-      {% if ctx.workspace_changes.counts.deleted %}<span class="change-chip change-deleted">-{{ ctx.workspace_changes.counts.deleted }} deleted</span>{% endif %}
-      {% if ctx.workspace_changes.counts.renamed %}<span class="change-chip change-renamed">R{{ ctx.workspace_changes.counts.renamed }} renamed</span>{% endif %}
-      {% if ctx.workspace_changes.counts.untracked %}<span class="change-chip change-untracked">?{{ ctx.workspace_changes.counts.untracked }} untracked</span>{% endif %}
-      {% if ctx.workspace_changes.counts.conflicted %}<span class="change-chip change-conflicted">!{{ ctx.workspace_changes.counts.conflicted }} conflicted</span>{% endif %}
-      {% if ctx.workspace_changes.counts.typechange %}<span class="change-chip change-typechange">T{{ ctx.workspace_changes.counts.typechange }} type</span>{% endif %}
-      {% if ctx.workspace_changes.counts.other %}<span class="change-chip change-other">{{ ctx.workspace_changes.counts.other }} other</span>{% endif %}
-    </div>
+    {{ change_badges(ctx.workspace_changes.counts) }}
     {% else %}
     <p class="muted">Working copy clean.</p>
     {% endif %}

@@ -14,7 +14,7 @@
   <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/add">
     <input type="hidden" name="q" value="{{ query }}" />
     {% if available_rows %}
-    <table>
+    <table class="table-base">
       <tr>
         <th>Select</th>
         <th>Problem</th>
@@ -39,7 +39,7 @@
   <h2>Reorder / Remove</h2>
   {% if problem_rows %}
   <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">
-    <table>
+    <table class="table-base">
       <tr>
         <th>Select</th>
         <th>Idx</th>
@@ -76,7 +76,7 @@
   <p class="muted">Each selected problem applies source updates and creates one commit with message: <code>contest {{ ctx.contest.slug }}: bulk update name/TL/ML</code>.</p>
   {% if problem_rows %}
   <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/change-general">
-    <table>
+    <table class="table-base">
       <tr>
         <th>Select</th>
         <th>Problem</th>
@@ -100,7 +100,7 @@
       {% endfor %}
     </table>
     <div class="form-row">
-      <button class="btn btn-primary primary-action" type="submit">Apply To Selected</button>
+      <button class="btn primary-action" type="submit">Apply To Selected</button>
       {% if latest_job and latest_job.job_type == "change-general" %}
       <button class="btn" type="submit" name="retry_job_id" value="{{ latest_job.id }}">Retry Failed From Last Job</button>
       {% endif %}
@@ -113,7 +113,7 @@
 <section>
   <h2>Last Change Report</h2>
   <p><strong>Job:</strong> <code>{{ latest_job.id }}</code> / {{ latest_job.status | status_label }}</p>
-  <table>
+  <table class="table-base">
     <tr>
       <th>Problem</th>
       <th>Status</th>

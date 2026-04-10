@@ -17,7 +17,7 @@
     <h2>Problem Access</h2>
     <p class="muted">Owners can grant/revoke <code>write/read</code> roles. Owner access is fixed and cannot be transferred. Target user must register first.</p>
     {% if acl_entries %}
-    <table>
+    <table class="table-base">
       <tr><th>User</th><th>Role</th><th>Granted</th><th>Actions</th></tr>
       {% for row in acl_entries %}
       <tr>

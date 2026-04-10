@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from "_component_dialogs.html" import ui_popup %}
+{% block body_class %}{% if detail_table_compact %} verification-compact{% endif %}{% endblock %}
 {% block content %}
 <div class="page-title-inline page-title-inline-status">
   <h1 class="page-title">Verification</h1>
@@ -92,7 +94,7 @@
         <tr>
           <th>Test</th>
           {% for col in detail_columns %}
-          <th class="{{ 'col-bad' if col.expected_mismatch else '' }}">
+          <th class="{{ 'tone-fail' if col.expected_mismatch else '' }}">
             {% if col.source_href %}
             <a href="{{ col.source_href }}" class="col-link"><span class="col-title">{{ col.title }}</span></a>
             {% else %}
@@ -107,7 +109,7 @@
             <span class="stat-line stat-sub">Expected</span>
           </th>
           {% for col in detail_columns %}
-          <th class="{{ col.result_tone_class }} {{ 'col-bad' if col.expected_mismatch else '' }}">
+          <th class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
             <span class="stat-line stat-main">{{ col.got_display or col.got_short }}</span>
             {% set expected_token = col.expected_display or '--' %}
             <span class="stat-line stat-sub">{{ expected_token }}</span>
@@ -174,7 +176,7 @@
             <div class="stat-line stat-sub">Statistics</div>
           </th>
           {% for col in detail_columns %}
-          <td class="{{ col.result_tone_class }} {{ 'col-bad' if col.expected_mismatch else '' }}">
+          <td class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
             <div class="stat-line stat-main">{{ col.got_display or col.got_short or '-' }}</div>
             <div class="stat-line stat-sub">{{ col.max_time_display or '-' }} / {{ col.max_memory_display or '-' }}</div>
           </td>
@@ -184,17 +186,9 @@
     </table>
   </div>
 </section>
-<div id="run-test-detail-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog verification-detail-popup" role="dialog" aria-modal="true" aria-labelledby="run-test-detail-popup-title">
-    <div class="ui-popup-header">
-      <h2 id="run-test-detail-popup-title" class="ui-popup-title">Test Details</h2>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content" id="run-test-detail-popup-content">
+{% call ui_popup('run-test-detail-popup', 'Test Details', dialog_class='verification-detail-popup', content_id='run-test-detail-popup-content') %}
       <p class="muted verification-detail-loading">Click to load test details.</p>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
 <section>
   <h2>Diagnostics</h2>
@@ -216,7 +210,7 @@
       </div>
     </div>
     {% if has_error %}
-    <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ col.error_display or col.error }}</p>
+    <p class="compile-diagnostics-error">{{ col.error_display or col.error }}</p>
     {% endif %}
     {% if has_entries %}
     <div class="compile-diagnostics-list" role="list">
@@ -251,7 +245,7 @@
       <div><strong>{{ detail_verification_logs.title or 'Verification' }}</strong></div>
     </div>
     {% if verification_error %}
-    <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
+    <p class="compile-diagnostics-error">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
     {% endif %}
     {% if verification_has_entries %}
     <div class="compile-diagnostics-list" role="list">
@@ -300,7 +294,7 @@
       <div><strong>{{ detail_verification_logs.title or 'Verification' }}</strong></div>
     </div>
     {% if verification_error %}
-    <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
+    <p class="compile-diagnostics-error">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
     {% endif %}
     {% if verification_has_entries %}
     <div class="compile-diagnostics-list" role="list">

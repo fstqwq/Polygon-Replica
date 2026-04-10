@@ -6,17 +6,23 @@
   if (!targets.length) return;
 
   var LOCAL_BASE = "/static/vendor/codemirror";
-  var CORE_CSS = LOCAL_BASE + "/lib/codemirror.min.css";
-  var CORE_JS = LOCAL_BASE + "/lib/codemirror.min.js";
+  var ASSET_VERSION = "20260409-1";
+
+  function assetUrl(path) {
+    return path + "?v=" + ASSET_VERSION;
+  }
+
+  var CORE_CSS = assetUrl(LOCAL_BASE + "/lib/codemirror.min.css");
+  var CORE_JS = assetUrl(LOCAL_BASE + "/lib/codemirror.min.js");
   var ADDON_JS = [
-    LOCAL_BASE + "/addon/edit/matchbrackets.min.js",
-    LOCAL_BASE + "/addon/edit/closebrackets.min.js",
+    assetUrl(LOCAL_BASE + "/addon/edit/matchbrackets.min.js"),
+    assetUrl(LOCAL_BASE + "/addon/edit/closebrackets.min.js"),
   ];
   var MODE_JS = [
-    LOCAL_BASE + "/mode/clike/clike.min.js",
-    LOCAL_BASE + "/mode/python/python.min.js",
-    LOCAL_BASE + "/mode/stex/stex.min.js",
-    LOCAL_BASE + "/mode/javascript/javascript.min.js",
+    assetUrl(LOCAL_BASE + "/mode/clike/clike.min.js"),
+    assetUrl(LOCAL_BASE + "/mode/python/python.min.js"),
+    assetUrl(LOCAL_BASE + "/mode/stex/stex.min.js"),
+    assetUrl(LOCAL_BASE + "/mode/javascript/javascript.min.js"),
   ];
 
   function readWrapEnabled(el) {

@@ -1,21 +1,22 @@
+{% from "_component_dialogs.html" import change_badges %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% if ctx.problem.name %}{{ ctx.problem.name }} - {% endif %}Polygon-Replica</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260317-1" />
-  <script src="/static/ui.js?v=20260317-1" defer></script>
-  <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css" />
-  <script src="/static/vendor/codemirror/lib/codemirror.min.js" defer></script>
-  <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js" defer></script>
-  <script src="/static/vendor/codemirror/addon/edit/closebrackets.min.js" defer></script>
-  <script src="/static/vendor/codemirror/mode/clike/clike.min.js" defer></script>
-  <script src="/static/vendor/codemirror/mode/python/python.min.js" defer></script>
-  <script src="/static/vendor/codemirror/mode/stex/stex.min.js" defer></script>
-  <script src="/static/vendor/codemirror/mode/javascript/javascript.min.js" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260409-1" />
+  <script src="/static/ui.js?v=20260409-1" defer></script>
+  <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260409-1" />
+  <script src="/static/vendor/codemirror/lib/codemirror.min.js?v=20260409-1" defer></script>
+  <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js?v=20260409-1" defer></script>
+  <script src="/static/vendor/codemirror/addon/edit/closebrackets.min.js?v=20260409-1" defer></script>
+  <script src="/static/vendor/codemirror/mode/clike/clike.min.js?v=20260409-1" defer></script>
+  <script src="/static/vendor/codemirror/mode/python/python.min.js?v=20260409-1" defer></script>
+  <script src="/static/vendor/codemirror/mode/stex/stex.min.js?v=20260409-1" defer></script>
+  <script src="/static/vendor/codemirror/mode/javascript/javascript.min.js?v=20260409-1" defer></script>
 </head>
-<body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}">
+<body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}
   <header class="topbar">
     {% set top_user = ctx.user %}
@@ -187,7 +188,7 @@
         {% if ctx.workspace_needs_update %}
         <div class="workspace-update-row">
           <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull">
-            <button class="btn button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
+            <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
           </form>
         </div>
         {% endif %}
@@ -200,16 +201,7 @@
           <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace">Commit Changes</a>
         </div>
         {% if ctx.workspace_changes.total > 0 %}
-        <div class="change-badges">
-          {% if ctx.workspace_changes.counts.added %}<span class="change-chip change-added">+{{ ctx.workspace_changes.counts.added }} added</span>{% endif %}
-          {% if ctx.workspace_changes.counts.modified %}<span class="change-chip change-modified">~{{ ctx.workspace_changes.counts.modified }} modified</span>{% endif %}
-          {% if ctx.workspace_changes.counts.deleted %}<span class="change-chip change-deleted">-{{ ctx.workspace_changes.counts.deleted }} deleted</span>{% endif %}
-          {% if ctx.workspace_changes.counts.renamed %}<span class="change-chip change-renamed">R{{ ctx.workspace_changes.counts.renamed }} renamed</span>{% endif %}
-          {% if ctx.workspace_changes.counts.untracked %}<span class="change-chip change-untracked">?{{ ctx.workspace_changes.counts.untracked }} untracked</span>{% endif %}
-          {% if ctx.workspace_changes.counts.conflicted %}<span class="change-chip change-conflicted">!{{ ctx.workspace_changes.counts.conflicted }} conflicted</span>{% endif %}
-          {% if ctx.workspace_changes.counts.typechange %}<span class="change-chip change-typechange">T{{ ctx.workspace_changes.counts.typechange }} type</span>{% endif %}
-          {% if ctx.workspace_changes.counts.other %}<span class="change-chip change-other">{{ ctx.workspace_changes.counts.other }} other</span>{% endif %}
-        </div>
+        {{ change_badges(ctx.workspace_changes.counts) }}
         <ul class="change-list">
           {% for row in ctx.workspace_changes.rows %}
           <li class="change-item change-{{ row.kind }}">
@@ -229,6 +221,6 @@
   </div>
   {% include "_page_profile.html" %}
 
-  <script src="/static/editor_init.js" defer></script>
+  <script src="/static/editor_init.js?v=20260409-1" defer></script>
 </body>
 </html>

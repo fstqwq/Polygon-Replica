@@ -1,0 +1,443 @@
+form {
+  margin: 0;
+}
+
+.form-stack {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.form-stack > input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+.form-stack > select,
+.form-stack > textarea {
+  width: 100%;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.form-row:not(.form-row-column) > label {
+  flex: 0 0 150px;
+}
+
+.form-row-column {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.form-row:not(.form-row-column) > input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+.form-row:not(.form-row-column) > select,
+.form-row:not(.form-row-column) > textarea {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.form-row-inline-distribute {
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: var(--space-7);
+  width: 100%;
+}
+
+.form-field-stack {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.form-row-inline-distribute > .form-field-stack:last-of-type {
+  flex: 1.15 1 0;
+}
+
+.form-field-stack > label {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.form-field-stack > input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+.form-field-stack > select,
+.form-field-stack > textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.form-row-inline-distribute > button {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 96px;
+  white-space: nowrap;
+}
+
+@media (max-width: 960px) {
+  .form-row-inline-distribute {
+    flex-wrap: wrap;
+    gap: var(--space-5);
+  }
+
+  .form-field-stack {
+    flex: 1 1 220px;
+  }
+
+  .form-row-inline-distribute > .form-field-stack:last-of-type {
+    flex: 1 1 220px;
+  }
+
+  .form-row-inline-distribute > button {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .form-field-stack {
+    flex: 1 1 100%;
+  }
+
+  .form-row-inline-distribute > button {
+    width: 100%;
+  }
+}
+
+.form-input-with-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.form-input-with-action > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.form-input-with-action > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.form-row-hint-offset {
+  flex: 1 1 100%;
+  margin: 0 0 0 158px;
+}
+
+@media (max-width: 800px) {
+  .form-row-hint-offset {
+    margin-left: 0;
+  }
+}
+
+.form-row-inline-controls {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.form-row-inline-controls > label {
+  flex: 0 0 auto;
+}
+
+.form-row-inline-controls > select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.form-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+}
+
+.form-row-actions > button {
+  white-space: nowrap;
+}
+
+.checker-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.checker-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.checker-mode-chip {
+  display: inline-block;
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.2;
+  color: var(--text-secondary);
+  border: 1px solid var(--line-strong);
+  padding: 1px var(--space-2);
+}
+
+.checker-mode-chip-active {
+  border-color: var(--text);
+  background: var(--surface-hover);
+  font-weight: 700;
+}
+
+.run-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-3);
+  padding: 2px var(--space-3);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.15;
+  font-weight: 600;
+  border: 1px solid var(--line-strong);
+  color: var(--text-secondary);
+  background: var(--surface-alt);
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.inline-form,
+.tag-form {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.inline-action {
+  display: inline-flex;
+  margin-left: var(--space-3);
+}
+
+.inline-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.inline-meta-row > p {
+  margin: 0;
+}
+
+.statement-summary {
+  margin: 0 0 var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.statement-summary-title {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.statement-summary-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.statement-summary-values {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  color: var(--muted);
+}
+
+.statement-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  padding: 1px var(--space-3);
+  white-space: nowrap;
+}
+
+.statement-summary-edit {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 2px var(--space-3);
+}
+
+.statement-summary-edit:hover {
+  border-color: var(--line);
+  background: var(--surface-alt);
+  text-decoration: none;
+}
+
+@media (max-width: 720px) {
+  .statement-summary-meta {
+    gap: var(--space-2);
+  }
+
+  .statement-summary-edit {
+    margin-left: 0;
+  }
+}
+
+.form-block {
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  padding: var(--space-3);
+}
+
+input,
+select,
+textarea {
+  border: 1px solid var(--field-border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+}
+
+textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+}
+
+textarea.textarea-sm {
+  min-height: 96px;
+}
+
+textarea.textarea-md {
+  min-height: 180px;
+}
+
+.CodeMirror {
+  border: 1px solid var(--field-border);
+  background: var(--surface);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: var(--font-size-ui-sm);
+}
+
+.CodeMirror-scroll {
+  min-height: 220px;
+}
+
+/* Button tiers: use .btn/.button-link for default actions, add .primary-action for primary actions, and use .linkish/.danger-link for ghost or destructive links. */
+.btn,
+.button-link {
+  font: inherit;
+  border: 1px solid var(--btn-border);
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  font-weight: 600;
+  line-height: 1.2;
+  padding: var(--space-2) var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  vertical-align: middle;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:hover:not(:disabled),
+.button-link:hover:not([aria-disabled="true"]) {
+  background: var(--btn-bg-hover);
+  text-decoration: none;
+}
+
+.btn:focus-visible,
+.button-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.btn:disabled,
+.button-link[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.primary-action {
+  border-color: var(--btn-primary-border);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+}
+
+.primary-action:hover:not(:disabled) {
+  background: var(--btn-primary-bg-hover);
+}
+
+.button-link:hover {
+  text-decoration: none;
+}
+
+.linkish,
+.linkish-button {
+  border: 0;
+  background: transparent;
+  color: var(--link);
+  padding: 0;
+}
+
+.linkish:hover,
+.linkish-button:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
+}
+
+.linkish[aria-disabled="true"],
+.linkish-button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  text-decoration: none;
+  pointer-events: none;
+}
+
+.text-nowrap {
+  white-space: nowrap;
+}
+
+.table-base {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table-base th,
+.table-base td {
+  border: 1px solid var(--line);
+  padding: var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  font-size: var(--font-size-ui-sm);
+  overflow-wrap: anywhere;
+}
+
+.table-base th {
+  background: var(--surface-alt);
+}
+
+.table-base tbody tr:nth-child(even) td {
+  background: var(--table-row-alt);
+}
+
+.table-base tbody tr:nth-child(odd) td {
+  background: var(--surface);
+}
+
+tr.table-row-dirty > td,
+tr.verification-row-failed > td {
+  background: var(--surface-danger);
+}
+

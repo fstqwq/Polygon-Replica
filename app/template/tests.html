@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <h1 class="page-title">Tests ({{ tests_editor.summary.total }})</h1>
 {% include "_flash_message.html" %}
@@ -70,13 +71,7 @@
 </section>
 
 {% for row in tests_editor.rows %}
-<div id="tests-edit-popup-{{ row.index }}" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="tests-edit-popup-{{ row.index }}-title">
-    <div class="ui-popup-header">
-      <h3 id="tests-edit-popup-{{ row.index }}-title">Edit Test #{{ row.index }}</h3>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('tests-edit-popup-' ~ row.index, 'Edit Test #' ~ row.index, title_tag='h3', title_class='') %}
       {% if row.manual_large_payload %}
       <p class="muted">
         Inline payload editor is disabled for large manual tests.
@@ -117,17 +112,9 @@
         {% endif %}
         <button class="btn" type="submit">Save Test</button>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
-<div id="tests-reindex-popup-{{ row.index }}" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="tests-reindex-popup-{{ row.index }}-title">
-    <div class="ui-popup-header">
-      <h3 id="tests-reindex-popup-{{ row.index }}-title">Reindex Test {{ "%03d"|format(row.index) }}</h3>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('tests-reindex-popup-' ~ row.index, 'Reindex Test ' ~ ('%03d'|format(row.index)), title_tag='h3', title_class='') %}
       <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/reindex">
         <input type="hidden" name="source_index" value="{{ row.index }}" />
         <label for="tests-reindex-target-popup-{{ row.index }}">Target position</label>
@@ -135,18 +122,10 @@
         <p class="muted">Move this test to a new position. Other tests keep relative order.</p>
         <button class="btn" type="submit">Reindex</button>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 {% endfor %}
 
-<div id="tests-add-manual-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="tests-add-manual-popup-title">
-    <div class="ui-popup-header">
-      <h3 id="tests-add-manual-popup-title">Add Manual Test</h3>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('tests-add-manual-popup', 'Add Manual Test', title_tag='h3', title_class='') %}
       <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-manual" data-sample-form="1">
         <label for="add-manual-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-id-popup" type="text" name="test_id" />
@@ -162,17 +141,9 @@
         <p class="muted">Template: each submission input as plain text.</p>
         <button class="btn" type="submit">Add Manual</button>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
-<div id="tests-upload-manual-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="tests-upload-manual-popup-title">
-    <div class="ui-popup-header">
-      <h3 id="tests-upload-manual-popup-title">Upload Manual Test</h3>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('tests-upload-manual-popup', 'Upload Manual Test', title_tag='h3', title_class='') %}
       <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-manual-upload" data-sample-form="1">
         <label for="add-manual-upload-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-upload-id-popup" type="text" name="test_id" />
@@ -187,9 +158,7 @@
         <input id="add-manual-upload-file-popup" type="file" name="manual_upload" required />
         <button class="btn" type="submit">Upload Manual</button>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
 <div class="tests-form-grid tests-form-grid-single-extra">
   <section class="tests-subsection">
@@ -211,36 +180,4 @@
     </form>
   </section>
 </div>
-<script>
-(() => {
-  function syncSampleForm(form) {
-    const toggle = form.querySelector('[data-sample-toggle="1"]');
-    const group = form.querySelector('[data-sample-output-validate-group="1"]');
-    if (!toggle || !group) {
-      return;
-    }
-    const checkbox = group.querySelector('input[name="sample_output_validate"]');
-    const visible = toggle.checked;
-    group.hidden = !visible;
-    if (checkbox) {
-      checkbox.disabled = !visible;
-    }
-  }
-
-  document.querySelectorAll('form[data-sample-form="1"]').forEach(syncSampleForm);
-  document.addEventListener('change', (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) {
-      return;
-    }
-    if (target.getAttribute('data-sample-toggle') !== '1') {
-      return;
-    }
-    const form = target.closest('form[data-sample-form="1"]');
-    if (form instanceof HTMLFormElement) {
-      syncSampleForm(form);
-    }
-  });
-})();
-</script>
 {% endblock %}

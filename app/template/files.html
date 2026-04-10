@@ -19,7 +19,7 @@
     {% if files_truncated %}
     <p><em>Repository listing is capped at {{ file_limit }} entries; narrow by folder for complete browsing.</em></p>
     {% endif %}
-    <table>
+    <table class="table-base">
       <tr><th>Type</th><th>Path</th></tr>
       {% for d in browse_dirs %}
       <tr>
@@ -90,7 +90,7 @@
           data-code-height="520"
           {% if content_truncated %}readonly{% endif %}
         >{{ content }}</textarea>
-        <button class="btn btn-primary primary-action" type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
+        <button class="btn primary-action" type="submit" {% if content_truncated %}disabled title="Cannot save truncated file view"{% endif %}>Save</button>
       </form>
     {% endif %}
   </section>

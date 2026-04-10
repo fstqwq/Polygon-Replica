@@ -4,7 +4,7 @@
 {% include "_flash_message.html" %}
 <section>
   {% if commits %}
-  <table>
+  <table class="table-base">
     <tr><th>Revision</th><th>Message</th><th>Author</th><th>Date</th><th>Commit</th><th>Action</th></tr>
     {% for c in commits %}
     <tr>

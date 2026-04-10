@@ -1,10 +1,11 @@
 {% if message %}
 {% set flash_mode = flash_presenter if flash_presenter is defined else 'topbar' %}
 {% set flash_level = message_level if message_level is defined else 'info' %}
+{% set flash_tone = 'tone-fail' if flash_level == 'error' else 'tone-warn' if flash_level == 'warning' else 'tone-ok' if flash_level == 'success' else 'tone-info' %}
 {% set flash_event_id_value = message_event_id if message_event_id is defined else '' %}
 {% set flash_ts_value = message_ts if message_ts is defined else '' %}
 {% if flash_mode == 'inline' %}
-<p class="flash flash-inline">{{ message }}</p>
+<p class="flash flash-inline {{ flash_tone }}">{{ message }}</p>
 {% else %}
 <div
   class="top-event-payload"

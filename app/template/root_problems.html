@@ -1,4 +1,5 @@
 {% extends "root_base.html" %}
+{% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <div class="page-title-inline root-page-title-inline">
   <h1 class="page-title">Problems</h1>
@@ -13,7 +14,7 @@
 <section>
   <h2>My Problems</h2>
   {% if entries %}
-  <table>
+  <table class="table-base">
     <tr>
       <th>Problem</th>
       <th>Role</th>
@@ -37,37 +38,23 @@
   <p class="muted">Showing up to {{ entries_limit }} {% if entries_limit == 1 %}problem{% else %}problems{% endif %}.</p>
 </section>
 
-<div id="problem-open-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="problem-open-popup-title">
-    <div class="ui-popup-header">
-      <h3 id="problem-open-popup-title">Open/Create By Problem ID</h3>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('problem-open-popup', 'Open/Create By Problem ID', title_tag='h3', title_class='') %}
       <form class="form-row" method="post" action="/switch-workspace">
         <label for="problem">Problem ID</label>
         <input id="problem" name="problem" value="" list="problem-list" />
         <label for="problem-name">Problem Name (for create)</label>
         <input id="problem-name" name="problem_name" value="" placeholder="used only when problem id is new" />
         <input type="hidden" name="page" value="statement" />
-        <button class="btn btn-primary primary-action" type="submit">Open</button>
+        <button class="btn primary-action" type="submit">Open</button>
         <datalist id="problem-list">
           {% for row in entries %}
           <option value="{{ row.slug }}">{{ row.name }}</option>
           {% endfor %}
         </datalist>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
-<div id="problem-import-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="problem-import-popup-title">
-    <div class="ui-popup-header">
-      <h3 id="problem-import-popup-title">Import Problem Package As New Problem</h3>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('problem-import-popup', 'Import Problem Package As New Problem', title_tag='h3', title_class='') %}
       <p class="muted">Upload a Polygon linux, ICPC, or native zip package to create a new problem and import statement/tests/components into that new workspace.</p>
       <form
         id="polygon-import-form"
@@ -84,7 +71,5 @@
         <input id="polygon-import-package" type="file" name="package_upload" accept=".zip,application/zip" required />
         <button class="btn" type="submit">Import As New Problem</button>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 {% endblock %}

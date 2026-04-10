@@ -41,11 +41,11 @@
   {% set diagnostics_error = (cell.detail.compile_error_display if cell.detail and cell.detail.compile_error_display else '') %}
   {% set has_diagnostics = diagnostics_error or (diagnostics_entries | length) > 0 %}
   {% set row_kind = final_row.kind if final_row.kind is defined else cell.kind %}
-  {% set verdict_class = 'run-verdict-ok' if row_kind == 'ok' else 'run-verdict-unexpected' if row_kind == 'fail' else 'run-verdict-expected' if row_kind == 'expected-nonac' else 'muted' %}
+  {% set verdict_tone = 'tone-ok' if row_kind == 'ok' else 'tone-fail' if row_kind == 'fail' else 'tone-info' if row_kind == 'expected-nonac' else 'tone-neutral' %}
   <section class="sol-card" data-run-id="{{ col.id }}">
     <div class="sol-head">
       <strong class="sol-title">{{ col.title }}</strong>
-      <span class="sol-verdict {{ verdict_class }}">{{ final_row.verdict_short or '-' }}</span>
+      <span class="sol-verdict {{ verdict_tone }}">{{ final_row.verdict_short or '-' }}</span>
     </div>
     {% set feedback_text = final_row.feedback_display or '-' %}
     <table class="sol-metrics">
@@ -75,7 +75,7 @@
         <div><strong>Diagnostics</strong></div>
       </div>
       {% if diagnostics_error %}
-      <p class="compile-diagnostics-error" style="white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;">{{ diagnostics_error }}</p>
+      <p class="compile-diagnostics-error">{{ diagnostics_error }}</p>
       {% endif %}
       {% if diagnostics_entries %}
       <div class="compile-diagnostics-list" role="list">

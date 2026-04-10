@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 {% set ns = namespace(latest=None) %}
 {% set preview_nav = ctx.nav_status.get('preview', {}) if ctx.nav_status is defined else {} %}
@@ -88,7 +89,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <button class="btn btn-primary primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
+      <button class="btn primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
     </form>
     {% endif %}
     {% if preview_compile_failed %}
@@ -125,7 +126,7 @@
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <button class="btn btn-primary primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
+      <button class="btn primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
     </form>
     {% elif not preview_is_missing and not preview_compile_failed %}
     <p class="muted">Latest preview has no PDF output.</p>
@@ -158,28 +159,14 @@
   </section>
 </div>
 
-<div id="statement-draft-popup" class="ui-popup-overlay statement-draft-popup" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="statement-draft-popup-title">
-    <div class="ui-popup-header">
-      <h2 id="statement-draft-popup-title" class="ui-popup-title">Draft History</h2>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('statement-draft-popup', 'Draft History', overlay_class='statement-draft-popup') %}
       <p class="muted" data-statement-draft-status="1">Loading local drafts...</p>
       <p class="flash" data-statement-draft-error="1" hidden></p>
       <p class="muted" data-statement-draft-empty="1" hidden>No local drafts yet.</p>
       <div class="statement-draft-list" data-statement-draft-list="1"></div>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
-<div id="statement-settings-popup" class="ui-popup-overlay" data-popup-overlay="1" hidden>
-  <div class="ui-popup-dialog" role="dialog" aria-modal="true" aria-labelledby="statement-settings-popup-title">
-    <div class="ui-popup-header">
-      <h2 id="statement-settings-popup-title" class="ui-popup-title">Edit Statement Settings</h2>
-      <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
-    </div>
-    <div class="ui-popup-content">
+{% call ui_popup('statement-settings-popup', 'Edit Statement Settings') %}
       <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/save">
         <div class="form-row">
           <label for="general-problem-name">Problem name</label>
@@ -214,9 +201,7 @@
           <button class="btn" type="submit">Save</button>
         </div>
       </form>
-    </div>
-  </div>
-</div>
+{% endcall %}
 
 <section>
   <h2>Statement attachments</h2>
@@ -224,7 +209,7 @@
     <p class="muted">Only uploaded images are shown.</p>
     <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?dir={{ statement_section_dir }}&path={{ statement_section_dir }}/attachment.png&src=statement{% if preview_id %}&sid={{ preview_id }}{% endif %}">Upload attachments</a>
   </div>
-  <table>
+  <table class="table-base">
     <tr>
       <th>Path</th>
       <th>Action</th>
