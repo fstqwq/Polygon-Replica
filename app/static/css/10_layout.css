@@ -45,36 +45,12 @@
   align-items: center;
   gap: var(--space-4);
   max-width: min(620px, 100%);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  border: 1px solid var(--tone-border, rgba(255, 255, 255, 0.2));
+  background: var(--tone-bg, rgba(255, 255, 255, 0.1));
+  color: var(--tone-fg, #ffffff);
   font-size: var(--font-size-ui-sm);
   line-height: 1.3;
   padding: 4px 8px;
-}
-
-.top-event-success {
-  border-color: var(--tag-ok-border);
-  background: var(--tag-ok-bg);
-  color: var(--tag-ok-fg);
-}
-
-.top-event-warning {
-  border-color: var(--warn-line);
-  background: var(--surface-warning);
-  color: var(--warn-text);
-}
-
-.top-event-error {
-  border-color: var(--tag-fail-border);
-  background: var(--tag-fail-bg);
-  color: var(--tag-fail-fg);
-}
-
-.top-event-info {
-  border-color: var(--tag-info-border);
-  background: var(--tag-info-bg);
-  color: var(--tag-info-fg);
 }
 
 .top-event-text {

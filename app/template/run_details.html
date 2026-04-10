@@ -94,7 +94,7 @@
         <tr>
           <th>Test</th>
           {% for col in detail_columns %}
-          <th class="{{ 'col-bad' if col.expected_mismatch else '' }}">
+          <th class="{{ 'tone-fail' if col.expected_mismatch else '' }}">
             {% if col.source_href %}
             <a href="{{ col.source_href }}" class="col-link"><span class="col-title">{{ col.title }}</span></a>
             {% else %}
@@ -109,7 +109,7 @@
             <span class="stat-line stat-sub">Expected</span>
           </th>
           {% for col in detail_columns %}
-          <th class="{{ col.result_tone_class }} {{ 'col-bad' if col.expected_mismatch else '' }}">
+          <th class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
             <span class="stat-line stat-main">{{ col.got_display or col.got_short }}</span>
             {% set expected_token = col.expected_display or '--' %}
             <span class="stat-line stat-sub">{{ expected_token }}</span>
@@ -176,7 +176,7 @@
             <div class="stat-line stat-sub">Statistics</div>
           </th>
           {% for col in detail_columns %}
-          <td class="{{ col.result_tone_class }} {{ 'col-bad' if col.expected_mismatch else '' }}">
+          <td class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
             <div class="stat-line stat-main">{{ col.got_display or col.got_short or '-' }}</div>
             <div class="stat-line stat-sub">{{ col.max_time_display or '-' }} / {{ col.max_memory_display or '-' }}</div>
           </td>

@@ -267,35 +267,37 @@ section.verification-header-section {
 }
 
 .verification-lifecycle-step-done {
-  background: var(--surface-success);
-}
-
-.verification-lifecycle-step-done .verification-lifecycle-step-status {
-  color: var(--ok);
+  --tone-bg: var(--surface-success);
+  --tone-fg: var(--ok);
 }
 
 .verification-lifecycle-step-running {
-  background: var(--surface-info);
-}
-
-.verification-lifecycle-step-running .verification-lifecycle-step-status {
-  color: var(--tag-info-fg);
+  --tone-bg: var(--surface-info);
+  --tone-fg: var(--tag-info-fg);
 }
 
 .verification-lifecycle-step-failed {
-  background: var(--surface-danger);
-}
-
-.verification-lifecycle-step-failed .verification-lifecycle-step-status {
-  color: var(--danger);
+  --tone-bg: var(--surface-danger);
+  --tone-fg: var(--danger);
 }
 
 .verification-lifecycle-step-skipped {
-  background: var(--surface-alt);
+  --tone-bg: var(--surface-alt);
+  --tone-fg: var(--muted);
 }
 
+.verification-lifecycle-step-done,
+.verification-lifecycle-step-running,
+.verification-lifecycle-step-failed,
+.verification-lifecycle-step-skipped {
+  background: var(--tone-bg);
+}
+
+.verification-lifecycle-step-done .verification-lifecycle-step-status,
+.verification-lifecycle-step-running .verification-lifecycle-step-status,
+.verification-lifecycle-step-failed .verification-lifecycle-step-status,
 .verification-lifecycle-step-skipped .verification-lifecycle-step-status {
-  color: #64748b;
+  color: var(--tone-fg);
 }
 
 .verification-expected-notes {
@@ -444,39 +446,17 @@ section.verification-header-section {
 }
 
 .verification-detail-table th.tone-ok,
-.verification-detail-table td.tone-ok {
-  background: var(--surface-success);
-  color: var(--ok);
-}
-
+.verification-detail-table td.tone-ok,
 .verification-detail-table th.tone-fail,
-.verification-detail-table td.tone-fail {
-  background: var(--surface-danger);
-  color: var(--danger);
-}
-
+.verification-detail-table td.tone-fail,
 .verification-detail-table th.tone-expected-nonac,
-.verification-detail-table td.tone-expected-nonac {
-  background: var(--surface-info);
-  color: var(--tag-info-fg);
-}
-
+.verification-detail-table td.tone-expected-nonac,
 .verification-detail-table th.tone-running,
-.verification-detail-table td.tone-running {
-  background: var(--surface-info);
-  color: var(--tag-info-fg);
-}
-
+.verification-detail-table td.tone-running,
 .verification-detail-table th.tone-neutral,
 .verification-detail-table td.tone-neutral {
-  background: var(--surface-alt);
-  color: var(--muted);
-}
-
-.verification-detail-table th.col-bad,
-.verification-detail-table td.col-bad {
-  background: var(--surface-danger);
-  color: var(--danger);
+  background: var(--tone-bg);
+  color: var(--tone-fg);
 }
 
 .tcell {
@@ -570,25 +550,17 @@ section.verification-header-section {
   text-overflow: ellipsis;
 }
 
-.run-verdict-unexpected {
-  background: var(--surface-danger);
-  color: var(--danger);
+.sol-verdict {
   border-radius: 4px;
   padding: 1px 6px;
 }
 
-.run-verdict-ok {
-  background: var(--surface-success);
-  color: var(--ok);
-  border-radius: 4px;
-  padding: 1px 6px;
-}
-
-.run-verdict-expected {
-  background: var(--surface-info);
-  color: var(--tag-info-fg);
-  border-radius: 4px;
-  padding: 1px 6px;
+.sol-verdict.tone-ok,
+.sol-verdict.tone-fail,
+.sol-verdict.tone-info,
+.sol-verdict.tone-neutral {
+  background: var(--tone-bg);
+  color: var(--tone-fg);
 }
 
 .sol-list {

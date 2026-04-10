@@ -510,7 +510,8 @@
     var dismissible = String(payload.getAttribute("data-dismissible") || "1").trim() !== "0";
     host.textContent = "";
     var notice = document.createElement("div");
-    notice.className = "top-event-notice top-event-" + level;
+    var toneClass = level === "success" ? "tone-ok" : level === "warning" ? "tone-warn" : level === "error" ? "tone-fail" : "tone-info";
+    notice.className = "top-event-notice top-event-" + level + " " + toneClass;
     notice.setAttribute("role", level === "error" ? "alert" : "status");
     if (eventId) {
       notice.setAttribute("data-event-id", eventId);

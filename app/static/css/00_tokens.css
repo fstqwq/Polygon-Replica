@@ -213,3 +213,35 @@ pre {
   font-weight: 700;
 }
 
+.tone-ok {
+  --tone-bg: var(--surface-success);
+  --tone-fg: var(--ok);
+  --tone-border: var(--tag-ok-border);
+}
+
+.tone-fail {
+  --tone-bg: var(--surface-danger);
+  --tone-fg: var(--danger);
+  --tone-border: var(--tag-fail-border);
+}
+
+.tone-warn {
+  --tone-bg: var(--surface-warning);
+  --tone-fg: var(--warn-text);
+  --tone-border: var(--warn-line);
+}
+
+.tone-info,
+.tone-running,
+.tone-expected-nonac {
+  --tone-bg: var(--surface-info);
+  --tone-fg: var(--tag-info-fg);
+  --tone-border: var(--tag-info-border);
+}
+
+.tone-neutral {
+  --tone-bg: var(--surface-alt);
+  --tone-fg: var(--muted);
+  --tone-border: var(--line);
+}
+
