@@ -61,7 +61,11 @@ def tests_spec_sample_output_value(raw: object | None, fallback: object = "") ->
     return normalize_sample_output(tests_spec_form_text(raw))
 
 
-def tests_spec_sample_output_validate_value(raw: object | None, fallback: object = True) -> bool:
+def tests_spec_sample_output_validate_value(raw: object | list[object] | None, fallback: object = True) -> bool:
+    if isinstance(raw, list):
+        if not raw:
+            return tests_spec_bool_flag(fallback)
+        return tests_spec_bool_flag(tests_spec_form_text(raw[-1]))
     if raw is None:
         return tests_spec_bool_flag(fallback)
     return tests_spec_bool_flag(tests_spec_form_text(raw))

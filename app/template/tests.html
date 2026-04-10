@@ -105,6 +105,7 @@
         <textarea id="edit-test-sample-input-{{ row.index }}" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input">{{ row.sample_input }}</textarea>
         <label for="edit-test-sample-output-{{ row.index }}">Sample Output (optional)</label>
         <textarea id="edit-test-sample-output-{{ row.index }}" class="textarea-sm" name="sample_output" placeholder="Leave blank for generated output">{{ row.sample_output }}</textarea>
+        <input type="hidden" name="sample_output_validate" value="0" />
         <label data-sample-output-validate-group="1" {{ "hidden" if not row.sample else "" }}><input type="checkbox" name="sample_output_validate" value="1" {{ "checked" if row.sample_output_validate else "" }} {{ "disabled" if not row.sample else "" }} /> Validate custom output</label>
         {% if row.manual_large_payload %}
         <input type="hidden" name="payload" value="" />
@@ -137,6 +138,7 @@
         <textarea id="add-manual-sample-input-popup" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input"></textarea>
         <label for="add-manual-sample-output-popup">Sample Output (optional)</label>
         <textarea id="add-manual-sample-output-popup" class="textarea-sm" name="sample_output" placeholder="Leave blank for generated output"></textarea>
+        <input type="hidden" name="sample_output_validate" value="0" />
         <label data-sample-output-validate-group="1" hidden><input type="checkbox" name="sample_output_validate" value="1" checked disabled /> Validate custom output</label>
         <label for="add-manual-input-popup">Data (<code>manual input</code>)</label>
         <textarea id="add-manual-input-popup" class="textarea-md" name="manual_input" placeholder="3&#10;1 2 3"></textarea>
@@ -155,6 +157,7 @@
         <textarea id="add-manual-upload-sample-input-popup" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input"></textarea>
         <label for="add-manual-upload-sample-output-popup">Sample Output (optional)</label>
         <textarea id="add-manual-upload-sample-output-popup" class="textarea-sm" name="sample_output" placeholder="Leave blank for generated output"></textarea>
+        <input type="hidden" name="sample_output_validate" value="0" />
         <label data-sample-output-validate-group="1" hidden><input type="checkbox" name="sample_output_validate" value="1" checked disabled /> Validate custom output</label>
         <label for="add-manual-upload-file-popup">Manual input file (UTF-8 text)</label>
         <input id="add-manual-upload-file-popup" type="file" name="manual_upload" required />

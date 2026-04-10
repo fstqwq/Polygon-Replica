@@ -70,7 +70,7 @@ def add_manual_test(
     manual_input: Annotated[str, Form()] = '',
     sample_input: Annotated[str | None, Form()] = None,
     sample_output: Annotated[str | None, Form()] = None,
-    sample_output_validate: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[list[str] | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -84,6 +84,8 @@ def add_manual_test(
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
         safe_sample_output = tests_spec_sample_output_value(sample_output, '')
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
+        if not safe_sample:
+            safe_sample_output_validate = False
         with config.workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
@@ -124,7 +126,7 @@ async def upload_manual_test(
     sample: Annotated[str, Form()] = '0',
     sample_input: Annotated[str | None, Form()] = None,
     sample_output: Annotated[str | None, Form()] = None,
-    sample_output_validate: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[list[str] | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -154,6 +156,8 @@ async def upload_manual_test(
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
         safe_sample_output = tests_spec_sample_output_value(sample_output, '')
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
+        if not safe_sample:
+            safe_sample_output_validate = False
         with config.workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
@@ -200,7 +204,7 @@ def add_generator_test(
     command: Annotated[str, Form()] = '',
     sample_input: Annotated[str | None, Form()] = None,
     sample_output: Annotated[str | None, Form()] = None,
-    sample_output_validate: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[list[str] | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -214,6 +218,8 @@ def add_generator_test(
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
         safe_sample_output = tests_spec_sample_output_value(sample_output, '')
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
+        if not safe_sample:
+            safe_sample_output_validate = False
         with config.workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
@@ -257,7 +263,7 @@ def edit_spec_test(
     payload: Annotated[str, Form()] = '',
     sample_input: Annotated[str | None, Form()] = None,
     sample_output: Annotated[str | None, Form()] = None,
-    sample_output_validate: Annotated[str | None, Form()] = None,
+    sample_output_validate: Annotated[list[str] | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -280,6 +286,8 @@ def edit_spec_test(
                 sample_output_validate,
                 current.get('sample_output_validate', True),
             )
+            if not safe_sample:
+                safe_sample_output_validate = False
             submitted_payload = tests_spec_form_text(payload)
             if not str(submitted_payload):
                 submitted_payload = tests_spec_read_payload(workspace, current)

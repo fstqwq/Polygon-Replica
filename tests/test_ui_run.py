@@ -376,6 +376,70 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("gen 99", html)
         self.assertIn('class="linkish danger-link" data-submit-form="1">Delete</a>', html)
 
+    def test_tests_spec_edit_can_clear_sample_output_validate(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        spec_path = ws / "tests" / "spec.json"
+        manual_dir = ws / "tests" / "manual"
+        generator_dir = ws / "tests" / "generator"
+        spec_path.unlink(missing_ok=True)
+        if manual_dir.exists():
+            for p in manual_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+        if generator_dir.exists():
+            for p in generator_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+
+        add_manual = add_manual_call(
+            problem="alice/sample",
+            user="alice",
+            test_id="001",
+            sample="1",
+            manual_input="1\n",
+            sample_output="42\n",
+            sample_output_validate=["0", "1"],
+        )
+        self.assertEqual(add_manual.status_code, 303)
+
+        edit_spec = edit_spec_call(
+            problem="alice/sample",
+            user="alice",
+            index="1",
+            test_id="001",
+            kind="manual",
+            sample="1",
+            payload="1\n",
+            sample_output="42\n",
+            sample_output_validate=["0"],
+        )
+        self.assertEqual(edit_spec.status_code, 303)
+
+        payload = json.loads(spec_path.read_text(encoding="utf-8"))
+        tests = payload.get("tests") or []
+        self.assertEqual(len(tests), 1)
+        self.assertFalse(bool(tests[0].get("sample_output_validate", True)))
+
+        edit_spec_checked = edit_spec_call(
+            problem="alice/sample",
+            user="alice",
+            index="1",
+            test_id="001",
+            kind="manual",
+            sample="1",
+            payload="1\n",
+            sample_output="42\n",
+            sample_output_validate=["0", "1"],
+        )
+        self.assertEqual(edit_spec_checked.status_code, 303)
+
+        payload_checked = json.loads(spec_path.read_text(encoding="utf-8"))
+        tests_checked = payload_checked.get("tests") or []
+        self.assertEqual(len(tests_checked), 1)
+        self.assertTrue(bool(tests_checked[0].get("sample_output_validate", True)))
+
+        page = ui_tests_page(_request("/problems/alice/sample/alice/tests"), "alice/sample", "alice")
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('type="hidden" name="sample_output_validate" value="0"', html)
+
     def test_tests_spec_gen_script_save_adds_and_removes_gen_entries(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         spec_path = ws / "tests" / "spec.json"
@@ -5588,6 +5652,5 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(">Verification</span>", html)
         self.assertIn(">failed</strong>", html)
-
 
 
