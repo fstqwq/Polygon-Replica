@@ -841,7 +841,7 @@ section.verification-header-section {
 
 .compile-diagnostics-row-warning {
   background: var(--surface-warning);
-  border-color: #fcd34d;
+  border-color: var(--warn-line);
 }
 
 .compile-diagnostics-row-note {
@@ -870,7 +870,7 @@ section.verification-header-section {
 
 .compile-diagnostics-row-warning .compile-diagnostics-level {
   background: var(--diagnostics-warning-bg);
-  border-color: #fcd34d;
+  border-color: var(--warn-line);
   color: var(--warn-text);
 }
 
