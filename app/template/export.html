@@ -20,7 +20,7 @@
 <section>
   <h2>Generation Tasks</h2>
   {% if export_events %}
-  <table>
+  <table class="table-base">
     <tr><th>Time</th><th>Status</th><th>Revision</th><th>Verification</th><th>Detail</th><th>Open</th></tr>
     {% for e in export_events %}
     <tr>
@@ -50,7 +50,7 @@
 </section>
 <section>
   <h2>Generated Exports</h2>
-  <table>
+  <table class="table-base">
     <tr><th>Type</th><th>File</th><th>Summary</th><th>Size</th><th>Time</th><th>Download</th></tr>
     {% for e in exports %}
     <tr>

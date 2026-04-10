@@ -26,7 +26,7 @@
 <section>
   <h2>Recent Jobs</h2>
   {% if job_rows %}
-  <table>
+  <table class="table-base">
     <tr>
       <th>Job</th>
       <th>Type</th>
@@ -71,7 +71,7 @@
   {% if selected_job.summary.get("pdf_file") %}
   <p><strong>PDF:</strong> <code>{{ selected_job.summary.get("pdf_file") }}</code></p>
   {% endif %}
-  <table>
+  <table class="table-base">
     <tr>
       <th>Idx</th>
       <th>Problem</th>
@@ -95,7 +95,7 @@
 <section>
   <h2>Artifacts</h2>
   {% if artifact_rows %}
-  <table>
+  <table class="table-base">
     <tr>
       <th>Artifact</th>
       <th>Job</th>

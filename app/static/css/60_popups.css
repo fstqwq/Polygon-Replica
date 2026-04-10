@@ -10,7 +10,7 @@ body.confirm-open {
   display: grid;
   place-items: center;
   background: rgba(15, 23, 42, 0.35);
-  padding: 16px;
+  padding: var(--space-6);
 }
 
 .ui-popup-overlay[hidden] {
@@ -31,9 +31,9 @@ body.confirm-open {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-5);
   border-bottom: 1px solid var(--line);
-  padding: 10px 12px;
+  padding: var(--space-4) var(--space-5);
 }
 
 .ui-popup-title,
@@ -49,21 +49,21 @@ body.confirm-open {
 
 .ui-popup-content {
   overflow: auto;
-  padding: 12px;
+  padding: var(--space-5);
   display: grid;
   gap: var(--space-4);
 }
 
 .statement-editor-field {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-3);
 }
 
 .statement-editor-field-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .statement-editor-field-head label {
@@ -81,7 +81,7 @@ body.confirm-open {
 
 .statement-draft-list {
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
   max-height: min(46vh, 420px);
   overflow: auto;
 }
@@ -91,14 +91,14 @@ body.confirm-open {
   background: var(--surface);
   padding: var(--space-3);
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .statement-draft-entry-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .statement-draft-entry-title {
@@ -123,15 +123,15 @@ body.confirm-open {
 
 .statement-draft-preview-list {
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .statement-draft-preview-item {
   border: 1px dashed var(--line);
-  padding: 6px;
+  padding: var(--space-2);
   background: var(--surface-alt);
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .statement-draft-preview-title {
@@ -156,7 +156,7 @@ body.confirm-open {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .statement-draft-actions {
@@ -171,7 +171,7 @@ body.confirm-open {
   display: grid;
   place-items: center;
   background: rgba(15, 23, 42, 0.35);
-  padding: 16px;
+  padding: var(--space-6);
 }
 
 .ui-confirm-overlay[hidden] {
@@ -182,7 +182,7 @@ body.confirm-open {
   width: min(540px, calc(100vw - 32px));
   border: 1px solid var(--line);
   background: var(--surface);
-  padding: 12px;
+  padding: var(--space-5);
   display: grid;
   gap: var(--space-4);
 }
@@ -196,7 +196,7 @@ body.confirm-open {
 .ui-confirm-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .ui-confirm-cancel {
@@ -213,26 +213,26 @@ body.confirm-open {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: var(--space-8);
 }
 
 .login-card {
   width: 460px;
-  padding: 16px;
+  padding: var(--space-6);
 }
 
 .page-profile {
   border-top: 1px solid var(--line);
   background: var(--surface-hover);
   color: var(--text-secondary);
-  padding: 8px 12px;
+  padding: var(--space-3) var(--space-5);
 }
 
 .page-profile-inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--font-size-ui-sm);
   text-align: center;
   width: 100%;

@@ -19,7 +19,7 @@
     {% if files_truncated %}
     <p><em>Repository listing is capped at {{ file_limit }} entries; narrow by folder for complete browsing.</em></p>
     {% endif %}
-    <table>
+    <table class="table-base">
       <tr><th>Type</th><th>Path</th></tr>
       {% for d in browse_dirs %}
       <tr>

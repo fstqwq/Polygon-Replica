@@ -209,7 +209,7 @@
     <p class="muted">Only uploaded images are shown.</p>
     <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?dir={{ statement_section_dir }}&path={{ statement_section_dir }}/attachment.png&src=statement{% if preview_id %}&sid={{ preview_id }}{% endif %}">Upload attachments</a>
   </div>
-  <table>
+  <table class="table-base">
     <tr>
       <th>Path</th>
       <th>Action</th>

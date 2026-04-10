@@ -7,13 +7,13 @@
 }
 
 .verification-inline-action {
-  margin-left: 8px;
+  margin-left: var(--space-3);
 }
 
 .verification-detail-topline {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-5);
   flex-wrap: wrap;
   margin: 2px 0 8px;
 }
@@ -31,7 +31,7 @@ section.verification-header-section {
 .verification-detail-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-5);
   flex-wrap: wrap;
 }
 
@@ -47,9 +47,9 @@ section.verification-header-section {
   display: grid;
   grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
   grid-template-rows: auto 1fr;
-  gap: 8px;
+  gap: var(--space-3);
   align-items: stretch;
-  margin: 8px 0;
+  margin: var(--space-3) 0;
   border: 1px solid var(--line);
   background: var(--surface);
   padding: var(--space-3);
@@ -60,7 +60,7 @@ section.verification-header-section {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .verification-lifecycle-head-full {
@@ -79,7 +79,7 @@ section.verification-header-section {
   background: transparent;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   align-content: start;
 }
 
@@ -88,13 +88,13 @@ section.verification-header-section {
   display: flex;
   justify-content: flex-start;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   width: 100%;
   border: 1px solid var(--line);
   background: var(--verification-tab-bg);
   color: inherit;
   text-align: left;
-  padding: 6px;
+  padding: var(--space-2);
   cursor: pointer;
 }
 
@@ -117,7 +117,7 @@ section.verification-header-section {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   line-height: 1;
   font-weight: 700;
   flex: none;
@@ -135,7 +135,7 @@ section.verification-header-section {
 }
 
 .verification-lifecycle-tab-status {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   color: var(--muted);
 }
 
@@ -167,7 +167,7 @@ section.verification-header-section {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
   align-items: stretch;
   justify-content: center;
   min-height: 0;
@@ -185,7 +185,7 @@ section.verification-header-section {
 .verification-lifecycle-step {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   border: 1px solid var(--line);
   background: var(--surface-alt);
   padding: 5px 6px;
@@ -199,7 +199,7 @@ section.verification-header-section {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   line-height: 1;
   flex: none;
 }
@@ -217,12 +217,12 @@ section.verification-header-section {
 }
 
 .verification-lifecycle-step-status {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   color: var(--muted);
 }
 
 .verification-lifecycle-step-detail {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   color: #4b5563;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -238,7 +238,7 @@ section.verification-header-section {
 
 .verification-lifecycle-step-facts th,
 .verification-lifecycle-step-facts td {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   padding: 2px 4px;
   text-align: left;
   border-top: 1px solid #e2e8f0;
@@ -254,13 +254,13 @@ section.verification-header-section {
 
 .verification-lifecycle-step-notes {
   margin: 4px 0 0;
-  padding-left: 16px;
+  padding-left: var(--space-6);
   display: grid;
   gap: 2px;
 }
 
 .verification-lifecycle-step-notes li {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   color: #4b5563;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -344,12 +344,12 @@ section.verification-header-section {
   text-align: center;
   white-space: nowrap;
   overflow-wrap: normal;
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   padding: 4px 5px;
 }
 
 .verification-detail-result-row > th {
-  font-size: 10px;
+  font-size: var(--font-size-ui-2xs);
   font-weight: 500;
 }
 
@@ -368,7 +368,7 @@ section.verification-header-section {
 
 .stat-sub {
   font-weight: 400;
-  font-size: 10px;
+  font-size: var(--font-size-ui-2xs);
   line-height: 1.2;
   color: var(--muted);
 }
@@ -408,11 +408,11 @@ section.verification-header-section {
 }
 
 .verification-detail-table.verification-detail-table-regular .vmeta {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
 }
 
 .verification-detail-table.verification-detail-table-regular .stat-sub {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
 }
 
 .run-details-page.run-details-page-compact .verification-detail-table > thead > tr:first-child > th {
@@ -465,11 +465,11 @@ section.verification-header-section {
 }
 
 .tcell .vcode {
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
 }
 
 .tcell .vmeta {
-  margin-left: 4px;
+  margin-left: var(--space-1);
 }
 
 .verification-detail-table [data-popup-open="run-test-detail-popup"][data-test-name] {
@@ -498,7 +498,7 @@ section.verification-header-section {
 
 .vcode {
   display: inline;
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   font-weight: 700;
   line-height: 1.1;
 }
@@ -506,7 +506,7 @@ section.verification-header-section {
 .vmeta {
   display: inline;
   margin-left: 2px;
-  font-size: 10px;
+  font-size: var(--font-size-ui-2xs);
   line-height: 1.1;
   color: var(--muted);
   opacity: 1;
@@ -533,7 +533,7 @@ section.verification-header-section {
 }
 
 .verification-detail-popup .ui-popup-content > * + * {
-  margin-top: 10px;
+  margin-top: var(--space-4);
 }
 
 .verification-detail-popup .ui-popup-title {
@@ -565,7 +565,7 @@ section.verification-header-section {
 
 .sol-list {
   display: grid;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .sol-card {
@@ -573,14 +573,14 @@ section.verification-header-section {
   background: var(--surface);
   padding: var(--space-3);
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .sol-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -625,7 +625,7 @@ section.verification-header-section {
 .sol-metrics th,
 .sol-metrics td {
   border: 1px solid var(--line);
-  padding: 4px 6px;
+  padding: var(--space-1) var(--space-2);
   text-align: left;
   overflow-wrap: anywhere;
 }
@@ -644,16 +644,16 @@ section.verification-header-section {
 
 .sol-output {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .transcript {
   border: 1px solid var(--line);
   background: var(--surface-alt);
   border-radius: 6px;
-  padding: 6px;
+  padding: var(--space-2);
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .transcript-head {
@@ -662,7 +662,7 @@ section.verification-header-section {
 
 .transcript-list {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   max-height: 180px;
   overflow: auto;
 }
@@ -682,12 +682,12 @@ section.verification-header-section {
 .transcript-bubble {
   display: inline-block;
   max-width: 88%;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-3);
   border-radius: 10px;
   border: 1px solid var(--line);
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
   line-height: 1.35;
   background: var(--surface);
 }
@@ -704,7 +704,7 @@ section.verification-header-section {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -715,15 +715,15 @@ section.verification-header-section {
 .test-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
   min-width: 0;
 }
 
 .preview-card {
   border: 1px solid var(--line);
   background: var(--surface);
-  padding: 6px;
+  padding: var(--space-2);
   min-width: 0;
 }
 
@@ -731,7 +731,7 @@ section.verification-header-section {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-3);
   margin-bottom: 4px;
 }
 
@@ -739,8 +739,8 @@ section.verification-header-section {
   margin: 0;
   border: 1px solid var(--line);
   background: var(--surface-alt);
-  padding: 4px;
-  font-size: 11px;
+  padding: var(--space-1);
+  font-size: var(--font-size-ui-xs);
   line-height: 1.3;
   white-space: pre-wrap;
   word-break: break-word;
@@ -757,19 +757,19 @@ section.verification-header-section {
   border: 1px solid var(--line);
   background: var(--surface);
   padding: var(--space-3);
-  margin: 8px 0;
+  margin: var(--space-3) 0;
 }
 
 .compile-diagnostics-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .compile-diagnostics-error {
-  margin: 6px 0;
+  margin: var(--space-2) 0;
   color: var(--danger);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -777,11 +777,11 @@ section.verification-header-section {
 }
 
 .compile-diagnostics-log {
-  margin: 6px 0;
+  margin: var(--space-2) 0;
   border: 1px solid var(--line);
   background: var(--surface-alt);
-  padding: 6px;
-  font-size: 11px;
+  padding: var(--space-2);
+  font-size: var(--font-size-ui-xs);
   line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-word;
@@ -790,20 +790,20 @@ section.verification-header-section {
 }
 
 .compile-diagnostics-list {
-  margin: 6px 0;
+  margin: var(--space-2) 0;
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .compile-diagnostics-row {
   display: grid;
   grid-template-columns: max-content max-content minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--space-3);
   align-items: start;
   border: 1px solid var(--line);
   background: var(--surface);
-  padding: 6px;
-  font-size: 11px;
+  padding: var(--space-2);
+  font-size: var(--font-size-ui-xs);
 }
 
 .compile-diagnostics-row-error {
@@ -862,12 +862,12 @@ section.verification-header-section {
 }
 
 .compile-diagnostics-raw {
-  margin-top: 6px;
+  margin-top: var(--space-2);
 }
 
 .compile-diagnostics-raw > summary {
   cursor: pointer;
   color: #475569;
-  font-size: 11px;
+  font-size: var(--font-size-ui-xs);
 }
 
