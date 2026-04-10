@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.service.importing.polygon import PolygonPackageImportService
+from app.service.problem.test_spec import load_tests_spec
 from app.service.statement.render import render_statement_main
 from .common import SmokeBase, config
 
@@ -209,6 +210,61 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue((ws / "statement-sections" / "russian" / "legend.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
+    def test_import_statement_examples_override_sample_io_and_enable_validate(self) -> None:
+        ws = self._workspace_path()
+        payload = io.BytesIO()
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<problem short-name="example-override">
+  <names>
+    <name language="english" value="Example Override"/>
+  </names>
+  <judging run-count="1">
+    <testset>
+      <time-limit>1000</time-limit>
+      <memory-limit>268435456</memory-limit>
+      <input-path-pattern>tests/%02d</input-path-pattern>
+      <answer-path-pattern>tests/%02d.a</answer-path-pattern>
+      <tests>
+        <test method="manual" sample="true"/>
+        <test method="manual"/>
+        <test method="manual" sample="true"/>
+      </tests>
+    </testset>
+  </judging>
+</problem>
+"""
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.xml", xml)
+            zf.writestr("tests/01", "raw input 1\n")
+            zf.writestr("tests/01.a", "raw answer 1\n")
+            zf.writestr("tests/02", "raw input 2\n")
+            zf.writestr("tests/02.a", "raw answer 2\n")
+            zf.writestr("tests/03", "raw input 3\n")
+            zf.writestr("tests/03.a", "raw answer 3\n")
+            zf.writestr("statement-sections/english/example.01", "example input 1\n")
+            zf.writestr("statement-sections/english/example.01.a", "example output 1\n")
+            zf.writestr("statement-sections/english/example.02", "example input 2\n")
+            zf.writestr("statement-sections/english/example.02.a", "example output 2\n")
+
+        service = PolygonPackageImportService()
+        result = service.import_package(ws, "example-override.zip", payload.getvalue())
+        self.assertEqual(str(result.get("title") or ""), "Example Override")
+
+        tests = load_tests_spec(ws / "tests" / "spec.json")
+        self.assertEqual(len(tests), 3)
+        self.assertEqual(str(tests[0].get("sample_input") or ""), "example input 1\n")
+        self.assertEqual(str(tests[0].get("sample_output") or ""), "example output 1\n")
+        self.assertTrue(bool(tests[0].get("sample_output_validate")))
+        self.assertEqual(str(tests[1].get("sample_input") or ""), "")
+        self.assertEqual(str(tests[1].get("sample_output") or ""), "")
+        self.assertEqual(str(tests[2].get("sample_input") or ""), "example input 2\n")
+        self.assertEqual(str(tests[2].get("sample_output") or ""), "example output 2\n")
+        self.assertTrue(bool(tests[2].get("sample_output_validate")))
+        self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8"), "raw answer 1\n")
+        self.assertEqual((ws / "tests" / "answers" / "003.ans").read_text(encoding="utf-8"), "raw answer 3\n")
+        self.assertFalse((ws / "statement-sections" / "english" / "example.01").exists())
+        self.assertFalse((ws / "statement-sections" / "english" / "example.01.a").exists())
+
     def test_import_run_twice_linux_package(self) -> None:
         ws = self._workspace_path()
         package = Path("third_party/polygon-package-examples/run-twice-guess-the-number-46$linux.zip")
@@ -226,6 +282,13 @@ class TestPolygonPackageImport(SmokeBase):
         tests = spec.get("tests") if isinstance(spec, dict) else []
         self.assertEqual(len(tests), 6)
         self.assertTrue(all((str(row.get("kind") or "") == "manual") for row in tests))
+        normalized_tests = load_tests_spec(ws / "tests" / "spec.json")
+        self.assertEqual(str(normalized_tests[0].get("sample_input") or ""), "1 2\n\n1\n\n\n0\n\n1\n")
+        self.assertEqual(str(normalized_tests[0].get("sample_output") or ""), "\n? 0\n\n! 00000000\n? 0\n\n? 100\n\n! 00001111\n")
+        self.assertTrue(bool(normalized_tests[0].get("sample_output_validate")))
+        self.assertEqual(str(normalized_tests[1].get("sample_input") or ""), "2 2\n11110000\n\n00000000\n")
+        self.assertEqual(str(normalized_tests[1].get("sample_output") or ""), "\n\n100\n\n0\n")
+        self.assertTrue(bool(normalized_tests[1].get("sample_output_validate")))
         tests_summary = result.get("tests") if isinstance(result.get("tests"), dict) else {}
         self.assertEqual(int(tests_summary.get("generated_fallback_to_manual") or 0), 6)
         self.assertEqual(int(tests_summary.get("answers") or 0), 6)
@@ -254,7 +317,7 @@ class TestPolygonPackageImport(SmokeBase):
         upstream_testlib = Path("third_party/upstream/testlib/testlib.h").read_bytes()
         self.assertEqual(imported_testlib, upstream_testlib)
 
-        main_tex = render_statement_main(ws / "statement", problem_title=str(result.get("title") or ""))
+        main_tex = render_statement_main(ws / "statement", problem_title=str(result.get("title") or ""), language="english")
         rendered = main_tex.read_text(encoding="utf-8")
         self.assertIn(r"\import{rendered/english/}{./problem.tex}", rendered)
         rendered_problem = (ws / "statement" / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
@@ -378,12 +441,12 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue(package.exists(), f"missing package fixture: {package}")
         service = PolygonPackageImportService()
         result = service.import_package(ws, package.name, package.read_bytes())
-        render_statement_main(ws / "statement", problem_title=str(result.get("title") or ""))
+        render_statement_main(ws / "statement", problem_title=str(result.get("title") or ""), language="english")
         with (
             patch.object(config.preview_service, "_sample_verification_rows_from_spec", return_value=[]),
             patch.object(config.preview_service.sandbox, "run", side_effect=FileNotFoundError("pdflatex missing")),
         ):
-            preview_id = config.preview_service.compile_preview(problem, user)
+            preview_id = config.preview_service.compile_preview(problem, user, language="english")
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"] or ""), "failed")

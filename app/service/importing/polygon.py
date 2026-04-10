@@ -38,7 +38,7 @@ ZIP_MAX_FILE_BYTES = 64 * 1024 * 1024
 ZIP_TEXT_MAX_BYTES = 8 * 1024 * 1024
 SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".py", ".java"}
 GENERATOR_CPP_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++"}
-STATEMENT_SECTION_SAMPLE_FILE_RE = re.compile(r"^example\.\d+(?:\.a)?$", re.IGNORECASE)
+STATEMENT_SECTION_SAMPLE_FILE_RE = re.compile(r"^example\.(\d+)(?:\.a)?$", re.IGNORECASE)
 POLYGON_SOLUTION_TAG_EXPECTED: dict[str, str] = {
     "main": "accepted",
     "accepted": "accepted",
@@ -281,6 +281,20 @@ def _unique_rel_path(workspace: Path, parent_rel: Path, filename: str) -> str:
         if not (workspace / item).exists():
             return item.as_posix()
         idx += 1
+
+
+def _parse_statement_sample_path(path: str) -> tuple[str, int, bool] | None:
+    rel = PurePosixPath(path.replace("\\", "/"))
+    if len(rel.parts) != 3 or rel.parts[0] != "statement-sections":
+        return None
+    match = STATEMENT_SECTION_SAMPLE_FILE_RE.fullmatch(rel.name)
+    if match is None:
+        return None
+    try:
+        sample_index = int(match.group(1))
+    except ValueError:
+        return None
+    return rel.parts[1], sample_index, rel.suffix.lower() == ".a"
 
 
 class PolygonPackageImportService:
@@ -548,6 +562,30 @@ class PolygonPackageImportService:
         supported = self._supported_generator_tokens(meta)
         return (command_token in supported) or (token_stem in supported)
 
+    def _statement_sample_overrides(
+        self,
+        zf: zipfile.ZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+        statement_language: str,
+    ) -> dict[int, dict[str, str]]:
+        if not statement_language:
+            return {}
+        safe_language = statement_language.strip().lower()
+        overrides: dict[int, dict[str, str]] = {}
+        for path, info in entries.items():
+            parsed = _parse_statement_sample_path(path)
+            if parsed is None:
+                continue
+            language, sample_index, is_output = parsed
+            if language.strip().lower() != safe_language:
+                continue
+            slot = overrides.setdefault(sample_index, {})
+            if is_output:
+                slot["sample_output"] = _read_text_from_zip(zf, info)
+                continue
+            slot["sample_input"] = _read_text_from_zip(zf, info)
+        return overrides
+
     def _import_tests(
         self,
         zf: zipfile.ZipFile,
@@ -555,6 +593,7 @@ class PolygonPackageImportService:
         workspace: Path,
         meta: PolygonMeta,
         *,
+        statement_language: str,
         normalize_test_data_newlines: bool = False,
     ) -> TestsImportSummary:
         tests = meta["tests"]
@@ -576,10 +615,14 @@ class PolygonPackageImportService:
         gen_count = 0
         generated_fallback_to_manual = 0
         answer_count = 0
+        sample_overrides = self._statement_sample_overrides(zf, entries, statement_language)
+        sample_number = 0
 
         for idx, row in enumerate(tests, start=1):
             is_generated = row["method"] == "generated"
             sample = row["sample"]
+            if sample:
+                sample_number += 1
             test_id = f"{idx:03d}"
             answer_rel = _normalize_zip_path(_expand_pattern(answer_pattern, idx)) if answer_pattern else ""
             sample_output_text = ""
@@ -595,6 +638,14 @@ class PolygonPackageImportService:
             spec_row: dict[str, object] = {"id": test_id, "sample": sample}
             if sample and sample_output_text:
                 spec_row["sample_output"] = sample_output_text
+            if sample:
+                sample_override = sample_overrides.get(sample_number)
+                if sample_override is not None:
+                    if "sample_input" in sample_override:
+                        spec_row["sample_input"] = sample_override["sample_input"]
+                    if "sample_output" in sample_override:
+                        spec_row["sample_output"] = sample_override["sample_output"]
+                        spec_row["sample_output_validate"] = True
             if is_generated:
                 cmd = row["cmd"]
                 if self._generator_command_supported(cmd, meta):
@@ -888,6 +939,7 @@ class PolygonPackageImportService:
                 entry_map,
                 workspace,
                 meta,
+                statement_language=statement_summary["language"],
                 normalize_test_data_newlines=normalize_test_data_newlines,
             )
             component_summary = self._import_components(zf, entry_map, workspace, meta)
