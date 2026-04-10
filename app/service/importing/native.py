@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -12,6 +13,7 @@ from app.service.problem.test_spec import load_tests_spec
 NATIVE_MARKER = "polygonlike-native.json"
 ZIP_MAX_BYTES = 256 * 1024 * 1024
 ZIP_MAX_FILE_BYTES = 64 * 1024 * 1024
+ZIP_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
 
 
 def _normalize_zip_path(raw: str) -> str:
@@ -69,6 +71,57 @@ def _read_bytes_from_zip(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     return raw
 
 
+def _validated_native_repo_entries(
+    entry_map: dict[str, zipfile.ZipInfo],
+    repo_entries: list[str],
+) -> list[tuple[Path, zipfile.ZipInfo, str]]:
+    validated: list[tuple[Path, zipfile.ZipInfo, str]] = []
+    total_size = 0
+    for rel in sorted(repo_entries):
+        rel_path = Path(rel)
+        if len(rel_path.parts) < 2:
+            continue
+        target_rel = Path(*rel_path.parts[1:])
+        if not target_rel.parts:
+            continue
+        if _is_forbidden_workspace_path(target_rel):
+            raise ValueError(f"native package contains forbidden hidden path: {rel}")
+        info = entry_map[rel]
+        entry_size = int(info.file_size)
+        if entry_size > ZIP_MAX_FILE_BYTES:
+            raise ValueError(f"zip entry too large: {rel}")
+        total_size += entry_size
+        if total_size > ZIP_MAX_EXTRACTED_BYTES:
+            raise ValueError(f"native package repo payload is too large at: {rel}")
+        validated.append((target_rel, info, rel))
+    return validated
+
+
+def _extract_zip_entry_to_path(
+    zf: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    target: Path,
+) -> int:
+    written = 0
+    tmp_target = target.with_name(f"{target.name}.native-import-tmp")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with zf.open(info, "r") as src, tmp_target.open("wb") as dst:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > ZIP_MAX_FILE_BYTES:
+                    raise ValueError(f"zip entry too large: {info.filename}")
+                dst.write(chunk)
+        tmp_target.replace(target)
+        return written
+    except Exception:
+        tmp_target.unlink(missing_ok=True)
+        raise
+
+
 def _clear_workspace_tree(workspace: Path) -> None:
     for child in workspace.iterdir():
         if child.name in {".git", ".polygonlike.lock"}:
@@ -83,7 +136,7 @@ def _clear_workspace_tree(workspace: Path) -> None:
 
 
 def _is_forbidden_workspace_path(path: Path) -> bool:
-    return any(part.lower() == ".git" for part in path.parts)
+    return any(str(part or "").startswith(".") for part in path.parts)
 
 
 class NativePackageImportService:
@@ -122,24 +175,21 @@ class NativePackageImportService:
             if not repo_entries:
                 raise ValueError("native package is missing repo payload")
 
-            files_to_write: list[tuple[Path, bytes]] = []
-            for rel in sorted(repo_entries):
-                rel_path = Path(rel)
-                if len(rel_path.parts) < 2:
-                    continue
-                target_rel = Path(*rel_path.parts[1:])
-                if not target_rel.parts:
-                    continue
-                if _is_forbidden_workspace_path(target_rel):
-                    raise ValueError("native package contains forbidden repository metadata")
-                payload = _read_bytes_from_zip(zf, entry_map[rel])
-                files_to_write.append((target_rel, payload))
+            files_to_write = _validated_native_repo_entries(entry_map, repo_entries)
+            staging_root = workspace.parent / f".native-import-{uuid.uuid4().hex}"
+            written_total = 0
+            try:
+                staging_root.mkdir(parents=True, exist_ok=False)
+                for target_rel, info, rel in files_to_write:
+                    written_total += _extract_zip_entry_to_path(zf, info, staging_root / target_rel)
+                    if written_total > ZIP_MAX_EXTRACTED_BYTES:
+                        raise ValueError(f"native package repo payload is too large at: {rel}")
 
-            _clear_workspace_tree(workspace)
-            for target_rel, payload in files_to_write:
-                target = workspace / target_rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(payload)
+                _clear_workspace_tree(workspace)
+                for child in staging_root.iterdir():
+                    shutil.move(str(child), str(workspace / child.name))
+            finally:
+                shutil.rmtree(staging_root, ignore_errors=True)
 
         tests_total = 0
         try:

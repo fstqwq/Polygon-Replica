@@ -15,6 +15,7 @@ from .common import SmokeBase
 from app.impl.run_export import export as export_page_module
 from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.runtime.config import config
+from app.service.importing import native as native_import_module
 from app.service.platform.git_process import run_git
 from app.service.importing.native import NATIVE_MARKER, NativePackageImportService
 
@@ -396,8 +397,46 @@ class TestExport(SmokeBase):
             zf.writestr("repo/tests/spec.json", json.dumps({"tests": []}))
 
         service = NativePackageImportService()
-        with self.assertRaisesRegex(ValueError, "forbidden repository metadata"):
+        with self.assertRaisesRegex(ValueError, r"forbidden hidden path: repo/\.git/config"):
             service.import_package(ws, "native-git-metadata.zip", payload.getvalue())
+
+    def test_native_import_rejects_hidden_workspace_paths(self) -> None:
+        service = NativePackageImportService()
+        blocked_paths = ["repo/.env", "repo/a/.hidden/file", "repo/.gitignore"]
+        for blocked_path in blocked_paths:
+            with self.subTest(blocked_path=blocked_path):
+                ws = Path(self._workspace_path())
+                payload = io.BytesIO()
+                with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr(
+                        NATIVE_MARKER,
+                        json.dumps({"package_type": "native", "problem_name": "blocked hidden path"}),
+                    )
+                    zf.writestr(blocked_path, "hidden\n")
+                    zf.writestr("repo/tests/spec.json", json.dumps({"tests": []}))
+
+                with self.assertRaisesRegex(ValueError, rf"forbidden hidden path: {re.escape(blocked_path)}"):
+                    service.import_package(ws, "native-hidden-path.zip", payload.getvalue())
+
+    def test_native_import_rejects_total_unzipped_repo_payload_too_large(self) -> None:
+        ws = Path(self._workspace_path())
+        sentinel = ws / "keep.txt"
+        sentinel.write_text("keep\n", encoding="utf-8")
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                NATIVE_MARKER,
+                json.dumps({"package_type": "native", "problem_name": "too large extracted payload"}),
+            )
+            zf.writestr("repo/a.txt", "1234567890")
+            zf.writestr("repo/b.txt", "abcdefghij")
+
+        service = NativePackageImportService()
+        with patch.object(native_import_module, "ZIP_MAX_EXTRACTED_BYTES", 16):
+            with self.assertRaisesRegex(ValueError, "repo payload is too large"):
+                service.import_package(ws, "native-too-large.zip", payload.getvalue())
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
     def test_native_export_roundtrip_preserves_canonical_repo_state(self) -> None:
         ws = Path(self._workspace_path())
