@@ -288,7 +288,7 @@
 }
 
 .switch-toggle > input:focus-visible + .switch-track {
-  outline: 2px solid #60a5fa;
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -297,16 +297,32 @@
   font-weight: var(--danger-link-weight);
 }
 
+.linkish.danger-link,
+.linkish-button.danger-link {
+  color: var(--danger-link-color);
+  font-weight: var(--danger-link-weight);
+}
+
 .danger-link:hover {
   color: var(--danger-link-hover-color);
 }
 
-.button-link.danger-link {
-  border-color: var(--danger-link-color);
+.linkish.danger-link:hover,
+.linkish-button.danger-link:hover:not(:disabled) {
+  color: var(--danger-link-hover-color);
 }
 
+.btn.danger-link,
+.button-link.danger-link {
+  border-color: var(--danger-link-color);
+  color: var(--danger-link-color);
+  font-weight: var(--danger-link-weight);
+}
+
+.btn.danger-link:hover:not(:disabled),
 .button-link.danger-link:hover:not([aria-disabled="true"]) {
   background: var(--danger-link-hover-bg);
+  color: var(--danger-link-hover-color);
 }
 
 .danger-link:focus-visible {
@@ -611,4 +627,3 @@
   background: var(--surface-alt);
   color: var(--text-secondary);
 }
-

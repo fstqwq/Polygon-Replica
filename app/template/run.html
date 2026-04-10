@@ -53,7 +53,7 @@
       </form>
       {% endif %}
       {% if not r.has_running %}
-      <a class="verification-inline-action linkish" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
+      <a class="verification-inline-action linkish danger-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
       {% endif %}
     </td>
   </tr>

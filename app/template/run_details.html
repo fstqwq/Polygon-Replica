@@ -34,7 +34,7 @@
         <input type="hidden" name="solution_paths" value="{{ p }}" />
         {% endfor %}
         <input type="hidden" name="force_recompile" value="1" />
-        <a href="#" class="linkish" data-submit-form="1">Rejudge</a>
+        <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge</a>
       </form>
       {% endif %}
     </div>
@@ -213,24 +213,8 @@
     <p class="compile-diagnostics-error">{{ col.error_display or col.error }}</p>
     {% endif %}
     {% if has_entries %}
-    <div class="compile-diagnostics-list" role="list">
-      {% for d in entries %}
-      {% set level = (d.level | default('') | lower) %}
-      {% if level not in ['error', 'warning', 'note'] %}
-      {% set level = 'other' %}
-      {% endif %}
-      <div class="compile-diagnostics-row compile-diagnostics-row-{{ level }}" role="listitem">
-        <span class="compile-diagnostics-level">{{ d.level_upper or (d.level | upper) }}</span>
-        <span class="compile-diagnostics-location">{{ d.location_display }}</span>
-        <span class="compile-diagnostics-message">{{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}</span>
-      </div>
-      {% endfor %}
-    </div>
-    <details class="compile-diagnostics-raw">
-      <summary>Raw log</summary>
-      <pre class="compile-diagnostics-log">{% for d in entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
+    <pre class="compile-diagnostics-log">{% for d in entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
 {% endfor %}</pre>
-    </details>
     {% endif %}
   </div>
   {% endif %}
@@ -248,24 +232,8 @@
     <p class="compile-diagnostics-error">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
     {% endif %}
     {% if verification_has_entries %}
-    <div class="compile-diagnostics-list" role="list">
-      {% for d in verification_entries %}
-      {% set level = (d.level | default('') | lower) %}
-      {% if level not in ['error', 'warning', 'note'] %}
-      {% set level = 'other' %}
-      {% endif %}
-      <div class="compile-diagnostics-row compile-diagnostics-row-{{ level }}" role="listitem">
-        <span class="compile-diagnostics-level">{{ d.level_upper or (d.level | upper) }}</span>
-        <span class="compile-diagnostics-location">{{ d.location_display }}</span>
-        <span class="compile-diagnostics-message">{{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}</span>
-      </div>
-      {% endfor %}
-    </div>
-    <details class="compile-diagnostics-raw">
-      <summary>Raw log</summary>
-      <pre class="compile-diagnostics-log">{% for d in verification_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
+    <pre class="compile-diagnostics-log">{% for d in verification_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
 {% endfor %}</pre>
-    </details>
     {% endif %}
   </div>
   {% endif %}
@@ -297,19 +265,8 @@
     <p class="compile-diagnostics-error">{{ detail_verification_logs.error_display or detail_verification_logs.error }}</p>
     {% endif %}
     {% if verification_has_entries %}
-    <div class="compile-diagnostics-list" role="list">
-      {% for d in verification_entries %}
-      {% set level = (d.level | default('') | lower) %}
-      {% if level not in ['error', 'warning', 'note'] %}
-      {% set level = 'other' %}
-      {% endif %}
-      <div class="compile-diagnostics-row compile-diagnostics-row-{{ level }}" role="listitem">
-        <span class="compile-diagnostics-level">{{ d.level_upper or (d.level | upper) }}</span>
-        <span class="compile-diagnostics-location">{{ d.location_display }}</span>
-        <span class="compile-diagnostics-message">{{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}</span>
-      </div>
-      {% endfor %}
-    </div>
+    <pre class="compile-diagnostics-log">{% for d in verification_entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
+{% endfor %}</pre>
     {% endif %}
   </div>
   {% else %}

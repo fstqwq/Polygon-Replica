@@ -1,14 +1,14 @@
 :root {
   --layout-max-width: 1400px;
-  --bg: #f1f5f9;
-  --bg-topbar: #1e293b;
-  --bg-topbar-hover: #334155;
+  --bg: #f6f1f5;
+  --bg-topbar: #fffbfe;
+  --bg-topbar-hover: #f2e6ef;
   --surface: #ffffff;
   --surface-alt: #f8fafc;
   --surface-subtle: #f8fafc;
   --surface-hover: #eef2f7;
   --surface-info: #eff6ff;
-  --surface-success: #ecfdf5;
+  --surface-success: #f0faf5;
   --surface-danger: #fef2f2;
   --surface-warning: #fff7ed;
   --line: #cbd5e1;
@@ -17,8 +17,12 @@
   --text: #0f172a;
   --text-secondary: #334155;
   --muted: #64748b;
+  --accent: #6d3a5f;
+  --accent-hover: #522946;
+  --accent-ring: #e9a8d7;
+  --accent-contrast: #ffffff;
   --link: #2563eb;
-  --focus-ring: #93c5fd;
+  --focus-ring: var(--accent-ring);
   --ok: #166534;
   --danger: #b91c1c;
   --danger-link-color: var(--danger);
@@ -49,18 +53,15 @@
   --change-other: #0f766e;
   --transcript-left-bg: #ecfeff;
   --transcript-right-bg: #eef2ff;
-  --diagnostics-error-bg: #fee2e2;
-  --diagnostics-warning-bg: #fef3c7;
-  --diagnostics-note-bg: #dbeafe;
-  --table-row-alt: #fcfcfd;
+  --table-row-alt: #f8f9fb;
   --btn-bg: #ffffff;
   --btn-bg-hover: #f1f5f9;
   --btn-border: #94a3b8;
   --btn-text: #0f172a;
-  --btn-primary-bg: #0f172a;
-  --btn-primary-bg-hover: #1e293b;
-  --btn-primary-border: #0f172a;
-  --btn-primary-text: #ffffff;
+  --btn-primary-bg: var(--accent);
+  --btn-primary-bg-hover: var(--accent-hover);
+  --btn-primary-border: var(--accent);
+  --btn-primary-text: var(--accent-contrast);
   --space-1: 4px;
   --space-2: 6px;
   --space-3: 8px;
@@ -245,4 +246,3 @@ pre {
   --tone-fg: var(--muted);
   --tone-border: var(--line);
 }
-

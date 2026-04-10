@@ -5,16 +5,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% if ctx.problem.name %}{{ ctx.problem.name }} - {% endif %}Polygon-Replica</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260409-1" />
-  <script src="/static/ui.js?v=20260409-1" defer></script>
-  <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260409-1" />
-  <script src="/static/vendor/codemirror/lib/codemirror.min.js?v=20260409-1" defer></script>
-  <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js?v=20260409-1" defer></script>
-  <script src="/static/vendor/codemirror/addon/edit/closebrackets.min.js?v=20260409-1" defer></script>
-  <script src="/static/vendor/codemirror/mode/clike/clike.min.js?v=20260409-1" defer></script>
-  <script src="/static/vendor/codemirror/mode/python/python.min.js?v=20260409-1" defer></script>
-  <script src="/static/vendor/codemirror/mode/stex/stex.min.js?v=20260409-1" defer></script>
-  <script src="/static/vendor/codemirror/mode/javascript/javascript.min.js?v=20260409-1" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260410-23" />
+  <script src="/static/ui.js?v=20260410-23" defer></script>
+  <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />
+  <script src="/static/vendor/codemirror/lib/codemirror.min.js?v=20260410-23" defer></script>
+  <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js?v=20260410-23" defer></script>
+  <script src="/static/vendor/codemirror/addon/edit/closebrackets.min.js?v=20260410-23" defer></script>
+  <script src="/static/vendor/codemirror/mode/clike/clike.min.js?v=20260410-23" defer></script>
+  <script src="/static/vendor/codemirror/mode/python/python.min.js?v=20260410-23" defer></script>
+  <script src="/static/vendor/codemirror/mode/stex/stex.min.js?v=20260410-23" defer></script>
+  <script src="/static/vendor/codemirror/mode/javascript/javascript.min.js?v=20260410-23" defer></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}
@@ -23,7 +23,11 @@
     {% set top_settings_href = '/problems/' ~ ctx.user.username ~ '/settings' %}
     {% set top_active_main = 'problems' %}
     {% include "_topbar_common.html" %}
+  </header>
+
+  <div class="problem-page-frame{% if ctx.page_wide_content %} page-frame-wide{% endif %}{% if ctx.page_single_column %} single-column{% endif %}">
     {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
+    {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
     {% set general_nav = nav_status.get('general', {}) %}
     {% set preview_nav = nav_status.get('preview', {}) %}
     {% set general_line_class = 'submenu-status-danger' if general_nav.get('danger') else 'submenu-status-warn' if general_nav.get('warn') else '' %}
@@ -50,7 +54,11 @@
     {% endif %}
     {% endfor %}
     {% endif %}
-    <nav class="problem-submenu">
+    <div class="problem-context-bar">
+      <strong class="problem-context-name">{{ ctx.problem.name }}</strong>
+      <span class="problem-context-slug">#{{ ctx.problem.slug }}</span>
+    </div>
+    <nav class="problem-submenu" aria-label="Problem sections">
       <div class="problem-submenu-item">
         <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement">
           <span class="submenu-head-line {{ statement_line_class }}">
@@ -61,6 +69,7 @@
         </a>
       </div>
       {% set checker_nav = nav_status.get('checker', {}) %}
+      {% if problem_mode != "interactive" %}
       <div class="problem-submenu-item">
         <a data-page="checker" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker">
           <span class="submenu-head-line">
@@ -72,7 +81,8 @@
           >{{ checker_nav.get("text", "-") }}</span>
         </a>
       </div>
-      {% if (ctx.problem_mode if ctx.problem_mode is defined else "pass-fail") != "pass-fail" %}
+      {% endif %}
+      {% if problem_mode == "interactive" %}
       <div class="problem-submenu-item">
         <a data-page="interactor" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/interactor">
           <span class="submenu-head-line">
@@ -159,68 +169,63 @@
         </a>
       </div>
     </nav>
-    <div class="problem-context-bar">
-      <strong class="problem-context-name">{{ ctx.problem.name }}</strong>
-      <span class="problem-context-slug">#{{ ctx.problem.slug }}</span>
-    </div>
-  </header>
-
-  <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}{% if ctx.page_single_column %} single-column{% endif %}">
-    <main class="content-shell">
-      <div class="container">{% block content %}{% endblock %}</div>
-    </main>
-    <aside class="side-panel">
-      <section class="action-card">
-        <h3>Working Copy</h3>
-        {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
-        {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
-        {% set upstream_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
-        {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
-        {% set upstream_rev = ('v' ~ upstream_rev_raw) if upstream_rev_raw is not none else 'missing' %}
-        <div class="workspace-revision{{ ' workspace-revision-alert' if ctx.workspace_revision_alert else '' }}">
-          <div class="workspace-revision-head">
-            {% if ctx.workspace_needs_update %}
-            <span class="workspace-revision-state">update available</span>
-            {% endif %}
+    <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}{% if ctx.page_single_column %} single-column{% endif %}">
+      <main class="content-shell">
+        <div class="container">{% block content %}{% endblock %}</div>
+      </main>
+      <aside class="side-panel">
+        <section class="action-card">
+          <h3>Working Copy</h3>
+          {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
+          {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
+          {% set upstream_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
+          {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
+          {% set upstream_rev = ('v' ~ upstream_rev_raw) if upstream_rev_raw is not none else 'missing' %}
+          <div class="workspace-revision{{ ' workspace-revision-alert' if ctx.workspace_revision_alert else '' }}">
+            <div class="workspace-revision-head">
+              {% if ctx.workspace_needs_update %}
+              <span class="workspace-revision-state">update available</span>
+              {% endif %}
+            </div>
+            <p class="workspace-revision-inline">Based on <strong>{{ local_rev }}</strong> / upstream <strong>{{ upstream_rev }}</strong></p>
           </div>
-          <p class="workspace-revision-inline">Based on <strong>{{ local_rev }}</strong> / upstream <strong>{{ upstream_rev }}</strong></p>
-        </div>
-        {% if ctx.workspace_needs_update %}
-        <div class="workspace-update-row">
-          <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull">
-            <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
-          </form>
-        </div>
-        {% endif %}
-        <div class="workspace-links">
-          <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/history">View Revision History</a>
-          <span class="workspace-link-sep" aria-hidden="true">/</span>
-          <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?src=workspace">Browse Files</a>
-        </div>
-        <div class="workspace-actions">
-          <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace">Commit Changes</a>
-        </div>
-        {% if ctx.workspace_changes.total > 0 %}
-        {{ change_badges(ctx.workspace_changes.counts) }}
-        <ul class="change-list">
-          {% for row in ctx.workspace_changes.rows %}
-          <li class="change-item change-{{ row.kind }}">
-            <code class="change-code">{{ row.code }}</code>
-            <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace?path={{ row.link_path }}&src=workspace">{{ row.path }}</a>
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="muted">Working copy clean.</p>
-        {% endif %}
-        {% if not ctx.access.can_write %}
-        <p class="muted">Workspace is read-only.</p>
-        {% endif %}
-      </section>
-    </aside>
+          {% if ctx.workspace_needs_update %}
+          <div class="workspace-update-row">
+            <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull">
+              <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
+            </form>
+          </div>
+          {% endif %}
+          <div class="workspace-links">
+            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/history">View Revision History</a>
+            <span class="workspace-link-sep" aria-hidden="true">/</span>
+            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?src=workspace">Browse Files</a>
+          </div>
+          <div class="workspace-actions">
+            <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace">Commit Changes</a>
+          </div>
+          {% if ctx.workspace_changes.total > 0 %}
+          {{ change_badges(ctx.workspace_changes.counts) }}
+          <ul class="change-list">
+            {% for row in ctx.workspace_changes.rows %}
+            <li class="change-item change-{{ row.kind }}">
+              <code class="change-code">{{ row.code }}</code>
+              <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace?path={{ row.link_path }}&src=workspace">{{ row.path }}</a>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted">Working copy clean.</p>
+          {% endif %}
+          {% if not ctx.access.can_write %}
+          <p class="muted">Workspace is read-only.</p>
+          {% endif %}
+        </section>
+      </aside>
+    </div>
   </div>
   {% include "_page_profile.html" %}
 
-  <script src="/static/editor_init.js?v=20260409-1" defer></script>
+  <script src="/static/editor_init.js?v=20260410-23" defer></script>
 </body>
 </html>

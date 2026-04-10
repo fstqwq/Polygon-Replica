@@ -36,9 +36,10 @@
 }
 
 .tests-editor-table {
+  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: fixed;
+  table-layout: auto;
   border: 1px solid var(--line);
   background: var(--surface);
 }
@@ -107,7 +108,7 @@
 }
 
 .tests-editor-table .tests-col-test {
-  width: 210px;
+  width: 200px;
 }
 
 .tests-editor-table .tests-col-preview {
@@ -115,7 +116,7 @@
 }
 
 .tests-editor-table .tests-col-actions {
-  width: 300px;
+  width: 200px;
 }
 
 .tests-preview-cell {
@@ -313,7 +314,23 @@
 }
 
 .solutions-table {
+  width: 100%;
   table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.solutions-table th,
+.solutions-table td {
+  border-bottom: 1px solid var(--line);
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.solutions-table th {
+  background: var(--surface-alt);
+  font-weight: 700;
+  font-size: var(--font-size-ui-sm);
 }
 
 .solutions-table col.solutions-col-source {
@@ -488,4 +505,3 @@ select.tag-select.tag-select-neutral {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-

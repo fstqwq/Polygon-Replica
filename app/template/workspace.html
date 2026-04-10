@@ -4,10 +4,12 @@
 <h1 class="page-title">Working Copy</h1>
 {% include "_flash_message.html" %}
 {% set nav = ctx.nav_status if ctx.nav_status is defined else {} %}
+{% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
 {% set readiness_items = [
   {'label': 'Statement', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/statement', 'meta': nav.get('preview', {}).get('text', '-'), 'danger': nav.get('preview', {}).get('danger', False), 'warn': nav.get('preview', {}).get('warn', False)},
   {'label': 'Judge Pipeline', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/run/new', 'meta': nav.get('pipeline', {}).get('text', '-'), 'danger': nav.get('pipeline', {}).get('danger', False), 'warn': nav.get('pipeline', {}).get('warn', False)},
-  {'label': 'Checker', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/checker', 'meta': nav.get('checker', {}).get('text', '-'), 'danger': nav.get('checker', {}).get('danger', False), 'warn': nav.get('checker', {}).get('warn', False)},
+  {'label': 'Checker', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/checker', 'meta': nav.get('checker', {}).get('text', '-'), 'danger': nav.get('checker', {}).get('danger', False), 'warn': nav.get('checker', {}).get('warn', False), 'mode': 'pass-fail'},
+  {'label': 'Interactor', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/interactor', 'meta': nav.get('interactor', {}).get('text', '-'), 'danger': nav.get('interactor', {}).get('danger', False), 'warn': nav.get('interactor', {}).get('warn', False), 'mode': 'interactive'},
   {'label': 'Validator', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/validator', 'meta': nav.get('validator', {}).get('text', '-'), 'danger': nav.get('validator', {}).get('danger', False), 'warn': nav.get('validator', {}).get('warn', False)},
   {'label': 'Tests', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/tests', 'meta': nav.get('tests', {}).get('text', '-'), 'danger': nav.get('tests', {}).get('danger', False), 'warn': nav.get('tests', {}).get('warn', False)},
   {'label': 'Solutions', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/solutions', 'meta': nav.get('solutions', {}).get('text', '-'), 'danger': nav.get('solutions', {}).get('danger', False), 'warn': nav.get('solutions', {}).get('warn', False)},
@@ -19,10 +21,12 @@
   <p class="muted">Statement preview status is tracked separately from judge pipeline runnable status.</p>
   <div class="readiness-grid">
     {% for item in readiness_items %}
+    {% if item.get('mode', problem_mode) == problem_mode %}
     <a class="readiness-card" href="{{ item.href }}">
       <span class="readiness-label">{{ item.label }}</span>
       <span class="readiness-state {{ 'submenu-status-warn' if (item.danger or item.warn) else '' }}">{{ item.meta }}</span>
     </a>
+    {% endif %}
     {% endfor %}
   </div>
 </section>
@@ -86,7 +90,7 @@
           data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
           data-sudo-url="/sudo?next={{ sudo_popup_next | urlencode }}"
         >
-          <button class="btn" type="submit">Delete Working Copy</button>
+          <button class="btn danger-link" type="submit">Delete Working Copy</button>
         </form>
         {% endif %}
         {% if ctx.access.can_manage %}
@@ -102,7 +106,7 @@
           {% set problem_slug_segment = ctx.problem.slug.rsplit('/', 1)[-1] %}
           <label for="confirm_problem">Type problem slug segment to confirm delete</label>
           <input id="confirm_problem" name="confirm_problem" placeholder="{{ problem_slug_segment }}" autocomplete="off" spellcheck="false" />
-        <button class="btn" type="submit">Delete Problem</button>
+        <button class="btn danger-link" type="submit">Delete Problem</button>
         </form>
         {% endif %}
       </div>

@@ -397,6 +397,19 @@ textarea.textarea-md {
   text-decoration: underline;
 }
 
+.table-base .linkish,
+.tests-editor-table .linkish,
+.verification-list-table .linkish,
+.verification-actions > a,
+.workspace-side-link,
+.status-inline-link,
+.linkish.danger-link,
+.linkish-button.danger-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
 .linkish[aria-disabled="true"],
 .linkish-button:disabled {
   color: var(--muted);
@@ -440,4 +453,3 @@ tr.table-row-dirty > td,
 tr.verification-row-failed > td {
   background: var(--surface-danger);
 }
-

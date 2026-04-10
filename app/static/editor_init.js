@@ -6,7 +6,7 @@
   if (!targets.length) return;
 
   var LOCAL_BASE = "/static/vendor/codemirror";
-  var ASSET_VERSION = "20260409-1";
+  var ASSET_VERSION = "20260410-23";
 
   function assetUrl(path) {
     return path + "?v=" + ASSET_VERSION;

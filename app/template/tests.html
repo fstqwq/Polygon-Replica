@@ -32,7 +32,9 @@
       <td>
         <div class="tests-cell-line tests-cell-line-main">
           <code>{{ "%03d"|format(row.index) }}</code>
-          <span class="tests-kind tests-kind-{{ row.kind }}">{{ row.kind }}</span>
+          {% if row.kind == "gen" %}
+          <span class="tests-kind tests-kind-gen">gen</span>
+          {% endif %}
           {% if row.sample %}
           <span class="tests-kind tests-kind-manual">sample</span>
           {% endif %}

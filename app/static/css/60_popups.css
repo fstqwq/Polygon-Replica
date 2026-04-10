@@ -223,7 +223,7 @@ body.confirm-open {
 
 .page-profile {
   border-top: 1px solid var(--line);
-  background: var(--surface-hover);
+  background: var(--bg-topbar);
   color: var(--text-secondary);
   padding: var(--space-3) var(--space-5);
 }

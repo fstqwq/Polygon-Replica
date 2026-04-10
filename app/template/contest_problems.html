@@ -63,7 +63,7 @@
     <div class="form-row">
       <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">Save Index Order</button>
       <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/renumber">Renumber A,B,C...</button>
-      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
+      <button class="btn danger-link" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
     </div>
   </form>
   {% else %}
