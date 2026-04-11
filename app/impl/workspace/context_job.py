@@ -201,7 +201,7 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
     try:
         if safe_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
-        if not head_commit:
+        if not head_commit and safe_export_type != 'native':
             raise ValueError('no committed revision; commit changes first')
         out = config.export_service.create_export(
             problem,

@@ -371,7 +371,7 @@ def export_create(problem: str, user: str, verification_id: str=Form(''), export
     try:
         if requested_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
-        if not head_commit:
+        if not head_commit and requested_export_type != 'native':
             raise ValueError('no committed revision; commit changes first')
         started = start_export_job(
             problem,

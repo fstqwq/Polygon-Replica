@@ -350,6 +350,29 @@ class ExportService:
 
         raise ValueError("export source snapshot requires non-empty source commit")
 
+    def _snapshot_working_tree(
+        self,
+        workspace_id: int | None,
+        problem_slug: str,
+        tmp_root: Path,
+    ) -> Path:
+        """Copy the workspace working tree to a temp snapshot, excluding .git and temp/."""
+        workspace = self._workspace_path_for_export(workspace_id, problem_slug)
+        snapshot = tmp_root / "_source"
+        snapshot.mkdir(parents=True, exist_ok=True)
+        for child in workspace.iterdir():
+            if child.name in {".git", "temp", ".polygonlike.lock"}:
+                continue
+            if child.is_symlink():
+                continue
+            target = snapshot / child.name
+            if child.is_dir():
+                shutil.copytree(child, target, symlinks=False)
+            else:
+                shutil.copy2(child, target)
+        remove_symlinks(snapshot)
+        return snapshot
+
     def _workspace_path_for_export(self, workspace_id: int | None, problem_slug: str) -> Path:
         if workspace_id is None:
             raise ValueError("build workspace metadata missing")
@@ -675,9 +698,10 @@ class ExportService:
         workspace = self._workspace_path_for_export(resolved_workspace_id, problem)
         if not resolved_source_commit:
             head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"], timeout=120)
-            if head.returncode != 0 or not head.stdout.strip():
+            if head.returncode == 0 and head.stdout.strip():
+                resolved_source_commit = head.stdout.strip()
+            elif resolved_export_type != "native":
                 raise ValueError("no committed revision; commit changes first")
-            resolved_source_commit = head.stdout.strip()
         export_id = f"e-{uuid.uuid4().hex[:10]}"
         export_dir = self._export_dir(str(problem_row["slug"]), export_id)
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -715,18 +739,28 @@ class ExportService:
                     pass_limit=pass_limit,
                 )
             else:
-                snapshot = self._snapshot_source(
-                    resolved_workspace_id,
-                    str(problem_row["slug"]),
-                    resolved_source_commit,
-                    tmp_root,
-                )
+                if resolved_source_commit:
+                    snapshot = self._snapshot_source(
+                        resolved_workspace_id,
+                        str(problem_row["slug"]),
+                        resolved_source_commit,
+                        tmp_root,
+                    )
+                else:
+                    snapshot = self._snapshot_working_tree(
+                        resolved_workspace_id,
+                        str(problem_row["slug"]),
+                        tmp_root,
+                    )
                 self._build_native_package(
                     package_root=package_root,
                     snapshot=snapshot,
                 )
 
-            preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"
+            if resolved_export_type == "native":
+                preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}.zip"
+            else:
+                preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"
             archive_target = self._export_path(str(problem_row["slug"]), export_id, preferred_filename)
             archive_prefix = archive_target.with_suffix("")
             archive = shutil.make_archive(
