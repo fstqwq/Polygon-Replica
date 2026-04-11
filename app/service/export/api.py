@@ -361,7 +361,7 @@ class ExportService:
         snapshot = tmp_root / "_source"
         snapshot.mkdir(parents=True, exist_ok=True)
         for child in workspace.iterdir():
-            if child.name in {".git", "temp", ".polygonlike.lock"}:
+            if child.name in {".git", "temp", "draft", ".polygonlike.lock"}:
                 continue
             if child.is_symlink():
                 continue
