@@ -350,26 +350,37 @@ class ExportService:
 
         raise ValueError("export source snapshot requires non-empty source commit")
 
+    @staticmethod
+    def _is_forbidden_native_working_tree_path(path: Path) -> bool:
+        return any(str(part or "").startswith(".") for part in path.parts)
+
+    def _copy_native_working_tree(self, src_dir: Path, dst_dir: Path, *, root_dir: Path) -> None:
+        for child in src_dir.iterdir():
+            rel = child.relative_to(root_dir)
+            if rel.parts and rel.parts[0] in {"temp", "draft"}:
+                continue
+            if self._is_forbidden_native_working_tree_path(rel):
+                continue
+            if child.is_symlink():
+                continue
+            target = dst_dir / child.name
+            if child.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                self._copy_native_working_tree(child, target, root_dir=root_dir)
+                continue
+            shutil.copy2(child, target)
+
     def _snapshot_working_tree(
         self,
         workspace_id: int | None,
         problem_slug: str,
         tmp_root: Path,
     ) -> Path:
-        """Copy the workspace working tree to a temp snapshot, excluding .git and temp/."""
+        """Copy the workspace working tree to a temp snapshot using native-import path rules."""
         workspace = self._workspace_path_for_export(workspace_id, problem_slug)
         snapshot = tmp_root / "_source"
         snapshot.mkdir(parents=True, exist_ok=True)
-        for child in workspace.iterdir():
-            if child.name in {".git", "temp", "draft", ".polygonlike.lock"}:
-                continue
-            if child.is_symlink():
-                continue
-            target = snapshot / child.name
-            if child.is_dir():
-                shutil.copytree(child, target, symlinks=False)
-            else:
-                shutil.copy2(child, target)
+        self._copy_native_working_tree(workspace, snapshot, root_dir=workspace)
         remove_symlinks(snapshot)
         return snapshot
 
@@ -691,17 +702,18 @@ class ExportService:
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
-        resolved_source_commit = str(source_commit or "").strip()
+        requested_source_commit = str(source_commit or "").strip()
         resolved_workspace_id = workspace_id
         if resolved_workspace_id is None:
             raise ValueError("export requires workspace_id")
         workspace = self._workspace_path_for_export(resolved_workspace_id, problem)
-        if not resolved_source_commit:
+        if resolved_export_type == "icpc" and not requested_source_commit:
             head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"], timeout=120)
             if head.returncode == 0 and head.stdout.strip():
-                resolved_source_commit = head.stdout.strip()
-            elif resolved_export_type != "native":
+                requested_source_commit = head.stdout.strip()
+            else:
                 raise ValueError("no committed revision; commit changes first")
+        stored_source_commit = "" if resolved_export_type == "native" else requested_source_commit
         export_id = f"e-{uuid.uuid4().hex[:10]}"
         export_dir = self._export_dir(str(problem_row["slug"]), export_id)
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -715,7 +727,7 @@ class ExportService:
         except Exception:
             workspace_path = None
         if workspace_path is not None:
-            revision_number = self._revision_number_for_commit(workspace_path, resolved_source_commit)
+            revision_number = self._revision_number_for_commit(workspace_path, stored_source_commit)
         revision_token = f"v{revision_number}" if isinstance(revision_number, int) and revision_number >= 0 else "v0"
 
         snapshot: Path | None = None
@@ -726,7 +738,7 @@ class ExportService:
                 snapshot = self._snapshot_source(
                     resolved_workspace_id,
                     str(problem_row["slug"]),
-                    resolved_source_commit,
+                    requested_source_commit,
                     tmp_root,
                 )
                 mode, pass_limit = self._problem_mode_and_pass_limit(snapshot)
@@ -739,19 +751,11 @@ class ExportService:
                     pass_limit=pass_limit,
                 )
             else:
-                if resolved_source_commit:
-                    snapshot = self._snapshot_source(
-                        resolved_workspace_id,
-                        str(problem_row["slug"]),
-                        resolved_source_commit,
-                        tmp_root,
-                    )
-                else:
-                    snapshot = self._snapshot_working_tree(
-                        resolved_workspace_id,
-                        str(problem_row["slug"]),
-                        tmp_root,
-                    )
+                snapshot = self._snapshot_working_tree(
+                    resolved_workspace_id,
+                    str(problem_row["slug"]),
+                    tmp_root,
+                )
                 self._build_native_package(
                     package_root=package_root,
                     snapshot=snapshot,
@@ -781,14 +785,14 @@ class ExportService:
                 filename=out.name,
                 sha256=digest,
                 size_bytes=int(out.stat().st_size),
-                source_commit=resolved_source_commit,
+                source_commit=stored_source_commit,
             )
             self._cleanup_previous_revision_exports(
                 problem_slug=str(problem_row["slug"]),
                 problem_id=int(problem_row["id"]),
                 workspace_id=resolved_workspace_id,
                 export_type=resolved_export_type,
-                source_commit=resolved_source_commit,
+                source_commit=stored_source_commit,
                 keep_export_id=export_id,
             )
             return out

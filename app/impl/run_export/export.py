@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 import zipfile
 from pathlib import Path
 from typing import TypedDict, cast
@@ -28,6 +29,15 @@ class ExportAuditDetails(TypedDict):
     verification_id: str
     filename: str
     error: str
+    export_task_id: str
+
+
+def _export_type_display(export_type: str) -> str:
+    if export_type == "icpc":
+        return "ICPC"
+    if export_type == "native":
+        return "Native"
+    return export_type or "-"
 
 
 def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
@@ -45,6 +55,7 @@ def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
     verification_id = cast(str | None, details.get("verification_id"))
     filename = cast(str | None, details.get("filename"))
     error = cast(str | None, details.get("error"))
+    export_task_id = cast(str | None, details.get("export_task_id"))
     return {
         "status": "unknown" if status is None else status,
         "export_type": "icpc" if export_type is None else export_type,
@@ -52,6 +63,7 @@ def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
         "verification_id": "" if verification_id is None else verification_id,
         "filename": "" if filename is None else filename.strip(),
         "error": "" if error is None else error.strip(),
+        "export_task_id": "" if export_task_id is None else export_task_id.strip(),
     }
 
 
@@ -103,9 +115,12 @@ def _export_recent_events(
             {
                 "created_at": item.get("created_at"),
                 "status": status,
+                "export_type": details["export_type"],
                 "source_commit": source_commit,
-                "source_commit_short": source_commit[:8] if source_commit else "-",
+                "source_display": "working tree" if details["export_type"] == "native" and not source_commit else (source_commit[:8] if source_commit else "-"),
                 "verification_id": verification_id or "-",
+                "export_task_id": details["export_task_id"],
+                "filename": filename,
                 "detail": detail,
                 "running": status == "running",
                 "verification_href": verification_href,
@@ -264,11 +279,13 @@ def export_page(request: Request, problem: str, user: str):
         head_commit = ""
     workspace = Path(ctx['workspace']['path'])
     generate_revision: int | None = git_commit_count(workspace, head_commit) if head_commit else None
-    generate_revision_display = f'v{generate_revision}' if generate_revision is not None and generate_revision >= 0 else 'missing'
-    if not head_commit:
-        build_note = 'no committed revision yet; commit changes before generating package'
-    else:
-        build_note = 'Generate will build from committed revision'
+    icpc_revision_display = f'v{generate_revision}' if generate_revision is not None and generate_revision >= 0 else 'missing'
+    icpc_option_label = (
+        f'ICPC (committed revision {icpc_revision_display})'
+        if head_commit
+        else 'ICPC (requires committed revision)'
+    )
+    native_option_label = 'Native (current working tree)'
     exports_rows = config.export_service.workspace_exports(int(ctx['problem']['id']), int(workspace_id), limit=40)
     revision_cache: dict[str, int | None] = {}
     verification_meta_cache: dict[str, dict[str, object] | None] = {}
@@ -287,7 +304,10 @@ def export_page(request: Request, problem: str, user: str):
                 revision = git_commit_count(workspace, source_commit)
                 revision_cache[source_commit] = revision
         item['revision'] = revision
-        item['revision_display'] = f'v{revision}' if revision is not None and revision >= 0 else 'v?'
+        if cast(str, item["export_type"]) == "native" and not source_commit:
+            item['source_display'] = 'working tree'
+        else:
+            item['source_display'] = f'v{revision}' if revision is not None and revision >= 0 else 'v?'
         stored_filename = cast(str | None, item.get("filename"))
         if stored_filename is None:
             stored_filename = ""
@@ -297,7 +317,8 @@ def export_page(request: Request, problem: str, user: str):
         fallback_stem = Path(problem_slug).name
         if not fallback_stem:
             fallback_stem = "problem"
-        item['display_filename'] = stored_filename or f"{fallback_stem}-{item['revision_display']}.zip"
+        native_export = cast(str, item["export_type"]) == "native"
+        item['display_filename'] = stored_filename or (f"{fallback_stem}.zip" if native_export else f"{fallback_stem}-{item['source_display']}.zip")
         verification_id = _resolve_export_verification_id(
             problem_id=problem_id,
             workspace_id=int(workspace_id),
@@ -328,7 +349,8 @@ def export_page(request: Request, problem: str, user: str):
                 summary_bits.append(f"{_count_label(solutions_total, 'solution')} ({solutions_correct} correct)")
         if tests_total is not None:
             summary_bits.append(_count_label(tests_total, "test"))
-        item["summary_display"] = f"{item['revision_display']} ({', '.join(summary_bits)})" if summary_bits else item["revision_display"]
+        item["summary_display"] = f"{item['source_display']} ({', '.join(summary_bits)})" if summary_bits else item["source_display"]
+        item["activity_detail"] = f"{item['display_filename']} ({', '.join(summary_bits)})" if summary_bits else item["display_filename"]
         exports.append(item)
     export_events = _export_recent_events(
         problem_id,
@@ -337,15 +359,57 @@ def export_page(request: Request, problem: str, user: str):
         username=ctx["user"]["username"],
         limit=20,
     )
+    export_row_index: dict[tuple[str, str, str], dict[str, object]] = {}
+    for item in exports:
+        export_row_index[(cast(str, item["export_type"]), cast(str, item["source_commit"]), cast(str, item["filename"]))] = item
+    activity_rows: list[dict[str, object]] = []
+    seen_task_ids: set[str] = set()
+    for e in export_events:
+        task_id = cast(str, e["export_task_id"])
+        if task_id:
+            if task_id in seen_task_ids:
+                continue
+            seen_task_ids.add(task_id)
+        status = cast(str, e["status"])
+        export_row = export_row_index.get(
+            (
+                cast(str, e["export_type"]),
+                cast(str, e["source_commit"]),
+                cast(str, e["filename"]),
+            )
+        )
+        if status == "ok" and export_row is not None:
+            activity_rows.append(
+                {
+                    "created_at": export_row["created_at"],
+                    "type_display": _export_type_display(cast(str, export_row["export_type"])),
+                    "source_display": export_row["source_display"],
+                    "status": "ok",
+                    "detail": export_row["activity_detail"],
+                    "open_href": f"/problems/{ctx['problem']['slug']}/{ctx['user']['username']}/exports/{export_row['id']}/{export_row['filename']}",
+                    "open_label": "zip",
+                }
+            )
+            continue
+        activity_rows.append(
+            {
+                "created_at": e["created_at"],
+                "type_display": _export_type_display(cast(str, e["export_type"])),
+                "source_display": e["source_display"],
+                "status": status,
+                "detail": "running" if status == "running" else e["detail"],
+                "open_href": e["verification_href"],
+                "open_label": "open",
+            }
+        )
     return template_response(
         request,
         'export.html',
         {
             'ctx': ctx,
-            'build_note': build_note,
-            'generate_revision_display': generate_revision_display,
-            'exports': exports,
-            'export_events': export_events,
+            'icpc_option_label': icpc_option_label,
+            'native_option_label': native_option_label,
+            'activity_rows': activity_rows,
         },
     )
 
@@ -360,13 +424,16 @@ def export_create(problem: str, user: str, verification_id: str=Form(''), export
         head_commit = ""
     if not requested_export_type:
         requested_export_type = 'icpc'
+    source_commit = "" if requested_export_type == "native" else head_commit
+    export_task_id = f"exp-{uuid.uuid4().hex[:12]}"
     initial_details: dict[str, object] = {
         'status': 'running',
         'verification_id': verification_id,
         'export_type': requested_export_type,
-        'source_commit': head_commit,
+        'source_commit': source_commit,
         'filename': '',
         'error': '',
+        'export_task_id': export_task_id,
     }
     try:
         if requested_export_type not in {'icpc', 'native'}:
@@ -379,12 +446,13 @@ def export_create(problem: str, user: str, verification_id: str=Form(''), export
             actor_user_id=int(ctx['user']['id']),
             problem_id=problem_id,
             workspace_id=workspace_id,
-            head_commit=head_commit,
+            source_commit=source_commit,
             requested_verification_id=verification_id,
             requested_export_type=requested_export_type,
+            export_task_id=export_task_id,
             initial_details=initial_details,
         )
-        msg = 'package generation queued' if started else 'package generation already running for this revision'
+        msg = 'package generation queued' if started else 'package generation already running for this source'
     except ValueError as exc:
         initial_details['status'] = 'failed'
         initial_details['error'] = str(exc)

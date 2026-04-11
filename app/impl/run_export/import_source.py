@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import re
+import shutil
+import uuid
 import zipfile
 from pathlib import Path
 from typing import TypedDict, cast
@@ -217,6 +219,113 @@ def _finalize_imported_problem(problem: str, actor_user: str, workspace: Path, p
     config.git_service.push(workspace, "main")
     return commit_head
 
+
+def _remove_tree_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+        return
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=False)
+
+
+def _merge_imported_tree(source_root: Path, target_root: Path) -> None:
+    for child in source_root.iterdir():
+        if child.name == ".git":
+            continue
+        target = target_root / child.name
+        if child.is_symlink():
+            child.unlink(missing_ok=True)
+            continue
+        if child.is_dir():
+            if target.is_symlink() or target.is_file():
+                _remove_tree_path(target)
+            if not target.exists():
+                shutil.move(str(child), str(target))
+                continue
+            _merge_imported_tree(child, target)
+            child.rmdir()
+            continue
+        if target.exists():
+            _remove_tree_path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(child), str(target))
+
+
+def import_package_into_workspace(
+    actor_user_id: int,
+    actor_user: str,
+    target_problem: str,
+    package_name: str,
+    package_content: bytes,
+    source_problem: str = "",
+    normalize_test_data_newlines: bool = False,
+) -> dict[str, object]:
+    safe_actor_user = actor_user.strip()
+    if not safe_actor_user:
+        raise ValueError("actor user is required")
+    safe_target_problem = target_problem.strip()
+    if not safe_target_problem:
+        raise ValueError("target problem is required")
+    safe_package_name = package_name.strip()
+    if not safe_package_name:
+        raise ValueError("package filename is required")
+    payload = bytes(package_content or b"")
+    if not payload:
+        raise ValueError("package file is empty")
+
+    package_format = _detect_problem_package_format(payload)
+    target_workspace = Path(config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=False))
+    importer = _select_importer(package_format)
+    staging_root = target_workspace.parent / f".workspace-import-{uuid.uuid4().hex}"
+    staging_workspace = staging_root / "workspace"
+    result: ImportedPackageResult
+    try:
+        staging_workspace.mkdir(parents=True, exist_ok=False)
+        result = cast(
+            ImportedPackageResult,
+            importer.import_package(
+                staging_workspace,
+                safe_package_name,
+                payload,
+                normalize_test_data_newlines=bool(normalize_test_data_newlines),
+            ),
+        )
+        imported_title = cast(str | None, result.get("title")) or ""
+        with config.workspace_service.workspace_lock(target_workspace):
+            _merge_imported_tree(staging_workspace, target_workspace)
+            if imported_title:
+                config.workspace_service.set_problem_name(safe_target_problem, imported_title)
+        config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=True)
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
+
+    problem_id = config.workspace_service.known_problem_id(safe_target_problem)
+    if problem_id is not None:
+        audit(
+            actor_user_id,
+            int(problem_id),
+            "export.import_workspace",
+            {
+                "package": safe_package_name,
+                "package_format": package_format,
+                "source_problem": source_problem.strip(),
+                "target_problem": safe_target_problem,
+                "statement": result.get("statement"),
+                "tests": result.get("tests"),
+                "components": result.get("components"),
+                "solutions": result.get("solutions"),
+                "merge_mode": "overwrite_matching_paths_keep_missing",
+            },
+        )
+    tests_info = result.get("tests")
+    total_tests = int(cast(dict[str, object], tests_info).get("total", 0)) if tests_info is not None else 0
+    return {
+        "target_problem": safe_target_problem,
+        "total_tests": total_tests,
+        "result": result,
+        "package_format": package_format,
+    }
+
 def import_package_as_new_problem(
     actor_user_id: int,
     actor_user: str,
@@ -312,7 +421,7 @@ def import_package_warnings(import_result: dict[str, object] | None) -> list[str
         warnings.append(warning)
     return warnings
 
-def export_import(problem: str, user: str, package_upload: UploadFile | None=File(None), problem_slug: str=Form('')):
+def export_import(problem: str, user: str, package_upload: UploadFile | None=File(None)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     try:
@@ -324,22 +433,22 @@ def export_import(problem: str, user: str, package_upload: UploadFile | None=Fil
             raise ValueError('package filename is required')
         package_content = package_upload.file.read()
         actor_user = ctx["user"]["username"]
-        imported = import_package_as_new_problem(
+        imported = import_package_into_workspace(
             actor_user_id=int(ctx['user']['id']),
             actor_user=actor_user,
+            target_problem=problem.strip(),
             package_name=package_name,
             package_content=package_content,
-            requested_slug=problem_slug.strip(),
             source_problem=problem.strip(),
         )
         target_problem = cast(str, imported["target_problem"])
         total_tests = int(imported["total_tests"])
         package_format = cast(str, imported["package_format"])
-        msg = f"{package_format} package imported as {target_problem} ({_count_label(total_tests, 'test')})"
+        msg = f"{package_format} package imported into working copy {target_problem} ({_count_label(total_tests, 'test')})"
         warnings = import_package_warnings(imported)
         if warnings:
             msg = f"{msg}; warning: {'; '.join(warnings)}"
-        return redirect_response(f'/problems/{target_problem}/{actor_user}/statement', status_code=303, message=msg)
+        return redirect_response(f'/problems/{target_problem}/{actor_user}/workspace', status_code=303, message=msg)
     except ValueError as exc:
         msg = str(exc)
     except Exception as exc:

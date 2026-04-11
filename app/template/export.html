@@ -3,40 +3,44 @@
 <h1 class="page-title">Packages</h1>
 {% include "_flash_message.html" %}
 
+<div class="grid">
+  <section class="info-card">
+    <h2>Export Into Package</h2>
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/create">
+      <label for="export-type">Type</label>
+      <select id="export-type" name="export_type">
+        <option value="icpc">{{ icpc_option_label }}</option>
+        <option value="native">{{ native_option_label }}</option>
+      </select>
+      <button class="btn primary-action" type="submit">Export</button>
+    </form>
+  </section>
+  <section class="info-card">
+    <h2>Import Into Working Copy</h2>
+    <p class="muted">Package files overwrite same-path local files. Paths absent from the package are kept.</p>
+    <form class="form-row" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/import">
+      <label for="workspace-import-package">Package (.zip)</label>
+      <input id="workspace-import-package" type="file" name="package_upload" accept=".zip,application/zip" required />
+      <button class="btn" type="submit">Import</button>
+    </form>
+  </section>
+</div>
+
 <section>
-  <h2>Generate</h2>
-  <p class="muted">{{ build_note }}</p>
-  <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export/create">
-    <label>Revision</label>
-    <strong class="{{ 'danger' if generate_revision_display == 'missing' else '' }}">{{ generate_revision_display }}</strong>
-    <label for="export-type">Type</label>
-    <select id="export-type" name="export_type">
-      <option value="icpc">ICPC</option>
-      <option value="native">Native</option>
-    </select>
-    <button class="btn primary-action" type="submit">Generate</button>
-  </form>
-</section>
-<section>
-  <h2>Generation Tasks</h2>
-  {% if export_events %}
+  <h2>Activity</h2>
+  {% if activity_rows %}
   <table class="table-base">
-    <tr><th>Time</th><th>Status</th><th>Revision</th><th>Verification</th><th>Detail</th><th>Open</th></tr>
-    {% for e in export_events %}
+    <tr><th>Time</th><th>Status</th><th>Type</th><th>Source</th><th>Detail</th><th>Open</th></tr>
+    {% for row in activity_rows %}
     <tr>
-      <td>{{ e.created_at|local_time }}</td>
-      <td>{{ e.status|status_label }}</td>
-      <td><code>{{ e.source_commit_short }}</code></td>
-      <td><code>{{ e.verification_id }}</code></td>
+      <td>{{ row.created_at|local_time }}</td>
+      <td>{{ row.status|status_label }}</td>
+      <td>{{ row.type_display }}</td>
+      <td><code>{{ row.source_display }}</code></td>
+      <td>{{ row.detail }}</td>
       <td>
-        {{ e.detail }}
-        {% if e.log_href %}
-        <a href="{{ e.log_href }}" target="_blank" rel="noopener">log</a>
-        {% endif %}
-      </td>
-      <td>
-        {% if e.verification_href %}
-        <a href="{{ e.verification_href }}">open</a>
+        {% if row.open_href %}
+        <a href="{{ row.open_href }}">{{ row.open_label }}</a>
         {% else %}
         -
         {% endif %}
@@ -45,23 +49,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="muted">No generation task yet.</p>
+  <p class="muted">No export activity yet.</p>
   {% endif %}
-</section>
-<section>
-  <h2>Generated Exports</h2>
-  <table class="table-base">
-    <tr><th>Type</th><th>File</th><th>Summary</th><th>Size</th><th>Time</th><th>Download</th></tr>
-    {% for e in exports %}
-    <tr>
-      <td>{% if e.export_type == "icpc" %}ICPC{% else %}{{ e.export_type }}{% endif %}</td>
-      <td>{{ e.display_filename }}</td>
-      <td>{{ e.summary_display }}</td>
-      <td>{{ e.size_bytes }}</td>
-      <td>{{ e.created_at|local_time }}</td>
-      <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/exports/{{ e.id }}/{{ e.filename }}">zip</a></td>
-    </tr>
-    {% endfor %}
-  </table>
 </section>
 {% endblock %}

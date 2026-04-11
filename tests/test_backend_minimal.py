@@ -888,7 +888,7 @@ class TestBackendMinimal(SmokeBase):
                 actor_user_id=int(ctx["user"]["id"]),
                 problem_id=int(ctx["problem"]["id"]),
                 workspace_id=int(ctx["workspace"]["id"]),
-                head_commit=str(ctx["workspace"].get("head_commit") or ""),
+                source_commit=str(ctx["workspace"].get("head_commit") or ""),
                 requested_verification_id="",
                 requested_export_type="invalid-type",
             )

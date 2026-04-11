@@ -12,7 +12,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from .common import SmokeBase
+from .ui_support import _flash_messages_from_response, _request
 from app.impl.run_export import export as export_page_module
+from app.impl.run_export import import_source as export_import_module
 from app.impl.run_export.import_source import import_package_as_new_problem
 from app.impl.runtime.config import config
 from app.service.importing import native as native_import_module
@@ -93,6 +95,13 @@ class TestExport(SmokeBase):
         head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])
         self.assertEqual(head.returncode, 0, head.stderr)
         return head.stdout.strip()
+
+    def _build_native_package_bytes(self, files: dict[str, str]) -> bytes:
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for rel, content in files.items():
+                zf.writestr(rel, content)
+        return payload.getvalue()
 
     def test_export_service_available(self) -> None:
         ws = self._workspace_path()
@@ -517,6 +526,237 @@ class TestExport(SmokeBase):
         self.assertEqual(imported_head.returncode, 0, imported_head.stderr)
         self.assertRegex(imported_head.stdout.strip(), r"^[0-9a-f]{40}$")
         self.assertEqual(run_git(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
+
+    def test_native_export_uses_working_tree_snapshot_even_when_head_exists(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/native_dirty_{token}.cpp"
+        desc_rel = f"{rel}.desc"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / desc_rel).write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, desc_rel, *self._seed_export_tests(ws, "001")],
+            f"test native export working tree snapshot {token}",
+        )
+        dirty_source = "int main(){return 7;}\n"
+        (ws / rel).write_text(dirty_source, encoding="utf-8")
+
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "native",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
+
+        with zipfile.ZipFile(archive, "r") as zf:
+            solution_name = next(name for name in zf.namelist() if name.endswith(f"/{rel}"))
+            self.assertEqual(zf.read(solution_name).decode("utf-8", errors="replace"), dirty_source)
+
+        row = db_fetch_one(
+            "SELECT source_commit FROM exports WHERE export_type='native' ORDER BY created_at DESC LIMIT 1"
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["source_commit"] or ""), "")
+
+    def test_native_export_excludes_hidden_paths_from_working_tree_snapshot(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/native_visible_{token}.cpp"
+        desc_rel = f"{rel}.desc"
+        hidden_root = ws / ".env"
+        hidden_nested = ws / "notes" / ".cache" / "secret.txt"
+        draft_file = ws / "draft" / "skip.txt"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / desc_rel).write_text("expected: accepted\n", encoding="utf-8")
+        hidden_root.write_text("hidden\n", encoding="utf-8")
+        hidden_nested.parent.mkdir(parents=True, exist_ok=True)
+        hidden_nested.write_text("hidden nested\n", encoding="utf-8")
+        draft_file.parent.mkdir(parents=True, exist_ok=True)
+        draft_file.write_text("draft\n", encoding="utf-8")
+
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "native",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit="",
+        )
+
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+            package_root = next(name.split("/", 1)[0] for name in names if name.endswith("/config/problem.json"))
+            self.assertIn(f"{package_root}/{rel}", names)
+            self.assertNotIn(f"{package_root}/.env", names)
+            self.assertNotIn(f"{package_root}/notes/.cache/secret.txt", names)
+            self.assertNotIn(f"{package_root}/draft/skip.txt", names)
+
+    def test_native_export_route_queues_working_tree_source(self) -> None:
+        with patch.object(export_page_module, "start_export_job", return_value=True) as start_job:
+            resp = export_page_module.export_create(self.problem, self.user, verification_id="", export_type="native")
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(str(start_job.call_args.kwargs["source_commit"]), "")
+
+    def test_export_page_labels_native_source_as_working_tree(self) -> None:
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "native",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit="",
+        )
+        self.assertTrue(archive.exists())
+        db_execute(
+            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            [
+                int(ctx["user"]["id"]),
+                int(ctx["problem"]["id"]),
+                "export.create",
+                json.dumps(
+                    {
+                        "status": "running",
+                        "export_type": "native",
+                        "source_commit": "",
+                        "verification_id": "",
+                        "filename": "",
+                        "error": "",
+                        "export_task_id": "task-ok",
+                    }
+                ),
+                "2026-04-12T02:09:02Z",
+            ],
+        )
+        db_execute(
+            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            [
+                int(ctx["user"]["id"]),
+                int(ctx["problem"]["id"]),
+                "export.create",
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "export_type": "native",
+                        "source_commit": "",
+                        "verification_id": "",
+                        "filename": archive.name,
+                        "error": "",
+                        "export_task_id": "task-ok",
+                    }
+                ),
+                "2026-04-12T02:09:03Z",
+            ],
+        )
+        db_execute(
+            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            [
+                int(ctx["user"]["id"]),
+                int(ctx["problem"]["id"]),
+                "export.create",
+                json.dumps(
+                    {
+                        "status": "running",
+                        "export_type": "native",
+                        "source_commit": "",
+                        "verification_id": "",
+                        "filename": "",
+                        "error": "",
+                        "export_task_id": "task-running",
+                    }
+                ),
+                "2026-04-12T02:09:04Z",
+            ],
+        )
+
+        resp = export_page_module.export_page(
+            _request(f"/problems/{self.problem}/{self.user}/export"),
+            self.problem,
+            self.user,
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Export Into Package", html)
+        self.assertIn("Native (current working tree)", html)
+        self.assertIn("ICPC (requires committed revision)", html)
+        self.assertIn("Import Into Working Copy", html)
+        self.assertIn("Activity", html)
+        self.assertNotIn("Generation Tasks", html)
+        self.assertNotIn("Generated Exports", html)
+        self.assertIn(f'/problems/{self.problem}/{self.user}/export/import', html)
+        self.assertIn("working tree", html)
+        self.assertIn(">running<", html)
+        self.assertEqual(html.count(">RUNNING<"), 1)
+        self.assertEqual(html.count(">OK<"), 1)
+
+    def test_import_into_working_copy_overwrites_matching_paths_and_keeps_others(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        kept_rel = f"notes/keep-{token}.txt"
+        overwritten_rel = f"solutions/std_{token}.cpp"
+        (ws / kept_rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / kept_rel).write_text("keep-local\n", encoding="utf-8")
+        (ws / overwritten_rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / overwritten_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        package_bytes = self._build_native_package_bytes(
+            {
+                "config/problem.json": json.dumps({"name": f"Imported {token}", "mode": "pass-fail", "pass_limit": 1}),
+                "tests/spec.json": json.dumps({"tests": [{"id": "001", "kind": "manual", "sample": False}]}),
+                "tests/manual/001.in": "5\n",
+                overwritten_rel: "int main(){return 7;}\n",
+            }
+        )
+
+        class _Upload:
+            filename = f"import-into-workspace-{token}.zip"
+
+            def __init__(self, raw: bytes):
+                self.file = io.BytesIO(raw)
+
+        resp = export_import_module.export_import(
+            self.problem,
+            self.user,
+            package_upload=_Upload(package_bytes),
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{self.problem}/{self.user}/workspace", str(resp.headers.get("location", "")))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn(f"native package imported into working copy {self.problem}", messages[0])
+        self.assertEqual((ws / overwritten_rel).read_text(encoding="utf-8"), "int main(){return 7;}\n")
+        self.assertEqual((ws / kept_rel).read_text(encoding="utf-8"), "keep-local\n")
+        self.assertEqual((ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "5\n")
+        problem_row = db_fetch_one("SELECT name FROM problems WHERE slug=?", [self.problem])
+        self.assertIsNotNone(problem_row)
+        self.assertEqual(str(problem_row["name"] or ""), f"Imported {token}")
+
+    def test_import_into_working_copy_route_reports_workspace_message(self) -> None:
+        package_bytes = self._build_native_package_bytes(
+            {
+                "config/problem.json": json.dumps({"name": "Workspace Import", "mode": "pass-fail", "pass_limit": 1}),
+                "tests/spec.json": json.dumps({"tests": []}),
+            }
+        )
+
+        class _Upload:
+            filename = "workspace-import.zip"
+
+            def __init__(self, raw: bytes):
+                self.file = io.BytesIO(raw)
+
+        resp = export_import_module.export_import(
+            self.problem,
+            self.user,
+            package_upload=_Upload(package_bytes),
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{self.problem}/{self.user}/workspace", str(resp.headers.get("location", "")))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn(f"native package imported into working copy {self.problem}", messages[0])
 
     def test_icpc_export_uses_committed_snapshot_without_verification(self) -> None:
         ws = Path(self._workspace_path())

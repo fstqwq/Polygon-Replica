@@ -190,25 +190,33 @@ def start_verification_job(
 _DYNAMIC_EXPORT_KEEP = (start_verification_job,)
 _ = len(_DYNAMIC_EXPORT_KEEP)
 
-def _export_workspace_key(problem_id: int, workspace_id: int, head_commit: str, export_type: str) -> str:
-    return f"{int(problem_id)}:{int(workspace_id)}:{head_commit}:{export_type}"
+def _export_source_commit(export_type: str, source_commit: str) -> str:
+    if export_type == "native":
+        return ""
+    return source_commit
 
-def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, head_commit: str, requested_verification_id: str, requested_export_type: str) -> None:
+
+def _export_workspace_key(problem_id: int, workspace_id: int, source_commit: str, export_type: str) -> str:
+    effective_source_commit = _export_source_commit(export_type, source_commit)
+    return f"{int(problem_id)}:{int(workspace_id)}:{effective_source_commit}:{export_type}"
+
+def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, source_commit: str, requested_verification_id: str, requested_export_type: str, export_task_id: str = "") -> None:
     safe_requested_verification_id = normalize_run_id_token(requested_verification_id)
     safe_export_type = requested_export_type or 'icpc'
-    details: dict[str, object] = {'status': 'failed', 'artifact_verification_id': safe_requested_verification_id, 'export_type': safe_export_type, 'source_commit': head_commit, 'filename': '', 'error': ''}
+    effective_source_commit = _export_source_commit(safe_export_type, source_commit)
+    details: dict[str, object] = {'status': 'failed', 'artifact_verification_id': safe_requested_verification_id, 'export_type': safe_export_type, 'source_commit': effective_source_commit, 'filename': '', 'error': '', 'export_task_id': export_task_id}
     worker_error: Exception | None = None
     try:
         if safe_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
-        if not head_commit and safe_export_type != 'native':
+        if not effective_source_commit and safe_export_type != 'native':
             raise ValueError('no committed revision; commit changes first')
         out = config.export_service.create_export(
             problem,
             "",
             safe_export_type,
             workspace_id=int(workspace_id),
-            source_commit=head_commit,
+            source_commit=effective_source_commit,
         )
         details['status'] = 'ok'
         details['filename'] = out.name
@@ -220,8 +228,8 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
     if worker_error is not None:
         raise worker_error
 
-def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, head_commit: str, requested_verification_id: str, requested_export_type: str, initial_details: dict[str, object] | None=None) -> bool:
-    key = _export_workspace_key(problem_id, workspace_id, head_commit, requested_export_type)
+def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, source_commit: str, requested_verification_id: str, requested_export_type: str, export_task_id: str = "", initial_details: dict[str, object] | None=None) -> bool:
+    key = _export_workspace_key(problem_id, workspace_id, source_commit, requested_export_type)
     with config.export_lock:
         if key in config.export_inflight:
             return False
@@ -237,7 +245,7 @@ def start_export_job(problem: str, user: str, *, actor_user_id: int, problem_id:
 
     def _runner() -> None:
         try:
-            _run_export_create_worker(problem, user, actor_user_id=actor_user_id, problem_id=problem_id, workspace_id=workspace_id, head_commit=head_commit, requested_verification_id=requested_verification_id, requested_export_type=requested_export_type)
+            _run_export_create_worker(problem, user, actor_user_id=actor_user_id, problem_id=problem_id, workspace_id=workspace_id, source_commit=source_commit, requested_verification_id=requested_verification_id, requested_export_type=requested_export_type, export_task_id=export_task_id)
         finally:
             worker = worker_ref[0]
             if worker is not None:
