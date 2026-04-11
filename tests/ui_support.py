@@ -529,8 +529,6 @@ def _wait_for_row(sql: str, params: list[object], timeout_sec: float = 8.0):
 class UIBaseSuite(SmokeBase):
     def setUp(self) -> None:
         super().setUp()
-        self.problem = "alice/sample"
-        self.user = "alice"
 
     def _prepare_verification_workspace(self, problem: str, user: str = "alice") -> Path:
         safe_problem = str(problem or "").strip()
@@ -617,5 +615,3 @@ int main() {
             encoding="utf-8",
         )
         return ws
-
-
