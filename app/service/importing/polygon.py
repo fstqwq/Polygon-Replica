@@ -37,7 +37,7 @@ ZIP_MAX_BYTES = 256 * 1024 * 1024
 ZIP_MAX_FILE_BYTES = 64 * 1024 * 1024
 ZIP_TEXT_MAX_BYTES = 8 * 1024 * 1024
 SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".py", ".java"}
-GENERATOR_CPP_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++"}
+GENERATOR_SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}
 STATEMENT_SECTION_SAMPLE_FILE_RE = re.compile(r"^example\.(\d+)(?:\.a)?$", re.IGNORECASE)
 POLYGON_SOLUTION_TAG_EXPECTED: dict[str, str] = {
     "main": "accepted",
@@ -538,7 +538,7 @@ class PolygonPackageImportService:
             source_name = Path(source).name
             source_stem = Path(source).stem
             suffix = Path(source).suffix.lower()
-            if suffix not in GENERATOR_CPP_SUFFIX_ALLOW:
+            if suffix not in GENERATOR_SOURCE_SUFFIX_ALLOW:
                 continue
             if source_name:
                 tokens.add(source_name)
@@ -791,7 +791,7 @@ class PolygonPackageImportService:
                 continue
             suffix = Path(source).suffix.lower()
             imported = self._copy_source_from_zip(zf, entries, source, workspace, "generators", Path(source).name)
-            if imported and suffix in GENERATOR_CPP_SUFFIX_ALLOW:
+            if imported and suffix in GENERATOR_SOURCE_SUFFIX_ALLOW:
                 generator_sources.append(imported)
         generator_sources = sorted(dict.fromkeys(generator_sources))
         build_cfg["generator_sources"] = generator_sources

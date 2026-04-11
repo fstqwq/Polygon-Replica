@@ -16,7 +16,7 @@ from app.service.problem.test_spec import parse_gen_command_tokens
 from .context_operation import (
     dedupe_preserve_order,
     generator_sources_from_build_cfg,
-    _list_cpp_sources,
+    _list_sources_with_extensions,
     read_build_config,
     workspace_rel_file_exists,
 )
@@ -88,16 +88,16 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
     suffix = token_path.suffix.lower()
     candidates: list[str] = []
     if raw.startswith('generators/'):
-        if suffix in _C.CPP_SOURCE_EXTENSIONS:
+        if suffix in _C.SOLUTION_SOURCE_EXTENSIONS:
             candidates.append(raw)
         else:
-            for ext in _C.CPP_SOURCE_EXTENSIONS:
+            for ext in _C.SOLUTION_SOURCE_EXTENSIONS:
                 candidates.append(f'{raw}{ext}')
-    elif suffix in _C.CPP_SOURCE_EXTENSIONS:
+    elif suffix in _C.SOLUTION_SOURCE_EXTENSIONS:
         candidates.append(f'generators/{raw}')
     else:
         candidates.append(f'generators/{raw}')
-        for ext in _C.CPP_SOURCE_EXTENSIONS:
+        for ext in _C.SOLUTION_SOURCE_EXTENSIONS:
             candidates.append(f'generators/{raw}{ext}')
     seen: set[str] = set()
     for rel in candidates:
@@ -108,7 +108,7 @@ def _resolve_generator_source_from_token_for_nav(token: str, source_paths: list[
         if rel_key in source_set:
             return rel_key
     name = token_path.name
-    if suffix in _C.CPP_SOURCE_EXTENSIONS:
+    if suffix in _C.SOLUTION_SOURCE_EXTENSIONS:
         exact = [rel for rel in normalized_sources if Path(rel).name == name]
         if len(exact) == 1:
             return exact[0]
@@ -154,7 +154,11 @@ def _count_used_configured_generators(workspace: Path, configured_sources: list[
 def generator_status_context(workspace: Path) -> dict:
     build_cfg, _ = read_build_config(workspace)
     configured_sources = generator_sources_from_build_cfg(build_cfg)
-    generator_candidates, generator_candidates_truncated = _list_cpp_sources(workspace, 'generators')
+    generator_candidates, generator_candidates_truncated = _list_sources_with_extensions(
+        workspace,
+        'generators',
+        set(_C.SOLUTION_SOURCE_EXTENSIONS),
+    )
     repo_source = ''
     repo_exists = False
     for rel in configured_sources:

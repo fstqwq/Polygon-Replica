@@ -10,15 +10,18 @@ from app.runtime_value import RuntimeValues, build_runtime_values
 
 CPP_SOURCE_EXTENSIONS: set[str] = set()
 SOLUTION_SOURCE_EXTENSIONS: set[str] = set()
+GENERATOR_SOURCE_EXTENSIONS: set[str] = set()
 
 
 def _apply_runtime_values(values: RuntimeValues) -> None:
     global CPP_SOURCE_EXTENSIONS
     global SOLUTION_SOURCE_EXTENSIONS
+    global GENERATOR_SOURCE_EXTENSIONS
     CPP_SOURCE_EXTENSIONS = {str(item).strip().lower() for item in values.CPP_SOURCE_EXTENSIONS}
     SOLUTION_SOURCE_EXTENSIONS = {
         str(item).strip().lower() for item in values.SOLUTION_SOURCE_EXTENSIONS
     }
+    GENERATOR_SOURCE_EXTENSIONS = set(SOLUTION_SOURCE_EXTENSIONS)
 
 
 def configure_runtime_values(values: RuntimeValues) -> None:
@@ -102,9 +105,14 @@ def normalize_component_source_path(raw: str | None, folder: str, default_filena
     if not normalized.startswith(expected_prefix):
         raise ValueError(f"{folder} source must be under {folder}/")
     suffix = Path(normalized).suffix.lower()
-    allowed_exts = SOLUTION_SOURCE_EXTENSIONS if folder == "solutions" else CPP_SOURCE_EXTENSIONS
+    if folder == "solutions":
+        allowed_exts = SOLUTION_SOURCE_EXTENSIONS
+    elif folder == "generators":
+        allowed_exts = GENERATOR_SOURCE_EXTENSIONS
+    else:
+        allowed_exts = CPP_SOURCE_EXTENSIONS
     if suffix not in allowed_exts:
-        if folder == "solutions":
+        if folder in {"solutions", "generators"}:
             raise ValueError(f"{folder} source must be .cpp/.cc/.cxx/.c++/.py/.java")
         raise ValueError(f"{folder} source must be a C++ file")
     return normalized
@@ -118,9 +126,14 @@ def normalize_optional_component_source_path(raw: str | None, folder: str, label
     if not normalized.startswith(expected_prefix):
         raise ValueError(f"{label} must be under {folder}/")
     suffix = Path(normalized).suffix.lower()
-    allowed_exts = SOLUTION_SOURCE_EXTENSIONS if folder == "solutions" else CPP_SOURCE_EXTENSIONS
+    if folder == "solutions":
+        allowed_exts = SOLUTION_SOURCE_EXTENSIONS
+    elif folder == "generators":
+        allowed_exts = GENERATOR_SOURCE_EXTENSIONS
+    else:
+        allowed_exts = CPP_SOURCE_EXTENSIONS
     if suffix not in allowed_exts:
-        if folder == "solutions":
+        if folder in {"solutions", "generators"}:
             raise ValueError(f"{label} must be .cpp/.cc/.cxx/.c++/.py/.java")
         raise ValueError(f"{label} must be a C++ file")
     return normalized

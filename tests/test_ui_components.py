@@ -229,7 +229,7 @@ class TestUIComponents(UIBaseSuite):
     def test_generators_page_supports_template_and_source_save(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         rel_name = "gen.cpp"
-        rel_second_name = "other.cpp"
+        rel_second_name = "other.py"
         rel = f"generators/{rel_name}"
         rel_second = f"generators/{rel_second_name}"
         (ws / rel).unlink(missing_ok=True)
@@ -273,6 +273,18 @@ class TestUIComponents(UIBaseSuite):
 
         created_second = generator_create_template(problem=self.problem, user=self.user, path=rel_second_name)
         self.assertEqual(created_second.status_code, 303)
+        self.assertEqual((ws / rel_second).read_text(encoding="utf-8"), "#!/usr/bin/env python3\n")
+
+        with patch("app.impl.problem.generator.judgehost_compile_check_error", return_value=""):
+            saved_second = generator_save_source(
+                problem=self.problem,
+                user=self.user,
+                path=rel_second,
+                content="print(123)\n",
+            )
+        self.assertEqual(saved_second.status_code, 303)
+        self.assertEqual((ws / rel_second).read_text(encoding="utf-8"), "print(123)\n")
+
         cfg_after_second = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual([str(x) for x in cfg_after_second.get("generator_sources", [])], [rel, rel_second])
         list_page = generators_page(_request(f"/problems/{self.problem}/{self.user}/generators"), self.problem, self.user)

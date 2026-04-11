@@ -18,6 +18,45 @@ from .common import SmokeBase, config
 
 
 class TestPolygonPackageImport(SmokeBase):
+    def test_import_generated_python_generator_keeps_generator_source(self) -> None:
+        ws = self._workspace_path()
+        payload = io.BytesIO()
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<problem short-name="python-generator">
+  <names>
+    <name language="english" value="Python Generator Import"/>
+  </names>
+  <judging run-count="1">
+    <testset>
+      <time-limit>1000</time-limit>
+      <memory-limit>268435456</memory-limit>
+      <tests>
+        <test method="generated" cmd="gen.py 7"/>
+      </tests>
+    </testset>
+  </judging>
+  <files>
+    <executables>
+      <executable>
+        <source path="files/gen.py" type="python.3"/>
+      </executable>
+    </executables>
+  </files>
+</problem>
+"""
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.xml", xml)
+            zf.writestr("files/gen.py", "print(7)\n")
+
+        service = PolygonPackageImportService()
+        result = service.import_package(ws, "python-generator.zip", payload.getvalue())
+        tests_summary = result.get("tests") if isinstance(result.get("tests"), dict) else {}
+        self.assertEqual(int(tests_summary.get("gen") or 0), 1)
+        self.assertEqual(int(tests_summary.get("generated_fallback_to_manual") or 0), 0)
+        build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
+        self.assertEqual(list(build_cfg.get("generator_sources") or []), ["generators/gen.py"])
+        self.assertEqual((ws / "generators" / "gen.py").read_text(encoding="utf-8"), "print(7)\n")
+
     def test_import_multipass_property_without_explicit_pass_limit_fails(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()

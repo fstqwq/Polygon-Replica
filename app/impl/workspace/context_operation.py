@@ -521,7 +521,7 @@ def _tests_spec_status_context(workspace: Path) -> dict:
         return {'mode': 'empty', 'display': 'empty', 'total': 0, 'manual': 0, 'gen': 0, 'sample': 0}
     return {'mode': 'ready', 'display': f'{total} ({count_label(sample, "sample")})', 'total': total, 'manual': manual, 'gen': gen, 'sample': sample}
 
-def _list_cpp_sources(workspace: Path, folder: str, limit: int=64) -> tuple[list[str], bool]:
+def _list_sources_with_extensions(workspace: Path, folder: str, extensions: set[str], limit: int=64) -> tuple[list[str], bool]:
     base = workspace / folder
     try:
         if not base.exists() or not base.is_dir() or base.is_symlink():
@@ -533,7 +533,7 @@ def _list_cpp_sources(workspace: Path, folder: str, limit: int=64) -> tuple[list
         with os.scandir(base) as entries:
             for entry in entries:
                 name = entry.name
-                if Path(name).suffix.lower() not in _C.CPP_SOURCE_EXTENSIONS:
+                if Path(name).suffix.lower() not in extensions:
                     continue
                 try:
                     if not entry.is_file(follow_symlinks=False):

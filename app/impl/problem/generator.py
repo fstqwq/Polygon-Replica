@@ -18,6 +18,15 @@ from app.service.platform.workspace_path import normalize_component_source_path,
 _C = config.constants
 
 
+def _generator_template_for_target(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    if suffix == '.py':
+        return '#!/usr/bin/env python3\n'
+    if suffix == '.java':
+        return ''
+    return template_for_kind('generator')
+
+
 def generators_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
@@ -49,7 +58,7 @@ def generators_page(request: Request, problem: str, user: str):
         repo_content = ''
         repo_content_truncated = False
     if not repo_content:
-        repo_content = template_for_kind('generator')
+        repo_content = _generator_template_for_target(selected_source)
     create_template_path_default = Path(selected_source).name if selected_source else 'generator.cpp'
     return template_response(request, 'generators.html', {'ctx': ctx, 'generator_status': generator_status, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'source_rows': source_rows, 'source_rows_truncated': bool(generator_status.get('source_rows_truncated')), 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'create_template_path_default': create_template_path_default})
 
@@ -68,7 +77,7 @@ def generator_create_template(problem: str, user: str, path: str=Form('generator
             if target_abs.exists() and target_abs.is_file() and (target_abs.stat().st_size > 0):
                 msg = 'generator source already exists; not overwritten'
             else:
-                config.git_service.write_file(workspace, target, template_for_kind('generator'))
+                config.git_service.write_file(workspace, target, _generator_template_for_target(target))
             build_cfg, cfg_path = read_build_config(workspace)
             generator_sources = generator_sources_from_build_cfg(build_cfg)
             if target not in generator_sources:
