@@ -351,6 +351,7 @@
   gap: var(--space-3);
   margin: 0;
   color: var(--text);
+  flex-wrap: wrap;
 }
 
 .problem-context-name {
@@ -360,6 +361,27 @@
 .problem-context-slug {
   color: var(--muted);
   font-size: var(--font-size-ui-sm);
+}
+
+.problem-context-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.problem-context-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  padding: 1px var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.25;
+  white-space: nowrap;
 }
 
 .problem-page-frame {

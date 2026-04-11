@@ -292,6 +292,32 @@
     button.textContent = loading ? loadingLabel : baseLabel;
   }
 
+  function submitForm(form) {
+    if (!form) return;
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+      return;
+    }
+    form.submit();
+  }
+
+  function isLocalStorageUsable(probeKey) {
+    try {
+      if (!window.localStorage) return false;
+      window.localStorage.setItem(probeKey, "1");
+      window.localStorage.removeItem(probeKey);
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  function storageScopeToken(raw) {
+    return String(raw || "")
+      .trim()
+      .replace(/[:|]/g, "_");
+  }
+
   function initNavActiveState() {
     var pageLinks = document.querySelectorAll("a[data-page]");
     if (!pageLinks.length) return;
@@ -2567,13 +2593,76 @@
   function initAutoSubmitSelects() {
     document.querySelectorAll("[data-auto-submit-select='1']").forEach(function (select) {
       select.addEventListener("change", function () {
-        var form = select.form;
-        if (!form) return;
-        if (typeof form.requestSubmit === "function") {
-          form.requestSubmit();
+        submitForm(select.form);
+      });
+    });
+  }
+
+  function initStatementLanguageSwitch() {
+    var forms = document.querySelectorAll("form[data-statement-language-form='1']");
+    if (!forms.length) return;
+    var canUseLocalStorage = isLocalStorageUsable("__polygonlike_statement_language_probe__");
+    var query = new URLSearchParams(window.location.search);
+    var hasExplicitLanguage = query.has("language");
+
+    function storedLanguageKey(form) {
+      return (
+        "statement-language:" +
+        storageScopeToken(form.getAttribute("data-statement-language-problem")) +
+        ":" +
+        storageScopeToken(form.getAttribute("data-statement-language-user"))
+      );
+    }
+
+    function readStoredLanguage(key) {
+      if (!canUseLocalStorage || !key) return "";
+      try {
+        return String(window.localStorage.getItem(key) || "").trim();
+      } catch (_err) {
+        return "";
+      }
+    }
+
+    function writeStoredLanguage(key, value) {
+      var safeValue = String(value || "").trim();
+      if (!canUseLocalStorage || !key || !safeValue) return;
+      try {
+        window.localStorage.setItem(key, safeValue);
+      } catch (_err) {
+        return;
+      }
+    }
+
+    function optionExists(select, value) {
+      var safeValue = String(value || "").trim();
+      if (!safeValue) return false;
+      return Array.from(select.options).some(function (option) {
+        return String(option.value || "") === safeValue;
+      });
+    }
+
+    forms.forEach(function (form) {
+      var select = form.querySelector("select[data-statement-language-select='1']");
+      if (!select) return;
+      var key = storedLanguageKey(form);
+      var currentValue = String(select.value || "").trim();
+      if (hasExplicitLanguage && currentValue) {
+        writeStoredLanguage(key, currentValue);
+      }
+      if (!hasExplicitLanguage) {
+        var rememberedLanguage = readStoredLanguage(key);
+        if (optionExists(select, rememberedLanguage) && rememberedLanguage !== currentValue) {
+          select.value = rememberedLanguage;
+          submitForm(form);
           return;
         }
-        form.submit();
+      }
+      select.addEventListener("change", function () {
+        var nextValue = String(select.value || "").trim();
+        if (nextValue) {
+          writeStoredLanguage(key, nextValue);
+        }
+        submitForm(form);
       });
     });
   }
@@ -2604,6 +2693,7 @@
     initSettingsPasswordProofForm();
     initSudoProofForm();
     initStatementDraftBackup();
+    initStatementLanguageSwitch();
     initAutoSubmitSelects();
     initPolygonImportSlugSuggest();
     initSettingsTokenGenerators();

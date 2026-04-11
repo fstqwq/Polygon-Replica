@@ -336,38 +336,18 @@ def preview_page(request: Request, problem: str, user: str):
     log_truncated = False
     pdf_exists = False
     preview_artifacts_missing = False
+    preview_display_status = 'none'
+    preview_is_stale = False
     log_refs = []
     log_refs_total = 0
     log_refs_truncated = False
-    selected_preview_nav: dict[str, object] | None = None
     selected_preview_summary: dict[str, object] | None = None
-    selected_preview_status = 'none'
     selected_preview_row_status = 'none'
     preview_compile_failed = False
     preview_failed_stage = ''
     preview_failure_title = 'Compile failed.'
     preview_failure_detail = ''
     latex_log_href = ''
-
-    def _selected_preview_nav_status(candidate_id: str) -> dict[str, object]:
-        if not candidate_id:
-            return {'text': 'none', 'danger': True, 'warn': False}
-        state = config.preview_service.get_workspace_preview_state(
-            problem_id,
-            workspace_id,
-            candidate_id,
-            statement_signature=current_statement_signature,
-            workspace_head=workspace_head,
-            language=current_language,
-        )
-        if state is None:
-            return {'text': 'missing', 'danger': True, 'warn': False}
-        preview_text = state['display_status']
-        preview_danger = preview_text in {'none', 'missing', 'failed', 'error'}
-        preview_warn = preview_text == 'stale'
-        if preview_text in {'ok', 'stale'}:
-            preview_danger = False
-        return {'text': preview_text, 'danger': preview_danger, 'warn': preview_warn}
 
     if preview_id:
         lp = None
@@ -382,29 +362,22 @@ def preview_page(request: Request, problem: str, user: str):
         if preview_state is None:
             preview_id = ''
         else:
-            selected_preview_status = preview_state['display_status']
+            preview_display_status = preview_state['display_status']
+            preview_is_stale = preview_display_status == 'stale'
             selected_preview_row_status = preview_state['row_status']
             selected_preview_summary = dict(preview_state['summary'])
-            if (not requested_preview_id) and selected_preview_status in {'stale', 'missing'}:
+            if (not requested_preview_id) and preview_display_status in {'stale', 'missing'}:
                 preview_id = ''
+                preview_state = None
     if preview_id:
-        preview_state = config.preview_service.get_workspace_preview_state(
-            problem_id,
-            workspace_id,
-            preview_id,
-            statement_signature=current_statement_signature,
-            workspace_head=workspace_head,
-            language=current_language,
-        )
-        if preview_state is None:
-            preview_id = ''
-        else:
+        if preview_state is not None:
             pdf_exists = bool(preview_state['pdf_available'])
-            preview_artifacts_missing = selected_preview_status == 'missing'
+            preview_artifacts_missing = preview_display_status == 'missing'
             if bool(preview_state['log_available']):
                 lp = config.fs_manager.resolve_preview_root(preview_id) / 'logs' / 'latex.log'
-            selected_preview_nav = _selected_preview_nav_status(preview_id)
             preview_compile_failed = selected_preview_row_status in {'failed', 'error'}
+        else:
+            preview_id = ''
         if preview_id and lp is not None:
             latex_log_href = f'/problems/{problem}/{user}/artifacts/{preview_id}/logs/latex.log'
             raw_log, log_truncated = read_text_safe_limited(lp, _C.UI_LOG_TEXT_CHAR_LIMIT)
@@ -445,8 +418,6 @@ def preview_page(request: Request, problem: str, user: str):
                     preview_failure_detail = extract_latex_failure_summary(log, selected_preview_summary)
                 if len(preview_failure_detail) > 240:
                     preview_failure_detail = preview_failure_detail[:237].rstrip() + '...'
-    if selected_preview_nav is not None:
-        ctx['nav_status']['preview'] = selected_preview_nav
     return_page = 'preview' if str(getattr(request.url, "path")).endswith('/preview') else 'statement'
     statement_section_dir = Path(section_path_map["legend"]).parent.as_posix()
     statement_compile_assets = statement_compile_asset_rows(workspace, statement_section_dir)
@@ -474,6 +445,8 @@ def preview_page(request: Request, problem: str, user: str):
             'log_char_limit': _C.UI_LOG_TEXT_CHAR_LIMIT,
             'pdf_exists': pdf_exists,
             'preview_artifacts_missing': preview_artifacts_missing,
+            'preview_display_status': preview_display_status,
+            'preview_is_stale': preview_is_stale,
             'log_refs': log_refs,
             'log_refs_total': log_refs_total,
             'log_refs_truncated': log_refs_truncated,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,6 +31,7 @@ from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job import _run_export_create_worker
+from app.service.statement.render import ensure_statement_language_sources
 from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
 
@@ -522,6 +524,27 @@ class TestBackendMinimal(SmokeBase):
         self.assertIn("/statement/assets/upload", html)
         self.assertIn("/statement/assets/delete", html)
 
+    def test_statement_nav_shows_empty_until_multiple_languages_exist(self) -> None:
+        initial_page = page_ctx(self.problem, self.user)
+        initial_nav = dict(initial_page["nav_status"]["statement_languages"])
+        self.assertEqual(str(initial_nav.get("text") or ""), "empty")
+
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ensure_statement_language_sources(ws, "chinese")
+        updated_page = page_ctx(self.problem, self.user)
+        updated_nav = dict(updated_page["nav_status"]["statement_languages"])
+        self.assertEqual(str(updated_nav.get("text") or ""), "english, chinese")
+
+    def test_statement_nav_shows_none_warn_when_language_directories_are_missing(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        shutil.rmtree(ws / "statement-sections", ignore_errors=True)
+
+        page = page_ctx(self.problem, self.user)
+        statement_nav = dict(page["nav_status"]["statement_languages"])
+        self.assertEqual(str(statement_nav.get("text") or ""), "none")
+        self.assertTrue(bool(statement_nav.get("warn")))
+        self.assertFalse(bool(statement_nav.get("danger")))
+
     def test_statement_compile_asset_upload_stores_file_under_current_language_dir(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         upload = self._FakeUpload("diagram.png", b"PNG")
@@ -793,7 +816,7 @@ class TestBackendMinimal(SmokeBase):
         self.assertEqual(str(payload.get("latest_preview_id") or ""), preview_id)
         self.assertEqual(str(payload.get("latest_status") or ""), "ok")
 
-    def test_page_ctx_projects_missing_for_latest_ok_preview_without_pdf(self) -> None:
+    def test_page_ctx_does_not_project_preview_state_from_latest_preview_row(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         ws = Path(str(ctx["workspace"]["path"]))
         preview_id = self.random_id("p-preview-nav-missing")
@@ -822,11 +845,9 @@ class TestBackendMinimal(SmokeBase):
             ],
         )
 
-        page = page_ctx(self.problem, self.user)
-        preview_nav = dict(page["nav_status"]["preview"])
-        self.assertEqual(str(preview_nav.get("text") or ""), "missing")
-        self.assertTrue(bool(preview_nav.get("danger")))
-        self.assertFalse(bool(preview_nav.get("warn")))
+        with patch.object(config.preview_service, "get_workspace_preview_state", side_effect=AssertionError("preview state lookup should stay local to statement page")):
+            page = page_ctx(self.problem, self.user)
+        self.assertNotIn("preview", page["nav_status"])
 
     def test_preview_artifact_file_reports_expired_for_missing_preview_pdf(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

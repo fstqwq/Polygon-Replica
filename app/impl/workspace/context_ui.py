@@ -9,7 +9,8 @@ from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 
 from app.main_util import normalize_workspace_rel_path
-from app.service.statement.signature import statement_sources_signature
+from app.service.statement.constant import DEFAULT_PROBLEM_TITLE, STATEMENT_SECTIONS_DIR
+from app.service.statement.context import statement_languages
 
 from .access import (
     problem_acl_entries,
@@ -155,9 +156,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
             'stale_reason': '',
         }
     latest_verification = ctx.get('latest_artifact_verification')
-    latest_preview = ctx.get('latest_preview')
     ctx['latest_verification_version'] = artifact_version_number(latest_verification['id']) if latest_verification else None
-    ctx['latest_preview_version'] = artifact_version_number(latest_preview['id']) if latest_preview else None
     ctx['nav_status'] = _build_problem_nav_status(ctx)
     return ctx
 
@@ -190,7 +189,63 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         gb_text = f'{_short_decimal(mb / 1024.0)}gb'
         return gb_text if len(gb_text) < len(mb_text) else mb_text
 
+    def _statement_seed_defaults() -> dict[str, str]:
+        return {
+            'name.tex': DEFAULT_PROBLEM_TITLE + '\n',
+            'legend.tex': '',
+            'input.tex': '',
+            'output.tex': '',
+            'interaction.tex': '',
+            'scoring.tex': '',
+            'notes.tex': '',
+        }
+
+    def _read_optional_text(path: Path, fallback: str) -> str:
+        try:
+            if path.exists() and path.is_file() and (not path.is_symlink()):
+                return path.read_text(encoding='utf-8')
+        except OSError:
+            return fallback
+        return fallback
+
+    def _statement_is_initial_empty(workspace: Path, languages: list[str]) -> bool:
+        if not languages:
+            return True
+        if len(languages) != 1:
+            return False
+        language = languages[0]
+        section_root = workspace / STATEMENT_SECTIONS_DIR / language
+        if not section_root.exists() or (not section_root.is_dir()) or section_root.is_symlink():
+            return True
+        seed_defaults = _statement_seed_defaults()
+        try:
+            for item in section_root.rglob('*'):
+                if not item.is_file() or item.is_symlink():
+                    continue
+                rel = item.relative_to(section_root).as_posix()
+                if rel not in seed_defaults:
+                    return False
+        except OSError:
+            return False
+        for rel, default_text in seed_defaults.items():
+            if _read_optional_text(section_root / rel, default_text) != default_text:
+                return False
+        return True
+
+    def _statement_summary_status(workspace: Path) -> dict[str, object]:
+        languages = statement_languages(workspace)
+        if not languages:
+            return {'text': 'none', 'danger': False, 'warn': True}
+        if _statement_is_initial_empty(workspace, languages):
+            return {'text': 'empty', 'danger': False, 'warn': False}
+        if len(languages) <= 2:
+            return {'text': ', '.join(languages), 'danger': False, 'warn': False}
+        return {'text': f'{languages[0]} (+{len(languages) - 1})', 'danger': False, 'warn': False}
+
     nav: dict[str, dict[str, object]] = {}
+    workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
+    workspace_path_text = cast(str | None, workspace_path_raw) or ''
+    workspace_path = Path(workspace_path_text) if workspace_path_text else Path('.')
     general_cfg = cast(dict[str, object], ctx['general_cfg'])
     time_limit_ms = _to_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']))
     memory_limit_mb = _to_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']))
@@ -203,43 +258,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         general_parts.append(f'{pass_limit} passes')
     general_parts.append(mode_text)
     nav['general'] = {'text': ', '.join(general_parts), 'danger': False}
-    latest_preview = ctx.get('latest_preview')
-    preview_status = str(_row_value(latest_preview, 'status', 'none') or 'none')
-    preview_text = preview_status
-    preview_danger = preview_status in {'none', 'missing', 'failed', 'error'}
-    preview_warn = False
-    preview_id = cast(str | None, _row_value(cast(dict[str, object] | None, latest_preview), 'id', '')) or ''
-    problem_id = _to_int(_row_value(ctx.get('problem'), 'id', 0))
-    workspace_id = _to_int(_row_value(ctx.get('workspace'), 'id', 0))
-    workspace_path_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'path', '')
-    workspace_path_text = cast(str | None, workspace_path_raw) or ''
-    problem_title_raw = _row_value(cast(dict[str, object], ctx['problem']), 'name', '')
-    problem_title = cast(str | None, problem_title_raw) or ''
-    workspace_head_raw = _row_value(cast(dict[str, object], ctx['workspace']), 'head_commit', '')
-    workspace_head = cast(str | None, workspace_head_raw) or ''
-    current_signature = ''
-    if workspace_path_text:
-        try:
-            current_signature = statement_sources_signature(Path(workspace_path_text), problem_title=problem_title)
-        except Exception:
-            current_signature = ''
-    if preview_id and problem_id > 0 and (workspace_id > 0):
-        preview_state = config.preview_service.get_workspace_preview_state(
-            problem_id,
-            workspace_id,
-            preview_id,
-            statement_signature=current_signature,
-            workspace_head=workspace_head,
-        )
-        if preview_state is None:
-            preview_text = 'missing'
-            preview_danger = True
-            preview_warn = False
-        else:
-            preview_text = str(preview_state['display_status'] or 'missing')
-            preview_warn = preview_text == 'stale'
-            preview_danger = preview_text in {'none', 'missing', 'failed', 'error'}
-    nav['preview'] = {'text': preview_text, 'danger': preview_danger, 'warn': preview_warn}
+    nav['statement_languages'] = _statement_summary_status(workspace_path)
     workspace_changes = cast(dict[str, object], ctx['workspace_changes'])
     changes_total = _to_int(workspace_changes.get('total'))
     nav['files'] = {'text': 'clean' if changes_total <= 0 else f'{changes_total} changed', 'danger': False}
@@ -411,4 +430,3 @@ def render_workspace_page(request: Request, problem: str, user: str, *, show_acc
                 kind = 'del'
             selected_diff_lines.append({'text': line, 'kind': kind})
     return template_response(request, 'workspace.html', {'ctx': ctx, 'status': status, 'branches': ctx.get('branches', []), 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})
-

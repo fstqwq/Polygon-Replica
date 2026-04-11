@@ -40,8 +40,7 @@ class WorkspaceRow(TypedDict):
     updated_at: str
 
 
-class WorkspaceRecentArtifactRow(TypedDict):
-    kind: str
+class WorkspaceRecentVerificationRow(TypedDict):
     id: str
     status: str
     created_at: str
@@ -428,41 +427,25 @@ class WorkspaceDiskStore:
             [path, now_iso(), int(workspace_id)],
         )
 
-    def recent_workspace_artifacts(self, workspace_id: int) -> list[WorkspaceRecentArtifactRow]:
-        rows = self.db.fetch_all(
+    def latest_workspace_artifact_verification(self, workspace_id: int) -> WorkspaceRecentVerificationRow | None:
+        row = self.db.fetch_one(
             """
-            SELECT kind,id,status,created_at
-            FROM (
-                SELECT 'verification' AS kind,id,status,created_at
-                FROM verifications
-                WHERE workspace_id=?
-                  AND kind IN ('all','custom')
-                ORDER BY created_at DESC
-                LIMIT 1
-            )
-            UNION ALL
-            SELECT kind,id,status,created_at
-            FROM (
-                SELECT 'preview' AS kind,id,status,created_at
-                FROM previews
-                WHERE workspace_id=?
-                ORDER BY created_at DESC
-                LIMIT 1
-            )
+            SELECT id,status,created_at
+            FROM verifications
+            WHERE workspace_id=?
+              AND kind IN ('all','custom')
+            ORDER BY created_at DESC
+            LIMIT 1
             """,
-            [int(workspace_id), int(workspace_id)],
+            [int(workspace_id)],
         )
-        items: list[WorkspaceRecentArtifactRow] = []
-        for row in rows:
-            items.append(
-                {
-                    "kind": str(row["kind"] or ""),
-                    "id": str(row["id"] or ""),
-                    "status": str(row["status"] or ""),
-                    "created_at": str(row["created_at"] or ""),
-                }
-            )
-        return items
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"] or ""),
+            "status": str(row["status"] or ""),
+            "created_at": str(row["created_at"] or ""),
+        }
 
     def latest_workspace_job_status(self, workspace_id: int, *, kind: str) -> str:
         if kind == "preview":

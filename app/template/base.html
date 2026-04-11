@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% if ctx.problem.name %}{{ ctx.problem.name }} - {% endif %}Polygon-Replica</title>
   <link rel="stylesheet" href="/static/style.css?v=20260410-23" />
-  <script src="/static/ui.js?v=20260410-23" defer></script>
+  <script src="/static/ui.js?v=20260412-01" defer></script>
   <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />
   <script src="/static/vendor/codemirror/lib/codemirror.min.js?v=20260410-23" defer></script>
   <script src="/static/vendor/codemirror/addon/edit/matchbrackets.min.js?v=20260410-23" defer></script>
@@ -28,10 +28,7 @@
   <div class="problem-page-frame{% if ctx.page_wide_content %} page-frame-wide{% endif %}{% if ctx.page_single_column %} single-column{% endif %}">
     {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
     {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
-    {% set general_nav = nav_status.get('general', {}) %}
-    {% set preview_nav = nav_status.get('preview', {}) %}
-    {% set general_line_class = 'submenu-status-danger' if general_nav.get('danger') else 'submenu-status-warn' if general_nav.get('warn') else '' %}
-    {% set statement_line_class = 'submenu-status-danger' if preview_nav.get('danger') else 'submenu-status-warn' if preview_nav.get('warn') else '' %}
+    {% set statement_meta_nav = nav_status.get('statement_languages', {}) %}
     {% set verification_status = ctx.verification_status.display if ctx.verification_status is defined else "none" %}
     {% set verification_mode = ctx.verification_status.mode if ctx.verification_status is defined else verification_status %}
     {% set verification_error = ctx.verification_status.error if ctx.verification_status is defined else "" %}
@@ -57,15 +54,24 @@
     <div class="problem-context-bar">
       <strong class="problem-context-name">{{ ctx.problem.name }}</strong>
       <span class="problem-context-slug">#{{ ctx.problem.slug }}</span>
+      {% if ctx.general_cfg is defined %}
+      <div class="problem-context-meta">
+        <span class="problem-context-chip">{{ ctx.general_cfg.time_limit_ms }}ms</span>
+        <span class="problem-context-chip">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
+        {% if ctx.general_cfg.pass_limit > 1 %}
+        <span class="problem-context-chip">{{ ctx.general_cfg.pass_limit }} passes</span>
+        {% endif %}
+        <span class="problem-context-chip">{{ ctx.general_cfg.mode }}</span>
+      </div>
+      {% endif %}
     </div>
     <nav class="problem-submenu" aria-label="Problem sections">
       <div class="problem-submenu-item">
         <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement">
-          <span class="submenu-head-line {{ statement_line_class }}">
+          <span class="submenu-head-line">
               <strong class="submenu-status-heading">Statement</strong>
-              <span class="submenu-status-state{{ ' danger' if preview_nav.get('danger') else ' warn' if preview_nav.get('warn') else '' }}">{{ preview_nav.get("text", "-") }}</span>
           </span>
-          <span class="submenu-detail-line {{ general_line_class }}">{{ general_nav.get("text", "-") }}</span>
+          <span class="submenu-detail-line {{ 'submenu-status-danger' if statement_meta_nav.get('danger') else 'submenu-status-warn' if statement_meta_nav.get('warn') else '' }}">{{ statement_meta_nav.get("text", "-") }}</span>
         </a>
       </div>
       {% set checker_nav = nav_status.get('checker', {}) %}

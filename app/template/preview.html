@@ -2,8 +2,6 @@
 {% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 {% set ns = namespace(latest=None) %}
-{% set preview_nav = ctx.nav_status.get('preview', {}) if ctx.nav_status is defined else {} %}
-{% set preview_is_stale = preview_nav.get('text') == 'stale' %}
 {% set preview_is_missing = preview_artifacts_missing %}
 {% if preview_id %}
   {% for p in previews %}
@@ -18,12 +16,19 @@
 <div class="page-title-inline statement-page-title-inline">
   <h1 class="page-title">Statement</h1>
   <div class="statement-page-title-tools">
-    <form class="inline-form statement-language-switch-form" method="get" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/{{ return_page if return_page is defined else 'statement' }}">
+    <form
+      class="inline-form statement-language-switch-form"
+      method="get"
+      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/{{ return_page if return_page is defined else 'statement' }}"
+      data-statement-language-form="1"
+      data-statement-language-problem="{{ ctx.problem.slug }}"
+      data-statement-language-user="{{ ctx.user.username }}"
+    >
       {% if preview_id %}
       <input type="hidden" name="preview_id" value="{{ preview_id }}" />
       {% endif %}
       <label for="statement-language-select">Language</label>
-      <select id="statement-language-select" name="language" data-auto-submit-select="1">
+      <select id="statement-language-select" name="language" data-statement-language-select="1">
         {% for language in available_languages %}
         <option value="{{ language }}" {% if language == current_language %}selected{% endif %}>{{ language }}</option>
         {% endfor %}
@@ -39,14 +44,6 @@
     <div class="statement-summary">
       <h2 class="statement-summary-title">{{ ctx.problem.name }}</h2>
       <div class="statement-summary-meta">
-        <div class="statement-summary-values">
-          <span class="statement-summary-chip">{{ ctx.general_cfg.time_limit_ms }}ms</span>
-          <span class="statement-summary-chip">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
-          {% if ctx.general_cfg.pass_limit > 1 %}
-          <span class="statement-summary-chip">{{ ctx.general_cfg.pass_limit }} passes</span>
-          {% endif %}
-          <span class="statement-summary-chip">{{ ctx.general_cfg.mode }}</span>
-        </div>
         <a class="linkish statement-summary-edit" href="#statement-settings-popup" data-popup-open="statement-settings-popup">Edit metadata</a>
       </div>
     </div>

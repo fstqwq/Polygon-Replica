@@ -6,7 +6,7 @@
 {% set nav = ctx.nav_status if ctx.nav_status is defined else {} %}
 {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
 {% set readiness_items = [
-  {'label': 'Statement', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/statement', 'meta': nav.get('preview', {}).get('text', '-'), 'danger': nav.get('preview', {}).get('danger', False), 'warn': nav.get('preview', {}).get('warn', False)},
+  {'label': 'Statement', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/statement', 'meta': nav.get('statement_languages', {}).get('text', '-'), 'danger': nav.get('statement_languages', {}).get('danger', False), 'warn': nav.get('statement_languages', {}).get('warn', False)},
   {'label': 'Judge Pipeline', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/run/new', 'meta': nav.get('pipeline', {}).get('text', '-'), 'danger': nav.get('pipeline', {}).get('danger', False), 'warn': nav.get('pipeline', {}).get('warn', False)},
   {'label': 'Checker', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/checker', 'meta': nav.get('checker', {}).get('text', '-'), 'danger': nav.get('checker', {}).get('danger', False), 'warn': nav.get('checker', {}).get('warn', False), 'mode': 'pass-fail'},
   {'label': 'Interactor', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/interactor', 'meta': nav.get('interactor', {}).get('text', '-'), 'danger': nav.get('interactor', {}).get('danger', False), 'warn': nav.get('interactor', {}).get('warn', False), 'mode': 'interactive'},
@@ -18,7 +18,6 @@
 
 <section class="readiness-overview">
   <h2>Problem Readiness</h2>
-  <p class="muted">Statement preview status is tracked separately from judge pipeline runnable status.</p>
   <div class="readiness-grid">
     {% for item in readiness_items %}
     {% if item.get('mode', problem_mode) == problem_mode %}

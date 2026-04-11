@@ -550,17 +550,18 @@ class TestUIWorkspace(UIBaseSuite):
         (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
         db_execute(
             """
-            INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,artifact_path,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?)
+            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
             [
                 preview_id,
                 problem_id,
                 workspace_id,
+                None,
                 "",
                 "main",
                 "failed",
-                str(preview_root),
+                "{}",
                 "2026-02-23T00:59:00Z",
                 "2026-02-23T01:00:00Z",
             ],
@@ -572,11 +573,11 @@ class TestUIWorkspace(UIBaseSuite):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'<span class="readiness-label">Statement</span>\s*<span class="readiness-state[^"]*submenu-status-warn[^"]*">\s*failed\s*</span>',
+            r'<span class="readiness-label">Statement</span>\s*<span class="readiness-state[^"]*">\s*empty\s*</span>',
         )
         self.assertNotRegex(
             html,
-            r'<span class="readiness-label">Statement</span>\s*<span class="readiness-state[^"]*submenu-status-danger[^"]*">',
+            r'<span class="readiness-label">Statement</span>\s*<span class="readiness-state[^"]*">\s*failed\s*</span>',
         )
         self.assertRegex(
             html,

@@ -533,21 +533,19 @@ class WorkspaceService:
         if not git_dir.exists() or not git_dir.is_dir():
             raise RuntimeError(f"workspace git metadata missing for {problem}/{username}")
         latest_artifact_verification = None
-        latest_preview = None
         if include_recent:
-            recent_rows = self._store.recent_workspace_artifacts(int(ws["id"]))
-            for row in recent_rows:
-                entry = {"id": row["id"], "status": row["status"], "created_at": row["created_at"]}
-                if row["kind"] == "verification":
-                    latest_artifact_verification = entry
-                elif row["kind"] == "preview":
-                    latest_preview = entry
+            recent_verification = self._store.latest_workspace_artifact_verification(int(ws["id"]))
+            if recent_verification is not None:
+                latest_artifact_verification = {
+                    "id": recent_verification["id"],
+                    "status": recent_verification["status"],
+                    "created_at": recent_verification["created_at"],
+                }
         return {
             "problem": dict(p),
             "user": dict(u),
             "workspace": dict(ws),
             "latest_artifact_verification": latest_artifact_verification,
-            "latest_preview": latest_preview,
         }
 
     def _workspace_expected_path(self, username: str, problem: str) -> Path:
