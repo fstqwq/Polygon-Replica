@@ -2564,6 +2564,20 @@
     refreshHint(true);
   }
 
+  function initAutoSubmitSelects() {
+    document.querySelectorAll("[data-auto-submit-select='1']").forEach(function (select) {
+      select.addEventListener("change", function () {
+        var form = select.form;
+        if (!form) return;
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+          return;
+        }
+        form.submit();
+      });
+    });
+  }
+
   onReady(function () {
     initSudoPopupBridge();
     initNavActiveState();
@@ -2590,6 +2604,7 @@
     initSettingsPasswordProofForm();
     initSudoProofForm();
     initStatementDraftBackup();
+    initAutoSubmitSelects();
     initPolygonImportSlugSuggest();
     initSettingsTokenGenerators();
     initSettingsJudgehostRunnerControls();

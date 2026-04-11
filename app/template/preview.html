@@ -23,12 +23,11 @@
       <input type="hidden" name="preview_id" value="{{ preview_id }}" />
       {% endif %}
       <label for="statement-language-select">Language</label>
-      <select id="statement-language-select" name="language">
+      <select id="statement-language-select" name="language" data-auto-submit-select="1">
         {% for language in available_languages %}
         <option value="{{ language }}" {% if language == current_language %}selected{% endif %}>{{ language }}</option>
         {% endfor %}
       </select>
-      <button class="btn" type="submit">Switch</button>
     </form>
     <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
   </div>
