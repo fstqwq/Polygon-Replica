@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import Form, HTTPException, Request
 
-from app.impl.auth.shared import redirect_response, template_response
+from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
@@ -118,7 +118,13 @@ def checker_create_template(problem: str, user: str):
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message=msg)
 
-def checker_save_source(problem: str, user: str, path: str=Form('checkers/checker.cpp'), content: str=Form('')):
+def checker_save_source(
+    problem: str,
+    user: str,
+    path: str = Form('checkers/checker.cpp'),
+    content: str = Form(''),
+    response_mode: str = Form(''),
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     if ctx.get('problem_mode') == 'interactive':
         return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
@@ -126,6 +132,8 @@ def checker_save_source(problem: str, user: str, path: str=Form('checkers/checke
     workspace = Path(ctx['workspace']['path'])
     target = 'checkers/checker.cpp'
     msg = 'checker source saved'
+    save_ok = False
+    json_requested = str(response_mode or '').strip().lower() == 'json'
     try:
         target = normalize_component_source_path(path, 'checkers', 'checker.cpp')
         with config.workspace_service.workspace_lock(workspace):
@@ -156,12 +164,18 @@ def checker_save_source(problem: str, user: str, path: str=Form('checkers/checke
                 else:
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
+        save_ok = True
         audit(ctx['user']['id'], ctx['problem']['id'], 'checker.save_source', {'path': target, 'bytes': len(content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message=msg)
+    redirect_url = f'/problems/{problem}/{user}/checker'
+    if json_requested:
+        if save_ok:
+            return json_redirect_response(redirect_url, msg)
+        return json_error_response(msg)
+    return redirect_response(redirect_url, status_code=303, message=msg)
 
 
 

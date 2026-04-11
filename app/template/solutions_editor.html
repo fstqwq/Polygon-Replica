@@ -16,7 +16,7 @@
 
 <section class="solution-editor-panel">
   <h2>Edit Source</h2>
-  <form id="solution-save-form" class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/save-source">
+  <form id="solution-save-form" class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/save-source" data-code-editor-guard="1">
     <input type="hidden" name="source_path" value="{{ selected }}" />
     <p><strong>Source:</strong> <code>{{ selected }}</code></p>
     <div class="form-row">
@@ -40,7 +40,7 @@
       <button class="btn" id="solution-save-submit" type="submit">Save Source</button>
       <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions?path={{ selected }}">Back to Solution Files</a>
     </div>
-    <p id="solution-save-error" class="danger component-editor-error"{% if not editor_error %} hidden{% endif %}>{{ editor_error }}</p>
+    <p id="solution-save-error" class="danger component-editor-error" data-component-editor-error="1"{% if not editor_error %} hidden{% endif %}>{{ editor_error }}</p>
   </form>
 </section>
 {% endblock %}

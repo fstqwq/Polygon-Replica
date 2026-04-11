@@ -1357,6 +1357,182 @@
     });
   }
 
+  var suppressCodeEditorBeforeUnload = false;
+
+  function suppressCodeEditorUnloadOnce() {
+    suppressCodeEditorBeforeUnload = true;
+  }
+
+  function findCodeMirrorEditorForTextarea(textarea) {
+    if (!textarea) return null;
+    var prev = textarea.previousElementSibling;
+    if (prev && prev.CodeMirror) return prev.CodeMirror;
+    var next = textarea.nextElementSibling;
+    if (next && next.CodeMirror) return next.CodeMirror;
+    var parent = textarea.parentElement;
+    if (!parent) return null;
+    var wrappers = parent.querySelectorAll(".CodeMirror");
+    if (wrappers.length !== 1) return null;
+    return wrappers[0] && wrappers[0].CodeMirror ? wrappers[0].CodeMirror : null;
+  }
+
+  function syncCodeEditorsInForm(form) {
+    if (!form) return;
+    form.querySelectorAll("textarea[data-code-editor='1']").forEach(function (ta) {
+      var cm = findCodeMirrorEditorForTextarea(ta);
+      if (!cm || typeof cm.save !== "function") return;
+      cm.save();
+    });
+  }
+
+  function clearComponentEditorError(errorBox) {
+    if (!errorBox) return;
+    errorBox.hidden = true;
+    errorBox.textContent = "";
+  }
+
+  function showComponentEditorError(errorBox, text, fallbackText) {
+    var safeText = String(text || "").trim() || String(fallbackText || "save failed").trim() || "save failed";
+    if (!errorBox) {
+      window.alert(safeText);
+      return;
+    }
+    errorBox.textContent = safeText;
+    errorBox.hidden = false;
+  }
+
+  function codeEditorGuardState(form) {
+    return form && form.__polygonCodeEditorGuard ? form.__polygonCodeEditorGuard : null;
+  }
+
+  function markCodeEditorFormDirty(form) {
+    var state = codeEditorGuardState(form);
+    if (!state || state.pending) return;
+    state.dirty = true;
+  }
+
+  function markCodeEditorFormClean(form) {
+    var state = codeEditorGuardState(form);
+    if (!state) return;
+    state.dirty = false;
+    state.pending = false;
+  }
+
+  function setCodeEditorFormPending(form, pending) {
+    var state = codeEditorGuardState(form);
+    if (!state) return;
+    state.pending = !!pending;
+  }
+
+  function initCodeEditorUnloadGuard() {
+    var forms = Array.prototype.slice.call(document.querySelectorAll("form[data-code-editor-guard='1']"));
+    if (!forms.length) return;
+
+    function bindCodeMirrorDirtyTracking(form) {
+      form.querySelectorAll("textarea[data-code-editor='1']").forEach(function (ta) {
+        if (ta.dataset.codeEditorGuardBound === "1") return;
+        var cm = findCodeMirrorEditorForTextarea(ta);
+        if (!cm || typeof cm.on !== "function") return;
+        ta.dataset.codeEditorGuardBound = "1";
+        cm.on("change", function () {
+          markCodeEditorFormDirty(form);
+        });
+      });
+    }
+
+    forms.forEach(function (form) {
+      if (form.__polygonCodeEditorGuard) return;
+      form.__polygonCodeEditorGuard = { dirty: false, pending: false };
+      form.addEventListener("input", function (ev) {
+        var target = ev.target;
+        if (!target || !target.name) return;
+        if (String(target.type || "").toLowerCase() === "hidden") return;
+        markCodeEditorFormDirty(form);
+      });
+      form.addEventListener("change", function (ev) {
+        var target = ev.target;
+        if (!target || !target.name) return;
+        if (String(target.type || "").toLowerCase() === "hidden") return;
+        markCodeEditorFormDirty(form);
+      });
+      bindCodeMirrorDirtyTracking(form);
+      [400, 1200, 2400].forEach(function (delayMs) {
+        window.setTimeout(function () {
+          bindCodeMirrorDirtyTracking(form);
+        }, delayMs);
+      });
+    });
+
+    window.addEventListener("beforeunload", function (event) {
+      if (suppressCodeEditorBeforeUnload) return;
+      var hasDirty = forms.some(function (form) {
+        var state = codeEditorGuardState(form);
+        return !!(state && state.dirty && !state.pending);
+      });
+      if (!hasDirty) return;
+      if (event) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+      return "";
+    });
+  }
+
+  function initComponentSourceEditorAsyncSave() {
+    document.querySelectorAll("form[data-component-source-save-form='1']").forEach(function (form) {
+      form.addEventListener("submit", async function (ev) {
+        var submitter = ev.submitter || null;
+        var submitterAction = String((submitter && submitter.getAttribute("formaction")) || "").trim();
+        var submitterMethod = String((submitter && submitter.getAttribute("formmethod")) || "").trim().toUpperCase();
+        if (submitterAction || (submitterMethod && submitterMethod !== "POST")) {
+          return;
+        }
+        ev.preventDefault();
+        var btn =
+          (submitter && submitter.tagName === "BUTTON" ? submitter : null) ||
+          form.querySelector("button[type='submit']");
+        if (!btn || btn.disabled) return;
+        var errorBox = form.querySelector("[data-component-editor-error='1']");
+        var baseLabel = String(btn.textContent || "Save Source").trim() || "Save Source";
+        clearComponentEditorError(errorBox);
+        syncCodeEditorsInForm(form);
+        setCodeEditorFormPending(form, true);
+        setSubmitting(btn, baseLabel, "Saving...", true);
+        try {
+          var formData = new FormData(form);
+          formData.set("response_mode", "json");
+          var resp = await fetch(form.action, {
+            method: "POST",
+            body: formData,
+            headers: {
+              "X-Requested-With": "fetch",
+              Accept: "application/json",
+            },
+            credentials: "same-origin",
+          });
+          var payload = {};
+          try {
+            payload = await resp.json();
+          } catch (_err) {
+            payload = {};
+          }
+          if (resp.ok && payload && payload.ok && payload.redirect) {
+            markCodeEditorFormClean(form);
+            suppressCodeEditorUnloadOnce();
+            window.location.assign(String(payload.redirect));
+            return;
+          }
+          setCodeEditorFormPending(form, false);
+          showComponentEditorError(errorBox, payload && (payload.error || payload.message), "save failed");
+        } catch (_err) {
+          setCodeEditorFormPending(form, false);
+          showComponentEditorError(errorBox, "save failed: network error", "save failed");
+        }
+        setSubmitting(btn, baseLabel, "Saving...", false);
+      });
+    });
+  }
+
   function initSolutionEditorAsyncSave() {
     var form = document.getElementById("solution-save-form");
     if (!form) return;
@@ -1365,33 +1541,16 @@
     var errorBox = document.getElementById("solution-save-error");
     var baseLabel = submitBtn ? submitBtn.textContent : "Save Source";
 
-    function syncEditors() {
-      form.querySelectorAll("textarea[data-code-editor='1']").forEach(function (ta) {
-        var cmWrap = ta.nextElementSibling;
-        if (!cmWrap || !cmWrap.CodeMirror || typeof cmWrap.CodeMirror.save !== "function") {
-          return;
-        }
-        cmWrap.CodeMirror.save();
-      });
-    }
-
     function showError(text) {
-      if (!errorBox) {
-        window.alert(String(text || "save failed"));
-        return;
-      }
-      errorBox.textContent = String(text || "").trim() || "save failed";
-      errorBox.hidden = false;
+      showComponentEditorError(errorBox, text, "save failed");
     }
 
     form.addEventListener("submit", async function (ev) {
       ev.preventDefault();
       if (submitBtn && submitBtn.disabled) return;
-      if (errorBox) {
-        errorBox.hidden = true;
-        errorBox.textContent = "";
-      }
-      syncEditors();
+      clearComponentEditorError(errorBox);
+      syncCodeEditorsInForm(form);
+      setCodeEditorFormPending(form, true);
       setSubmitting(submitBtn, baseLabel, "Saving...", true);
       try {
         var resp = await fetch(form.action, {
@@ -1410,11 +1569,15 @@
           payload = {};
         }
         if (resp.ok && payload && payload.ok && payload.redirect) {
+          markCodeEditorFormClean(form);
+          suppressCodeEditorUnloadOnce();
           window.location.assign(String(payload.redirect));
           return;
         }
+        setCodeEditorFormPending(form, false);
         showError((payload && (payload.error || payload.message)) || "save failed");
       } catch (_err) {
+        setCodeEditorFormPending(form, false);
         showError("save failed: network error");
       }
       setSubmitting(submitBtn, baseLabel, "Saving...", false);
@@ -2418,7 +2581,9 @@
     initSudoGatedForms();
     initSubmitLinks();
     initPreviewCompileAsync();
+    initComponentSourceEditorAsyncSave();
     initSolutionEditorAsyncSave();
+    initCodeEditorUnloadGuard();
     initLoginProofForm();
     initRegisterLikeProofForm("register-form");
     initRegisterLikeProofForm("setup-form");
@@ -2432,4 +2597,3 @@
     initSettingsJudgehostToggles();
   });
 })();
-

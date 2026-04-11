@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import Form, HTTPException, Request
 
-from app.impl.auth.shared import redirect_response, template_response
+from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, read_build_config, template_for_kind, write_build_config
@@ -58,12 +58,20 @@ def validator_create_template(problem: str, user: str, path: str=Form('validator
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/{user}/validator', status_code=303, message=msg)
 
-def validator_save_source(problem: str, user: str, path: str=Form('validators/validator.cpp'), content: str=Form('')):
+def validator_save_source(
+    problem: str,
+    user: str,
+    path: str = Form('validators/validator.cpp'),
+    content: str = Form(''),
+    response_mode: str = Form(''),
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     target = 'validators/validator.cpp'
     msg = 'validator source saved'
+    save_ok = False
+    json_requested = str(response_mode or '').strip().lower() == 'json'
     try:
         target = normalize_component_source_path(path, 'validators', 'validator.cpp')
         with config.workspace_service.workspace_lock(workspace):
@@ -94,12 +102,18 @@ def validator_save_source(problem: str, user: str, path: str=Form('validators/va
                 else:
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
+        save_ok = True
         audit(ctx['user']['id'], ctx['problem']['id'], 'validator.save_source', {'path': target, 'bytes': len(content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/validator', status_code=303, message=msg)
+    redirect_url = f'/problems/{problem}/{user}/validator'
+    if json_requested:
+        if save_ok:
+            return json_redirect_response(redirect_url, msg)
+        return json_error_response(msg)
+    return redirect_response(redirect_url, status_code=303, message=msg)
 
 
 

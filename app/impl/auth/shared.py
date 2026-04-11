@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.impl.auth.internal import runtime
 from app.impl.runtime.config import config
@@ -260,6 +260,29 @@ def redirect_response(url: str, status_code: int = 303, message: str = "") -> Re
     safe_message = _normalize_flash_message(message)
     if safe_message:
         set_flash_cookie(response, [safe_message])
+    _apply_security_headers(response)
+    return response
+
+
+def json_redirect_response(url: str, message: str = "", **payload: object) -> JSONResponse:
+    target = _sanitize_redirect_target(url)
+    safe_message = _normalize_flash_message(message)
+    body: dict[str, object] = {"ok": True, "redirect": target, "message": safe_message}
+    if payload:
+        body.update(payload)
+    response = JSONResponse(body)
+    if safe_message:
+        set_flash_cookie(response, [safe_message])
+    _apply_security_headers(response)
+    return response
+
+
+def json_error_response(message: str = "", status_code: int = 400, **payload: object) -> JSONResponse:
+    safe_message = _normalize_flash_message(message) or "request failed"
+    body: dict[str, object] = {"ok": False, "error": safe_message}
+    if payload:
+        body.update(payload)
+    response = JSONResponse(body, status_code=status_code)
     _apply_security_headers(response)
     return response
 
