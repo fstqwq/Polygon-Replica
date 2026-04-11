@@ -8,8 +8,11 @@ from app.impl.preview.preview import (
     preview_run,
     preview_save,
     preview_status,
+    statement_compile_asset_upload,
+    statement_attachment_upload,
     statement_language_add,
     statement_attachment_delete,
+    statement_compile_asset_delete,
 )
 
 router = APIRouter()
@@ -33,6 +36,21 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/{user}/preview/save",
     preview_save,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/statement/assets/upload",
+    statement_compile_asset_upload,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/statement/assets/delete",
+    statement_compile_asset_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/{user}/statement/attachments/upload",
+    statement_attachment_upload,
     methods=["POST"],
 )
 router.add_api_route(

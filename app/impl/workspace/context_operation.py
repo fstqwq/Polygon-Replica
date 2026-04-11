@@ -188,59 +188,6 @@ def build_line_focus_context(text: str, line: int, radius: int=2) -> dict | None
         snippet.append(f'{marker} {ln:5d} | {rows[ln - 1]}')
     return {'start': start, 'end': end, 'line': target, 'text': '\n'.join(snippet)}
 
-def normalize_files_source(raw: str | None) -> str:
-    value = '' if raw is None else raw.strip().lower()
-    allowed = {'tests', 'preview', 'statement', 'run', 'export', 'workspace', 'access', 'checker', 'validator', 'interactor', 'solutions', 'generators'}
-    return value if value in allowed else ''
-
-def normalize_source_id(raw: str | None) -> str:
-    value = '' if raw is None else raw.strip()
-    return value if is_canonical_artifact_id(value) else ''
-
-def files_back_target(problem: str, user: str, source: str, source_id: str) -> tuple[str, str]:
-    base = f'/problems/{problem}/{user}'
-    if source == 'tests':
-        if source_id:
-            return (f'{base}/tests?verification_id={quote_plus(source_id)}', 'Tests')
-        return (f'{base}/tests', 'Tests')
-    if source == 'preview':
-        if source_id:
-            return (f'{base}/preview?preview_id={quote_plus(source_id)}', 'Statement')
-        return (f'{base}/preview', 'Statement')
-    if source == 'statement':
-        return (f'{base}/statement', 'Statement')
-    if source == 'run':
-        if source_id:
-            return (f'{base}/run/details?verification_id={quote_plus(source_id)}', 'Verification')
-        return (f'{base}/run', 'Verification')
-    if source == 'export':
-        return (f'{base}/export', 'Packages')
-    if source == 'workspace':
-        return (f'{base}/workspace', 'Working copy')
-    if source == 'access':
-        return (f'{base}/access', 'Manage access')
-    if source == 'checker':
-        return (f'{base}/checker', 'Checker')
-    if source == 'validator':
-        return (f'{base}/validator', 'Validator')
-    if source == 'interactor':
-        return (f'{base}/interactor', 'Interactor')
-    if source == 'solutions':
-        return (f'{base}/solutions', 'Solutions')
-    if source == 'generators':
-        return (f'{base}/generators', 'Generators')
-    return ('', '')
-
-def files_source_query_tail(source: str, source_id: str) -> str:
-    parts: list[str] = []
-    if source:
-        parts.append(f'src={quote_plus(source)}')
-    if source_id:
-        parts.append(f'sid={quote_plus(source_id)}')
-    if not parts:
-        return ''
-    return '&' + '&'.join(parts)
-
 def _normalize_repo_dir(raw: str | None) -> str:
     text = '' if raw is None else raw.strip().replace('\\', '/')
     if not text:

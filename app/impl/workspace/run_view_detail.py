@@ -667,7 +667,7 @@ def build_run_detail_context(
             if safe_solution:
                 source_href = f'/problems/{problem_slug}/{username}/solutions/editor?path={quote_plus(safe_solution)}'
             else:
-                source_href = f'/problems/{problem_slug}/{username}/files?path={quote_plus(source_rel)}&src=run'
+                source_href = f'/problems/{problem_slug}/{username}/files?path={quote_plus(source_rel)}'
         expected_behavior = _run_expected_behavior_from_summary(summary, source_for_display)
         if expected_behavior == 'unknown':
             mapped_expected = expected_by_run_id.get(run_id)

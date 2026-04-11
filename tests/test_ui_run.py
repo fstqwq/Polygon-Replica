@@ -5379,8 +5379,8 @@ class TestUIRun(UIBaseSuite):
         write_preview_summary(preview_id, {"statement_signature": statement_sig})
         preview_resp = preview_page(_request("/problems/alice/sample/alice/preview", f"preview_id={preview_id}"), "alice/sample", "alice")
         preview_html = preview_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("src=statement", preview_html)
-        self.assertIn(f"sid={preview_id}", preview_html)
+        self.assertNotIn("src=statement", preview_html)
+        self.assertNotIn(f"sid={preview_id}", preview_html)
         self.assertNotIn("2026-02-23T00:01:00Z", preview_html)
 
         run_id = f"ui-runctx-{uuid.uuid4().hex[:8]}"
@@ -5652,5 +5652,4 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(">Verification</span>", html)
         self.assertIn(">failed</strong>", html)
-
 

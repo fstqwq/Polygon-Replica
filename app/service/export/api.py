@@ -613,6 +613,15 @@ class ExportService:
             "interactor" if mode == "interactive" else "checker",
         )
         self._copy_solutions(snapshot, package_root)
+        self._copy_attachments(snapshot, package_root)
+
+    def _copy_attachments(self, snapshot: Path, package_root: Path) -> None:
+        src = snapshot / "attachments"
+        if not src.exists() or not src.is_dir() or src.is_symlink():
+            return
+        dst = package_root / "attachments"
+        dst.mkdir(parents=True, exist_ok=True)
+        self._copy_dir_contents(src, dst)
 
     def _build_native_package(
         self,

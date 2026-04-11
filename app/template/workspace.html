@@ -68,7 +68,7 @@
     {% if status.conflicted_files %}
     <ul class="files">
       {% for p in status.conflicted_files %}
-      <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ p }}&src=workspace">{{ p }}</a></li>
+      <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ p }}">{{ p }}</a></li>
       {% endfor %}
     </ul>
     {% endif %}

@@ -18,7 +18,6 @@
       {% endfor %}
     </table>
     {% if source_rows_truncated %}
-    <p class="muted">Showing first configured/cpp entries only.</p>
     {% endif %}
     <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators/create-template">
       <label for="generator-create-path">Create template</label>
@@ -43,7 +42,6 @@
       editor_error
     ) }}
     {% else %}
-    <p class="muted">Create a generator template or pick an existing generator file to edit.</p>
     {% endif %}
   </section>
 </div>

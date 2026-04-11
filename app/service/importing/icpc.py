@@ -804,6 +804,7 @@ class ICPCPackageImportService:
             )
             solutions_summary = self._import_solutions(zf, entry_map, workspace)
             components_summary = self._import_components(zf, entry_map, workspace, meta)
+            self._import_attachments(zf, entry_map, workspace)
             problem_result = self._write_problem_config(workspace, meta, statement_summary)
             problem_cfg = problem_result["cfg"]
             file_io_warning = problem_result.get("file_io_warning", "")
@@ -822,3 +823,13 @@ class ICPCPackageImportService:
             if file_io_warning:
                 result["file_io_warning"] = file_io_warning
             return result
+
+    def _import_attachments(
+        self,
+        zf: zipfile.ZipFile,
+        entries: dict[str, zipfile.ZipInfo],
+        workspace: Path,
+    ) -> None:
+        copied = self._copy_component_tree(zf, entries, "attachments", workspace, "attachments")
+        if not copied:
+            return

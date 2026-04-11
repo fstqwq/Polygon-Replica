@@ -343,18 +343,17 @@ class TestSecurity(SmokeBase):
         self.assertIn("invalid path", self._first_flash_message(resp).lower())
         self.assertFalse(marker.exists())
 
-    def test_files_delete_redirect_preserves_query_delimiter_for_workspace_source(self) -> None:
+    def test_files_delete_redirect_preserves_query_delimiter_for_directory_only(self) -> None:
         resp = files_delete(
             problem="alice/sample",
             user="alice",
             path="notes/missing-delete-target.txt",
             dir="notes",
-            src="workspace",
         )
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(
             resp.headers.get("location", ""),
-            "/problems/alice/sample/alice/files?dir=notes&src=workspace",
+            "/problems/alice/sample/alice/files?dir=notes",
         )
 
     def test_files_rename_rejects_destination_path_traversal(self) -> None:

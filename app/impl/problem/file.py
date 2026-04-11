@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _looks_like_binary_file
-from app.impl.workspace.context_operation import audit, build_line_focus_context, build_repo_browser_entries, default_files_selected_path, files_back_target, files_browse_query_tail, files_source_query_tail, kind_for_path, normalize_files_source, normalize_source_id, parse_line_param, template_for_kind
+from app.impl.workspace.context_operation import audit, build_line_focus_context, build_repo_browser_entries, default_files_selected_path, files_browse_query_tail, kind_for_path, parse_line_param, template_for_kind
 from app.impl.workspace.solution import ensure_solution_metadata_for_source
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
@@ -28,15 +28,12 @@ def _files_redirect_href(
     *,
     path: str = '',
     browse_tail: str = '',
-    source_tail: str = '',
 ) -> str:
     query_parts: list[str] = []
     if path:
         query_parts.append(f'path={quote_plus(path)}')
     if browse_tail:
         query_parts.append(browse_tail.lstrip('&'))
-    if source_tail:
-        query_parts.append(source_tail.lstrip('&'))
     if not query_parts:
         return f'/problems/{problem}/{user}/files'
     return f'/problems/{problem}/{user}/files?' + '&'.join(query_parts)
@@ -47,10 +44,6 @@ def files_page(request: Request, problem: str, user: str):
     selected = normalize_workspace_rel_path(request.query_params.get('path'))
     line_raw = request.query_params.get('line')
     selected_line = parse_line_param(line_raw, default=1)
-    source_page = normalize_files_source(request.query_params.get('src'))
-    source_id = normalize_source_id(request.query_params.get('sid'))
-    source_back_href, source_back_label = files_back_target(problem, user, source_page, source_id)
-    source_query_tail = files_source_query_tail(source_page, source_id)
     content = ''
     content_truncated = False
     selected_missing = False
@@ -93,7 +86,7 @@ def files_page(request: Request, problem: str, user: str):
     message = ''
     if not message and auto_message:
         message = auto_message
-    return template_response(request, 'files.html', {'ctx': ctx, 'files': files, 'files_truncated': files_truncated, 'file_limit': _C.WORKSPACE_FILE_LIST_LIMIT, 'selected': selected, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'selected_line': selected_line, 'selected_parent': selected_parent, 'browse_dir': browse_dir, 'browse_parent': browse_parent, 'browse_dirs': browse_dirs, 'browse_files': browse_files, 'browse_total': browse_total, 'browse_query_tail': browse_query_tail, 'line_focus': line_focus, 'line_jump_requested': line_jump_requested, 'line_jump_missing': line_jump_missing, 'selected_missing': selected_missing, 'selected_is_dir': selected_is_dir, 'selected_is_binary': selected_is_binary, 'selected_is_pdf': selected_is_pdf, 'selected_media_type': selected_media_type, 'selected_template_kind': selected_template_kind, 'source_page': source_page, 'source_id': source_id, 'source_query_tail': source_query_tail, 'source_back_href': source_back_href, 'source_back_label': source_back_label, 'message': message})
+    return template_response(request, 'files.html', {'ctx': ctx, 'files': files, 'files_truncated': files_truncated, 'file_limit': _C.WORKSPACE_FILE_LIST_LIMIT, 'selected': selected, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'selected_line': selected_line, 'selected_parent': selected_parent, 'browse_dir': browse_dir, 'browse_parent': browse_parent, 'browse_dirs': browse_dirs, 'browse_files': browse_files, 'browse_total': browse_total, 'browse_query_tail': browse_query_tail, 'line_focus': line_focus, 'line_jump_requested': line_jump_requested, 'line_jump_missing': line_jump_missing, 'selected_missing': selected_missing, 'selected_is_dir': selected_is_dir, 'selected_is_binary': selected_is_binary, 'selected_is_pdf': selected_is_pdf, 'selected_media_type': selected_media_type, 'selected_template_kind': selected_template_kind, 'message': message})
 
 def files_save(
     problem: str,
@@ -101,14 +94,10 @@ def files_save(
     path: Annotated[str, Form()],
     content: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
-    src: Annotated[str, Form()] = '',
-    sid: Annotated[str, Form()] = '',
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    source_page = normalize_files_source(src)
-    source_id = normalize_source_id(sid)
     msg = 'saved'
     try:
         with config.workspace_service.workspace_lock(workspace):
@@ -117,7 +106,7 @@ def files_save(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
         status_code=303,
         message=msg,
     )
@@ -127,14 +116,10 @@ def files_new(
     user: str,
     path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
-    src: Annotated[str, Form()] = '',
-    sid: Annotated[str, Form()] = '',
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    source_page = normalize_files_source(src)
-    source_id = normalize_source_id(sid)
     msg = 'created'
     try:
         with config.workspace_service.workspace_lock(workspace):
@@ -143,7 +128,7 @@ def files_new(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
         status_code=303,
         message=msg,
     )
@@ -154,14 +139,10 @@ def files_create_template(
     path: Annotated[str, Form()],
     kind: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
-    src: Annotated[str, Form()] = '',
-    sid: Annotated[str, Form()] = '',
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    source_page = normalize_files_source(src)
-    source_id = normalize_source_id(sid)
     msg = 'template created'
     try:
         expected_kind = kind_for_path(path)
@@ -184,7 +165,7 @@ def files_create_template(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
         status_code=303,
         message=msg,
     )
@@ -195,14 +176,10 @@ async def files_upload(
     path: Annotated[str, Form()],
     upload: Annotated[UploadFile, File(...)],
     dir: Annotated[str, Form()] = '',
-    src: Annotated[str, Form()] = '',
-    sid: Annotated[str, Form()] = '',
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    source_page = normalize_files_source(src)
-    source_id = normalize_source_id(sid)
     total_bytes = 0
     tmp_path: Path | None = None
     try:
@@ -237,7 +214,7 @@ async def files_upload(
             tmp_path.unlink(missing_ok=True)
     audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': path, 'bytes': total_bytes})
     return redirect_response(
-        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
         status_code=303,
         message='uploaded',
     )
@@ -248,14 +225,10 @@ def files_rename(
     old_path: Annotated[str, Form()],
     new_path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
-    src: Annotated[str, Form()] = '',
-    sid: Annotated[str, Form()] = '',
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    source_page = normalize_files_source(src)
-    source_id = normalize_source_id(sid)
     selected = new_path
     msg = 'renamed'
     try:
@@ -266,7 +239,7 @@ def files_rename(
         selected = old_path
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, path=selected, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        _files_redirect_href(problem, user, path=selected, browse_tail=files_browse_query_tail(dir)),
         status_code=303,
         message=msg,
     )
@@ -276,14 +249,10 @@ def files_delete(
     user: str,
     path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
-    src: Annotated[str, Form()] = '',
-    sid: Annotated[str, Form()] = '',
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    source_page = normalize_files_source(src)
-    source_id = normalize_source_id(sid)
     msg = 'deleted'
     try:
         with config.workspace_service.workspace_lock(workspace):
@@ -292,7 +261,7 @@ def files_delete(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
-        _files_redirect_href(problem, user, browse_tail=files_browse_query_tail(dir), source_tail=files_source_query_tail(source_page, source_id)),
+        _files_redirect_href(problem, user, browse_tail=files_browse_query_tail(dir)),
         status_code=303,
         message=msg,
     )

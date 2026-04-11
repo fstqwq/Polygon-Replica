@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from pathlib import Path
 from urllib.parse import quote_plus, urlencode
 
-from fastapi import Form, HTTPException, Request
+from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response, template_response
@@ -31,26 +33,18 @@ from app.service.statement.render import ensure_statement_language_sources
 from app.service.statement.signature import statement_sources_signature
 
 _C = config.constants
-_STATEMENT_ATTACHMENT_IMAGE_EXTENSIONS = {
-    ".bmp",
-    ".gif",
-    ".jpeg",
-    ".jpg",
-    ".png",
-    ".svg",
-    ".tif",
-    ".tiff",
-    ".webp",
-    ".pdf",
-}
+_STATEMENT_CANONICAL_SECTION_FILES = frozenset({
+    "name.tex",
+    "legend.tex",
+    "input.tex",
+    "output.tex",
+    "interaction.tex",
+    "scoring.tex",
+    "notes.tex",
+})
+_CONTESTANT_ATTACHMENTS_ROOT = "attachments"
 
-
-
-def is_statement_attachment_image_path(rel_path: str) -> bool:
-    return Path(rel_path).suffix.lower() in _STATEMENT_ATTACHMENT_IMAGE_EXTENSIONS
-
-
-def statement_attachment_rows(workspace: Path, section_dir_rel: str) -> list[dict[str, str]]:
+def statement_compile_asset_rows(workspace: Path, section_dir_rel: str) -> list[dict[str, str]]:
     safe_section_dir = normalize_workspace_rel_path(section_dir_rel)
     if not safe_section_dir:
         return []
@@ -66,16 +60,79 @@ def statement_attachment_rows(workspace: Path, section_dir_rel: str) -> list[dic
         for item in sorted(section_dir_abs.rglob("*")):
             if not item.is_file() or item.is_symlink():
                 continue
+            rel_in_section = item.relative_to(section_dir_abs).as_posix()
+            if rel_in_section in _STATEMENT_CANONICAL_SECTION_FILES:
+                continue
             try:
                 rel = item.resolve().relative_to(workspace_root).as_posix()
             except (ValueError, OSError):
                 continue
-            if not is_statement_attachment_image_path(rel):
-                continue
-            rows.append({"path": rel, "path_q": quote_plus(rel)})
+            rows.append({"path": rel, "path_q": quote_plus(rel), "display_path": rel_in_section})
     except OSError:
         return rows
     return rows
+
+
+def contestant_attachment_rows(workspace: Path) -> list[dict[str, str]]:
+    try:
+        attachment_dir = safe_workspace_path(workspace, _CONTESTANT_ATTACHMENTS_ROOT)
+    except HTTPException:
+        return []
+    if not attachment_dir.exists() or (not attachment_dir.is_dir()) or attachment_dir.is_symlink():
+        return []
+    workspace_root = workspace.resolve()
+    rows: list[dict[str, str]] = []
+    try:
+        for item in sorted(attachment_dir.rglob("*")):
+            if not item.is_file() or item.is_symlink():
+                continue
+            try:
+                rel = item.resolve().relative_to(workspace_root).as_posix()
+            except (ValueError, OSError):
+                continue
+            display_path = item.relative_to(attachment_dir).as_posix()
+            rows.append({"path": rel, "path_q": quote_plus(rel), "display_path": display_path})
+    except OSError:
+        return rows
+    return rows
+
+
+def normalize_contestant_attachment_target(path: str, *, upload_filename: str = "") -> str:
+    safe_path = normalize_workspace_rel_path(path)
+    if safe_path:
+        if safe_path == _CONTESTANT_ATTACHMENTS_ROOT:
+            raise ValueError("attachment target must be a file path")
+        if safe_path.startswith(_CONTESTANT_ATTACHMENTS_ROOT + "/"):
+            return safe_path
+        return f"{_CONTESTANT_ATTACHMENTS_ROOT}/{safe_path}"
+    safe_name = Path(str(upload_filename or "").strip().replace("\\", "/")).name
+    if not safe_name:
+        raise ValueError("attachment path is required")
+    return f"{_CONTESTANT_ATTACHMENTS_ROOT}/{safe_name}"
+
+
+def normalize_statement_compile_asset_target(path: str, section_dir_rel: str, *, upload_filename: str = "") -> str:
+    safe_section_dir = normalize_workspace_rel_path(section_dir_rel)
+    if not safe_section_dir:
+        raise ValueError("statement language directory is required")
+    safe_path = normalize_workspace_rel_path(path)
+    section_prefix = safe_section_dir.rstrip("/") + "/"
+    if safe_path:
+        if safe_path == safe_section_dir:
+            raise ValueError("statement asset target must be a file path")
+        if safe_path.startswith(section_prefix):
+            target_rel = safe_path
+        else:
+            target_rel = f"{safe_section_dir}/{safe_path}"
+    else:
+        safe_name = Path(upload_filename.replace("\\", "/")).name
+        if not safe_name:
+            raise ValueError("statement asset path is required")
+        target_rel = f"{safe_section_dir}/{safe_name}"
+    rel_in_section = Path(target_rel).relative_to(safe_section_dir).as_posix()
+    if rel_in_section in _STATEMENT_CANONICAL_SECTION_FILES:
+        raise ValueError("canonical statement section sources must be edited in the statement editor")
+    return target_rel
 
 
 def statement_mode_from_ctx(ctx: dict) -> str:
@@ -392,7 +449,8 @@ def preview_page(request: Request, problem: str, user: str):
         ctx['nav_status']['preview'] = selected_preview_nav
     return_page = 'preview' if str(getattr(request.url, "path")).endswith('/preview') else 'statement'
     statement_section_dir = Path(section_path_map["legend"]).parent.as_posix()
-    statement_attachments = statement_attachment_rows(workspace, statement_section_dir)
+    statement_compile_assets = statement_compile_asset_rows(workspace, statement_section_dir)
+    contestant_attachments = contestant_attachment_rows(workspace)
     return template_response(
         request,
         'preview.html',
@@ -408,7 +466,8 @@ def preview_page(request: Request, problem: str, user: str):
             'statement_template_path': STATEMENT_TEMPLATE_REL.as_posix(),
             'statement_problem_path': STATEMENT_PROBLEM_REL.as_posix(),
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
-            'statement_attachments': statement_attachments,
+            'statement_compile_assets': statement_compile_assets,
+            'contestant_attachments': contestant_attachments,
             'editor_char_limit': _C.STATEMENT_EDITOR_CHAR_LIMIT,
             'log': log,
             'log_truncated': log_truncated,
@@ -618,7 +677,7 @@ def preview_save(
         message='statement saved',
     )
 
-def statement_attachment_delete(
+def statement_compile_asset_delete(
     problem: str,
     user: str,
     path: str = Form(...),
@@ -639,16 +698,186 @@ def statement_attachment_delete(
             message=str(exc),
         )
     section_dir_rel = statement_editor_section_paths(current_language)['legend'].parent.as_posix()
-    message = 'attachment deleted'
+    message = 'statement asset deleted'
     try:
         safe_rel = normalize_workspace_rel_path(path)
         if not safe_rel:
-            raise ValueError('attachment path is required')
+            raise ValueError('statement asset path is required')
         section_prefix = section_dir_rel.rstrip('/') + '/'
         if safe_rel != section_dir_rel and not safe_rel.startswith(section_prefix):
-            raise ValueError('attachment must be under statement section directory')
-        if not is_statement_attachment_image_path(safe_rel):
-            raise ValueError('only image attachments are supported')
+            raise ValueError('statement asset must be under current statement language directory')
+        rel_in_section = Path(safe_rel).relative_to(section_dir_rel).as_posix()
+        if rel_in_section in _STATEMENT_CANONICAL_SECTION_FILES:
+            raise ValueError('canonical statement section sources cannot be deleted here')
+        with config.workspace_service.workspace_lock(workspace):
+            attachment_abs = safe_workspace_path(workspace, safe_rel)
+            if not attachment_abs.exists() or (not attachment_abs.is_file()):
+                raise ValueError('statement asset not found')
+            attachment_abs.unlink()
+        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.asset.delete', {'path': safe_rel, 'language': current_language})
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    except HTTPException as exc:
+        message = str(exc.detail)
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
+
+
+async def statement_compile_asset_upload(
+    problem: str,
+    user: str,
+    path: str = Form(""),
+    upload: UploadFile = File(...),
+    page: str = Form('statement'),
+    language: str = Form(''),
+    preview_id: str = Form(''),
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    try:
+        current_language = selected_statement_language(workspace, language)
+    except ValueError as exc:
+        return redirect_response(
+            statement_redirect_url(problem, user, target_page, language=resolve_statement_page_language(workspace, language), preview_id=preview_id),
+            status_code=303,
+            message=str(exc),
+        )
+    section_dir_rel = statement_editor_section_paths(current_language)['legend'].parent.as_posix()
+    message = 'statement asset uploaded'
+    total_bytes = 0
+    tmp_path: Path | None = None
+    target_rel = ''
+    try:
+        target_rel = normalize_statement_compile_asset_target(path, section_dir_rel, upload_filename=upload.filename or "")
+        with config.workspace_service.workspace_lock(workspace):
+            asset_abs = safe_workspace_path(workspace, target_rel)
+            if asset_abs.exists() and asset_abs.is_dir():
+                raise ValueError('statement asset target must be a file path')
+            asset_abs.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(prefix=f'.upload-{asset_abs.name}.', suffix='.tmp', dir=str(asset_abs.parent))
+            tmp_path = Path(tmp_name)
+            try:
+                with os.fdopen(fd, 'wb') as out:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        total_bytes += len(chunk)
+                os.replace(tmp_path, asset_abs)
+                tmp_path = None
+            except Exception:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
+                    tmp_path = None
+                raise
+        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.asset.upload', {'path': target_rel, 'bytes': total_bytes, 'language': current_language})
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    except HTTPException as exc:
+        message = str(exc.detail)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
+
+
+async def statement_attachment_upload(
+    problem: str,
+    user: str,
+    path: str = Form(""),
+    upload: UploadFile = File(...),
+    page: str = Form('statement'),
+    language: str = Form(''),
+    preview_id: str = Form(''),
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    try:
+        current_language = selected_statement_language(workspace, language)
+    except ValueError as exc:
+        return redirect_response(
+            statement_redirect_url(problem, user, target_page, language=resolve_statement_page_language(workspace, language), preview_id=preview_id),
+            status_code=303,
+            message=str(exc),
+        )
+    message = 'attachment uploaded'
+    total_bytes = 0
+    tmp_path: Path | None = None
+    target_rel = ''
+    try:
+        target_rel = normalize_contestant_attachment_target(path, upload_filename=upload.filename)
+        with config.workspace_service.workspace_lock(workspace):
+            attachment_abs = safe_workspace_path(workspace, target_rel)
+            if attachment_abs.exists() and attachment_abs.is_dir():
+                raise ValueError('attachment target must be a file path')
+            attachment_abs.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(prefix=f'.upload-{attachment_abs.name}.', suffix='.tmp', dir=str(attachment_abs.parent))
+            tmp_path = Path(tmp_name)
+            try:
+                with os.fdopen(fd, 'wb') as out:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        total_bytes += len(chunk)
+                os.replace(tmp_path, attachment_abs)
+                tmp_path = None
+            except Exception:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
+                    tmp_path = None
+                raise
+        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.attachment.upload', {'path': target_rel, 'bytes': total_bytes})
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    except HTTPException as exc:
+        message = str(exc.detail)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
+
+
+def statement_attachment_delete(
+    problem: str,
+    user: str,
+    path: str = Form(...),
+    page: str = Form('statement'),
+    language: str = Form(''),
+    preview_id: str = Form(''),
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    try:
+        current_language = selected_statement_language(workspace, language)
+    except ValueError as exc:
+        return redirect_response(
+            statement_redirect_url(problem, user, target_page, language=resolve_statement_page_language(workspace, language), preview_id=preview_id),
+            status_code=303,
+            message=str(exc),
+        )
+    message = 'attachment deleted'
+    try:
+        safe_rel = normalize_contestant_attachment_target(path)
         with config.workspace_service.workspace_lock(workspace):
             attachment_abs = safe_workspace_path(workspace, safe_rel)
             if not attachment_abs.exists() or (not attachment_abs.is_file()):

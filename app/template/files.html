@@ -2,18 +2,14 @@
 {% block content %}
 <h1 class="page-title">Files</h1>
 {% include "_flash_message.html" %}
-{% if source_back_href %}
-<p class="flash">Opened from {{ source_back_label }}. <a href="{{ source_back_href }}">Back to {{ source_back_label }}</a></p>
-{% endif %}
 
 <div class="grid files-grid">
   <section class="files-panel files-panel-browser">
     <h2>Repository Browser</h2>
-    <p class="muted">Browse by folder and open files directly in the editor.</p>
     <div class="inline-meta-row">
       <p><strong>Current folder:</strong> <code>{{ browse_dir if browse_dir else "/" }}</code></p>
       {% if browse_dir %}
-      <a href="?dir={{ browse_parent }}{{ source_query_tail }}">Go Up</a>
+      <a href="?dir={{ browse_parent }}">Go Up</a>
       {% endif %}
     </div>
     {% if files_truncated %}
@@ -24,13 +20,13 @@
       {% for d in browse_dirs %}
       <tr>
         <td>dir</td>
-        <td><a href="?dir={{ d.path }}{{ source_query_tail }}"><code>{{ d.path }}/</code></a></td>
+        <td><a href="?dir={{ d.path }}"><code>{{ d.path }}/</code></a></td>
       </tr>
       {% endfor %}
       {% for f in browse_files %}
       <tr>
         <td>file</td>
-        <td><a href="?path={{ f.path }}&dir={{ browse_dir }}{{ source_query_tail }}"><code>{{ f.path }}</code></a></td>
+        <td><a href="?path={{ f.path }}&dir={{ browse_dir }}"><code>{{ f.path }}</code></a></td>
       </tr>
       {% endfor %}
     </table>
@@ -43,7 +39,7 @@
     <h2>Editor</h2>
     <div class="inline-meta-row">
       <p><strong>File:</strong> <code>{{ selected }}</code></p>
-      <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}{{ browse_query_tail }}{{ source_query_tail }}">Download file</a>
+      <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}">Download file</a>
     </div>
     {% if selected_missing %}
     <p class="flash">Selected file does not exist yet.</p>
@@ -52,8 +48,6 @@
       <input type="hidden" name="path" value="{{ selected }}" />
       <input type="hidden" name="kind" value="{{ selected_template_kind }}" />
       <input type="hidden" name="dir" value="{{ browse_dir }}" />
-      <input type="hidden" name="src" value="{{ source_page }}" />
-      <input type="hidden" name="sid" value="{{ source_id }}" />
       <button class="btn" type="submit">Create {{ selected_template_kind }} template</button>
     </form>
     {% endif %}
@@ -64,7 +58,7 @@
     <p class="flash">Binary file is read-only in text editor.</p>
     {% if selected_is_pdf %}
     <p class="muted">PDF preview:</p>
-    <iframe class="pdf-preview files-pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}{{ browse_query_tail }}{{ source_query_tail }}"></iframe>
+    <iframe class="pdf-preview files-pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}"></iframe>
     {% else %}
     <p class="muted">This file is binary{% if selected_media_type %} ({{ selected_media_type }}){% endif %}. Use download/upload actions to manage it.</p>
     {% endif %}
@@ -81,8 +75,6 @@
       <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/save">
         <input type="hidden" name="path" value="{{ selected }}" />
         <input type="hidden" name="dir" value="{{ browse_dir }}" />
-        <input type="hidden" name="src" value="{{ source_page }}" />
-        <input type="hidden" name="sid" value="{{ source_id }}" />
         <textarea
           name="content"
           data-code-editor="1"
@@ -97,7 +89,6 @@
 
   <section class="files-panel files-panel-ops">
     <h2>File Operations</h2>
-    <p class="muted">Fast actions on paths. Rename/Delete are grouped under Advanced.</p>
     <div class="form-stack selected-path-actions-list">
       <div class="form-block">
         <h3>Create File</h3>
@@ -108,8 +99,6 @@
             <button class="btn" type="submit">Create</button>
           </div>
           <input type="hidden" name="dir" value="{{ browse_dir }}" />
-          <input type="hidden" name="src" value="{{ source_page }}" />
-          <input type="hidden" name="sid" value="{{ source_id }}" />
         </form>
       </div>
       <div class="form-block">
@@ -121,8 +110,6 @@
             <button class="btn" type="submit">Upload</button>
           </div>
           <input type="hidden" name="dir" value="{{ browse_dir }}" />
-          <input type="hidden" name="src" value="{{ source_page }}" />
-          <input type="hidden" name="sid" value="{{ source_id }}" />
           <div class="form-row">
             <label for="upload-local-file">Local file</label>
             <input id="upload-local-file" type="file" name="upload" />
@@ -145,8 +132,6 @@
                 <button class="btn" type="submit">Rename</button>
               </div>
               <input type="hidden" name="dir" value="{{ browse_dir }}" />
-              <input type="hidden" name="src" value="{{ source_page }}" />
-              <input type="hidden" name="sid" value="{{ source_id }}" />
             </form>
           </div>
           <div class="form-block">
@@ -158,8 +143,6 @@
                 <button class="btn danger-link" type="submit">Delete</button>
               </div>
               <input type="hidden" name="dir" value="{{ browse_dir }}" />
-              <input type="hidden" name="src" value="{{ source_page }}" />
-              <input type="hidden" name="sid" value="{{ source_id }}" />
             </form>
           </div>
         </div>

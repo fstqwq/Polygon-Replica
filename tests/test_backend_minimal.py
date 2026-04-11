@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import io
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -13,7 +15,15 @@ from app.db import DB, IncompatibleSchemaError
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
-from app.impl.preview.preview import preview_page, preview_run, preview_status, statement_language_add
+from app.impl.preview.preview import (
+    preview_page,
+    preview_run,
+    preview_status,
+    statement_compile_asset_upload,
+    statement_attachment_delete,
+    statement_attachment_upload,
+    statement_language_add,
+)
 from app.impl.run_export.artifact import artifact_file
 from app.impl.auth.internal.runtime import _startup_clear_all_caches
 from app.impl.runtime.config import config
@@ -25,6 +35,17 @@ from app.service.disk.verification_store import VerificationStore
 
 
 class TestBackendMinimal(SmokeBase):
+    class _FakeUpload:
+        def __init__(self, filename: str, data: bytes):
+            self.filename = filename
+            self._buf = io.BytesIO(data)
+
+        async def read(self, size: int = -1) -> bytes:
+            return self._buf.read(size)
+
+        async def close(self) -> None:
+            self._buf.close()
+
     def test_startup_clear_all_caches_wipes_cache_root_artifacts_and_runtime(self) -> None:
         artifact_file = config.fs_manager.cache_artifacts_root / "verifications" / "ver-test" / "logs" / "compile.log"
         runtime_file = config.fs_manager.runtime_root / "judgehost-runs" / "jt-test" / "stdout.txt"
@@ -480,6 +501,84 @@ class TestBackendMinimal(SmokeBase):
             "notes.tex",
         ):
             self.assertTrue((ws / "statement-sections" / "japanese" / rel).is_file(), rel)
+
+    def test_preview_page_lists_compile_assets_and_contestant_attachments_separately(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        english_dir = ws / "statement-sections" / "english"
+        english_dir.mkdir(parents=True, exist_ok=True)
+        (english_dir / "legend.tex").write_text("Legend.\n", encoding="utf-8")
+        (english_dir / "diagram.png").write_bytes(b"PNG")
+        (ws / "attachments").mkdir(parents=True, exist_ok=True)
+        (ws / "attachments" / "guess_number_testing_tool.py").write_text("print('ok')\n", encoding="utf-8")
+
+        resp = preview_page(_request(f"/problems/{self.problem}/{self.user}/statement"), self.problem, self.user)
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Statement attachments", html)
+        self.assertIn("Contestant attachments", html)
+        self.assertIn("diagram.png", html)
+        self.assertIn("guess_number_testing_tool.py", html)
+        self.assertIn("/statement/attachments/upload", html)
+        self.assertIn("/statement/assets/upload", html)
+        self.assertIn("/statement/assets/delete", html)
+
+    def test_statement_compile_asset_upload_stores_file_under_current_language_dir(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        upload = self._FakeUpload("diagram.png", b"PNG")
+
+        resp = asyncio.run(
+            statement_compile_asset_upload(
+                self.problem,
+                self.user,
+                path="figures/diagram.png",
+                upload=upload,
+                page="statement",
+                language="english",
+            )
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{self.problem}/{self.user}/statement?language=english", resp.headers.get("location", ""))
+        self.assertEqual((ws / "statement-sections" / "english" / "figures" / "diagram.png").read_bytes(), b"PNG")
+
+    def test_statement_attachment_upload_stores_file_under_attachments_root(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        upload = self._FakeUpload("guess_number_testing_tool.py", b"print('ok')\n")
+
+        resp = asyncio.run(
+            statement_attachment_upload(
+                self.problem,
+                self.user,
+                path="tools/guess_number_testing_tool.py",
+                upload=upload,
+                page="statement",
+                language="english",
+            )
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{self.problem}/{self.user}/statement?language=english", resp.headers.get("location", ""))
+        self.assertEqual(
+            (ws / "attachments" / "tools" / "guess_number_testing_tool.py").read_text(encoding="utf-8"),
+            "print('ok')\n",
+        )
+
+    def test_statement_attachment_delete_removes_file_under_attachments_root(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        attachment = ws / "attachments" / "guess_number_testing_tool.py"
+        attachment.parent.mkdir(parents=True, exist_ok=True)
+        attachment.write_text("print('ok')\n", encoding="utf-8")
+
+        resp = statement_attachment_delete(
+            self.problem,
+            self.user,
+            path="attachments/guess_number_testing_tool.py",
+            page="statement",
+            language="english",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(attachment.exists())
 
     def test_preview_run_accepts_default_english_when_no_language_directories_exist(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])

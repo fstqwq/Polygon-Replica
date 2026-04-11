@@ -36,6 +36,11 @@ form {
   min-width: 0;
 }
 
+.form-row:not(.form-row-column) > .form-input-with-action {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
 .form-row-inline-distribute {
   flex-wrap: nowrap;
   align-items: flex-end;
@@ -281,6 +286,78 @@ form {
   text-decoration: none;
 }
 
+.statement-page-title-inline {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.statement-page-title-tools {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.statement-language-switch-form {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.statement-language-switch-form > label {
+  margin: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.statement-language-switch-form > select {
+  min-width: 120px;
+}
+
+.statement-assets-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+}
+
+.statement-assets-card {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-5);
+}
+
+.statement-assets-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.statement-assets-card-head h2 {
+  margin: 0;
+}
+
+.statement-assets-card-copy {
+  margin: 0;
+}
+
+.statement-assets-card-body {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.statement-assets-upload-block {
+  margin: 0;
+}
+
 @media (max-width: 720px) {
   .statement-summary-meta {
     gap: var(--space-2);
@@ -288,6 +365,14 @@ form {
 
   .statement-summary-edit {
     margin-left: 0;
+  }
+
+  .statement-page-title-tools {
+    justify-content: flex-start;
+  }
+
+  .statement-assets-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
