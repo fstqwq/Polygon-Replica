@@ -1,760 +1,82 @@
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone
-
-from app.db import now_iso
-from app.service.judgehost.runtime import domjudge_verdict_from_runresult, now_iso_after, parse_iso_utc
-from app.service.verification.task_scheduler import notify_verification_task_terminal
-from app.service.verification.test_rows import build_verification_test_pass_row, build_verification_test_row
-
 
 class JudgehostQueueMixin:
-    def _run_ids_with_leased_cases(self, run_ids: list[str]) -> set[str]:
-        progress = self._judgehost_state_store.case_progress_for_runs(run_ids)
-        return {
-            run_id
-            for run_id, row in progress.items()
-            if int(row.get("leased") or 0) > 0
-        }
+    # Delegation layer; logic lives in app.service.judgehost.task_queue.TaskQueue
+    def domjudge_runs_with_leased_cases(self, *args, **kwargs):
+        return self._queue.domjudge_runs_with_leased_cases(*args, **kwargs)
 
-    def domjudge_runs_with_leased_cases(self, run_ids: list[str]) -> set[str]:
-        return self._run_ids_with_leased_cases([self._normalize_run_id(run_id) for run_id in run_ids if run_id])
+    def fetch_work(self, *args, **kwargs):
+        return self._queue.fetch_work(*args, **kwargs)
 
-    def _lease_matching_group_task(self, *, hostname: str, group_key: str) -> dict[str, object] | None:
-        safe_host = self._normalize_hostname(hostname)
-        safe_group_key = str(group_key or "")
-        if not safe_group_key:
-            return None
-        lease_until = now_iso_after(self._lease_sec)
-        now_text = now_iso()
-        with self._state_lock:
-            queued = [
-                task
-                for task in self._tasks_by_id.values()
-                if task["status"] == self.STATUS_QUEUED
-                and str((task.get("payload") or {}).get("domjudge_group_key") or "") == safe_group_key
-            ]
-            queued.sort(key=lambda item: item["created_at"])
-            if not queued:
-                return None
-            task = queued[0]
-            task["status"] = self.STATUS_LEASED
-            task["lease_owner"] = safe_host
-            task["lease_expires_at"] = lease_until
-            task["updated_at"] = now_text
-            task["attempt_count"] = task["attempt_count"] + 1
-            return {
-                "task_id": task["id"],
-                "run_id": task["run_id"],
-                "problem": task["problem_slug"],
-                "username": task["username"],
-                "artifact_verification_id": task["artifact_verification_id"],
-                "mode": task["mode"],
-                "lease_expires_at": lease_until,
-                "payload": dict(task.get("payload") or {}),
-            }
+    def renew_lease(self, *args, **kwargs):
+        return self._queue.renew_lease(*args, **kwargs)
 
-    def _claim_lease_requeue_slot(self, *, interval_sec: float = 0.75) -> bool:
-        now_mono = time.monotonic()
-        with self._lease_requeue_lock:
-            if now_mono < float(self._lease_requeue_next_ts):
-                return False
-            self._lease_requeue_next_ts = now_mono + max(0.05, float(interval_sec))
-            return True
+    def report_result(self, *args, **kwargs):
+        return self._queue.report_result(*args, **kwargs)
 
-    def _requeue_expired_leases(self, *, force: bool = False) -> None:
-        if (not force) and (not self._claim_lease_requeue_slot()):
-            return
-        now_dt = datetime.now(timezone.utc)
-        now_text = now_dt.isoformat()
-        with self._state_lock:
-            for task in self._tasks_by_id.values():                if task["status"] != self.STATUS_LEASED:
-                    continue
-                lease_exp = parse_iso_utc(task.get("lease_expires_at"))
-                if lease_exp is None or lease_exp >= now_dt:
-                    continue
-                task["status"] = self.STATUS_QUEUED
-                task["lease_owner"] = ""
-                task["lease_expires_at"] = ""
-                task["updated_at"] = now_text
+    def wait_for_task_result(self, *args, **kwargs):
+        return self._queue.wait_for_task_result(*args, **kwargs)
 
-    def _record_host_event_conn(
-        self,
-        *,
-        hostname: str,
-        action: str,
-        task_id: str = "",
-        run_id: str = "",
-        lease_expires_at: str = "",
-    ) -> None:
-        if not action:
-            raise RuntimeError("judgehost host event action is required")
-        now_text = now_iso()
-        with self._state_lock:
-            row = self._hosts_state.get(hostname)
-            if row is None:
-                row = {
-                    "hostname": hostname,
-                    "enabled": True,
-                    "first_seen_at": now_text,
-                    "last_seen_at": now_text,
-                    "last_action": "",
-                    "last_task_id": "",
-                    "last_run_id": "",
-                    "lease_expires_at": "",
-                    "update_count": 0,
-                }
-                self._hosts_state[hostname] = row
-            row["last_seen_at"] = now_text
-            row["last_action"] = action
-            row["last_task_id"] = task_id
-            row["last_run_id"] = run_id
-            row["lease_expires_at"] = lease_expires_at
-            row["update_count"] = row["update_count"] + 1
+    def poll_task_result(self, *args, **kwargs):
+        return self._queue.poll_task_result(*args, **kwargs)
 
-    def _host_enabled_conn(self, conn=None, hostname: str = "") -> bool:
-        if not hostname:
-            return True
-        with self._state_lock:
-            row = self._hosts_state.get(hostname)
-            if row is None:
-                return True
-            return bool(row.get("enabled", True))
+    def wait_for_task_case_result(self, *args, **kwargs):
+        return self._queue.wait_for_task_case_result(*args, **kwargs)
 
-    def fetch_work(self, hostname: str) -> list[dict[str, object]]:
-        hostname = self._normalize_hostname(hostname)
-        tasks: list[dict[str, object]] = []
-        self._requeue_expired_leases()
-        event_action = "fetch"
-        event_task_id = ""
-        event_run_id = ""
-        event_lease_expires_at = ""
-        with self._state_lock:
-            host_row = self._hosts_state.get(hostname)
-            if host_row is not None and not bool(host_row.get("enabled", True)):
-                event_action = "disabled"
-            else:
-                queued = [
-                    task
-                    for task in self._tasks_by_id.values()
-                    if task["status"] == self.STATUS_QUEUED
-                ]
-                queued.sort(key=lambda item: item["created_at"])
-                lease_until = now_iso_after(self._lease_sec)
-                now_text = now_iso()
-                for task in queued[:1]:
-                    task_id = task["id"]
-                    if task["status"] != self.STATUS_QUEUED:
-                        continue
-                    task["status"] = self.STATUS_LEASED
-                    task["lease_owner"] = hostname
-                    task["lease_expires_at"] = lease_until
-                    task["updated_at"] = now_text
-                    task["attempt_count"] = task["attempt_count"] + 1
-                    payload = task.get("payload") or {}
-                    tasks.append(
-                        {
-                            "task_id": task_id,
-                            "run_id": task["run_id"],
-                            "problem": task["problem_slug"],
-                            "username": task["username"],
-                            "artifact_verification_id": task["artifact_verification_id"],
-                            "mode": task["mode"],
-                            "lease_expires_at": lease_until,
-                            "payload": dict(payload),
-                        }
-                    )
-                if tasks:
-                    tail = tasks[-1]
-                    event_action = "lease"
-                    event_task_id = tail["task_id"]
-                    event_run_id = tail["run_id"]
-                    event_lease_expires_at = lease_until
-        self._record_host_event_conn(
-            hostname=hostname,
-            action=event_action,
-            task_id=event_task_id,
-            run_id=event_run_id,
-            lease_expires_at=event_lease_expires_at,
-        )
-        return tasks
+    def poll_task_case_result(self, *args, **kwargs):
+        return self._queue.poll_task_case_result(*args, **kwargs)
 
-    def renew_lease(self, task_id: str, hostname: str) -> bool:
-        hostname = self._normalize_hostname(hostname)
-        if not task_id:
-            return False
-        with self._state_lock:
-            task = self._tasks_by_id.get(task_id)
-            if task is None:
-                self._record_host_event_conn(hostname=hostname, action="heartbeat", task_id=task_id)
-                return False
-            if task["status"] != self.STATUS_LEASED:
-                self._record_host_event_conn(hostname=hostname, action="heartbeat", task_id=task_id)
-                return False
-            if task["lease_owner"] != hostname:
-                self._record_host_event_conn(hostname=hostname, action="heartbeat", task_id=task_id)
-                return False
-            now_text = now_iso()
-            lease_until = now_iso_after(self._lease_sec)
-            task["lease_expires_at"] = lease_until
-            task["updated_at"] = now_text
-            self._record_host_event_conn(
-                hostname=hostname,
-                action="heartbeat",
-                task_id=task_id,
-                lease_expires_at=lease_until,
-            )
-            return True
+    def wait_for_task(self, *args, **kwargs):
+        return self._queue.wait_for_task(*args, **kwargs)
 
-    def _load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
-        if not run_id:
-            return {}
-        task_run_id = ""
-        task_verification_id = ""
-        cached_summary: dict[str, object] | None = None
-        with self._state_lock:
-            task_id = self._task_id_by_run.get(run_id)
-            if task_id is not None:
-                task_row = self._tasks_by_id.get(task_id)
-                if task_row is not None:
-                    task_verification_id = task_row.get("verification_id")
-                    task_run_id = task_row.get("run_id")
-                    cached_summary = dict(task_row.get("summary") or {})
-        if task_run_id and (
-            task_run_id != run_id
-            or task_verification_id != verification_id
-        ):
-            summary = self._load_run_summary(task_run_id, task_verification_id)
-            if summary:
-                return summary
-        if cached_summary is not None:
-            return cached_summary
-        return {}
+    def set_host_enabled(self, *args, **kwargs):
+        return self._queue.set_host_enabled(*args, **kwargs)
 
-    @staticmethod
-    def _summary_error_text(summary: dict[str, object]) -> str:
-        diagnostics = summary.get("compile_diagnostics") or []
-        for item in diagnostics:
-            message = item.get("message") or ""
-            if message:
-                return message
-        return summary.get("error") or ""
+    def status(self, *args, **kwargs):
+        return self._queue.status(*args, **kwargs)
 
-    def report_result(self, *, task_id: str, hostname: str, payload: dict[str, object]) -> dict[str, object]:
-        if not task_id:
-            raise RuntimeError("task_id is required")
-        hostname = self._normalize_hostname(hostname)
-        run_status = payload["run_status"]
-        run_status_token = run_status.lower()
-        if run_status_token in {"ok", "accepted", "pass", "passed", "success", "completed"}:
-            run_status = "ok"
-            task_status = self.STATUS_COMPLETED
-        else:
-            run_status = "failed"
-            task_status = self.STATUS_FAILED
-        error_text = (payload.get("error") or "").strip()
+    def cancel_tasks_for_runs(self, *args, **kwargs):
+        return self._queue.cancel_tasks_for_runs(*args, **kwargs)
 
-        with self._state_lock:
-            row = self._tasks_by_id.get(task_id)
-            if row is None:
-                raise RuntimeError("judgehost task not found")
-            current_status = row["status"]
-            lease_owner = row["lease_owner"]
-            if current_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                raise RuntimeError(f"judgehost task is not reportable (status={current_status})")
-            if lease_owner and lease_owner != hostname:
-                raise RuntimeError("judgehost task lease owner mismatch")
-            run_id = row["run_id"]
-            verification_id = row["verification_id"]
-            prev_status = current_status
-            prev_lease_owner = lease_owner
-            prev_lease_expires_at = row["lease_expires_at"]
-            prev_error_text = row["error_text"]
-            prev_result = dict(row.get("result") or {})
-            prev_summary = dict(row.get("summary") or {})
-            row["status"] = self.STATUS_REPORTING
-            row["updated_at"] = now_iso()
+    def startup_cancel_inflight_tasks(self, *args, **kwargs):
+        return self._queue.startup_cancel_inflight_tasks(*args, **kwargs)
 
-        try:
-            existing_summary = self._load_run_summary(run_id, verification_id) or prev_summary
-            summary = payload.get("summary")
-            summary_obj = dict(existing_summary) if summary is None else {**existing_summary, **summary}
-            if run_status != "ok":
-                if error_text:
-                    summary_obj["error"] = error_text
-                elif "error" not in summary_obj:
-                    summary_obj["error"] = "judgehost reported failure"
-            summary_obj["status"] = run_status
+    def forget_problem_tasks(self, *args, **kwargs):
+        return self._queue.forget_problem_tasks(*args, **kwargs)
 
-            judgehost_block = dict(summary_obj.get("judgehost") or {})
-            judgehost_block["task_id"] = task_id
-            judgehost_block["hostname"] = hostname
-            judgehost_block["status"] = task_status
-            summary_obj["judgehost"] = judgehost_block
+    def cancel_domjudge_jobs_for_runs(self, *args, **kwargs):
+        return self._queue.cancel_domjudge_jobs_for_runs(*args, **kwargs)
 
-            if (not error_text) and run_status != "ok":
-                error_text = self._summary_error_text(summary_obj) or "judgehost task failed"
+    def cancel_all_domjudge_inflight(self, *args, **kwargs):
+        return self._queue.cancel_all_domjudge_inflight(*args, **kwargs)
 
-            finished_at = now_iso()
-        except Exception:
-            with self._state_lock:
-                row = self._tasks_by_id.get(task_id)
-                if row is not None and row["status"] == self.STATUS_REPORTING:
-                    row["status"] = prev_status
-                    row["lease_owner"] = prev_lease_owner
-                    row["lease_expires_at"] = prev_lease_expires_at
-                    row["error_text"] = prev_error_text
-                    row["result"] = prev_result
-                    row["summary"] = prev_summary
-                    row["updated_at"] = now_iso()
-            raise
+    def forget_domjudge_runs(self, *args, **kwargs):
+        return self._queue.forget_domjudge_runs(*args, **kwargs)
 
-        with self._state_lock:
-            row = self._tasks_by_id.get(task_id)
-            if row is not None:
-                row["status"] = task_status
-                row["result"] = dict(payload)
-                row["summary"] = dict(summary_obj)
-                row["run_status"] = run_status
-                row["error_text"] = error_text
-                row["lease_owner"] = hostname
-                row["lease_expires_at"] = ""
-                row["updated_at"] = finished_at
-                row["completed_at"] = finished_at
-        self._record_host_event_conn(
-            hostname=hostname,
-            action="report",
-            task_id=task_id,
-            run_id=run_id,
-        )
-        if verification_id:
-            notify_verification_task_terminal(verification_id, task_id)
-        return {
-            "task_id": task_id,
-            "verification_id": verification_id,
-            "run_id": run_id,
-            "artifact_path": "",
-            "status": run_status,
-            "summary": summary_obj,
-        }
+    def _run_ids_with_leased_cases(self, *args, **kwargs):
+        return self._queue._run_ids_with_leased_cases(*args, **kwargs)
 
-    def wait_for_task_result(self, task_id: str, timeout_sec: float | None = None) -> dict[str, object]:
-        if not task_id:
-            raise RuntimeError("judgehost task id is required")
-        timeout = self._wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
-        deadline = time.monotonic() + timeout
-        while True:
-            result = self.poll_task_result(task_id)
-            if result is not None:
-                return result
-            if time.monotonic() >= deadline:
-                raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
-            time.sleep(self._wait_poll_sec)
+    def _lease_matching_group_task(self, *args, **kwargs):
+        return self._queue._lease_matching_group_task(*args, **kwargs)
 
-    def poll_task_result(self, task_id: str) -> dict[str, object] | None:
-        if not task_id:
-            raise RuntimeError("judgehost task id is required")
-        row = self._task_by_id(task_id)
-        if row is None:
-            raise RuntimeError("judgehost task disappeared")
-        status = str(row["status"] or "")
-        if status not in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
-            return None
-        verification_id = str(row["verification_id"] or "")
-        run_id = str(row["run_id"] or "")
-        return {
-            "task_id": task_id,
-            "verification_id": verification_id,
-            "run_id": run_id,
-            "artifact_path": "",
-            "status": row["run_status"],
-            "task_status": status,
-            "error": row["error_text"],
-            "summary": dict(row.get("summary") or {}),
-        }
+    def _claim_lease_requeue_slot(self, *args, **kwargs):
+        return self._queue._claim_lease_requeue_slot(*args, **kwargs)
 
-    def wait_for_task_case_result(self, task_id: str, test_name: str, timeout_sec: float | None = None) -> dict[str, object]:
-        if not task_id:
-            raise RuntimeError("judgehost task id is required")
-        if not test_name:
-            raise RuntimeError("judgehost test name is required")
-        timeout = self._wait_timeout_sec if timeout_sec is None else max(1.0, float(timeout_sec))
-        deadline = time.monotonic() + timeout
-        while True:
-            result = self.poll_task_case_result(task_id, test_name)
-            if result is not None:
-                return result
-            if time.monotonic() >= deadline:
-                raise RuntimeError(f"judgehost task timed out after {int(timeout)}s")
-            time.sleep(self._wait_poll_sec)
+    def _requeue_expired_leases(self, *args, **kwargs):
+        return self._queue._requeue_expired_leases(*args, **kwargs)
 
-    def poll_task_case_result(self, task_id: str, test_name: str) -> dict[str, object] | None:
-        if not task_id:
-            raise RuntimeError("judgehost task id is required")
-        if not test_name:
-            raise RuntimeError("judgehost test name is required")
-        row = self._task_by_id(task_id)
-        if row is None:
-            raise RuntimeError("judgehost task disappeared")
-        case_row = self._judgehost_state_store.case_for_task(task_id, test_name)
-        if case_row is not None and str(case_row["status"] or "") == "reported":
-            verification_id = str(row["verification_id"] or "")
-            run_id = str(row["run_id"] or "")
-            summary = self._load_run_summary(run_id, verification_id)
-            tests = summary.get("tests")
-            selected_test_row = None
-            if isinstance(tests, list):
-                for item in tests:
-                    if isinstance(item, dict) and str(item.get("test") or "") == test_name:
-                        selected_test_row = dict(item)
-                        break
-            if selected_test_row is None:
-                cpu_ms = max(0, int(round(float(case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
-                wall_ms = max(0, int(round(float(case_row["wall_sec"] or case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
-                memory_kb = max(0, int(case_row["memory_kb"] or 0))
-                selected_test_row = build_verification_test_row(
-                    test_name=test_name,
-                    verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
-                    time_ms=cpu_ms,
-                    time_user_ms=cpu_ms,
-                    time_wall_ms=wall_ms,
-                    memory_kb=memory_kb,
-                    message="",
-                    output_ref=str(case_row["output_run_rel"] or ""),
-                    feedback_files=[],
-                    passes=[
-                        build_verification_test_pass_row(
-                            verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
-                            time_ms=cpu_ms,
-                            time_user_ms=cpu_ms,
-                            time_wall_ms=wall_ms,
-                            memory_kb=memory_kb,
-                            feedback="",
-                            output_ref=str(case_row["output_run_rel"] or ""),
-                            runresult=str(case_row["runresult"] or ""),
-                        )
-                    ],
-                    runresult=str(case_row["runresult"] or ""),
-                )
-            case_summary = {
-                "source": summary.get("source") or "",
-                "compile_diagnostics": list(summary.get("compile_diagnostics") or []),
-                "error": str(summary.get("error") or ""),
-                "tests": [selected_test_row],
-            }
-            task_kind = str((row.get("payload") or {}).get("task_kind") or "")
-            runresult = str(case_row["runresult"] or "")
-            verdict = domjudge_verdict_from_runresult(runresult)
-            if task_kind == self._TASK_KIND_MAIN_CORRECT:
-                run_status = "ok" if verdict == "OK" else "failed"
-            elif runresult in {"compiler-error", "checker-fail", "compare-error", "internal-error"}:
-                run_status = "failed"
-            else:
-                run_status = "ok"
-            return {
-                "task_id": task_id,
-                "verification_id": str(row["verification_id"] or ""),
-                "run_id": str(row["run_id"] or ""),
-                "artifact_path": "",
-                "status": run_status,
-                "task_status": row["status"],
-                "error": str(case_summary.get("error") or ""),
-                "summary": case_summary,
-            }
-        task_status = str(row["status"] or "")
-        if task_status in {self.STATUS_FAILED, self.STATUS_COMPLETED}:
-            verification_id = str(row["verification_id"] or "")
-            run_id = str(row["run_id"] or "")
-            task_summary = self._load_run_summary(run_id, verification_id)
-            source_label = str(task_summary.get("source") or "")
-            compile_diagnostics = list(task_summary.get("compile_diagnostics") or [])
-            detail = str(task_summary.get("error") or row.get("error_text") or "")
-            if not detail:
-                detail = f"judgehost case result missing for {test_name}"
-            return {
-                "task_id": task_id,
-                "verification_id": verification_id,
-                "run_id": run_id,
-                "artifact_path": "",
-                "status": "failed",
-                "task_status": task_status,
-                "missing_case_result": True,
-                "error": detail,
-                "summary": {
-                    "source": source_label,
-                    "compile_diagnostics": compile_diagnostics,
-                    "error": detail,
-                    "tests": [],
-                },
-            }
-        return None
+    def _record_host_event_conn(self, *args, **kwargs):
+        return self._queue._record_host_event_conn(*args, **kwargs)
 
-    def wait_for_task(self, task_id: str, timeout_sec: float | None = None) -> str:
-        result = self.wait_for_task_result(task_id, timeout_sec=timeout_sec)
-        task_status = result["task_status"]
-        if task_status == self.STATUS_FAILED:
-            detail = result["error"] or "judgehost task failed without error text"
-            raise RuntimeError(detail)
-        return result["run_id"]
+    def _host_enabled_conn(self, *args, **kwargs):
+        return self._queue._host_enabled_conn(*args, **kwargs)
 
-    def _host_status_rows(self) -> tuple[list[dict[str, object]], int]:
-        now_dt = datetime.now(timezone.utc)
-        now_ts = time.time()
-        active_by_host: dict[str, int] = {}
-        cases_5m: dict[str, int] = {}
-        cases_15m: dict[str, int] = {}
-        cases_1h: dict[str, int] = {}
-        cases_5h: dict[str, int] = {}
-        with self._state_lock:
-            for task in self._tasks_by_id.values():
-                if task["status"] != self.STATUS_LEASED:
-                    continue
-                host = task["lease_owner"]
-                if not host:
-                    continue
-                lease_expires_at = parse_iso_utc(task.get("lease_expires_at"))
-                if lease_expires_at is None or lease_expires_at < now_dt:
-                    continue
-                active_by_host[host] = int(active_by_host.get(host, 0)) + 1
-            for host, events in self._host_judged_case_events.items():
-                keep: list[float] = []
-                c5 = 0
-                c15 = 0
-                c1h = 0
-                c5h = 0
-                for ts in events:
-                    age = now_ts - float(ts)
-                    if age <= 5 * 3600:
-                        keep.append(ts)
-                        c5h += 1
-                        if age <= 3600:
-                            c1h += 1
-                            if age <= 900:
-                                c15 += 1
-                                if age <= 300:
-                                    c5 += 1
-                self._host_judged_case_events[host] = keep
-                cases_5m[host] = c5
-                cases_15m[host] = c15
-                cases_1h[host] = c1h
-                cases_5h[host] = c5h
-            last_judging_by_host = {k: dict(v) for k, v in self._host_last_judging.items()}
-            host_rows = sorted(
-                (dict(row) for row in self._hosts_state.values()),
-                key=lambda item: (
-                    str(item.get("last_seen_at") or ""),
-                    str(item.get("hostname") or ""),
-                ),
-                reverse=True,
-            )
-        rows_out: list[dict[str, object]] = []
-        online_count = 0
-        for row in host_rows:
-            hostname = str(row.get("hostname") or "")
-            if not hostname:
-                continue
-            enabled_flag = bool(row.get("enabled"))
-            last_seen = str(row.get("last_seen_at") or "")
-            last_seen_dt = parse_iso_utc(last_seen)
-            age_sec: int | None = None
-            is_online = False
-            if last_seen_dt is not None:
-                delta = max(0.0, (now_dt - last_seen_dt).total_seconds())
-                age_sec = int(delta)
-                is_online = delta <= float(self._online_window_sec)
-            if is_online and enabled_flag:
-                online_count += 1
-            count_5m = int(cases_5m.get(hostname, 0))
-            count_15m = int(cases_15m.get(hostname, 0))
-            count_1h = int(cases_1h.get(hostname, 0))
-            count_5h = int(cases_5h.get(hostname, 0))
-            last_judging = dict(last_judging_by_host.get(hostname, {}))
-            last_judging_label = last_judging.get("label")
-            last_judging_at = last_judging.get("updated_at")
-            rows_out.append(
-                {
-                    "hostname": hostname,
-                    "enabled": enabled_flag,
-                    "online": is_online,
-                    "age_sec": age_sec,
-                    "last_seen_at": last_seen,
-                    "first_seen_at": str(row.get("first_seen_at") or ""),
-                    "last_action": str(row.get("last_action") or ""),
-                    "last_task_id": str(row.get("last_task_id") or ""),
-                    "last_run_id": str(row.get("last_run_id") or ""),
-                    "lease_expires_at": str(row.get("lease_expires_at") or ""),
-                    "active_leases": int(active_by_host.get(hostname, 0)),
-                    "update_count": int(row.get("update_count") or 0),
-                    "load_5m": float(count_5m / 300.0),
-                    "load_15m": float(count_15m / 900.0),
-                    "load_1h": float(count_1h / 3600.0),
-                    "load_5h": float(count_5h / 18000.0),
-                    "judged_cases_5m": count_5m,
-                    "judged_cases_15m": count_15m,
-                    "judged_cases_1h": count_1h,
-                    "judged_cases_5h": count_5h,
-                    "last_judging": last_judging_label,
-                    "last_judging_at": last_judging_at,
-                }
-            )
-        return rows_out, online_count
+    def _load_run_summary(self, *args, **kwargs):
+        return self._queue.load_run_summary(*args, **kwargs)
 
+    def _summary_error_text(self, *args, **kwargs):
+        return self._queue._summary_error_text(*args, **kwargs)
 
-    def set_host_enabled(self, hostname: str, enabled: bool) -> dict[str, int]:
-        now_text = now_iso()
-        released_tasks = 0
-        with self._state_lock:
-            current_row = dict(self._hosts_state.get(hostname, {}))
-            self._hosts_state[hostname] = {
-                "hostname": hostname,
-                "enabled": bool(enabled),
-                "first_seen_at": str(current_row.get("first_seen_at") or now_text),
-                "last_seen_at": str(current_row.get("last_seen_at") or now_text),
-                "last_action": "set-enabled" if enabled else "set-disabled",
-                "last_task_id": str(current_row.get("last_task_id") or ""),
-                "last_run_id": str(current_row.get("last_run_id") or ""),
-                "lease_expires_at": str(current_row.get("lease_expires_at") or ""),
-                "update_count": int(current_row.get("update_count") or 0) + 1,
-            }
-            if not enabled:
-                for task in self._tasks_by_id.values():
-                    if task["lease_owner"] != hostname:
-                        continue
-                    task_status = task["status"]
-                    if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                        continue
-                    task["status"] = self.STATUS_QUEUED
-                    task["lease_owner"] = ""
-                    task["lease_expires_at"] = ""
-                    task["updated_at"] = now_text
-                    released_tasks += 1
-        released_jobs = 0
-        released_cases = 0
-        if not enabled:
-            released_jobs, released_cases = self._judgehost_state_store.release_host_leases(
-                hostname,
-                now_text=now_text,
-            )
-        return {
-            "released_tasks": released_tasks,
-            "released_jobs": released_jobs,
-            "released_cases": released_cases,
-        }
-
-    def status(self) -> dict[str, object]:
-        counts = self._task_status_counts()
-        host_rows, online_count = self._host_status_rows()
-        return {
-            "enabled": bool(self._enabled),
-            "auth_configured": bool(self._api_token),
-            "hosts_total": len(host_rows),
-            "hosts_online": int(online_count),
-            "hosts": host_rows,
-            "queue": {
-                "queued": int(counts.get(self.STATUS_QUEUED, 0)),
-                "leased": int(counts.get(self.STATUS_LEASED, 0)),
-                "completed": int(counts.get(self.STATUS_COMPLETED, 0)),
-                "failed": int(counts.get(self.STATUS_FAILED, 0)),
-            },
-        }
-
-    def cancel_tasks_for_runs(self, run_ids: list[str], *, reason: str) -> int:
-        reason = reason.strip()
-        if not reason:
-            raise RuntimeError("judgehost cancellation reason is required")
-        run_ids = [run_id for run_id in run_ids if run_id]
-        if not run_ids:
-            return 0
-        now_text = now_iso()
-        affected = 0
-        leased_run_ids = self._run_ids_with_leased_cases(run_ids)
-        with self._state_lock:
-            for run_id in run_ids:
-                task_id = self._task_id_by_run.get(run_id)
-                if task_id is None:
-                    continue
-                row = self._tasks_by_id.get(task_id)
-                if row is None:
-                    continue
-                if row["status"] not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                    continue
-                if run_id in leased_run_ids:
-                    continue
-                row["status"] = self.STATUS_FAILED
-                row["result"] = {"cancelled": True, "reason": reason, "error": reason}
-                row["error_text"] = reason
-                row["lease_owner"] = ""
-                row["lease_expires_at"] = ""
-                row["updated_at"] = now_text
-                row["completed_at"] = now_text
-                affected += 1
-        return affected
-
-
-    def startup_cancel_inflight_tasks(self, *, reason: str) -> list[dict[str, str]]:
-        reason = reason.strip()
-        if not reason:
-            raise RuntimeError("judgehost startup cancel reason is required")
-        now_text = now_iso()
-        entries: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        with self._state_lock:
-            for row in self._tasks_by_id.values():
-                status = row["status"]
-                if status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                    continue
-                run_id = row["run_id"]
-                verification_id = row["verification_id"]
-                entry_key = (verification_id, run_id)
-                if verification_id and run_id and entry_key not in seen:
-                    seen.add(entry_key)
-                    entries.append(
-                        {
-                            "run_id": run_id,
-                            "verification_id": verification_id,
-                        }
-                    )
-                row["status"] = self.STATUS_FAILED
-                row["result"] = {"cancelled": True, "reason": reason, "error": reason}
-                row["error_text"] = reason
-                row["lease_owner"] = ""
-                row["lease_expires_at"] = ""
-                row["updated_at"] = now_text
-                row["completed_at"] = now_text
-        return entries
-
-    def forget_problem_tasks(self, problem_slug: str) -> int:
-        if not problem_slug:
-            return 0
-        removed = 0
-        with self._state_lock:
-            remove_ids = [
-                task_id
-                for task_id, row in self._tasks_by_id.items()
-                if row["problem_slug"] == problem_slug
-            ]
-            for task_id in remove_ids:
-                row = self._tasks_by_id.pop(task_id, None)
-                if row is None:
-                    continue
-                run_id = row.get("run_id")
-                if run_id and self._task_id_by_run.get(run_id) == task_id:
-                    self._task_id_by_run.pop(run_id, None)
-                removed += 1
-        return removed
-
-
-    def cancel_domjudge_jobs_for_runs(self, run_ids: list[str], *, final_status: str = "failed") -> int:
-        return self._judgehost_state_store.cancel_jobs_for_runs(
-            run_ids=run_ids,
-            final_status=(final_status or "failed"),
-            now_text=now_iso(),
-        )
-
-
-    def cancel_all_domjudge_inflight(self) -> int:
-        return self._judgehost_state_store.cancel_all_inflight(now_text=now_iso())
-
-    def forget_domjudge_runs(self, run_ids: list[str]) -> int:
-        return self._judgehost_state_store.forget_runs(run_ids)
+    def _host_status_rows(self, *args, **kwargs):
+        return self._queue._host_status_rows(*args, **kwargs)

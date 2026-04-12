@@ -17,6 +17,7 @@ from .internal.enqueue import JudgehostEnqueueMixin
 from .internal.queue import JudgehostQueueMixin
 from .core import JudgehostCore
 from .state import JudgehostState
+from .task_queue import TaskQueue
 from .toolkit import DomjudgeToolkit
 
 
@@ -94,6 +95,7 @@ class Judgehost(
         )
         object.__setattr__(self, "_toolkit", DomjudgeToolkit(self._state))
         object.__setattr__(self, "_core", JudgehostCore(self._state))
+        object.__setattr__(self, "_queue", TaskQueue(self._state, self._core, self._toolkit))
         self.apply_runtime_values(constants)
 
     def __getattribute__(self, name: str):
