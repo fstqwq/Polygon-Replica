@@ -114,6 +114,50 @@ def _prefer_source_aware_failure_reason(current_reason: str, columns: list[dict[
         return source_reason
     return current_reason
 
+
+def _generate_detail_from_task_row(
+    row: VerificationTaskRow,
+    *,
+    tests_meta_row: dict[str, object] | None,
+) -> dict[str, object]:
+    status = str(row['status'] or '')
+    verdict = str(row['verdict'] or '')
+    if status == VerificationTaskStore.TASK_DONE:
+        status_text = verdict or 'AC'
+        tone = 'ok'
+    elif status == VerificationTaskStore.TASK_FAILED:
+        status_text = verdict or 'FL'
+        tone = 'fail'
+    elif status == VerificationTaskStore.TASK_LEASED:
+        status_text = 'running'
+        tone = 'running'
+    elif status in {VerificationTaskStore.TASK_QUEUED, VerificationTaskStore.TASK_PENDING}:
+        status_text = 'pending'
+        tone = 'neutral'
+    elif status == VerificationTaskStore.TASK_CANCELLED:
+        status_text = 'cancelled'
+        tone = 'neutral'
+    else:
+        status_text = status or '-'
+        tone = 'neutral'
+    runtime_ms = 0 if row['runtime_sec'] is None else max(0, int(round(float(row['runtime_sec']) * 1000.0)))
+    memory_kb = 0 if row['memory_kb'] is None else max(0, int(row['memory_kb']))
+    meta = dict(tests_meta_row or {})
+    source_path = str(row['source_path'] or '') or str(meta.get('source') or '')
+    command = str(meta.get('command') or '')
+    return {
+        'source_path': source_path,
+        'command': command,
+        'status': status,
+        'verdict': verdict,
+        'runtime_ms': runtime_ms,
+        'memory_kb': memory_kb,
+        'error_text': preserve_error_text(str(row['error_text'] or ''), max_chars=1600, max_lines=24),
+        'feedback_text': preserve_error_text(str(row['feedback_text'] or ''), max_chars=1600, max_lines=24),
+        'tone': tone,
+        'status_text': status_text,
+    }
+
 def build_run_detail_context(
     ctx: dict,
     execute_mode: str,
@@ -1058,6 +1102,20 @@ def build_run_detail_context(
             continue
     display_test_total = max(max(known_tests_by_index.keys(), default=0), tests_meta_total, column_tests_total)
     row_index_by_test = {name: idx for idx, name in enumerate(ordered_tests, start=1)}
+    tests_meta_by_test_name: dict[str, dict[str, object]] = {}
+    for item in cast(list[object], verification_details.get('tests_meta_rows') or []):
+        if not isinstance(item, dict):
+            continue
+        test_name = normalize_run_test_name_token(str(item.get('test_name') or ''))
+        if test_name and test_name not in tests_meta_by_test_name:
+            tests_meta_by_test_name[test_name] = dict(item)
+    generate_task_by_test_name: dict[str, VerificationTaskRow] = {}
+    for row in task_rows:
+        if str(row['task_kind'] or '') != _TASK_KIND_GENERATE_INPUT:
+            continue
+        test_name = normalize_run_test_name_token(str(row['test_name'] or ''))
+        if test_name:
+            generate_task_by_test_name[test_name] = row
     detail_rows: list[dict] = []
     if not include_row_details:
         row_entries: list[tuple[int, str, str, bool]] = []
@@ -1071,6 +1129,7 @@ def build_run_detail_context(
         for idx, actual_test_name, display_name, is_placeholder in row_entries:
             cells: list[dict] = []
             has_detail = False
+            has_generate_detail = bool(actual_test_name and generate_task_by_test_name.get(actual_test_name))
             for col in columns:
                 cell = col['tests_map'].get(actual_test_name) if actual_test_name else None
                 if cell is None:
@@ -1119,7 +1178,7 @@ def build_run_detail_context(
                     'is_placeholder': bool(is_placeholder),
                     'row_id': f'test-detail-{idx}',
                     'cells': cells,
-                    'has_detail': bool(has_detail and (not is_placeholder)),
+                    'has_detail': bool((has_detail or has_generate_detail) and (not is_placeholder)),
                 }
             )
     else:
@@ -1170,6 +1229,15 @@ def build_run_detail_context(
             row_index = int(row_index_by_test.get(test_name) or 0)
             if row_index <= 0:
                 continue
+            generate_task_row = generate_task_by_test_name.get(test_name)
+            generate_detail = (
+                _generate_detail_from_task_row(
+                    generate_task_row,
+                    tests_meta_row=tests_meta_by_test_name.get(test_name),
+                )
+                if generate_task_row is not None
+                else None
+            )
             input_rel = f'tests/{test_name}'
             answer_name = _run_test_answer_name(test_name)
             answer_rel = f'ans/{answer_name}' if answer_name else ''
@@ -1279,8 +1347,9 @@ def build_run_detail_context(
                     'row_id': f'test-detail-{row_index}',
                     'input_preview': input_preview,
                     'answer_preview': answer_preview,
+                    'generate_detail': generate_detail,
                     'cells': cells,
-                    'has_detail': any((cell.get('detail') is not None for cell in cells)),
+                    'has_detail': bool(generate_detail is not None or any((cell.get('detail') is not None for cell in cells))),
                 }
             )
     rejudge_context = _run_rejudge_context_for_entries(columns, workspace)

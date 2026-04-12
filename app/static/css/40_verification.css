@@ -826,6 +826,40 @@ section.verification-header-section {
   min-width: 0;
 }
 
+.generation-detail-card {
+  margin-bottom: var(--space-3);
+}
+
+.generation-detail-body {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.generation-detail-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.generation-detail-block {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.generation-detail-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.generation-detail-block > pre {
+  margin: 0;
+}
+
+.generation-detail-error {
+  color: var(--danger);
+}
+
 .preview-card {
   border: 1px solid var(--line);
   background: var(--surface);

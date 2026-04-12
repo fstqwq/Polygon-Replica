@@ -32,6 +32,43 @@
     {% endif %}
   </div>
 </div>
+{% if row.generate_detail %}
+{% set generate = row.generate_detail %}
+{% set generate_status_class = 'ok' if generate.tone == 'ok' else 'danger' if generate.tone == 'fail' else 'info' if generate.tone == 'running' else 'muted' %}
+<div class="preview-card generation-detail-card">
+  <div class="preview-head">
+    <strong>Generation</strong>
+  </div>
+  <div class="generation-detail-body">
+    <div class="generation-detail-row">
+      <span class="generation-detail-label">Source:</span>
+      <span>{{ generate.source_path }}</span>
+    </div>
+    {% if generate.command %}
+    <div class="generation-detail-row">
+      <span class="generation-detail-label">Command:</span>
+      <code>{{ generate.command }}</code>
+    </div>
+    {% endif %}
+    <div class="generation-detail-row">
+      <span class="generation-detail-label">Status:</span>
+      <span class="{{ generate_status_class }}">{{ generate.status_text }}{% if generate.runtime_ms or generate.memory_kb %} ({{ generate.runtime_ms }}ms, {{ generate.memory_kb }}KB){% endif %}</span>
+    </div>
+    {% if generate.feedback_text %}
+    <div class="generation-detail-block">
+      <span class="generation-detail-label">Validator:</span>
+      <pre class="compile-diagnostics-log">{{ generate.feedback_text }}</pre>
+    </div>
+    {% endif %}
+    {% if generate.error_text %}
+    <div class="generation-detail-block">
+      <span class="generation-detail-label">Error:</span>
+      <pre class="compile-diagnostics-log generation-detail-error">{{ generate.error_text }}</pre>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 <div class="sol-list">
   {% for cell in row.cells %}
   {% set col = detail_columns[loop.index0] %}

@@ -3717,6 +3717,7 @@ class TestUIRun(UIBaseSuite):
         self.assertRegex(detail_html, r"(?s)<strong>Input 001\.in</strong>.*?<pre[^>]*>\s*1 2 3\s*</pre>")
         self.assertRegex(detail_html, r"(?s)<strong>Answer</strong>.*?<pre[^>]*>\s*6\s*</pre>")
         self.assertRegex(detail_html, r"(?s)<strong>Output</strong>.*?<pre[^>]*>\s*6\s*</pre>")
+        self.assertNotIn("<strong>Generation</strong>", detail_html)
         self.assertIn(
             f"/problems/alice/sample/alice/artifacts/{verification_id}/tests/001.in",
             detail_html,
@@ -3745,6 +3746,207 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(answer_download.status_code, 200)
         self.assertEqual(answer_download.body, b"6\n")
+
+    def test_run_test_detail_fragment_shows_generation_validation_details(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "generators").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (workspace / "generators" / "random_tree.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        verification_id = f"ver-generate-detail-{uuid.uuid4().hex[:8]}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="ok",
+            detail={
+                "status": "ok",
+                "tests_meta_rows": [
+                    {
+                        "index": 1,
+                        "test_name": "001.in",
+                        "source": "generators/random_tree.cpp",
+                        "command": "random_tree 10 20",
+                    }
+                ],
+            },
+        )
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="input",
+            file_name="001.in",
+            payload=b"1 2 3\n",
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"6\n",
+        )
+        output_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="output",
+            file_name="001.out",
+            payload=b"6\n",
+            extra_tags={"run_id": "tmp.cpp"},
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": input_ref, "answer_ref": answer_ref},
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-generate-detail-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/random_tree.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "AC",
+                    "runtime_sec": 0.007,
+                    "cpu_sec": 0.006,
+                    "wall_sec": 0.007,
+                    "memory_kb": 2048,
+                    "compile_log": "",
+                    "diagnostics_json": "[]",
+                    "error_text": "",
+                    "feedback_text": "tree is valid",
+                    "output_ref": "",
+                },
+                {
+                    "id": f"vt-runtime-generate-detail-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/tmp.cpp",
+                    "logical_run_id": "tmp.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "runtime_sec": 0.003,
+                    "cpu_sec": 0.002,
+                    "wall_sec": 0.003,
+                    "memory_kb": 1024,
+                    "compile_log": "",
+                    "diagnostics_json": "[]",
+                    "error_text": "",
+                    "feedback_text": "",
+                    "output_ref": output_ref,
+                },
+            ],
+            edges=[],
+        )
+
+        detail = run_details_test_fragment(
+            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("<strong>Generation</strong>", detail_html)
+        self.assertIn("generators/random_tree.cpp", detail_html)
+        self.assertIn("random_tree 10 20", detail_html)
+        self.assertIn("AC (7ms, 2048KB)", detail_html)
+        self.assertIn("Validator:", detail_html)
+        self.assertIn("tree is valid", detail_html)
+
+    def test_run_details_page_keeps_test_popup_available_for_generate_stage_failure(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "generators").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "tmp.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (workspace / "generators" / "random_tree.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        verification_id = f"ver-generate-fail-{uuid.uuid4().hex[:8]}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="failed",
+            detail={
+                "status": "failed",
+                "tests_meta_rows": [
+                    {
+                        "index": 1,
+                        "test_name": "001.in",
+                        "source": "generators/random_tree.cpp",
+                        "command": "random_tree 10 20",
+                    }
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-generate-fail-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "generate-input",
+                    "source_path": "generators/random_tree.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_FAILED,
+                    "verdict": "FL",
+                    "runtime_sec": 0.004,
+                    "cpu_sec": 0.004,
+                    "wall_sec": 0.004,
+                    "memory_kb": 1536,
+                    "compile_log": "",
+                    "diagnostics_json": "[]",
+                    "error_text": "validator rejected generated test",
+                    "feedback_text": "",
+                    "output_ref": "",
+                },
+                {
+                    "id": f"vt-runtime-pending-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/tmp.cpp",
+                    "logical_run_id": "tmp.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_PENDING,
+                },
+            ],
+            edges=[],
+        )
+
+        page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
+        self.assertEqual(page.status_code, 200)
+        page_html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('data-test-name="001.in"', page_html)
+
+        detail = run_details_test_fragment(
+            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("<strong>Generation</strong>", detail_html)
+        self.assertIn("generators/random_tree.cpp", detail_html)
+        self.assertIn("FL (4ms, 1536KB)", detail_html)
+        self.assertIn("Error:", detail_html)
+        self.assertIn("validator rejected generated test", detail_html)
 
     def test_async_run_failure_shows_fl_reason_in_test_details(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
