@@ -210,6 +210,11 @@ pre {
   font-weight: 700;
 }
 
+.info {
+  color: var(--tag-info-fg);
+  font-weight: 700;
+}
+
 .revision-alert {
   color: var(--danger);
   font-weight: 700;

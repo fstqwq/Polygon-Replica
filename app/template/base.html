@@ -145,7 +145,7 @@
               <span hidden>Verification</span><strong hidden>{{ verification_status }}</strong>
               <strong class="submenu-status-heading">Verification</strong>
               <span
-                class="submenu-status-state {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else '' }}"
+                class="submenu-status-state {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else 'info' if verification_mode == 'running' else '' }}"
                 {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}
               >{{ verification_status }}</span>
             </a>

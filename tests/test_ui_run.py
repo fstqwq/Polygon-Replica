@@ -1716,6 +1716,82 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("Generate Input / accepted.cpp / 001.in", running_labels)
         self.assertIn("Main Correct / accepted.cpp / 002.in", running_labels)
 
+    def test_run_details_running_issue_uses_info_note_and_status_moves_into_task_status(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-verif-running-issue-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-running-issue-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-verif-running-issue"),
+            kind=Kind.ALL,
+            status="running",
+            created_at="2026-04-12T19:22:22Z",
+            finished_at="",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "running",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "verification_source": "verification.start",
+                        "tests": [],
+                        "tests_total": 1,
+                    },
+                }
+            ],
+            summary_extra={
+                "status": "running",
+                "verification_id": verification_id,
+                "task_counts": {
+                    "total": 1,
+                    "pending": 0,
+                    "queued": 0,
+                    "running": 1,
+                    "done": 0,
+                    "failed": 0,
+                    "cancelled": 0,
+                },
+                "running_tasks": [
+                    {
+                        "task_id": "vt-running-issue-1",
+                        "label": "Solution Run / wa.cpp / 001.in",
+                    }
+                ],
+            },
+        )
+        db_execute(
+            "UPDATE verifications SET fail_reason=? WHERE id=?",
+            ["luangao.cpp: cancelled on service startup", verification_id],
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('class="verification-page-title-tools"', html)
+        self.assertIn("Last&nbsp;updated:", html)
+        self.assertRegex(
+            html,
+            r'Task Status</strong>\s*<span class="verification-task-status-state info">running</span>',
+        )
+        self.assertIn('class="verification-task-note">luangao.cpp: cancelled on service startup</p>', html)
+        self.assertIn("Running Now", html)
+        self.assertIn("Waiting for running-task updates.", html)
+        self.assertNotIn('class="page-title-status', html)
+        self.assertNotIn('<span class="danger">running</span>', html)
+
     def test_run_details_task_graph_shows_main_correct_columns(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
@@ -2954,7 +3030,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertNotIn("Run Solutions", html)
-        self.assertIn('<span class="danger">failed</span>', html)
+        self.assertIn('verification-task-status-state danger">failed</span>', html)
         self.assertNotIn("failed (1/1 completed)", html)
         self.assertNotIn("1/1 solutions finished", html)
 
@@ -3056,7 +3132,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertNotIn("Run Solutions", html)
-        self.assertIn('<span class="danger">failed</span>', html)
+        self.assertIn('verification-task-status-state danger">failed</span>', html)
         self.assertNotIn("failed (1/1 completed)", html)
         self.assertNotIn("Cancelled solutions", html)
         self.assertNotIn("Failed solutions", html)

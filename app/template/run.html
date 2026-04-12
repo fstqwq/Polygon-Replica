@@ -31,6 +31,8 @@
     <td>
       {% if r.status == "ok" %}
       <span class="ok">{{ r.status }}</span>
+      {% elif r.status == "running" %}
+      <span class="info">{{ r.status }}</span>
       {% elif r.is_failed %}
       <span class="danger">{{ r.status }}</span>
       {% else %}
