@@ -17,6 +17,7 @@ from .internal.enqueue import JudgehostEnqueueMixin
 from .internal.queue import JudgehostQueueMixin
 from .core import JudgehostCore
 from .dispatch import DispatchHandler
+from .enqueue import TaskEnqueue
 from .result import ResultProcessor
 from .state import JudgehostState
 from .task_queue import TaskQueue
@@ -103,6 +104,11 @@ class Judgehost(
             self,
             "_dispatch",
             DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit),
+        )
+        object.__setattr__(
+            self,
+            "_enqueue",
+            TaskEnqueue(self._state, self._core, self._dispatch, self._result, self._toolkit, self),
         )
         self.apply_runtime_values(constants)
 
