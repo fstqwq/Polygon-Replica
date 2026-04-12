@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import time
 import uuid
 from pathlib import Path
@@ -307,23 +306,7 @@ def _rollback_imported_contest(contest_slug: str, imported_problem_slugs: list[s
     for problem_slug in reversed(imported_problem_slugs):
         _rollback_imported_problem(problem_slug)
     if safe_slug:
-        contest_row = config.contest_service.contest_context(safe_slug)
-        if contest_row is not None:
-            contest_id = int(contest_row["id"])
-
-            def tx(conn) -> None:
-                conn.execute("DELETE FROM contest_artifacts WHERE contest_id=?", [contest_id])
-                conn.execute("DELETE FROM contest_jobs WHERE contest_id=?", [contest_id])
-                conn.execute("DELETE FROM contest_attachments WHERE contest_id=?", [contest_id])
-                conn.execute("DELETE FROM contest_properties WHERE contest_id=?", [contest_id])
-                conn.execute("DELETE FROM contest_problems WHERE contest_id=?", [contest_id])
-                conn.execute("DELETE FROM contest_members WHERE contest_id=?", [contest_id])
-                conn.execute("DELETE FROM contests WHERE id=?", [contest_id])
-
-            config.db.write_transaction(tx)
-        source_root = (config.contest_service.contest_sources_base() / safe_slug).resolve()
-        if source_root.exists():
-            shutil.rmtree(source_root, ignore_errors=True)
+        config.contest_service.delete_contest(safe_slug)
 
 
 def _build_problem_slug_review_rows(

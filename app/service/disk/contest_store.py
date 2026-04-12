@@ -440,9 +440,22 @@ class ContestDiskStore:
             for pos, row in enumerate(rows, start=1):
                 conn.execute(
                     "UPDATE contest_problems SET idx=? WHERE contest_id=? AND problem_id=?",
-                    [idx_label(pos), int(contest_id), int(row["problem_id"])],
+                    [idx_label(pos), int(contest_id), int(row[0])],
                 )
             return len(rows)
+        self.db.write_transaction(tx)
+
+    def delete_contest(self, contest_id: int) -> None:
+        def tx(conn: sqlite3.Connection) -> None:
+            safe_contest_id = int(contest_id)
+            conn.execute("DELETE FROM contest_artifacts WHERE contest_id=?", [safe_contest_id])
+            conn.execute("DELETE FROM contest_jobs WHERE contest_id=?", [safe_contest_id])
+            conn.execute("DELETE FROM contest_attachments WHERE contest_id=?", [safe_contest_id])
+            conn.execute("DELETE FROM contest_properties WHERE contest_id=?", [safe_contest_id])
+            conn.execute("DELETE FROM contest_problems WHERE contest_id=?", [safe_contest_id])
+            conn.execute("DELETE FROM contest_members WHERE contest_id=?", [safe_contest_id])
+            conn.execute("DELETE FROM contests WHERE id=?", [safe_contest_id])
+
         self.db.write_transaction(tx)
 
     def selected_problem_rows(self, contest_id: int, problem_ids: list[int]) -> list[ContestSelectedProblemRecord]:

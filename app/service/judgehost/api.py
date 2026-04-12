@@ -4,7 +4,6 @@ from pathlib import Path
 
 from app.db import DB
 from app.runtime_value import RuntimeValues
-from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.repository.workspace import WorkspaceService
@@ -45,126 +44,18 @@ class Judgehost:
             fs_manager=fs_manager,
             constants=constants,
             judge_fs_index_service=judge_fs_index_service,
-            verification_store=VerificationStore(db),
         )
         self._toolkit = DomjudgeToolkit(self._state)
         self._core = JudgehostCore(self._state)
         self._queue = TaskQueue(self._state, self._core, self._toolkit)
         self._result = ResultProcessor(self._state, self._core, self._queue, self._toolkit)
         self._dispatch = DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit)
-        self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._result, self._toolkit, self)
+        self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._result, self._toolkit)
         self.apply_runtime_values(constants)
 
     @property
     def state(self) -> JudgehostState:
         return self._state
-
-    # Compatibility state proxies for tests during transition.
-    @property
-    def _enabled(self) -> bool:
-        return self._state.enabled
-
-    @_enabled.setter
-    def _enabled(self, value: bool) -> None:
-        self._state.enabled = value
-
-    @property
-    def _api_token(self) -> str:
-        return self._state.api_token
-
-    @_api_token.setter
-    def _api_token(self, value: str) -> None:
-        self._state.api_token = value
-
-    @property
-    def _api_username(self) -> str:
-        return self._state.api_username
-
-    @_api_username.setter
-    def _api_username(self, value: str) -> None:
-        self._state.api_username = value
-
-    @property
-    def _constants(self) -> RuntimeValues:
-        return self._state.constants
-
-    @_constants.setter
-    def _constants(self, value: RuntimeValues) -> None:
-        self._state.constants = value
-
-    @property
-    def _include_build_payload(self) -> bool:
-        return self._state.include_build_payload
-
-    @_include_build_payload.setter
-    def _include_build_payload(self, value: bool) -> None:
-        self._state.include_build_payload = value
-
-    @property
-    def _max_tests_per_task(self) -> int:
-        return self._state.max_tests_per_task
-
-    @_max_tests_per_task.setter
-    def _max_tests_per_task(self, value: int) -> None:
-        self._state.max_tests_per_task = value
-
-    @property
-    def _state_lock(self):
-        return self._state.state_lock
-
-    @property
-    def _tasks_by_id(self) -> dict[str, dict[str, object]]:
-        return self._state.tasks_by_id
-
-    @property
-    def _judgehost_state_store(self):
-        return self._state.judgehost_state_store
-
-    # Compatibility helper forwards for tests during transition.
-    def _task_by_id(self, task_id: str) -> dict[str, object]:
-        return self._core.task_by_id(task_id)
-
-    def _load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
-        return self._queue.load_run_summary(run_id, verification_id)
-
-    def _domjudge_work_root(self, task_id: str) -> Path:
-        return self._toolkit.work_root(task_id)
-
-    def _domjudge_b64_decode(self, text: str | bytes | bytearray | memoryview | None) -> bytes:
-        return self._toolkit.b64_decode(text)
-
-    def _domjudge_compile_script(self, *args, **kwargs) -> bytes:
-        return self._toolkit.compile_script(*args, **kwargs)
-
-    def _domjudge_compare_script(self, *args, **kwargs) -> bytes:
-        return self._toolkit.compare_script(*args, **kwargs)
-
-    def _domjudge_run_script(self, *args, **kwargs) -> bytes:
-        return self._toolkit.run_script(*args, **kwargs)
-
-    def _domjudge_cpp_executable_build_script(self, *args, **kwargs) -> bytes:
-        return self._toolkit.cpp_executable_build_script(*args, **kwargs)
-
-    def _domjudge_payload_blob_bytes(self, value: str | bytes | bytearray | memoryview | None) -> bytes:
-        return self._toolkit.payload_blob_bytes(value)
-
-    def _domjudge_precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
-        return self._enqueue._domjudge_precomputed_fields_from_payload(payload)
-
-    def _domjudge_prepare_job(self, hostname: str, task_row: dict[str, object]) -> int:
-        return self._dispatch._domjudge_prepare_job(hostname, task_row)
-
-    def _domjudge_release_prepared_job_for_queue(self, *args, **kwargs):
-        return self._dispatch._domjudge_release_prepared_job_for_queue(*args, **kwargs)
-
-    def _domjudge_lease_cases(self, *args, **kwargs):
-        return self._dispatch._domjudge_lease_cases(*args, **kwargs)
-
-    def _domjudge_try_prequeue_cache_finalize(self, *args, **kwargs):
-        return self._dispatch._domjudge_try_prequeue_cache_finalize(*args, **kwargs)
-
-    def _domjudge_strip_protocol_trace(self, text: str) -> str:
-        return self._toolkit.strip_protocol_trace(text)
 
     # Public API delegation.
     def apply_runtime_values(self, constants: RuntimeValues) -> None:

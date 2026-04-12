@@ -294,6 +294,22 @@ class ContestService:
     def contest_slug_exists(self, contest_slug: str) -> bool:
         return self._store.contest_slug_exists(contest_slug)
 
+    def delete_contest(self, contest_slug: str) -> None:
+        safe_slug = str(contest_slug).strip()
+        if not safe_slug:
+            return
+        row = self._store.contest_context_row(safe_slug)
+        if row is None:
+            return
+        contest_id = int(row["id"])
+        self._store.delete_contest(contest_id)
+        source_root = (self.contest_sources_base() / safe_slug).resolve()
+        if source_root.exists():
+            shutil.rmtree(source_root, ignore_errors=True)
+        artifact_root = (self.artifacts_base() / safe_slug).resolve()
+        if artifact_root.exists():
+            shutil.rmtree(artifact_root, ignore_errors=True)
+
     def create_contest_with_owner(self, *, slug: str, title: str, owner_user_id: int) -> int:
         return self._store.create_contest_with_owner(
             slug=slug,

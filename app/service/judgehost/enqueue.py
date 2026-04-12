@@ -48,14 +48,12 @@ class TaskEnqueue:
         dispatch: DispatchHandler,
         result: ResultProcessor,
         toolkit: DomjudgeToolkit,
-        owner: object,
     ) -> None:
         self._s = state
         self._core = core
         self._dispatch = dispatch
         self._result = result
         self._toolkit = toolkit
-        self._owner = owner
 
     def __getattribute__(self, name: str):
         state_attr_map = object.__getattribute__(self, "_STATE_ATTR_MAP")
@@ -82,11 +80,6 @@ class TaskEnqueue:
             "_domjudge_try_prequeue_cache_finalize",
         }
         if name in dispatch_aliases:
-            if name == "_domjudge_try_prequeue_cache_finalize":
-                owner = object.__getattribute__(self, "_owner")
-                owner_override = getattr(owner, "__dict__", {}).get(name)
-                if owner_override is not None:
-                    return owner_override
             return object.__getattribute__(object.__getattribute__(self, "_dispatch"), name)
         result_aliases = {"_domjudge_finalize_if_ready"}
         if name in result_aliases:

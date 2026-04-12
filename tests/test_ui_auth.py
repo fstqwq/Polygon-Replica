@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .db_helpers import db_execute, db_fetch_one
 
@@ -891,12 +891,12 @@ class TestUIAuth(UIBaseSuite):
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
         service = config.judgehost_task_service
-        old_enabled = bool(service._enabled)
-        old_token = str(service._api_token or "")
-        self.addCleanup(setattr, service, "_enabled", old_enabled)
-        self.addCleanup(setattr, service, "_api_token", old_token)
-        service._enabled = True
-        service._api_token = "admin-snapshot-token"
+        old_enabled = bool(service._state.enabled)
+        old_token = str(service._state.api_token or "")
+        self.addCleanup(setattr, service._state, "enabled", old_enabled)
+        self.addCleanup(setattr, service._state, "api_token", old_token)
+        service._state.enabled = True
+        service._state.api_token = "admin-snapshot-token"
         service.fetch_work("judgehost-admin-snapshot")
         resp = settings_judgehost_snapshot(user="alice")
         self.assertEqual(resp.status_code, 200)
@@ -937,4 +937,3 @@ class TestUIAuth(UIBaseSuite):
         )
         self.assertEqual(valid.status_code, 303)
         self.assertIn("/problems/alice/minimal-spanning-tree/alice/statement", valid.headers.get("location", ""))
-

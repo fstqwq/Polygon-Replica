@@ -102,7 +102,8 @@ _diag_logger = logging.getLogger("uvicorn.error")
 
 def _judgehost_form_part_limit_bytes() -> int:
     service = getattr(config, "judgehost_task_service", None)
-    constants = getattr(service, "_constants", None)
+    state = getattr(service, "state", None)
+    constants = getattr(state, "constants", None)
 
     def _read_kb(name: str, fallback: int = 0) -> int:
         if constants is None:
@@ -413,4 +414,3 @@ async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id:
         payload=payload,
     )
     return JSONResponse({})
-

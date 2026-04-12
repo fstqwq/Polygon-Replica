@@ -320,7 +320,7 @@ class TestPolygonPackageImport(SmokeBase):
         spec = json.loads((ws / "tests" / "spec.json").read_text(encoding="utf-8"))
         tests = spec.get("tests") if isinstance(spec, dict) else []
         self.assertEqual(len(tests), 6)
-        self.assertTrue(all((str(row.get("kind") or "") == "manual") for row in tests))
+        self.assertTrue(all((str(row.get("kind") or "") == "gen") for row in tests))
         normalized_tests = load_tests_spec(ws / "tests" / "spec.json")
         self.assertEqual(str(normalized_tests[0].get("sample_input") or ""), "1 2\n\n1\n\n\n0\n\n1\n")
         self.assertEqual(str(normalized_tests[0].get("sample_output") or ""), "\n? 0\n\n! 00000000\n? 0\n\n? 100\n\n! 00001111\n")
@@ -329,7 +329,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertEqual(str(normalized_tests[1].get("sample_output") or ""), "\n\n100\n\n0\n")
         self.assertTrue(bool(normalized_tests[1].get("sample_output_validate")))
         tests_summary = result.get("tests") if isinstance(result.get("tests"), dict) else {}
-        self.assertEqual(int(tests_summary.get("generated_fallback_to_manual") or 0), 6)
+        self.assertEqual(int(tests_summary.get("generated_fallback_to_manual") or 0), 0)
         self.assertEqual(int(tests_summary.get("answers") or 0), 6)
         self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8").strip(), "37")
         self.assertEqual((ws / "tests" / "answers" / "002.ans").read_text(encoding="utf-8").strip(), "58")
@@ -346,7 +346,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue(str(build_cfg.get("accepted_solution_source") or "").startswith("solutions/"))
         self.assertEqual(str(build_cfg.get("validator_source") or ""), "validators/validator.cpp")
         self.assertFalse((ws / "checkers" / "checker.cpp").exists())
-        self.assertEqual(list(build_cfg.get("generator_sources") or []), [])
+        self.assertEqual(list(build_cfg.get("generator_sources") or []), ["generators/gen.py"])
         self.assertIsNone(build_cfg.get("max_passes"))
         components_summary = result.get("components") if isinstance(result.get("components"), dict) else {}
         self.assertIsNone(components_summary.get("checker_source"))

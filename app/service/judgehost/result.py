@@ -370,10 +370,6 @@ class ResultProcessor:
         _ = domjudge_text(runner)
         return {}
 
-    @staticmethod
-    def _domjudge_verdict_from_runresult(raw: str) -> str:
-        return domjudge_verdict_from_runresult(raw)
-
     def _domjudge_task_lease_owner(self, task_id: str) -> str:
         return domjudge_task_lease_owner(self._task_by_id(task_id), default="judgehost")
 
@@ -486,7 +482,7 @@ class ResultProcessor:
             test_name = domjudge_text(row["test_name"], default=f"{int(row['ordinal']):03}.in")
             runresult = domjudge_text(row["runresult"])
             runresult_token = domjudge_lower_text(runresult)
-            verdict = self._domjudge_verdict_from_runresult(runresult)
+            verdict = domjudge_verdict_from_runresult(runresult)
             if compile_success == 0:
                 verdict = "CE"
             cpu_sec = domjudge_parse_float(row["cpu_sec"], domjudge_parse_float(row["runtime_sec"], 0.0))
@@ -810,7 +806,7 @@ class ResultProcessor:
                 runresult = "output-limit"
         if runresult in {"compare-error", "run-error"} and compare_exit_code == 3:
             runresult = "checker-fail"
-        verdict = self._domjudge_verdict_from_runresult(runresult)
+        verdict = domjudge_verdict_from_runresult(runresult)
         compile_config_hash = domjudge_json_hash(compile_cfg)
         run_config_hash = domjudge_json_hash(run_cfg)
         compare_config_hash = domjudge_json_hash(compare_cfg)

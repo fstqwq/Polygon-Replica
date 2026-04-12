@@ -20,7 +20,7 @@ class JudgehostState:
     fs_manager: FsManager
     constants: RuntimeValues
     judge_fs_index_service: JudgeFsIndexService | None
-    verification_store: VerificationStore
+    verification_store: VerificationStore = field(init=False)
 
     lock: threading.Lock = field(default_factory=threading.Lock)
     state_lock: threading.RLock = field(default_factory=threading.RLock)
@@ -50,3 +50,6 @@ class JudgehostState:
     testcase_registry_by_hash: dict[str, dict[str, object]] = field(default_factory=dict)
 
     judgehost_state_store: JudgehostStateStore = field(default_factory=JudgehostStateStore)
+
+    def __post_init__(self) -> None:
+        self.verification_store = VerificationStore(self.db)

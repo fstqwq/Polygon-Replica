@@ -6,6 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 STYLE_PATH = ROOT / "app" / "static" / "style.css"
+TOKENS_PATH = ROOT / "app" / "static" / "css" / "00_tokens.css"
+WORKSPACE_CSS_PATH = ROOT / "app" / "static" / "css" / "20_workspace.css"
 
 
 def _python_files_under(root: Path) -> list[Path]:
@@ -82,7 +84,8 @@ class TestPublicContracts(unittest.TestCase):
                 self.assertRegex(source, pattern, msg=str(path))
 
     def test_danger_link_styles_use_shared_tokens(self) -> None:
-        source = STYLE_PATH.read_text(encoding="utf-8-sig")
+        token_source = TOKENS_PATH.read_text(encoding="utf-8-sig")
+        workspace_source = WORKSPACE_CSS_PATH.read_text(encoding="utf-8-sig")
         for token in [
             "--danger-link-color:",
             "--danger-link-hover-color:",
@@ -90,12 +93,12 @@ class TestPublicContracts(unittest.TestCase):
             "--danger-link-focus:",
             "--danger-link-weight:",
         ]:
-            self.assertIn(token, source)
-        self.assertIn("color: var(--danger-link-color);", source)
-        self.assertIn("font-weight: var(--danger-link-weight);", source)
-        self.assertIn("color: var(--danger-link-hover-color);", source)
-        self.assertIn("background: var(--danger-link-hover-bg);", source)
-        self.assertIn("outline: 2px solid var(--danger-link-focus);", source)
+            self.assertIn(token, token_source)
+        self.assertIn("color: var(--danger-link-color);", workspace_source)
+        self.assertIn("font-weight: var(--danger-link-weight);", workspace_source)
+        self.assertIn("color: var(--danger-link-hover-color);", workspace_source)
+        self.assertIn("background: var(--danger-link-hover-bg);", workspace_source)
+        self.assertIn("outline: 2px solid var(--danger-link-focus);", workspace_source)
 
     def test_old_danger_link_variants_removed_from_templates_and_styles(self) -> None:
         offenders: list[str] = []
@@ -129,7 +132,7 @@ class TestPublicContracts(unittest.TestCase):
     def test_dynamic_export_patterns_removed_from_target_modules(self) -> None:
         targets = [
             ROOT / "app" / "main_util.py",
-            ROOT / "app" / "impl" / "auth" / "api.py",
+            ROOT / "app" / "impl" / "auth" / "middleware.py",
             ROOT / "app" / "impl" / "workspace" / "context_ui.py",
         ]
         for path in targets:
@@ -253,13 +256,12 @@ class TestPublicContracts(unittest.TestCase):
             ROOT / "app" / "impl" / "runtime" / "config.py",
             ROOT / "app" / "service" / "auth" / "service.py",
             ROOT / "app" / "service" / "contest" / "service.py",
-            ROOT / "app" / "service" / "export" / "api.py",
-            ROOT / "app" / "service" / "judgehost" / "api.py",
-            ROOT / "app" / "service" / "judgehost" / "internal" / "domjudge_dispatch.py",
+            ROOT / "app" / "service" / "export" / "service.py",
+            ROOT / "app" / "service" / "judgehost" / "dispatch.py",
+            ROOT / "app" / "service" / "judgehost" / "state.py",
             ROOT / "app" / "service" / "repository" / "workspace.py",
             ROOT / "app" / "service" / "runtime" / "state_service.py",
             ROOT / "app" / "service" / "statement" / "preview.py",
-            ROOT / "app" / "service" / "verification" / "pipeline.py",
             ROOT / "app" / "service" / "verification" / "service.py",
             ROOT / "app" / "service" / "verification" / "store.py",
             ROOT / "app" / "service" / "platform" / "system_config.py",

@@ -280,7 +280,7 @@ class TestBackendMinimal(SmokeBase):
         )
         metadata = config.verification_service.verification_detail(verification_id)
         self.assertNotIn("artifact_refs", metadata)
-        row = config.db.fetch_one(
+        row = db_fetch_one(
             "SELECT input_ref,answer_ref FROM verification_artifact_refs WHERE verification_id=? AND test_name=?",
             [verification_id, "001.in"],
         )
