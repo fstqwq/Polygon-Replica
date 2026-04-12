@@ -145,9 +145,14 @@ def _generate_detail_from_task_row(
     meta = dict(tests_meta_row or {})
     source_path = str(row['source_path'] or '') or str(meta.get('source') or '')
     command = str(meta.get('command') or '')
+    is_manual_validation = bool(str(meta.get('kind') or '') == 'manual' or source_path == 'manual_validate.cpp')
+    display_source = 'manual validation' if is_manual_validation else source_path
+    display_command = '' if is_manual_validation else command
     return {
         'source_path': source_path,
         'command': command,
+        'display_source': display_source,
+        'display_command': display_command,
         'status': status,
         'verdict': verdict,
         'runtime_ms': runtime_ms,

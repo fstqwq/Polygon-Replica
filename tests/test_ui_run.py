@@ -3858,11 +3858,11 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("<strong>Generation</strong>", detail_html)
-        self.assertIn("generators/random_tree.cpp", detail_html)
+        self.assertRegex(detail_html, r"(?s)<th>Source</th>\s*<td>generators/random_tree\.cpp</td>")
+        self.assertRegex(detail_html, r"(?s)<th>Command</th>\s*<td><code>random_tree 10 20</code></td>")
+        self.assertRegex(detail_html, r"(?s)<th>Status</th>\s*<td><span class=\"ok\">AC \(7ms, 2048KB\)</span></td>")
         self.assertIn("random_tree 10 20", detail_html)
-        self.assertIn("AC (7ms, 2048KB)", detail_html)
-        self.assertIn("Validator:", detail_html)
-        self.assertIn("tree is valid", detail_html)
+        self.assertRegex(detail_html, r"(?s)<th>Validator</th>\s*<td><pre[^>]*>tree is valid</pre></td>")
 
     def test_run_details_page_keeps_test_popup_available_for_generate_stage_failure(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -3943,10 +3943,74 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("<strong>Generation</strong>", detail_html)
-        self.assertIn("generators/random_tree.cpp", detail_html)
-        self.assertIn("FL (4ms, 1536KB)", detail_html)
+        self.assertRegex(detail_html, r"(?s)<th>Source</th>\s*<td>generators/random_tree\.cpp</td>")
+        self.assertRegex(detail_html, r"(?s)<th>Status</th>\s*<td><span class=\"danger\">FL \(4ms, 1536KB\)</span></td>")
         self.assertIn("Error:", detail_html)
         self.assertIn("validator rejected generated test", detail_html)
+
+    def test_run_test_detail_fragment_hides_manual_validate_placeholder_source(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+
+        verification_id = f"ver-manual-generate-{uuid.uuid4().hex[:8]}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="ok",
+            detail={
+                "status": "ok",
+                "tests_meta_rows": [
+                    {
+                        "index": 1,
+                        "test_name": "001.in",
+                        "kind": "manual",
+                        "source": "manual_validate.cpp",
+                    }
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-manual-generate-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "generate-input",
+                    "source_path": "manual_validate.cpp",
+                    "logical_run_id": "",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "AC",
+                    "runtime_sec": 0.001,
+                    "cpu_sec": 0.001,
+                    "wall_sec": 0.001,
+                    "memory_kb": 256,
+                    "compile_log": "",
+                    "diagnostics_json": "[]",
+                    "error_text": "",
+                    "feedback_text": "manual input valid",
+                    "output_ref": "",
+                }
+            ],
+            edges=[],
+        )
+
+        detail = run_details_test_fragment(
+            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("<strong>Generation</strong>", detail_html)
+        self.assertRegex(detail_html, r"(?s)<th>Source</th>\s*<td>manual validation</td>")
+        self.assertNotIn("manual_validate.cpp", detail_html)
+        self.assertNotIn("<th>Command</th>", detail_html)
 
     def test_async_run_failure_shows_fl_reason_in_test_details(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
