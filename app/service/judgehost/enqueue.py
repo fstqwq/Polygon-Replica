@@ -27,19 +27,6 @@ class TaskEnqueue:
     STATUS_QUEUED = "queued"
     STATUS_ENQUEUING = "enqueuing"
     _TASK_KIND_COMPILE_ONLY = "compile-only"
-    _STATE_ATTR_MAP = {
-        "db": "db",
-        "_workspace_service": "workspace_service",
-        "_constants": "constants",
-        "_max_binary_payload_bytes": "max_binary_payload_bytes",
-        "_max_source_bytes": "max_source_bytes",
-        "_max_tests_per_task": "max_tests_per_task",
-        "_include_build_payload": "include_build_payload",
-        "_judgehost_state_store": "judgehost_state_store",
-        "_state_lock": "state_lock",
-        "_task_id_by_run": "task_id_by_run",
-        "_tasks_by_id": "tasks_by_id",
-    }
 
     def __init__(
         self,
@@ -55,58 +42,6 @@ class TaskEnqueue:
         self._result = result
         self._toolkit = toolkit
 
-    def __getattribute__(self, name: str):
-        state_attr_map = object.__getattribute__(self, "_STATE_ATTR_MAP")
-        if name in state_attr_map:
-            state = object.__getattribute__(self, "_s")
-            return getattr(state, state_attr_map[name])
-        return object.__getattribute__(self, name)
-
-    def __setattr__(self, name: str, value) -> None:
-        state_attr_map = type(self)._STATE_ATTR_MAP
-        if name in state_attr_map and "_s" in self.__dict__:
-            setattr(self._s, state_attr_map[name], value)
-            return
-        object.__setattr__(self, name, value)
-
-    def __getattr__(self, name: str):
-        core_aliases = {"_normalize_hostname", "_normalize_run_id", "_safe_read_bytes", "_safe_workspace_source"}
-        if name in core_aliases:
-            return getattr(object.__getattribute__(self, "_core"), name[1:])
-        dispatch_aliases = {
-            "_domjudge_apply_cache_shortcuts_for_job",
-            "_domjudge_case_rows",
-            "_domjudge_prepare_payload",
-            "_domjudge_try_prequeue_cache_finalize",
-        }
-        if name in dispatch_aliases:
-            return object.__getattribute__(object.__getattribute__(self, "_dispatch"), name)
-        result_aliases = {"_domjudge_finalize_if_ready"}
-        if name in result_aliases:
-            return object.__getattribute__(object.__getattribute__(self, "_result"), name)
-        toolkit_alias_map = {
-            "_domjudge_b64_decode": "b64_decode",
-            "_domjudge_compare_script": "compare_script",
-            "_domjudge_compile_script": "compile_script",
-            "_domjudge_cpp_executable_build_script": "cpp_executable_build_script",
-            "_domjudge_ensure_bytes_file": "ensure_bytes_file",
-            "_domjudge_execution_modes": "execution_modes",
-            "_domjudge_force_cpp_define": "force_cpp_define",
-            "_domjudge_group_key": "group_key",
-            "_domjudge_is_grouped_verification_task": "is_grouped_verification_task",
-            "_domjudge_language_extensions": "language_extensions",
-            "_domjudge_load_script_asset": "load_script_asset",
-            "_domjudge_run_script": "run_script",
-            "_domjudge_set_hash_from_blobs": "set_hash_from_blobs",
-            "_domjudge_task_kind": "task_kind",
-            "_domjudge_toolchain_cmd_digest": "toolchain_cmd_digest",
-            "_domjudge_work_root": "work_root",
-            "resolve_artifact_blob": "resolve_artifact_blob",
-        }
-        alias = toolkit_alias_map.get(name)
-        if alias is not None:
-            return getattr(object.__getattribute__(self, "_toolkit"), alias)
-        raise AttributeError(name)
     _JAVA_CLASS_DECL_RE = re.compile(
         r"\b(?P<public>public\s+)?(?:(?:abstract|final|static|strictfp|sealed|non-sealed)\s+)*class\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\b"
     )
@@ -134,7 +69,7 @@ class TaskEnqueue:
         safe_ref_key = TaskEnqueue._normalize_text(ref_key)
         if (not safe_verification_id) or (not safe_test_name) or safe_ref_key not in {"input_ref", "answer_ref"}:
             return ""
-        row = self.db.fetch_one(
+        row = self._s.db.fetch_one(
             f"""
             SELECT {safe_ref_key}
             FROM verification_artifact_refs
@@ -385,8 +320,8 @@ class TaskEnqueue:
         payload: dict[str, object],
         reactivated: bool,
     ) -> None:
-        with self._state_lock:
-            row = self._tasks_by_id.get(task_id)
+        with self._s.state_lock:
+            row = self._s.tasks_by_id.get(task_id)
             if row is None:
                 return
             existing_payload = cast(dict[str, object], row.get("payload") or {})
@@ -434,26 +369,26 @@ class TaskEnqueue:
         task_id: str,
         payload: dict[str, object],
     ) -> bool:
-        compile_only = self._domjudge_task_kind(payload) == self._TASK_KIND_COMPILE_ONLY
-        prepared = self._domjudge_prepare_payload(payload, compile_only=compile_only)
+        compile_only = self._toolkit.task_kind(payload) == self._TASK_KIND_COMPILE_ONLY
+        prepared = self._dispatch._domjudge_prepare_payload(payload, compile_only=compile_only)
         run_id = domjudge_text(payload.get("run_id"))
         if not run_id:
             raise RuntimeError("run id is required for judgehost enqueue")
-        case_rows = self._domjudge_case_rows(
+        case_rows = self._dispatch._domjudge_case_rows(
             task_id=task_id,
             run_id=run_id,
             tests_rows=prepared["tests_rows"],
             main_correct=prepared["main_correct"],
         )
         requested_test_names = [str(case_row["test_name"] or "") for case_row in case_rows if str(case_row["test_name"] or "")]
-        if self._judgehost_state_store.job_for_task(task_id) is None:
+        if self._s.judgehost_state_store.job_for_task(task_id) is None:
             self._merge_existing_task_payload(
                 task_id=task_id,
                 payload=payload,
                 reactivated=False,
             )
             return True
-        append_result = self._judgehost_state_store.append_cases_to_task(
+        append_result = self._s.judgehost_state_store.append_cases_to_task(
             task_id=task_id,
             run_id=run_id,
             case_rows=case_rows,
@@ -465,7 +400,7 @@ class TaskEnqueue:
             missing_names = [
                 test_name
                 for test_name in requested_test_names
-                if self._judgehost_state_store.case_for_task(task_id, test_name) is None
+                if self._s.judgehost_state_store.case_for_task(task_id, test_name) is None
             ]
             if missing_names:
                 raise RuntimeError(f"shared judgehost job append failed for {', '.join(missing_names)}")
@@ -484,9 +419,9 @@ class TaskEnqueue:
         task_id: str,
         payload: dict[str, object],
     ) -> None:
-        compile_only = self._domjudge_task_kind(payload) == self._TASK_KIND_COMPILE_ONLY
-        prepared = self._domjudge_prepare_payload(payload, compile_only=compile_only)
-        work_root = self._domjudge_work_root(task_id)
+        compile_only = self._toolkit.task_kind(payload) == self._TASK_KIND_COMPILE_ONLY
+        prepared = self._dispatch._domjudge_prepare_payload(payload, compile_only=compile_only)
+        work_root = self._toolkit.work_root(task_id)
         source_dir = (work_root / "source").resolve()
         scripts_compile_dir = (work_root / "scripts" / "compile").resolve()
         scripts_run_dir = (work_root / "scripts" / "run").resolve()
@@ -496,18 +431,18 @@ class TaskEnqueue:
         source_name = prepared["source_name"]
         source_bytes = prepared["source_bytes"]
         source_path = (source_dir / source_name).resolve()
-        self._domjudge_ensure_bytes_file(source_path, source_bytes, executable=False)
+        self._toolkit.ensure_bytes_file(source_path, source_bytes, executable=False)
         for name, blob in prepared["extra_source_items"]:
             target = (source_dir / name).resolve()
             if target == source_path:
                 continue
-            self._domjudge_ensure_bytes_file(target, blob, executable=False)
+            self._toolkit.ensure_bytes_file(target, blob, executable=False)
         for name, content, is_exec in prepared["compile_files"]:
-            self._domjudge_ensure_bytes_file(scripts_compile_dir / name, content, executable=is_exec)
+            self._toolkit.ensure_bytes_file(scripts_compile_dir / name, content, executable=is_exec)
         for name, content, is_exec in prepared["run_files"]:
-            self._domjudge_ensure_bytes_file(scripts_run_dir / name, content, executable=is_exec)
+            self._toolkit.ensure_bytes_file(scripts_run_dir / name, content, executable=is_exec)
         for name, content, is_exec in prepared["compare_files"]:
-            self._domjudge_ensure_bytes_file(scripts_compare_dir / name, content, executable=is_exec)
+            self._toolkit.ensure_bytes_file(scripts_compare_dir / name, content, executable=is_exec)
 
     @staticmethod
     def _verification_id(run_id: str, verification_id: str) -> str:
@@ -525,7 +460,7 @@ class TaskEnqueue:
         mode: str,
         selected_tests: list[str],
     ) -> dict[str, object]:
-        if not self._include_build_payload:
+        if not self._s.include_build_payload:
             return {}
         safe_verification_id = TaskEnqueue._normalize_text(artifact_verification_id)
         if not safe_verification_id:
@@ -541,7 +476,7 @@ class TaskEnqueue:
                     continue
                 wanted_tests.append(token)
         else:
-            selected_test_rows = self.db.fetch_all(
+            selected_test_rows = self._s.db.fetch_all(
                 """
                 SELECT test_name
                 FROM verification_selected_tests
@@ -557,7 +492,7 @@ class TaskEnqueue:
                 if token in wanted_tests:
                     continue
                 wanted_tests.append(token)
-                if len(wanted_tests) >= self._max_tests_per_task:
+                if len(wanted_tests) >= self._s.max_tests_per_task:
                     break
 
         tests_payload: list[dict[str, object]] = []
@@ -567,7 +502,7 @@ class TaskEnqueue:
             )
             if not input_ref:
                 continue
-            test_bytes = self.resolve_artifact_blob(input_ref)
+            test_bytes = self._toolkit.resolve_artifact_blob(input_ref)
             if test_bytes is None:
                 continue
             ans_name = f"{Path(test_name).stem}.ans"
@@ -576,7 +511,7 @@ class TaskEnqueue:
             )
             ans_bytes = b""
             if answer_ref:
-                resolved_answer = self.resolve_artifact_blob(answer_ref)
+                resolved_answer = self._toolkit.resolve_artifact_blob(answer_ref)
                 if resolved_answer is not None:
                     ans_bytes = resolved_answer
             tests_payload.append(
@@ -592,7 +527,7 @@ class TaskEnqueue:
 
         run_config_text = ""
         run_cfg_obj: dict[str, object] = {}
-        verification_row = self.db.fetch_one(
+        verification_row = self._s.db.fetch_one(
             "SELECT run_config_json FROM verifications WHERE id=?",
             [safe_verification_id],
         )
@@ -694,9 +629,9 @@ class TaskEnqueue:
 
         sources_payload: dict[str, str] = {}
         for name, source_path in source_files.items():
-            blob = self._safe_read_bytes(
+            blob = self._core.safe_read_bytes(
                 source_path,
-                max_bytes=self._max_binary_payload_bytes,
+                max_bytes=self._s.max_binary_payload_bytes,
                 label=f"{name} payload",
             )
             sources_payload[name] = base64.b64encode(blob).decode("ascii")
@@ -733,7 +668,7 @@ class TaskEnqueue:
         force_recompile: bool = False,
         compile_only: bool = False,
     ) -> dict[str, object]:
-        ctx = self._workspace_service.workspace_context(problem, username, include_recent=False)
+        ctx = self._s.workspace_service.workspace_context(problem, username, include_recent=False)
         workspace = Path(ctx["workspace"]["path"])
 
         source_bytes: bytes
@@ -744,10 +679,10 @@ class TaskEnqueue:
             source_name = TaskEnqueue._normalize_text_with_default(upload_filename, default="submission.cpp")
             source_label = source_name
         else:
-            source_path = self._safe_workspace_source(workspace, TaskEnqueue._normalize_text(submission_path))
-            source_bytes = self._safe_read_bytes(
+            source_path = self._core.safe_workspace_source(workspace, TaskEnqueue._normalize_text(submission_path))
+            source_bytes = self._core.safe_read_bytes(
                 source_path,
-                max_bytes=self._max_source_bytes,
+                max_bytes=self._s.max_source_bytes,
                 label="submission payload",
             )
             source_name = source_path.name
@@ -764,7 +699,7 @@ class TaskEnqueue:
             mode=mode,
             selected_tests=selected_tests,
         )
-        safe_task_kind = self._domjudge_task_kind(
+        safe_task_kind = self._toolkit.task_kind(
             {
                 "task_kind": task_kind,
                 "verification_source": verification_source,
@@ -798,7 +733,7 @@ class TaskEnqueue:
 
     def _domjudge_precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
         source_name = domjudge_path_name(payload.get("source_name"), default="submission.cpp")
-        source_bytes = self._domjudge_b64_decode(payload.get("source_b64"))
+        source_bytes = self._toolkit.b64_decode(payload.get("source_b64"))
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
         entry_point = domjudge_text(payload.get("entry_point"))
@@ -810,7 +745,7 @@ class TaskEnqueue:
             safe_name = domjudge_path_name(raw_name)
             if (not safe_name) or safe_name == source_name:
                 continue
-            blob = self._domjudge_b64_decode(raw_blob)
+            blob = self._toolkit.b64_decode(raw_blob)
             if not blob:
                 continue
             extra_source_items.append((safe_name, blob))
@@ -832,7 +767,7 @@ class TaskEnqueue:
                 if token:
                     checker_args.append(token)
         mode = domjudge_lower_text(payload.get("mode"), default="pass-fail")
-        compile_only, generate_mode, main_correct = self._domjudge_execution_modes(payload)
+        compile_only, generate_mode, main_correct = self._toolkit.execution_modes(payload)
         manual_validate_only = domjudge_bool(payload.get("manual_validate_only"), default=False)
         configured_pass_limit = max(
             1,
@@ -842,12 +777,12 @@ class TaskEnqueue:
             ),
         )
         pass_limit = configured_pass_limit
-        compile_timeout = max(1, int(getattr(self._constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
-        compile_mem_mb = max(64, int(getattr(self._constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
-        compile_output_kb = max(64, int(getattr(self._constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536))
-        run_output_kb = max(64, int(getattr(self._constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536))
-        run_process_limit = max(1, int(getattr(self._constants, "RUN_EXEC_PROCESS_LIMIT", 64) or 64))
-        default_cfg = getattr(self._constants, "GENERAL_CONFIG_DEFAULTS", {}) or {}
+        compile_timeout = max(1, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
+        compile_mem_mb = max(64, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
+        compile_output_kb = max(64, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536))
+        run_output_kb = max(64, int(getattr(self._s.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536))
+        run_process_limit = max(1, int(getattr(self._s.constants, "RUN_EXEC_PROCESS_LIMIT", 64) or 64))
+        default_cfg = getattr(self._s.constants, "GENERAL_CONFIG_DEFAULTS", {}) or {}
         run_tl_ms = domjudge_parse_int(
             run_cfg_obj.get("time_limit_ms"),
             domjudge_parse_int(
@@ -871,23 +806,23 @@ class TaskEnqueue:
         binaries_obj = cast(dict[str, object] | None, binaries_b64)
         if binaries_obj is None:
             binaries_obj = {}
-        checker_bytes = self._domjudge_b64_decode(binaries_obj.get("checker"))
-        validator_bytes = self._domjudge_b64_decode(binaries_obj.get("validator"))
-        interactor_bytes = self._domjudge_b64_decode(binaries_obj.get("interactor"))
+        checker_bytes = self._toolkit.b64_decode(binaries_obj.get("checker"))
+        validator_bytes = self._toolkit.b64_decode(binaries_obj.get("validator"))
+        interactor_bytes = self._toolkit.b64_decode(binaries_obj.get("interactor"))
         sources_b64 = verification_payload.get("sources_b64")
         sources_obj = cast(dict[str, object] | None, sources_b64)
         if sources_obj is None:
             sources_obj = {}
-        checker_source_bytes = self._domjudge_b64_decode(sources_obj.get("checker.cpp"))
-        validator_source_bytes = self._domjudge_b64_decode(sources_obj.get("validator.cpp"))
-        interactor_source_bytes = self._domjudge_b64_decode(sources_obj.get("interactor.cpp"))
-        testlib_header_bytes = self._domjudge_b64_decode(sources_obj.get("testlib.h"))
+        checker_source_bytes = self._toolkit.b64_decode(sources_obj.get("checker.cpp"))
+        validator_source_bytes = self._toolkit.b64_decode(sources_obj.get("validator.cpp"))
+        interactor_source_bytes = self._toolkit.b64_decode(sources_obj.get("interactor.cpp"))
+        testlib_header_bytes = self._toolkit.b64_decode(sources_obj.get("testlib.h"))
         if checker_source_bytes:
-            checker_source_bytes = self._domjudge_force_cpp_define(checker_source_bytes)
+            checker_source_bytes = self._toolkit.force_cpp_define(checker_source_bytes)
         if validator_source_bytes:
-            validator_source_bytes = self._domjudge_force_cpp_define(validator_source_bytes)
+            validator_source_bytes = self._toolkit.force_cpp_define(validator_source_bytes)
         if interactor_source_bytes:
-            interactor_source_bytes = self._domjudge_force_cpp_define(interactor_source_bytes)
+            interactor_source_bytes = self._toolkit.force_cpp_define(interactor_source_bytes)
         if checker_source_bytes:
             checker_bytes = b""
         if validator_source_bytes:
@@ -906,7 +841,7 @@ class TaskEnqueue:
         compile_files: list[tuple[str, bytes, bool]] = [
             (
                 "run",
-                self._domjudge_compile_script(
+                self._toolkit.compile_script(
                     source_name,
                     manual_validate_only=manual_validate_only,
                     compile_only=compile_only,
@@ -914,9 +849,9 @@ class TaskEnqueue:
                 True,
             )
         ]
-        if self._domjudge_language_extensions(source_name)[0] == "java":
+        if self._toolkit.language_extensions(source_name)[0] == "java":
             compile_files.append(
-                ("DetectMain.java", self._domjudge_load_script_asset("DetectMain.java").encode("utf-8"), False)
+                ("DetectMain.java", self._toolkit.load_script_asset("DetectMain.java").encode("utf-8"), False)
             )
         run_files: list[tuple[str, bytes, bool]] = []
         compare_files: list[tuple[str, bytes, bool]] = []
@@ -928,19 +863,19 @@ class TaskEnqueue:
                 run_files.append(("run", interactor_bytes, True))
             elif interactor_source_bytes:
                 run_files.append(
-                    ("build", self._domjudge_cpp_executable_build_script("interactor.cpp", role="interactor"), True)
+                    ("build", self._toolkit.cpp_executable_build_script("interactor.cpp", role="interactor"), True)
                 )
                 run_files.append(("interactor.cpp", interactor_source_bytes, False))
                 if testlib_header_bytes:
                     run_files.append(("testlib.h", testlib_header_bytes, False))
             else:
                 raise RuntimeError("interactive mode requires interactor payload")
-            compare_files.append(("run", self._domjudge_compare_script(main_correct=main_correct), True))
+            compare_files.append(("run", self._toolkit.compare_script(main_correct=main_correct), True))
         else:
             run_files.append(
                 (
                     "run",
-                    self._domjudge_run_script(
+                    self._toolkit.run_script(
                         False,
                         main_correct=main_correct,
                         compile_only=compile_only,
@@ -951,9 +886,9 @@ class TaskEnqueue:
                 )
             )
             if compile_only:
-                compare_files.append(("run", self._domjudge_compare_script(main_correct=False), True))
+                compare_files.append(("run", self._toolkit.compare_script(main_correct=False), True))
             elif generate_mode:
-                compare_files.append(("run", self._domjudge_compare_script(generate_mode=True), True))
+                compare_files.append(("run", self._toolkit.compare_script(generate_mode=True), True))
                 if validator_source_bytes:
                     compare_files.append(("validator.cpp", validator_source_bytes, False))
                     if testlib_header_bytes:
@@ -961,7 +896,7 @@ class TaskEnqueue:
                 elif validator_bytes:
                     compare_files.append(("validator", validator_bytes, True))
             else:
-                compare_files.append(("run", self._domjudge_compare_script(main_correct=main_correct), True))
+                compare_files.append(("run", self._toolkit.compare_script(main_correct=main_correct), True))
                 if checker_source_bytes:
                     compare_files.append(("checker.cpp", checker_source_bytes, False))
                     if testlib_header_bytes:
@@ -973,11 +908,11 @@ class TaskEnqueue:
         if extra_source_items:
             hash_blobs: list[bytes] = [f"{source_name}\0".encode("utf-8") + source_bytes]
             hash_blobs.extend(f"{name}\0".encode("utf-8") + blob for name, blob in extra_source_items)
-            source_hash = self._domjudge_set_hash_from_blobs(hash_blobs)
+            source_hash = self._toolkit.set_hash_from_blobs(hash_blobs)
         compile_hash = domjudge_executable_hash(compile_files)
         run_hash = domjudge_executable_hash(run_files)
         compare_hash = domjudge_executable_hash(compare_files)
-        toolchain_cmd_digest = self._domjudge_toolchain_cmd_digest(
+        toolchain_cmd_digest = self._toolkit.toolchain_cmd_digest(
             source_name,
             manual_validate_only=manual_validate_only,
         )
@@ -988,7 +923,7 @@ class TaskEnqueue:
             "hash": compile_hash,
             "toolchain_cmd_digest": toolchain_cmd_digest,
             "filter_compiler_files": False,
-            "language_extensions": list(self._domjudge_language_extensions(source_name)[1]),
+            "language_extensions": list(self._toolkit.language_extensions(source_name)[1]),
             "script_timelimit": compile_timeout,
             "script_memory_limit": int(compile_mem_mb * 1024),
             "script_filesize_limit": int(compile_output_kb),
@@ -1002,7 +937,7 @@ class TaskEnqueue:
             "process_limit": run_process_limit,
             "entry_point": entry_point or None,
             "pass_limit": pass_limit,
-            "language_id": self._domjudge_language_extensions(source_name)[0],
+            "language_id": self._toolkit.language_extensions(source_name)[0],
         }
         if source_name.lower().endswith(".java") and (not entry_point):
             run_config["entry_point"] = self._detect_java_entry_point(source_name, source_bytes)
@@ -1053,7 +988,7 @@ class TaskEnqueue:
     ) -> dict[str, object]:
         selected = self._normalize_list(selected_tests, matcher=RUN_TEST_NAME_RE)
         verification_run_id_list = self._normalize_list(verification_run_ids, matcher=_RUN_ID_RE)
-        safe_run_id = self._normalize_run_id(run_id)
+        safe_run_id = self._core.normalize_run_id(run_id)
         payload = self._build_task_payload(
             problem=problem,
             username=username,
@@ -1073,7 +1008,7 @@ class TaskEnqueue:
             compile_only=bool(compile_only),
         )
         payload["domjudge_precomputed"] = self._domjudge_precomputed_fields_from_payload(payload)
-        payload["domjudge_group_key"] = self._domjudge_group_key(payload)
+        payload["domjudge_group_key"] = self._toolkit.group_key(payload)
         return payload
 
     def _initial_summary(
@@ -1092,7 +1027,7 @@ class TaskEnqueue:
         task_kind: str = "",
         compile_only: bool = False,
     ) -> dict[str, object]:
-        safe_task_kind = self._domjudge_task_kind(
+        safe_task_kind = self._toolkit.task_kind(
             {
                 "task_kind": task_kind,
                 "verification_source": verification_source,
@@ -1146,7 +1081,7 @@ class TaskEnqueue:
         persist_verification_run: bool = False,
         prepared_payload: dict[str, object] | None = None,
     ) -> str:
-        safe_run_id = self._normalize_run_id(run_id if run_id else verification_id)
+        safe_run_id = self._core.normalize_run_id(run_id if run_id else verification_id)
         safe_verification_id = TaskEnqueue._normalize_text(
             verification_id if verification_id else safe_run_id
         )
@@ -1175,8 +1110,8 @@ class TaskEnqueue:
         if prepared_payload is not None:
             payload.update(dict(prepared_payload))
         payload["domjudge_precomputed"] = self._domjudge_precomputed_fields_from_payload(payload)
-        payload["domjudge_group_key"] = self._domjudge_group_key(payload)
-        safe_task_kind = self._domjudge_task_kind(payload)
+        payload["domjudge_group_key"] = self._toolkit.group_key(payload)
+        safe_task_kind = self._toolkit.task_kind(payload)
         payload["run_id"] = safe_run_id
         payload["problem"] = problem
         payload["username"] = username
@@ -1202,17 +1137,17 @@ class TaskEnqueue:
         task_id = ""
         summary: dict[str, object] | None = None
         while True:
-            with self._state_lock:
+            with self._s.state_lock:
                 existing_task_id = (
                         TaskEnqueue._normalize_text(existing_task_id_obj)
-                        if (existing_task_id_obj := self._task_id_by_run.get(safe_run_id))
+                        if (existing_task_id_obj := self._s.task_id_by_run.get(safe_run_id))
                         is not None
                         else ""
                     )
                 if existing_task_id:
-                    existing_task = self._tasks_by_id.get(existing_task_id)
+                    existing_task = self._s.tasks_by_id.get(existing_task_id)
                     if existing_task is None:
-                        self._task_id_by_run.pop(safe_run_id, None)
+                        self._s.task_id_by_run.pop(safe_run_id, None)
                     else:
                         existing_status = (
                             TaskEnqueue._normalize_status(existing_status_obj)
@@ -1221,7 +1156,7 @@ class TaskEnqueue:
                         )
                         if existing_status != self.STATUS_ENQUEUING:
                             break
-                if not existing_task_id or existing_task_id not in self._tasks_by_id:
+                if not existing_task_id or existing_task_id not in self._s.tasks_by_id:
                     task_id = f"jt-{uuid.uuid4().hex[:12]}"
                     source_label_obj = payload.get("source_label")
                     if source_label_obj is None:
@@ -1251,7 +1186,7 @@ class TaskEnqueue:
                         compile_only=bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY),
                     )
                     now_text = now_iso()
-                    self._tasks_by_id[task_id] = {
+                    self._s.tasks_by_id[task_id] = {
                         "id": task_id,
                         "run_id": safe_run_id,
                         "problem_slug": str(problem),
@@ -1273,7 +1208,7 @@ class TaskEnqueue:
                         "attempt_count": 0,
                         "summary": dict(summary),
                     }
-                    self._task_id_by_run[safe_run_id] = task_id
+                    self._s.task_id_by_run[safe_run_id] = task_id
                     break
             # Another thread is creating the same run task; wait for terminal enqueue step.
             time.sleep(0.01)
@@ -1283,26 +1218,26 @@ class TaskEnqueue:
                 task_id=existing_task_id,
                 payload=payload,
             )
-            existing_job = self._judgehost_state_store.job_for_task(existing_task_id)
+            existing_job = self._s.judgehost_state_store.job_for_task(existing_task_id)
             if existing_job is not None:
-                self._domjudge_apply_cache_shortcuts_for_job(
+                self._dispatch._domjudge_apply_cache_shortcuts_for_job(
                     int(existing_job["job_id"]),
-                    hostname=self._normalize_hostname("prequeue-cache"),
+                    hostname=self._core.normalize_hostname("prequeue-cache"),
                 )
-                self._domjudge_finalize_if_ready(int(existing_job["job_id"]))
+                self._result._domjudge_finalize_if_ready(int(existing_job["job_id"]))
             return existing_task_id
 
         if summary is None or not task_id:
             raise RuntimeError("failed to allocate judgehost task")
 
-        if not self._domjudge_is_grouped_verification_task(payload):
-            self._domjudge_try_prequeue_cache_finalize(
+        if not self._toolkit.is_grouped_verification_task(payload):
+            self._dispatch._domjudge_try_prequeue_cache_finalize(
                 task_id=task_id,
                 run_id=safe_run_id,
                 payload=dict(payload),
             )
-        with self._state_lock:
-            row = self._tasks_by_id.get(task_id)
+        with self._s.state_lock:
+            row = self._s.tasks_by_id.get(task_id)
             if row is not None:
                 row_status_obj = row.get("status")
                 row_status = TaskEnqueue._normalize_status(row_status_obj) if row_status_obj is not None else ""
@@ -1345,4 +1280,3 @@ class TaskEnqueue:
             persist_verification_run=False,
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
         )
-

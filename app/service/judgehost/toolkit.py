@@ -40,79 +40,10 @@ logger = logging.getLogger(__name__)
 
 class DomjudgeToolkit:
     CASE_CACHE_KIND = JudgeFsIndexService.KIND_CASE
-    _STATE_ATTR_MAP = {
-        "_fs_manager": "fs_manager",
-        "_constants": "constants",
-        "_state_lock": "state_lock",
-        "_testcase_registry_lock": "testcase_registry_lock",
-        "_testcase_registry_by_hash": "testcase_registry_by_hash",
-        "_judge_fs_index_service": "judge_fs_index_service",
-        "_hosts_state": "hosts_state",
-    }
-    _METHOD_ALIAS_MAP = {
-        "contest_id": "_domjudge_contest_id",
-        "work_root": "_domjudge_work_root",
-        "b64_decode": "_domjudge_b64_decode",
-        "payload_blob_bytes": "_domjudge_payload_blob_bytes",
-        "manifest_from_files": "_domjudge_manifest_from_files",
-        "validate_cache_entry": "_domjudge_validate_cache_entry",
-        "case_cache_ref": "_domjudge_case_cache_ref",
-        "cache_get": "_domjudge_cache_get",
-        "cache_put": "_domjudge_cache_put",
-        "cache_delete": "_domjudge_cache_delete",
-        "cache_read_blob": "_domjudge_cache_read_blob",
-        "cache_blob_ref": "_domjudge_cache_blob_ref",
-        "build_cached_case": "_domjudge_build_cached_case",
-        "store_case_cache": "_domjudge_store_case_cache",
-        "set_hash_from_blobs": "_domjudge_set_hash_from_blobs",
-        "read_artifact_blob": "_domjudge_read_artifact_blob",
-        "strip_protocol_trace": "_domjudge_strip_protocol_trace",
-        "force_cpp_define": "_domjudge_force_cpp_define",
-        "ensure_bytes_file": "_domjudge_ensure_bytes_file",
-        "testcase_blob_ref": "_domjudge_testcase_blob_ref",
-        "register_cached_testcase": "_domjudge_register_cached_testcase",
-        "language_extensions": "_domjudge_language_extensions",
-        "shell_words": "_domjudge_shell_words",
-        "shell_tokens": "_domjudge_shell_tokens",
-        "toolchain_cmd_digest": "_domjudge_toolchain_cmd_digest",
-        "load_script_asset": "_domjudge_load_script_asset",
-        "render_script_template": "_domjudge_render_script_template",
-        "compile_script": "_domjudge_compile_script",
-        "cpp_executable_build_script": "_domjudge_cpp_executable_build_script",
-        "task_kind": "_domjudge_task_kind",
-        "group_key": "_domjudge_group_key",
-        "is_grouped_verification_task": "_domjudge_is_grouped_verification_task",
-        "execution_modes": "_domjudge_execution_modes",
-        "run_script": "_domjudge_run_script",
-        "compare_script": "_domjudge_compare_script",
-        "config": "domjudge_config",
-        "languages": "domjudge_languages",
-        "list_hosts": "domjudge_list_hosts",
-    }
 
     def __init__(self, state: JudgehostState) -> None:
         self._s = state
 
-    def __getattribute__(self, name: str):
-        state_attr_map = object.__getattribute__(self, "_STATE_ATTR_MAP")
-        if name in state_attr_map:
-            state = object.__getattribute__(self, "_s")
-            return getattr(state, state_attr_map[name])
-        return object.__getattribute__(self, name)
-
-    def __setattr__(self, name: str, value) -> None:
-        state_attr_map = type(self)._STATE_ATTR_MAP
-        if name in state_attr_map and "_s" in self.__dict__:
-            setattr(self._s, state_attr_map[name], value)
-            return
-        object.__setattr__(self, name, value)
-
-    def __getattr__(self, name: str):
-        alias_map = type(self)._METHOD_ALIAS_MAP
-        alias = alias_map.get(name)
-        if alias is None:
-            raise AttributeError(name)
-        return object.__getattribute__(self, alias)
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_GENERATE_INPUT = "generate-input"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
@@ -127,20 +58,20 @@ class DomjudgeToolkit:
 
 
     @staticmethod
-    def _domjudge_contest_id(raw: object) -> str:
+    def contest_id(raw: object) -> str:
         token = domjudge_text(raw)
         if not _DOMJUDGE_CONTEST_ID_RE.fullmatch(token):
             return "local"
         return token
 
-    def _domjudge_work_root(self, task_id: str) -> Path:
+    def work_root(self, task_id: str) -> Path:
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", domjudge_text(task_id)).strip("-")
         if not safe:
             safe = f"task-{uuid.uuid4().hex[:8]}"
-        return (self._fs_manager.judgehost_runs_root / safe).resolve()
+        return (self._s.fs_manager.judgehost_runs_root / safe).resolve()
 
     @staticmethod
-    def _domjudge_b64_decode(text: str | bytes | bytearray | memoryview | None) -> bytes:
+    def b64_decode(text: str | bytes | bytearray | memoryview | None) -> bytes:
         if text is None:
             return b""
         try:
@@ -160,15 +91,15 @@ class DomjudgeToolkit:
             raise RuntimeError("DOMjudge payload is not valid base64") from exc
 
     @staticmethod
-    def _domjudge_payload_blob_bytes(value: str | bytes | bytearray | memoryview | None) -> bytes:
+    def payload_blob_bytes(value: str | bytes | bytearray | memoryview | None) -> bytes:
         if value is None:
             return b""
         try:
             return bytes(value)
         except TypeError:
-            return DomjudgeToolkit._domjudge_b64_decode(value)
+            return DomjudgeToolkit.b64_decode(value)
 
-    def _domjudge_manifest_from_files(self, files: dict[str, bytes]) -> tuple[list[dict[str, object]], str]:
+    def manifest_from_files(self, files: dict[str, bytes]) -> tuple[list[dict[str, object]], str]:
         rows: list[dict[str, object]] = []
         for raw_name, raw_blob in sorted(files.items(), key=lambda item: domjudge_text(item[0])):
             path = domjudge_path_name(raw_name)
@@ -190,7 +121,7 @@ class DomjudgeToolkit:
             )
         return rows, domjudge_manifest_digest(rows)
 
-    def _domjudge_validate_cache_entry(
+    def validate_cache_entry(
         self,
         *,
         kind: str,
@@ -243,7 +174,7 @@ class DomjudgeToolkit:
                 return False
             blob_key = str(row["blob_key"])
             expected = (str(row["sha256"]), int(row["size"]))
-            blob = self._domjudge_cache_read_blob(
+            blob = self.cache_read_blob(
                 kind=kind,
                 key_hash=key_hash,
                 signature=signature,
@@ -263,7 +194,7 @@ class DomjudgeToolkit:
             seen_blob[blob_key] = (blob_sha, blob_size)
         return True
 
-    def _domjudge_case_cache_ref(
+    def case_cache_ref(
         self,
         *,
         source_hash: str,
@@ -288,8 +219,8 @@ class DomjudgeToolkit:
             testcase_hash=testcase_hash,
         )
 
-    def _domjudge_cache_get(self, kind: str, key_hash: str, signature: str) -> dict[str, object] | None:
-        service = self._judge_fs_index_service
+    def cache_get(self, kind: str, key_hash: str, signature: str) -> dict[str, object] | None:
+        service = self._s.judge_fs_index_service
         if service is None:
             return None
         entry = service.get(kind=kind, key_hash=key_hash, signature=signature)
@@ -304,17 +235,17 @@ class DomjudgeToolkit:
             "created_at": domjudge_text(entry.get("created_at")),
             "updated_at": domjudge_text(entry.get("updated_at")),
         }
-        if not self._domjudge_validate_cache_entry(
+        if not self.validate_cache_entry(
             kind=kind,
             key_hash=key_hash,
             signature=signature,
             entry=resolved,
         ):
-            self._domjudge_cache_delete(kind=kind, key_hash=key_hash, signature=signature)
+            self.cache_delete(kind=kind, key_hash=key_hash, signature=signature)
             return None
         return resolved
 
-    def _domjudge_cache_put(
+    def cache_put(
         self,
         kind: str,
         key_hash: str,
@@ -324,7 +255,7 @@ class DomjudgeToolkit:
         files: dict[str, bytes] | None = None,
         tags: dict[str, object] | None = None,
     ) -> str:
-        service = self._judge_fs_index_service
+        service = self._s.judge_fs_index_service
         if service is None:
             return ""
         service.put(
@@ -337,23 +268,23 @@ class DomjudgeToolkit:
         )
         return signature
 
-    def _domjudge_cache_delete(self, kind: str, key_hash: str, signature: str) -> None:
-        service = self._judge_fs_index_service
+    def cache_delete(self, kind: str, key_hash: str, signature: str) -> None:
+        service = self._s.judge_fs_index_service
         if service is None:
             return
         service.delete(kind=kind, key_hash=key_hash, signature=signature)
 
-    def _domjudge_cache_read_blob(self, kind: str, key_hash: str, signature: str, name: str) -> bytes | None:
-        service = self._judge_fs_index_service
+    def cache_read_blob(self, kind: str, key_hash: str, signature: str, name: str) -> bytes | None:
+        service = self._s.judge_fs_index_service
         if service is None:
             return None
         return service.read_blob(kind=kind, key_hash=key_hash, signature=signature, name=name)
 
     @staticmethod
-    def _domjudge_cache_blob_ref(*, kind: str, key_hash: str, signature: str, name: str) -> str:
+    def cache_blob_ref(*, kind: str, key_hash: str, signature: str, name: str) -> str:
         return domjudge_cache_blob_ref(kind=kind, key_hash=key_hash, signature=signature, name=name)
 
-    def _domjudge_build_cached_case(
+    def build_cached_case(
         self,
         *,
         cache_kind: str,
@@ -392,13 +323,13 @@ class DomjudgeToolkit:
             **rel_map,
         }
 
-    def _domjudge_set_hash_from_blobs(self, blobs: list[bytes]) -> str:
+    def set_hash_from_blobs(self, blobs: list[bytes]) -> str:
         return domjudge_set_hash_from_blobs(blobs)
 
-    def _domjudge_read_artifact_blob(self, work_root: Path, token: str) -> bytes | None:
+    def read_artifact_blob(self, work_root: Path, token: str) -> bytes | None:
         return domjudge_read_artifact_blob(
             parse_cache_blob_ref=domjudge_parse_cache_blob_ref,
-            cache_read_blob=lambda kind, key_hash, signature, name: self._domjudge_cache_read_blob(
+            cache_read_blob=lambda kind, key_hash, signature, name: self.cache_read_blob(
                 kind=kind,
                 key_hash=key_hash,
                 signature=signature,
@@ -411,18 +342,18 @@ class DomjudgeToolkit:
     def resolve_artifact_blob(self, token: str, *, work_root: str | Path | None = None) -> bytes | None:
         return resolve_artifact_blob(
             parse_cache_blob_ref=domjudge_parse_cache_blob_ref,
-            cache_read_blob=lambda kind, key_hash, signature, name: self._domjudge_cache_read_blob(
+            cache_read_blob=lambda kind, key_hash, signature, name: self.cache_read_blob(
                 kind=kind,
                 key_hash=key_hash,
                 signature=signature,
                 name=name,
             ),
-            read_artifact_blob=self._domjudge_read_artifact_blob,
+            read_artifact_blob=self.read_artifact_blob,
             token=token,
             work_root=work_root,
         )
 
-    def _domjudge_store_case_cache(
+    def store_case_cache(
         self,
         *,
         key_parts: dict[str, str],
@@ -436,8 +367,8 @@ class DomjudgeToolkit:
         files: dict[str, bytes],
         shortcut_eligible: bool,
     ) -> None:
-        manifest_rows, manifest_digest = self._domjudge_manifest_from_files(files)
-        key_hash = self._domjudge_cache_put(
+        manifest_rows, manifest_digest = self.manifest_from_files(files)
+        key_hash = self.cache_put(
             self.CASE_CACHE_KIND,
             key_parts["key_hash"],
             key_parts["signature"],
@@ -459,7 +390,7 @@ class DomjudgeToolkit:
             return
 
     @staticmethod
-    def _domjudge_strip_protocol_trace(raw: bytes) -> bytes:
+    def strip_protocol_trace(raw: bytes) -> bytes:
         payload = raw
         if not payload:
             return b""
@@ -482,7 +413,7 @@ class DomjudgeToolkit:
         return ("\n".join(kept) + "\n").encode("utf-8")
 
     @staticmethod
-    def _domjudge_force_cpp_define(source_bytes: bytes) -> bytes:
+    def force_cpp_define(source_bytes: bytes) -> bytes:
         payload = source_bytes
         if not payload:
             return b""
@@ -491,7 +422,7 @@ class DomjudgeToolkit:
         return b"#ifndef DOMJUDGE\n#define DOMJUDGE 1\n#endif\n" + payload
 
     @staticmethod
-    def _domjudge_ensure_bytes_file(path: Path, content: bytes, *, executable: bool = False) -> None:
+    def ensure_bytes_file(path: Path, content: bytes, *, executable: bool = False) -> None:
         target = Path(path).resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
@@ -502,8 +433,8 @@ class DomjudgeToolkit:
             except Exception as exc:
                 logger.debug("failed to set executable bit on %s: %s", target, exc)
 
-    def _domjudge_testcase_blob_ref(self, *, testcase_hash: str, signature: str, name: str) -> str:
-        return self._domjudge_cache_blob_ref(
+    def testcase_blob_ref(self, *, testcase_hash: str, signature: str, name: str) -> str:
+        return self.cache_blob_ref(
             kind=self.CASE_CACHE_KIND,
             key_hash=testcase_hash,
             signature=signature,
@@ -511,10 +442,10 @@ class DomjudgeToolkit:
         )
 
     def clear_testcase_registry(self) -> None:
-        with self._testcase_registry_lock:
-            self._testcase_registry_by_hash.clear()
+        with self._s.testcase_registry_lock:
+            self._s.testcase_registry_by_hash.clear()
 
-    def _domjudge_register_cached_testcase(
+    def register_cached_testcase(
         self,
         *,
         testcase_hash: str,
@@ -525,7 +456,7 @@ class DomjudgeToolkit:
         if not re.fullmatch(r"[0-9a-f]{64}", safe_hash):
             safe_hash = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
         testcase_signature = domjudge_set_hash_from_blobs([in_bytes, ans_bytes])
-        if not self._domjudge_cache_put(
+        if not self.cache_put(
             self.CASE_CACHE_KIND,
             safe_hash,
             testcase_signature,
@@ -546,18 +477,18 @@ class DomjudgeToolkit:
         ):
             raise RuntimeError("judge fs index testcase store is unavailable")
         now_text = now_iso()
-        input_ref = self._domjudge_testcase_blob_ref(
+        input_ref = self.testcase_blob_ref(
             testcase_hash=safe_hash,
             signature=testcase_signature,
             name="input.in",
         )
-        answer_ref = self._domjudge_testcase_blob_ref(
+        answer_ref = self.testcase_blob_ref(
             testcase_hash=safe_hash,
             signature=testcase_signature,
             name="answer.ans",
         )
-        with self._testcase_registry_lock:
-            self._testcase_registry_by_hash[safe_hash] = {
+        with self._s.testcase_registry_lock:
+            self._s.testcase_registry_by_hash[safe_hash] = {
                 "hash": safe_hash,
                 "input_ref": input_ref,
                 "answer_ref": answer_ref,
@@ -566,7 +497,7 @@ class DomjudgeToolkit:
         return (input_ref, answer_ref)
 
     @staticmethod
-    def _domjudge_language_extensions(source_name: str) -> tuple[str, list[str]]:
+    def language_extensions(source_name: str) -> tuple[str, list[str]]:
         name = domjudge_lower_text(source_name)
         if name.endswith(".java"):
             return ("java", ["java"])
@@ -577,7 +508,7 @@ class DomjudgeToolkit:
         return ("cpp", ["cpp", "cc", "cxx", "c++"])
 
     @staticmethod
-    def _domjudge_shell_words(raw: object) -> str:
+    def shell_words(raw: object) -> str:
         token = domjudge_text(raw)
         if not token:
             return ""
@@ -589,7 +520,7 @@ class DomjudgeToolkit:
         return " ".join(safe_parts)
 
     @staticmethod
-    def _domjudge_shell_tokens(raw: object) -> list[str]:
+    def shell_tokens(raw: object) -> list[str]:
         token = domjudge_text(raw)
         if not token:
             return []
@@ -603,31 +534,31 @@ class DomjudgeToolkit:
                 out.append(part)
         return out
 
-    def _domjudge_toolchain_cmd_digest(self, source_name: str, *, manual_validate_only: bool = False) -> str:
+    def toolchain_cmd_digest(self, source_name: str, *, manual_validate_only: bool = False) -> str:
         if manual_validate_only:
             return compile_command_digest("skip.compile", [])
-        language, _exts = self._domjudge_language_extensions(source_name)
+        language, _exts = self.language_extensions(source_name)
         if language == "java":
-            command = domjudge_text(getattr(self._constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
-            flags = self._domjudge_shell_tokens(getattr(self._constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", ""))
+            command = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
+            flags = self.shell_tokens(getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", ""))
             return compile_command_digest(command, flags)
         if language == "py":
             command = "pypy3"
-            flags = self._domjudge_shell_tokens(getattr(self._constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", ""))
+            flags = self.shell_tokens(getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", ""))
             return compile_command_digest(command, [*flags, "-m", "py_compile"])
         if language == "c":
             return compile_command_digest("gcc", ["-O2", "-std=gnu11", "-pipe", "-lm"])
-        command = domjudge_text(getattr(self._constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
-        flags = self._domjudge_shell_tokens(
+        command = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
+        flags = self.shell_tokens(
             getattr(
-                self._constants,
+                self._s.constants,
                 "TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS",
                 "-x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE",
             )
         )
         return compile_command_digest(command, flags)
 
-    def _domjudge_load_script_asset(self, name: str) -> str:
+    def load_script_asset(self, name: str) -> str:
         root = (Path(__file__).resolve().parent / "scripts").resolve()
         safe_name = domjudge_path_name(name)
         if safe_name != name:
@@ -640,7 +571,7 @@ class DomjudgeToolkit:
         return path.read_text(encoding="utf-8")
 
     @staticmethod
-    def _domjudge_render_script_template(template: str, values: dict[str, str]) -> str:
+    def render_script_template(template: str, values: dict[str, str]) -> str:
         rendered = template
         for key, value in values.items():
             rendered = rendered.replace(f"{{{{{key}}}}}", value)
@@ -651,7 +582,7 @@ class DomjudgeToolkit:
             )
         return rendered
 
-    def _domjudge_compile_script(
+    def compile_script(
         self,
         source_name: str,
         *,
@@ -659,22 +590,22 @@ class DomjudgeToolkit:
         compile_only: bool = False,
     ) -> bytes:
         if manual_validate_only:
-            return self._domjudge_load_script_asset("skip.compile").encode("utf-8")
-        language, _exts = self._domjudge_language_extensions(source_name)
-        compiler = domjudge_text(getattr(self._constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
-        java_compiler = domjudge_text(getattr(self._constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
-        cpp_compile_flags = self._domjudge_shell_words(
+            return self.load_script_asset("skip.compile").encode("utf-8")
+        language, _exts = self.language_extensions(source_name)
+        compiler = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
+        java_compiler = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_JAVA_COMPILER", "javac"), default="javac")
+        cpp_compile_flags = self.shell_words(
             getattr(
-                self._constants,
+                self._s.constants,
                 "TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS",
                 "-x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE",
             )
         )
-        java_compile_flags = self._domjudge_shell_words(
-            getattr(self._constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", "")
+        java_compile_flags = self.shell_words(
+            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_JAVA_COMPILE_FLAGS", "")
         )
-        python_compile_flags = self._domjudge_shell_words(
-            getattr(self._constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", "")
+        python_compile_flags = self.shell_words(
+            getattr(self._s.constants, "TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS", "")
         )
         cpp_compile_cmd = shlex.quote(compiler)
         if cpp_compile_flags:
@@ -693,16 +624,16 @@ class DomjudgeToolkit:
             values = {
                 "PYTHON_COMPILE_FLAG_SUFFIX": python_compile_flag_suffix,
             }
-        template = self._domjudge_load_script_asset(script_name)
-        rendered = self._domjudge_render_script_template(template, values)
+        template = self.load_script_asset(script_name)
+        rendered = self.render_script_template(template, values)
         return rendered.encode("utf-8")
 
-    def _domjudge_cpp_executable_build_script(self, source_name: str, *, role: str) -> bytes:
-        compiler = domjudge_text(getattr(self._constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
+    def cpp_executable_build_script(self, source_name: str, *, role: str) -> bytes:
+        compiler = domjudge_text(getattr(self._s.constants, "TOOLCHAIN_CPP_COMPILER", "g++"), default="g++")
         safe_source = shlex.quote(domjudge_path_name(source_name, default="interactor.cpp"))
         safe_role = domjudge_text(role, default="executable")
-        template = self._domjudge_load_script_asset("cpp.executable.build")
-        rendered = self._domjudge_render_script_template(
+        template = self.load_script_asset("cpp.executable.build")
+        rendered = self.render_script_template(
             template,
             {
                 "ROLE": safe_role,
@@ -712,7 +643,7 @@ class DomjudgeToolkit:
         )
         return rendered.encode("utf-8")
 
-    def _domjudge_task_kind(
+    def task_kind(
         self,
         payload: dict[str, object] | None = None,
         *,
@@ -746,9 +677,9 @@ class DomjudgeToolkit:
             return self._TASK_KIND_MAIN_CORRECT
         return self._TASK_KIND_SOLUTION_RUN
 
-    def _domjudge_group_key(self, payload: dict[str, object] | None = None) -> str:
+    def group_key(self, payload: dict[str, object] | None = None) -> str:
         payload_obj = {} if payload is None else payload
-        task_kind = self._domjudge_task_kind(payload_obj)
+        task_kind = self.task_kind(payload_obj)
         verification_source = domjudge_lower_text(payload_obj.get("verification_source"))
         if verification_source not in {
             self._TASK_KIND_GENERATE_INPUT,
@@ -804,10 +735,10 @@ class DomjudgeToolkit:
         )
         return f"jg-{digest[:32]}"
 
-    def _domjudge_is_grouped_verification_task(self, payload: dict[str, object] | None = None) -> bool:
-        return bool(self._domjudge_group_key(payload))
+    def is_grouped_verification_task(self, payload: dict[str, object] | None = None) -> bool:
+        return bool(self.group_key(payload))
 
-    def _domjudge_execution_modes(
+    def execution_modes(
         self,
         payload: dict[str, object] | None = None,
         *,
@@ -815,7 +746,7 @@ class DomjudgeToolkit:
         compile_only: object | None = None,
     ) -> tuple[bool, bool, bool]:
         payload_obj = {} if payload is None else payload
-        kind = self._domjudge_task_kind(
+        kind = self.task_kind(
             payload_obj,
             verification_source=verification_source,
             compile_only=compile_only,
@@ -826,7 +757,7 @@ class DomjudgeToolkit:
             kind == self._TASK_KIND_MAIN_CORRECT,
         )
 
-    def _domjudge_run_script(
+    def run_script(
         self,
         interactive: bool,
         *,
@@ -837,16 +768,16 @@ class DomjudgeToolkit:
     ) -> bytes:
         _ = main_correct
         if interactive:
-            return self._domjudge_load_script_asset("interactive.run").encode("utf-8")
+            return self.load_script_asset("interactive.run").encode("utf-8")
         if compile_only or manual_validate_only:
             script_name = "skip.run"
         elif generate_mode:
             script_name = "generate.run"
         else:
             script_name = "normal.run"
-        return self._domjudge_load_script_asset(script_name).encode("utf-8")
+        return self.load_script_asset(script_name).encode("utf-8")
 
-    def _domjudge_compare_script(
+    def compare_script(
         self,
         *,
         main_correct: bool = False,
@@ -858,17 +789,15 @@ class DomjudgeToolkit:
             script_name = "generate.compare"
         else:
             script_name = "normal.compare"
-        return self._domjudge_load_script_asset(script_name).encode("utf-8")
+        return self.load_script_asset(script_name).encode("utf-8")
 
-    def domjudge_config(self) -> dict[str, object]:
-        return domjudge_config_from_constants(self._constants)
+    def config(self) -> dict[str, object]:
+        return domjudge_config_from_constants(self._s.constants)
 
     @staticmethod
-    def domjudge_languages() -> list[dict[str, object]]:
+    def languages() -> list[dict[str, object]]:
         return domjudge_languages_payload()
 
-    def domjudge_list_hosts(self) -> list[dict[str, object]]:
-        with self._state_lock:
-            return domjudge_hosts_payload(self._hosts_state)
-
-
+    def list_hosts(self) -> list[dict[str, object]]:
+        with self._s.state_lock:
+            return domjudge_hosts_payload(self._s.hosts_state)
