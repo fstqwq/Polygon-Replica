@@ -15,7 +15,9 @@ from .internal.domjudge_result import JudgehostDomjudgeResultsMixin
 from .internal.domjudge_util import JudgehostDomjudgeUtilsMixin
 from .internal.enqueue import JudgehostEnqueueMixin
 from .internal.queue import JudgehostQueueMixin
+from .core import JudgehostCore
 from .state import JudgehostState
+from .toolkit import DomjudgeToolkit
 
 
 class Judgehost(
@@ -90,6 +92,8 @@ class Judgehost(
                 verification_store=VerificationStore(db),
             ),
         )
+        object.__setattr__(self, "_toolkit", DomjudgeToolkit(self._state))
+        object.__setattr__(self, "_core", JudgehostCore(self._state))
         self.apply_runtime_values(constants)
 
     def __getattribute__(self, name: str):
