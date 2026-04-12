@@ -148,11 +148,13 @@ def _generate_detail_from_task_row(
     is_manual_validation = bool(str(meta.get('kind') or '') == 'manual' or source_path == 'manual_validate.cpp')
     display_source = 'manual validation' if is_manual_validation else source_path
     display_command = '' if is_manual_validation else command
+    title_suffix = 'manual' if is_manual_validation else (display_command or 'gen')
     return {
         'source_path': source_path,
         'command': command,
         'display_source': display_source,
         'display_command': display_command,
+        'title_suffix': title_suffix,
         'status': status,
         'verdict': verdict,
         'runtime_ms': runtime_ms,
@@ -161,6 +163,7 @@ def _generate_detail_from_task_row(
         'feedback_text': preserve_error_text(str(row['feedback_text'] or ''), max_chars=1600, max_lines=24),
         'tone': tone,
         'status_text': status_text,
+        'feedback_display': preserve_error_text(str(row['feedback_text'] or ''), max_chars=1600, max_lines=24) or '-',
     }
 
 def build_run_detail_context(
@@ -882,7 +885,9 @@ def build_run_detail_context(
                             feedback_rel = ''
                             if feedback_items:
                                 feedback_rel = (feedback_items[0] or '')
-                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': run_cpu_wall_ms_text(pass_time_user_ms, pass_time_wall_ms), 'memory_display': run_memory_mb_text(pass_memory_kb), 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                            pass_time_display = run_cpu_wall_ms_text(pass_time_user_ms, pass_time_wall_ms)
+                            pass_memory_display = run_memory_mb_text(pass_memory_kb)
+                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': pass_time_display, 'memory_display': pass_memory_display, 'status_display': f'{pass_verdict_short} · {pass_time_display} · {pass_memory_display}', 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     if not pass_rows:
                         output_rel = (item.get('output_ref') or '')
                         output_task_id = str(item.get('task_id') or '')
@@ -890,7 +895,8 @@ def build_run_detail_context(
                         feedback_rel = ''
                         if feedback_items:
                             feedback_rel = (feedback_items[0] or '')
-                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': run_cpu_wall_ms_text(time_user_ms, time_wall_ms), 'memory_display': memory_mb_text, 'feedback_display': feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                        time_display = run_cpu_wall_ms_text(time_user_ms, time_wall_ms)
+                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': time_display, 'memory_display': memory_mb_text, 'status_display': f'{verdict_short} · {time_display} · {memory_mb_text}', 'feedback_display': feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     final_row = dict(pass_rows[-1]) if pass_rows else {}
                     for candidate in reversed(pass_rows):
                         verdict_token = (candidate.get('verdict_short') or '')
@@ -902,6 +908,7 @@ def build_run_detail_context(
                         'verdict_short': verdict_short,
                         'time_display': f'{time_ms}ms',
                         'memory_display': memory_mb_text,
+                        'status_display': f'{verdict_short} · {run_cpu_wall_ms_text(time_user_ms, time_wall_ms)} · {memory_mb_text}',
                         'feedback_display': feedback_display,
                         'pass_rows': pass_rows,
                         'final_row': final_row,
@@ -968,6 +975,7 @@ def build_run_detail_context(
                         'kind': _run_cell_kind(verdict, expected_behavior),
                         'time_display': run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms),
                         'memory_display': run_memory_mb_text(memory_kb),
+                        'status_display': f'{short if short else "--"} · {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} · {run_memory_mb_text(memory_kb)}',
                         'feedback_display': '-',
                         'output_rel': output_rel,
                         'output_task_id': '',
@@ -979,6 +987,7 @@ def build_run_detail_context(
                         'verdict_short': short if short else '--',
                         'time_display': f'{time_ms}ms',
                         'memory_display': run_memory_mb_text(memory_kb),
+                        'status_display': f'{short if short else "--"} · {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} · {run_memory_mb_text(memory_kb)}',
                         'feedback_display': '-',
                         'pass_rows': [pass_row],
                         'final_row': dict(pass_row),

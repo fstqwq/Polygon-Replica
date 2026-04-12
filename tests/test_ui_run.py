@@ -3377,13 +3377,14 @@ class TestUIRun(UIBaseSuite):
                     "cells": [
                         {
                             "detail": {
-                                "final_row": {
-                                    "kind": "ok",
-                                    "verdict_short": "AC",
-                                    "time_display": "1ms cpu, 2ms wall",
-                                    "memory_display": "1MB",
-                                    "feedback_display": "ok",
-                                    "output_preview": {
+                                    "final_row": {
+                                        "kind": "ok",
+                                        "verdict_short": "AC",
+                                        "time_display": "1ms (2ms wall)",
+                                        "status_display": "AC · 1ms (2ms wall) · 1MB",
+                                        "memory_display": "1MB",
+                                        "feedback_display": "ok",
+                                        "output_preview": {
                                         "available": True,
                                         "text": "> ping\n< pong\n",
                                         "truncated": False,
@@ -3857,12 +3858,16 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("<strong>Generation</strong>", detail_html)
-        self.assertRegex(detail_html, r"(?s)<th>Source</th>\s*<td>generators/random_tree\.cpp</td>")
-        self.assertRegex(detail_html, r"(?s)<th>Command</th>\s*<td><code>random_tree 10 20</code></td>")
-        self.assertRegex(detail_html, r"(?s)<th>Status</th>\s*<td><span class=\"ok\">AC \(7ms, 2048KB\)</span></td>")
-        self.assertIn("random_tree 10 20", detail_html)
-        self.assertRegex(detail_html, r"(?s)<th>Validator</th>\s*<td><pre[^>]*>tree is valid</pre></td>")
+        self.assertIn("<strong>Generation of 001.in: random_tree 10 20</strong>", detail_html)
+        self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics generation-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
+        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-ok\">.*?<span class=\"vcode\">AC</span>")
+        self.assertRegex(detail_html, r"(?s)<td class=\"fb-cell\">tree is valid</td>")
+        self.assertNotIn("<th>Source</th>", detail_html)
+        self.assertNotIn("<th>Command</th>", detail_html)
+        self.assertNotIn("<th>Validator</th>", detail_html)
+        self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
+        self.assertIn('<span class="vmeta">2ms (3ms wall)</span>', detail_html)
+        self.assertIn('<span class="vmeta">1MB</span>', detail_html)
 
     def test_run_details_page_keeps_test_popup_available_for_generate_stage_failure(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -3942,10 +3947,11 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("<strong>Generation</strong>", detail_html)
-        self.assertRegex(detail_html, r"(?s)<th>Source</th>\s*<td>generators/random_tree\.cpp</td>")
-        self.assertRegex(detail_html, r"(?s)<th>Status</th>\s*<td><span class=\"danger\">FL \(4ms, 1536KB\)</span></td>")
-        self.assertIn("Error:", detail_html)
+        self.assertIn("<strong>Generation of 001.in: random_tree 10 20</strong>", detail_html)
+        self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics generation-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
+        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-fail\">.*?<span class=\"vcode\">FL</span>")
+        self.assertRegex(detail_html, r"(?s)<td class=\"fb-cell\">-</td>")
+        self.assertIn("Error", detail_html)
         self.assertIn("validator rejected generated test", detail_html)
 
     def test_run_test_detail_fragment_hides_manual_validate_placeholder_source(self) -> None:
@@ -4007,10 +4013,10 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("<strong>Generation</strong>", detail_html)
-        self.assertRegex(detail_html, r"(?s)<th>Source</th>\s*<td>manual validation</td>")
+        self.assertIn("<strong>Generation of 001.in: manual</strong>", detail_html)
         self.assertNotIn("manual_validate.cpp", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
+        self.assertNotIn("<th>Source</th>", detail_html)
 
     def test_async_run_failure_shows_fl_reason_in_test_details(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

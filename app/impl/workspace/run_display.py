@@ -84,4 +84,4 @@ def run_memory_mb_text(memory_kb: int) -> str:
 def run_cpu_wall_ms_text(cpu_ms: int, wall_ms: int) -> str:
     safe_cpu_ms = max(0, cpu_ms)
     safe_wall_ms = max(0, wall_ms)
-    return f"{safe_cpu_ms}ms cpu, {safe_wall_ms}ms wall"
+    return f"{safe_cpu_ms}ms ({safe_wall_ms}ms wall)"

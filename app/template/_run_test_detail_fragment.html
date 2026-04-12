@@ -34,42 +34,35 @@
 </div>
 {% if row.generate_detail %}
 {% set generate = row.generate_detail %}
-{% set generate_status_class = 'ok' if generate.tone == 'ok' else 'danger' if generate.tone == 'fail' else 'info' if generate.tone == 'running' else 'muted' %}
 <div class="preview-card generation-detail-card">
   <div class="preview-head">
-    <strong>Generation</strong>
+    <strong>Generation of {{ row.test_name }}: {{ generate.title_suffix }}</strong>
   </div>
   <table class="sol-metrics generation-metrics">
     <colgroup>
-      <col class="generation-label-col" />
-      <col class="generation-value-col" />
+      <col class="generation-status-col" />
+      <col class="generation-feedback-col" />
     </colgroup>
-    <tbody>
-      <tr>
-        <th>Source</th>
-        <td>{{ generate.display_source or generate.source_path }}</td>
-      </tr>
-      {% if generate.display_command %}
-      <tr>
-        <th>Command</th>
-        <td><code>{{ generate.display_command }}</code></td>
-      </tr>
-      {% endif %}
+    <thead>
       <tr>
         <th>Status</th>
-        <td><span class="{{ generate_status_class }}">{{ generate.status_text }}{% if generate.runtime_ms or generate.memory_kb %} ({{ generate.runtime_ms }}ms, {{ generate.memory_kb }}KB){% endif %}</span></td>
+        <th>Feedback</th>
       </tr>
-      {% if generate.feedback_text %}
+    </thead>
+    <tbody>
       <tr>
-        <th>Validator</th>
-        <td><pre class="compile-diagnostics-log generation-detail-log">{{ generate.feedback_text }}</pre></td>
+        <td class="status-cell tone-{{ generate.tone }}">
+          <div class="status-inline">
+            <span class="vcode">{{ generate.status_text }}</span>
+          </div>
+        </td>
+        <td class="fb-cell{{ ' empty-text' if (generate.feedback_display or '-') == '(empty)' else '' }}">{{ generate.feedback_display or '-' }}</td>
       </tr>
-      {% endif %}
     </tbody>
   </table>
   {% if generate.error_text %}
   <div class="generation-detail-block">
-    <span class="generation-detail-label">Error:</span>
+    <span class="generation-detail-label">Error</span>
     <pre class="compile-diagnostics-log generation-detail-error">{{ generate.error_text }}</pre>
   </div>
   {% endif %}
@@ -83,32 +76,36 @@
   {% set diagnostics_entries = cell.detail.compile_diagnostics if cell.detail and cell.detail.compile_diagnostics else [] %}
   {% set diagnostics_error = (cell.detail.compile_error_display if cell.detail and cell.detail.compile_error_display else '') %}
   {% set has_diagnostics = diagnostics_error or (diagnostics_entries | length) > 0 %}
-  {% set row_kind = final_row.kind if final_row.kind is defined else cell.kind %}
-  {% set verdict_tone = 'tone-ok' if row_kind == 'ok' else 'tone-fail' if row_kind == 'fail' else 'tone-info' if row_kind == 'expected-nonac' else 'tone-neutral' %}
   <section class="sol-card" data-run-id="{{ col.id }}">
     <div class="sol-head">
       <strong class="sol-title">{{ col.title }}</strong>
-      <span class="sol-verdict {{ verdict_tone }}">{{ final_row.verdict_short or '-' }}</span>
     </div>
     {% set feedback_text = final_row.feedback_display or '-' %}
     <table class="sol-metrics">
       <colgroup>
-        <col class="time-col" />
-        <col class="mem-col" />
+        <col class="status-col" />
         <col class="fb-col" />
       </colgroup>
       <thead>
         <tr>
-          <th>Time</th>
-          <th>Memory</th>
+          <th>Status</th>
           <th>Feedback</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td>{{ final_row.time_display or '-' }}</td>
-          <td>{{ final_row.memory_display or '-' }}</td>
-          <td class="fb-cell {{ 'empty-text' if feedback_text == '(empty)' else '' }}">{{ feedback_text }}</td>
+          <td class="status-cell tone-{{ final_row.kind or 'neutral' }}">
+            <div class="status-inline">
+              <span class="vcode">{{ final_row.verdict_short or '-' }}</span>
+              {% if final_row.time_display and final_row.time_display != '-' %}
+              <span class="vmeta">{{ final_row.time_display }}</span>
+              {% endif %}
+              {% if final_row.memory_display and final_row.memory_display != '-' %}
+              <span class="vmeta">{{ final_row.memory_display }}</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="fb-cell{{ ' empty-text' if feedback_text == '(empty)' else '' }}">{{ feedback_text }}</td>
         </tr>
       </tbody>
     </table>
