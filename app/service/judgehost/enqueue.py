@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_source_hash
-from app.service.judgehost.internal.shared import _RUN_ID_RE, _VERIFICATION_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
+from app.service.judgehost.shared import _RUN_ID_RE, _VERIFICATION_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
 from app.service.platform.hashing import domjudge_executable_hash
 from app.service.run.runtime import RUN_TEST_NAME_RE
@@ -1352,3 +1352,4 @@ class TaskEnqueue:
             persist_verification_run=False,
             prepared_payload=None if prepared_payload is None else dict(prepared_payload),
         )
+

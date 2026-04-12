@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import json
@@ -17,7 +17,7 @@ from app.service.judgehost.domjudge.cache import (
     domjudge_parse_cache_blob_ref,
     domjudge_set_hash_from_blobs,
 )
-from app.service.judgehost.internal.shared import (
+from app.service.judgehost.shared import (
     _DOMJUDGE_CACHE_NAME_RE,
     _DOMJUDGE_CONTEST_ID_RE,
     _DOMJUDGE_PROTOCOL_TRACE_BYTES_RE,
@@ -870,4 +870,5 @@ class DomjudgeToolkit:
     def domjudge_list_hosts(self) -> list[dict[str, object]]:
         with self._state_lock:
             return domjudge_hosts_payload(self._hosts_state)
+
 

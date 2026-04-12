@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import secrets
 import time
@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.db import now_iso
 from app.runtime_value import RuntimeValues
-from app.service.judgehost.internal.shared import _HOSTNAME_RE, _RUN_ID_RE, task_status_counts
+from app.service.judgehost.shared import _HOSTNAME_RE, _RUN_ID_RE, task_status_counts
 
 from .state import JudgehostState
 
@@ -198,3 +198,4 @@ class JudgehostCore:
         if size > max_bytes:
             raise RuntimeError(f"{label} exceeds payload limit: {path.name} ({size} bytes)")
         return path.read_bytes()
+

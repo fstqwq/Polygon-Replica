@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -12,7 +12,7 @@ from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_json_hash
 from app.service.judgehost.domjudge.client import domjudge_script_id
 from app.service.memory.judgehost_state_store import JudgehostCaseRow, JudgehostJobRow
-from app.service.judgehost.internal.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
+from app.service.judgehost.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_parse_float,
@@ -1062,3 +1062,4 @@ class DispatchHandler:
                 return leased_cases
             self._domjudge_finalize_if_ready(active_job_id)
             return []
+

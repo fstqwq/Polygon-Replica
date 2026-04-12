@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import logging
@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from typing import cast
 
-from app.service.judgehost.internal.shared import (
+from app.service.judgehost.shared import (
     domjudge_task_lease_owner,
     domjudge_text,
     domjudge_lower_text,
@@ -1211,3 +1211,4 @@ class ResultProcessor:
             task_id=safe_task_id,
             run_id=safe_run_id,
         )
+
