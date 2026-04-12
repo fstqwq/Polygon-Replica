@@ -50,6 +50,7 @@ from app.impl.workspace.context_verification import (
     _expected_status_rule,
     _status_rule_expected_display,
     _verification_solution_match,
+    _verification_solution_failure_hint,
 )
 from app.impl.workspace.run_view_list import (
     _latest_iso_timestamp,
@@ -74,6 +75,44 @@ _C = config.constants
 _TASK_KIND_GENERATE_INPUT = "generate-input"
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
+
+
+def _source_aware_column_failure_reason(columns: list[dict[str, object]]) -> str:
+    for col in columns:
+        source_path = str(col.get("source") or "")
+        match_reason = str(col.get("match_reason") or "")
+        error_text = str(col.get("error") or "")
+        if not (match_reason or error_text):
+            continue
+        reason = _verification_solution_failure_hint(source_path, match_reason, error_text)
+        if reason:
+            return reason
+    return ""
+
+
+def _prefer_source_aware_failure_reason(current_reason: str, columns: list[dict[str, object]]) -> str:
+    source_reason = _source_aware_column_failure_reason(columns)
+    if not source_reason:
+        return current_reason
+    if not current_reason:
+        return source_reason
+    generic_match_reasons = {
+        str(col.get("match_reason") or "").strip()
+        for col in columns
+        if str(col.get("match_reason") or "").strip()
+    }
+    generic_error_texts = {
+        str(col.get("error") or "").strip()
+        for col in columns
+        if str(col.get("error") or "").strip()
+    }
+    if current_reason in generic_match_reasons or current_reason in generic_error_texts:
+        return source_reason
+    if current_reason in {"verification failed", "solution run did not complete", "verification mismatch"}:
+        return source_reason
+    if current_reason.startswith("required=[") and ", allowed=[" in current_reason and ", got=[" in current_reason:
+        return source_reason
+    return current_reason
 
 def build_run_detail_context(
     ctx: dict,
@@ -1279,6 +1318,8 @@ def build_run_detail_context(
         running_tasks = list(verification_details.get('running_tasks') or []) if isinstance(verification_details.get('running_tasks'), list) else []
     detail_fail_reason = str((verification_record.get('fail_reason') if verification_record is not None else '') or '')
     detail_fail_flag = bool(detail_fail_reason)
+    detail_fail_reason = _prefer_source_aware_failure_reason(detail_fail_reason, columns)
+    detail_fail_flag = bool(detail_fail_reason)
     stage_results = verification_details.get('stage_results') if isinstance(verification_details.get('stage_results'), dict) else {}
     verification_logs: dict[str, object] = {
         'available': False,
@@ -1325,6 +1366,18 @@ def build_run_detail_context(
                 artifact_verification_error = f'{diag_location}: {diag_message}'
             elif diag_message:
                 artifact_verification_error = diag_message
+        source_aware_column_reason = _source_aware_column_failure_reason(columns)
+        artifact_verification_error = _prefer_source_aware_failure_reason(artifact_verification_error, columns)
+        generic_column_reasons = {
+            str(col.get('match_reason') or '').strip()
+            for col in columns
+            if str(col.get('match_reason') or '').strip()
+        }
+        if (not diagnostics_rows) and (
+            artifact_verification_error in generic_column_reasons
+            or (source_aware_column_reason and artifact_verification_error == source_aware_column_reason)
+        ):
+            artifact_verification_error = ''
         verification_logs = {
             'available': True,
             'title': diagnostics_title,

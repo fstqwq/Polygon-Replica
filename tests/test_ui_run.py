@@ -4754,6 +4754,49 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("Traceback (most recent call last):", html)
         self.assertIn("ZeroDivisionError: division by zero", html)
 
+    def test_source_aware_run_detail_failure_reason_prefers_column_source(self) -> None:
+        from app.impl.workspace.run_view_detail import _prefer_source_aware_failure_reason
+
+        generic_reason = "required=[AC], allowed=[AC], got=[TL]"
+        reason = _prefer_source_aware_failure_reason(
+            generic_reason,
+            [
+                {
+                    "source": "solutions/ac_python.py",
+                    "match_reason": generic_reason,
+                    "error": "",
+                }
+            ],
+        )
+        self.assertEqual(reason, "ac_python.py: required=[AC], allowed=[AC], got=[TL]")
+
+    def test_verification_match_omits_rule_reason_for_incomplete_solution_run(self) -> None:
+        matched, completed, observed_pass, reason = workspace_impl._verification_solution_match(
+            "rejected",
+            "failed",
+            {"error": "cancelled on service startup"},
+        )
+        self.assertFalse(matched)
+        self.assertFalse(completed)
+        self.assertFalse(observed_pass)
+        self.assertEqual(reason, "")
+
+    def test_source_aware_run_detail_failure_reason_prefers_column_error_when_rule_is_incomplete(self) -> None:
+        from app.impl.workspace.run_view_detail import _prefer_source_aware_failure_reason
+
+        generic_reason = "required=[WA, TL, RE, CE], allowed=[AC, WA, TL, RE, CE], got=[]: cancelled on service startup"
+        reason = _prefer_source_aware_failure_reason(
+            generic_reason,
+            [
+                {
+                    "source": "solutions/luangao.cpp",
+                    "match_reason": "",
+                    "error": "cancelled on service startup",
+                }
+            ],
+        )
+        self.assertEqual(reason, "luangao.cpp: cancelled on service startup")
+
     def test_run_details_falls_back_to_verification_expected_behavior_for_cell_colors(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
@@ -5652,4 +5695,3 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(">Verification</span>", html)
         self.assertIn(">failed</strong>", html)
-

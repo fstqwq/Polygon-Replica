@@ -111,9 +111,10 @@ def _run_timeout_ms_from_summary(summary: dict | None) -> int:
     if time_limit_ms <= 0:
         return 0
     if mode == "interactive":
+        pass_limit = coerce_int(run_cfg.get("pass_limit"), 1, 1, 100)
+        if pass_limit > 1:
+            return time_limit_ms + int(_C.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC) * 1000
         return time_limit_ms + int(_C.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC) * 1000
-    if mode == "multi-pass":
-        return time_limit_ms + int(_C.RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC) * 1000
     return time_limit_ms + int(_C.RUN_WALL_TIME_SLACK_PASS_FAIL_SEC) * 1000
 
 

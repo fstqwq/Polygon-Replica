@@ -160,15 +160,15 @@ def _verification_solution_match(expected_behavior: str, run_status: str, summar
         return (False, False, False, 'running')
     completed = _verification_run_completed(run_status, summary)
     observed_pass = _verification_run_passed(run_status, summary)
+    if not completed:
+        return (False, False, observed_pass, "")
     rule_matched, rule_reason = _status_rule_match(expected_behavior, run_status, summary)
-    matched = bool(completed and rule_matched)
+    matched = bool(rule_matched)
     if matched:
         return (True, True, observed_pass, "")
     if rule_reason:
-        return (False, completed, observed_pass, rule_reason)
-    if not completed:
-        return (False, completed, observed_pass, "solution run did not complete")
-    return (False, completed, observed_pass, "verification mismatch")
+        return (False, True, observed_pass, rule_reason)
+    return (False, True, observed_pass, "verification mismatch")
 
 def _verification_solution_failure_hint(source_path: str, reason: str, error_text: str = "") -> str:
     source_label = _source_basename_label(source_path)

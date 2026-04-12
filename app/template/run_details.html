@@ -196,8 +196,9 @@
   {% for col in detail_columns %}
   {% set entries = col.compile_diagnostics if col.compile_diagnostics else [] %}
   {% set has_error = (col.error | default('') | trim) %}
+  {% set match_reason = (col.match_reason | default('') | trim) %}
   {% set has_entries = (entries | length) > 0 %}
-  {% if has_error or has_entries %}
+  {% if has_error or has_entries or match_reason %}
   {% set ns.has_diag = true %}
   <div class="compile-diagnostics-card">
     <div class="compile-diagnostics-head">
@@ -211,6 +212,8 @@
     </div>
     {% if has_error %}
     <p class="compile-diagnostics-error">{{ col.error_display or col.error }}</p>
+    {% elif match_reason %}
+    <p class="compile-diagnostics-error">{{ match_reason }}</p>
     {% endif %}
     {% if has_entries %}
     <pre class="compile-diagnostics-log">{% for d in entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
