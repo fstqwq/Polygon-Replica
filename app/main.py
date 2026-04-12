@@ -3,15 +3,18 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from time import monotonic
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.impl.auth.middleware import auth_middleware as auth_http_middleware
 from app.impl.auth.internal.runtime import shutdown as auth_shutdown, startup as auth_startup
+from app.impl.auth.shared import _apply_security_headers
 from app.route import (
     tests_route,
     preview_route,
     contest_route,
+    agent_route,
     judgehost_route,
     problem_route,
     root_auth_route,
@@ -34,7 +37,11 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     request.state.request_started_at = monotonic()
-    response = await auth_http_middleware(request, call_next)
+    try:
+        response = await auth_http_middleware(request, call_next)
+    except HTTPException as exc:
+        response = PlainTextResponse(str(exc.detail or "request failed"), status_code=int(exc.status_code or 400))
+        _apply_security_headers(response)
     started = getattr(request.state, "request_started_at", None)
     if started is not None:
         response.headers["X-Backend-Render-Ms"] = str(max(0, int(round((monotonic() - started) * 1000))))
@@ -43,6 +50,7 @@ async def auth_middleware(request: Request, call_next):
 
 app.include_router(root_auth_route.router)
 app.include_router(contest_route.router)
+app.include_router(agent_route.router)
 app.include_router(problem_route.router)
 app.include_router(tests_route.router)
 app.include_router(preview_route.router)

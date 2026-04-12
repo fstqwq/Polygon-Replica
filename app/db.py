@@ -64,6 +64,59 @@ CREATE TABLE IF NOT EXISTS sudo_sessions (
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS agent_registration_codes (
+    code TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    identity_hash TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    desktop_id TEXT NOT NULL,
+    init_ts TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    revoked_at TEXT,
+    UNIQUE(user_id, identity_hash),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_access_requests (
+    id TEXT PRIMARY KEY,
+    agent_session_id TEXT NOT NULL,
+    problem_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    resolved_at TEXT,
+    delivered_at TEXT,
+    token_id TEXT NOT NULL DEFAULT '',
+    delivery_token TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY(agent_session_id) REFERENCES agent_sessions(id),
+    FOREIGN KEY(problem_id) REFERENCES problems(id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_tokens (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    agent_session_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    problem_id INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    revoked_at TEXT,
+    FOREIGN KEY(agent_session_id) REFERENCES agent_sessions(id),
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(problem_id) REFERENCES problems(id)
+);
+
 CREATE TABLE IF NOT EXISTS repo_acl (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     problem_id INTEGER NOT NULL,
@@ -368,6 +421,10 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sudo_sessions_user_created ON sudo_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_agent_registration_codes_expires ON agent_registration_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_user_revoked_seen ON agent_sessions(user_id, revoked_at, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_access_requests_session_status_created ON agent_access_requests(agent_session_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_tokens_user_problem_active ON agent_tokens(user_id, problem_id, revoked_at, expires_at);
 CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC);
 """
 
@@ -385,6 +442,41 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "auth_sessions": ("id", "user_id", "token_hash", "created_at", "expires_at", "revoked_at"),
     "sudo_sessions": ("id", "user_id", "scope", "token_hash", "created_at", "expires_at", "revoked_at"),
+    "agent_registration_codes": ("code", "user_id", "created_at", "expires_at", "used_at"),
+    "agent_sessions": (
+        "id",
+        "user_id",
+        "identity_hash",
+        "agent_name",
+        "desktop_id",
+        "init_ts",
+        "created_at",
+        "last_seen_at",
+        "revoked_at",
+    ),
+    "agent_access_requests": (
+        "id",
+        "agent_session_id",
+        "problem_id",
+        "status",
+        "created_at",
+        "expires_at",
+        "resolved_at",
+        "delivered_at",
+        "token_id",
+        "delivery_token",
+    ),
+    "agent_tokens": (
+        "id",
+        "token_hash",
+        "agent_session_id",
+        "user_id",
+        "problem_id",
+        "scope",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+    ),
     "repo_acl": ("id", "problem_id", "user_id", "role", "created_at"),
     "workspaces": (
         "id",
@@ -628,13 +720,6 @@ class DB:
                 raise
 
     def _init_current_schema(self) -> None:
-        if self._db_file_exists():
-            with sqlite3.connect(self.path) as conn:
-                self._prepare_connection(conn)
-                self._validate_existing_schema(conn)
-                conn.executescript(SCHEMA_INDEXES)
-                conn.commit()
-                return
         with sqlite3.connect(self.path) as conn:
             self._prepare_connection(conn)
             conn.executescript(SCHEMA)

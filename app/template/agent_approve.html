@@ -1,0 +1,34 @@
+{% extends "root_base.html" %}
+{% block content %}
+<h1 class="page-title">Agent Authorization Request</h1>
+{% include "_flash_message.html" %}
+<p><a href="/agent/sessions">Back to Agent Sessions</a></p>
+<section class="info-card">
+  <p><strong>{{ access_request.agent_name }}</strong></p>
+  <p class="muted">Desktop: <code>{{ access_request.desktop_id }}</code> | Connected: {{ access_request.init_ts }}</p>
+  <p>Requesting access to: <code>{{ access_request.problem_slug }}</code></p>
+  <p class="muted">This approval is linked to your current login and expires at {{ access_request.expires_at | local_time }}.</p>
+  <form method="post" action="/agent/approve/{{ access_request.id }}" class="form-stack">
+    <label for="scope">Scope</label>
+    <select id="scope" name="scope">
+      <option value="readonly" {% if default_scope == 'readonly' %}selected{% endif %}>readonly</option>
+      <option value="workspace" {% if default_scope == 'workspace' %}selected{% endif %}>workspace</option>
+      <option value="commit" {% if default_scope == 'commit' %}selected{% endif %}>commit</option>
+    </select>
+
+    <label for="ttl">Token TTL</label>
+    <select id="ttl" name="ttl">
+      <option value="3600">1 hour</option>
+      <option value="86400" {% if default_ttl == '86400' %}selected{% endif %}>24 hours</option>
+      <option value="604800">7 days</option>
+      <option value="2592000">30 days</option>
+      <option value="forever">forever</option>
+    </select>
+
+    <div class="form-row form-row-actions">
+      <button class="btn" type="submit" name="decision" value="approve">Approve</button>
+      <button class="btn" type="submit" name="decision" value="deny">Deny</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

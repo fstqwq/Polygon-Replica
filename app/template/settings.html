@@ -7,6 +7,7 @@
   <section class="settings-account-panel">
     <h2>Account</h2>
     <p><strong>User:</strong> <code>{{ user.username }}</code></p>
+    <p><a href="/agent/sessions">Connected Agents</a></p>
     <h3>Change Password</h3>
     <form id="settings-password-form" class="form-stack" method="post" action="/problems/{{ user.username }}/settings/password">
       <label for="current_password">Current Password</label>

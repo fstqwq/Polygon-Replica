@@ -1,0 +1,105 @@
+{% extends "root_base.html" %}
+{% block content %}
+<h1 class="page-title">Connected Agents</h1>
+{% include "_flash_message.html" %}
+<p><a href="/problems/{{ user.username }}/settings">Back to Settings</a></p>
+<section class="info-card">
+  <div class="form-row form-row-actions" style="justify-content: space-between; align-items: center;">
+    <div>
+      <strong>Connect to Agent</strong>
+      <p class="muted">Create a one-time registration URL and pass it to your skill.</p>
+    </div>
+    <button class="btn" type="button" id="agent-connect-button">Connect to Agent</button>
+  </div>
+  <div id="agent-connect-result" hidden>
+    <label for="agent-register-url">Registration URL</label>
+    <div class="form-input-with-action">
+      <input id="agent-register-url" type="text" readonly spellcheck="false" />
+      <button class="btn" type="button" id="agent-copy-url">Copy</button>
+    </div>
+    <p class="muted" id="agent-register-meta"></p>
+  </div>
+</section>
+
+{% if sessions %}
+  {% for session in sessions %}
+  <section class="info-card">
+    <div class="form-row form-row-actions" style="justify-content: space-between; align-items: center;">
+      <div>
+        <h2>{{ session.agent_name }}</h2>
+        <p class="muted">Desktop: <code>{{ session.desktop_id }}</code> | Connected: {{ session.created_at | local_time }} | Last seen: {{ session.last_seen_at | local_time }}</p>
+      </div>
+      <form method="post" action="/agent/disconnect/{{ session.id }}" class="inline-form">
+        <button class="btn" type="submit">Disconnect Agent</button>
+      </form>
+    </div>
+    {% if session.revoked_at %}
+    <p class="danger">Disconnected at {{ session.revoked_at | local_time }}</p>
+    {% endif %}
+    <p class="muted">Identity: <code>{{ session.identity_hash }}</code></p>
+    <h3>Authorized Problems</h3>
+    {% if session.tokens %}
+    <table class="table-base">
+      <thead>
+        <tr>
+          <th>Problem</th>
+          <th>Scope</th>
+          <th>Expires</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for token in session.tokens %}
+        <tr>
+          <td><code>{{ token.problem_slug }}</code></td>
+          <td><code>{{ token.scope }}</code></td>
+          <td>{% if token.revoked_at %}<span class="danger">revoked</span>{% elif token.expires_at %}{{ token.expires_at | local_time }}{% else %}<span class="muted">forever</span>{% endif %}</td>
+          <td>
+            {% if not token.revoked_at %}
+            <form method="post" action="/agent/revoke/{{ token.id }}" class="inline-form">
+              <button class="btn" type="submit">Revoke</button>
+            </form>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No authorized problems.</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+{% else %}
+  <p class="muted">No connected agents.</p>
+{% endif %}
+
+<script>
+(() => {
+  const button = document.getElementById('agent-connect-button');
+  const result = document.getElementById('agent-connect-result');
+  const urlInput = document.getElementById('agent-register-url');
+  const meta = document.getElementById('agent-register-meta');
+  const copyButton = document.getElementById('agent-copy-url');
+  if (!button || !result || !urlInput || !meta || !copyButton) return;
+  button.addEventListener('click', async () => {
+    const response = await fetch('/agent/connect', { method: 'POST', credentials: 'same-origin' });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      meta.textContent = payload.error || 'request failed';
+      result.hidden = false;
+      return;
+    }
+    urlInput.value = payload.register_url || '';
+    meta.textContent = `Expires at ${payload.expires_at || '-'} (${payload.expires_in || '-'}s)`;
+    result.hidden = false;
+  });
+  copyButton.addEventListener('click', async () => {
+    if (!urlInput.value) return;
+    await navigator.clipboard.writeText(urlInput.value);
+  });
+})();
+</script>
+{% endblock %}

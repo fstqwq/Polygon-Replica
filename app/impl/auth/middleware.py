@@ -26,6 +26,8 @@ async def auth_middleware(request: Request, call_next):
     protected = (
         path == "/"
         or path in {"/problems", "/contests"}
+        or path == "/agent"
+        or (path.startswith("/agent/") and (not path.startswith("/agent/v1/")))
         or path.startswith("/problems/")
         or path.startswith("/contests/")
         or path.startswith("/switch-")

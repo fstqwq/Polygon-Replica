@@ -10,6 +10,7 @@ from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
 from app.service.platform.async_task_cache import AsyncTaskCacheService
 from app.service.auth.service import AuthService
+from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
 from app.service.platform.fs.layout import FsManager
 from app.service.verification.service import VerificationService
@@ -39,6 +40,7 @@ class RuntimeConfig:
     db: DB = field(init=False)
     workspace_service: workspace.WorkspaceService = field(init=False)
     auth_service: AuthService = field(init=False)
+    agent_service: AgentService = field(init=False)
     contest_service: ContestService = field(init=False)
     git_service: GitService = field(init=False)
     fs_manager: FsManager = field(init=False)
@@ -88,6 +90,7 @@ class RuntimeConfig:
         toolchain.apply_runtime_values(self.constants)
         workspace.apply_runtime_values(self.constants)
         self.auth_service.apply_runtime_values(self.constants)
+        self.agent_service.apply_runtime_values(self.constants)
         self.verification_service.apply_runtime_values(self.constants)
         self.preview_service.apply_runtime_values(self.constants)
         self.judgehost_task_service.apply_runtime_values(self.constants)
@@ -110,6 +113,7 @@ class RuntimeConfig:
         toolchain.apply_runtime_values(self.constants)
         workspace.apply_runtime_values(self.constants)
         self.workspace_service = workspace.WorkspaceService(self.db, self.settings)
+        self.agent_service = AgentService(self.db, self.workspace_service, constants=self.constants)
         self.contest_service = ContestService(self.db, self.settings)
         self.git_service = GitService()
         self.fs_manager = FsManager(self.settings.cache_root, self.settings.artifacts_root)
