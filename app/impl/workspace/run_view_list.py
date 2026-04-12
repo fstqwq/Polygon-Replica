@@ -6,9 +6,9 @@ from pathlib import Path
 from app.impl.auth.shared import parse_iso_utc
 from app.impl.runtime.config import config
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
+from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
 from .context_verification import _verification_solution_match
-from .problem_config import coerce_int, normalize_problem_mode
 from .run_display import run_verdict_short
 
 

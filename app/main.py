@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from time import monotonic
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
-from app.impl.auth.api import auth_middleware as auth_http_middleware
+from app.impl.auth.middleware import auth_middleware as auth_http_middleware
 from app.impl.auth.internal.runtime import shutdown as auth_shutdown, startup as auth_startup
 from app.route import (
     tests_route,

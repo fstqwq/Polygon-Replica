@@ -3,26 +3,30 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-from app.impl.root.api import (
+from app.impl.root.auth_pages import (
     auth_password_meta,
-    contests_root_create,
-    contests_root_import,
-    contests_root_import_confirm,
-    contests_root_import_review,
-    contests_root_page,
     home,
     login_page,
     login_submit,
     logout,
-    problems_root_import,
-    problems_root_import_slug_hint,
-    problems_root_page,
     register_page,
     register_submit,
     setup_page,
     setup_submit,
     sudo_page,
     sudo_submit,
+)
+from app.impl.root.problems import (
+    problems_root_import,
+    problems_root_import_slug_hint,
+    problems_root_page,
+)
+from app.impl.root.contests import (
+    contests_root_create,
+    contests_root_import,
+    contests_root_import_confirm,
+    contests_root_import_review,
+    contests_root_page,
 )
 
 router = APIRouter()

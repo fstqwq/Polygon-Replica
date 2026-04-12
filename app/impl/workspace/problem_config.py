@@ -6,56 +6,9 @@ from typing import cast
 
 from app.impl.runtime.config import config
 from app.main_util import safe_workspace_path
+from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
 
 _C = config.constants
-
-
-def coerce_int(raw: object, default: int, min_value: int, max_value: int) -> int:
-    try:
-        value = int(str(raw).strip())
-    except Exception:
-        return default
-    return max(min_value, min(max_value, value))
-
-
-def form_text(value: str | object) -> str:
-    default = getattr(value, "default", value)
-    if default is Ellipsis:
-        return ""
-    if default is None:
-        return ""
-    return str(default)
-
-
-def normalize_problem_mode(raw: str | None, default: str = "pass-fail") -> str:
-    if raw is None:
-        token = ""
-    else:
-        token = raw.strip().lower().replace("_", "-").replace(" ", "-")
-    if not token:
-        if default in _C.GENERAL_MODE_VALUES:
-            return default
-        return "pass-fail"
-    if token in _C.GENERAL_MODE_VALUES:
-        return token
-    raise ValueError(f"invalid problem mode: {token}")
-
-
-def normalize_pass_limit(raw: object, default: int = 1) -> int:
-    if raw is None:
-        return coerce_int(default, default, _C.GENERAL_PASS_LIMIT_MIN, _C.GENERAL_PASS_LIMIT_MAX)
-    text = str(raw).strip()
-    if not text:
-        return coerce_int(default, default, _C.GENERAL_PASS_LIMIT_MIN, _C.GENERAL_PASS_LIMIT_MAX)
-    try:
-        value = int(text)
-    except Exception as exc:
-        raise ValueError("pass limit must be an integer") from exc
-    if value < _C.GENERAL_PASS_LIMIT_MIN or value > _C.GENERAL_PASS_LIMIT_MAX:
-        raise ValueError(
-            f"pass limit must be between {_C.GENERAL_PASS_LIMIT_MIN} and {_C.GENERAL_PASS_LIMIT_MAX}"
-        )
-    return value
 
 
 def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, object], Path]:
@@ -73,7 +26,7 @@ def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, o
             raise ValueError("problem.json missing mode")
         if "pass_limit" not in payload:
             raise ValueError("problem.json missing pass_limit")
-    mode = normalize_problem_mode(cast(str | None, payload.get("mode")), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
+    mode = normalize_problem_mode(payload.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
     ui_cfg = {
         "time_limit_ms": coerce_int(
             payload.get("time_limit_ms"),
@@ -91,6 +44,8 @@ def read_problem_config(workspace: Path) -> tuple[dict[str, object], dict[str, o
         "pass_limit": normalize_pass_limit(
             payload.get("pass_limit"),
             int(_C.GENERAL_CONFIG_DEFAULTS["pass_limit"]),
+            min_value=_C.GENERAL_PASS_LIMIT_MIN,
+            max_value=_C.GENERAL_PASS_LIMIT_MAX,
         ),
     }
     return (payload, ui_cfg, cfg_path)

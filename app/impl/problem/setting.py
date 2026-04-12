@@ -12,8 +12,9 @@ from app.impl.auth.csrf import issue_password_form_csrf_token, password_proof_fr
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _as_bool_form_value, _settings_user_ctx, _system_config_row_by_key
 from app.impl.workspace.context_operation import audit, user_participating_problems
-from app.impl.workspace.problem_config import coerce_int, form_text
 from app.impl.workspace.access import is_system_admin_user_id, require_system_admin
+from app.main_util import form_text
+from app.service.verification.runtime import coerce_int
 
 _C = config.constants
 

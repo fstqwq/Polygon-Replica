@@ -13,7 +13,7 @@ from app.service.auth.service import AuthService
 from app.service.contest.service import ContestService
 from app.service.platform.fs.layout import FsManager
 from app.service.verification.service import VerificationService
-from app.service.export.api import ExportService
+from app.service.export.service import ExportService
 from app.service.repository.git import GitService
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.judgehost.api import Judgehost

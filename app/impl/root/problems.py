@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+from fastapi import File, Form, Request, UploadFile
+from fastapi.responses import JSONResponse
+
+from app.impl.auth.shared import (
+    enforce_same_origin_state_change,
+    redirect_response,
+    template_response,
+)
+from app.impl.run_export.import_source import (
+    build_import_slug_hint,
+    import_package_as_new_problem,
+    import_package_warnings,
+)
+from app.impl.runtime.config import config
+from app.impl.workspace.context import global_user_ctx
+from app.impl.workspace.context_operation import audit, user_participating_problems
+from app.impl.root.shared import _active_root_user, _count_label
+
+_C = config.constants
+
+
+def problems_root_page(request: Request, user: str = ""):
+    active_user = _active_root_user(request, user)
+    gctx = global_user_ctx(active_user)
+    entries = user_participating_problems(int(gctx['user']['id']), limit=_C.API_PROBLEMS_LIST_LIMIT)
+    return template_response(request, 'root_problems.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': _C.API_PROBLEMS_LIST_LIMIT, 'active_main': 'problems'})
+
+
+def problems_root_import_slug_hint(request: Request, user: str = "", filename: str = "", requested_slug: str = ""):
+    active_user = _active_root_user(request, user)
+    gctx = global_user_ctx(active_user)
+    payload = build_import_slug_hint(str(gctx["user"]["username"]), filename, requested_slug)
+    return JSONResponse(payload)
+
+
+def problems_root_import(request: Request, user: str = "", package_upload: UploadFile | None = File(None), problem_slug: str = Form("")):
+    enforce_same_origin_state_change(request)
+    active_user = _active_root_user(request, user)
+    gctx = global_user_ctx(active_user)
+    package_name = ""
+    package_content: bytes = b""
+    try:
+        if package_upload is None:
+            raise ValueError("package file is required")
+        package_name = str(package_upload.filename or "").strip()
+        if not package_name:
+            raise ValueError("package filename is required")
+        package_content = package_upload.file.read()
+        imported = import_package_as_new_problem(
+            actor_user_id=int(gctx["user"]["id"]),
+            actor_user=str(gctx["user"]["username"]),
+            package_name=package_name,
+            package_content=package_content,
+            requested_slug=str(problem_slug or "").strip(),
+            source_problem="",
+        )
+        target_problem_obj = imported.get("target_problem")
+        target_problem = target_problem_obj.strip() if isinstance(target_problem_obj, str) else ""
+        total_tests_obj = imported.get("total_tests")
+        total_tests = int(total_tests_obj) if isinstance(total_tests_obj, int) else 0
+        package_format_obj = imported.get("package_format")
+        package_format = package_format_obj.strip() if isinstance(package_format_obj, str) else "package"
+        msg = f"{package_format} package imported as {target_problem} ({_count_label(total_tests, 'test')})"
+        warnings = import_package_warnings(imported)
+        if warnings:
+            msg = f"{msg}; warning: {'; '.join(warnings)}"
+        return redirect_response(f"/problems/{target_problem}/{gctx['user']['username']}/statement", status_code=303, message=msg)
+    except Exception as exc:
+        msg = str(exc)
+    finally:
+        if package_upload is not None:
+            package_upload.file.close()
+    return redirect_response("/problems", status_code=303, message=msg)

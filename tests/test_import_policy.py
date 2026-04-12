@@ -31,7 +31,7 @@ _export_public(globals(), module)
             ),
             [],
         )
-        self.assertEqual(import_policy._plural_name_violations_for_module("app.impl.auth.api"), [])
+        self.assertEqual(import_policy._plural_name_violations_for_module("app.impl.auth.middleware"), [])
 
     def test_affix_cluster_detector(self) -> None:
         offenders = import_policy._affix_cluster_modules(

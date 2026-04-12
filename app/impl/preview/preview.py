@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote_plus, urlencode
 
 from fastapi import File, Form, HTTPException, Request, UploadFile
@@ -472,8 +473,8 @@ def preview_page(request: Request, problem: str, user: str):
 def preview_run(
     problem: str,
     user: str,
-    page: str = Form('statement'),
-    language: str = Form(''),
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -593,14 +594,14 @@ def preview_status(problem: str, user: str, language: str = ""):
 def preview_save(
     problem: str,
     user: str,
-    legend_tex: str=Form(''),
-    input_tex: str=Form(''),
-    output_tex: str=Form(''),
-    interaction_tex: str=Form(''),
-    notes_tex: str=Form(''),
-    page: str=Form('statement'),
-    language: str=Form(''),
-    preview_id: str=Form(''),
+    legend_tex: Annotated[str, Form()] = '',
+    input_tex: Annotated[str, Form()] = '',
+    output_tex: Annotated[str, Form()] = '',
+    interaction_tex: Annotated[str, Form()] = '',
+    notes_tex: Annotated[str, Form()] = '',
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -653,10 +654,10 @@ def preview_save(
 def statement_compile_asset_delete(
     problem: str,
     user: str,
-    path: str = Form(...),
-    page: str = Form('statement'),
-    language: str = Form(''),
-    preview_id: str = Form(''),
+    path: Annotated[str, Form()] = ...,
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -702,11 +703,11 @@ def statement_compile_asset_delete(
 async def statement_compile_asset_upload(
     problem: str,
     user: str,
-    path: str = Form(""),
-    upload: UploadFile = File(...),
-    page: str = Form('statement'),
-    language: str = Form(''),
-    preview_id: str = Form(''),
+    path: Annotated[str, Form()] = "",
+    upload: Annotated[UploadFile, File()] = ...,
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -767,11 +768,11 @@ async def statement_compile_asset_upload(
 async def statement_attachment_upload(
     problem: str,
     user: str,
-    path: str = Form(""),
-    upload: UploadFile = File(...),
-    page: str = Form('statement'),
-    language: str = Form(''),
-    preview_id: str = Form(''),
+    path: Annotated[str, Form()] = "",
+    upload: Annotated[UploadFile, File()] = ...,
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -831,10 +832,10 @@ async def statement_attachment_upload(
 def statement_attachment_delete(
     problem: str,
     user: str,
-    path: str = Form(...),
-    page: str = Form('statement'),
-    language: str = Form(''),
-    preview_id: str = Form(''),
+    path: Annotated[str, Form()] = ...,
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -871,9 +872,9 @@ def statement_attachment_delete(
 def statement_language_add(
     problem: str,
     user: str,
-    language: str = Form(...),
-    page: str = Form('statement'),
-    preview_id: str = Form(''),
+    language: Annotated[str, Form()] = ...,
+    page: Annotated[str, Form()] = 'statement',
+    preview_id: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)

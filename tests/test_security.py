@@ -37,7 +37,7 @@ from app.impl.problem.solution import (
 from app.impl.problem.validator import validator_create_template, validator_save_source
 from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_execute
-from app.impl.root.api import auth_password_meta, login_page
+from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.service.problem.test_spec import parse_gen_command_tokens
 from .ui_support import _register_with_password_proof
 

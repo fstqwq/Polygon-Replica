@@ -8,7 +8,7 @@ from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.context_operation import audit
-from app.impl.workspace.problem_config import form_text
+from app.main_util import form_text
 
 from .common import (
     _dedupe_preserve,

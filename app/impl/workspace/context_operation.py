@@ -12,9 +12,6 @@ from .artifact import (
 from .context import (
     count_label,
 )
-from .problem_config import (
-    coerce_int,
-)
 from .revision import workspace_revision_info
 from .solution import (
     list_solution_sources,
@@ -42,6 +39,7 @@ from app.service.problem.test_spec import (
     summarize_tests_spec,
 )
 from app.service.platform.process import is_canonical_artifact_id
+from app.service.verification.runtime import coerce_int
 
 _C = config.constants
 

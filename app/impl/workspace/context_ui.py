@@ -11,6 +11,7 @@ from app.impl.runtime.config import config
 from app.main_util import normalize_workspace_rel_path
 from app.service.statement.constant import DEFAULT_PROBLEM_TITLE, STATEMENT_SECTIONS_DIR
 from app.service.statement.context import statement_languages
+from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
 
 from .access import (
     problem_acl_entries,
@@ -31,12 +32,7 @@ from .context_component_status import (
     validator_status_context,
 )
 from .context_verification import _verification_status_context
-from .problem_config import (
-    coerce_int,
-    normalize_problem_mode,
-    normalize_pass_limit,
-    read_problem_config,
-)
+from .problem_config import read_problem_config
 from .revision import git_commit_count, workspace_revision_info
 
 _C = config.constants

@@ -4,13 +4,14 @@ from pathlib import Path
 
 from app.impl.runtime.config import config
 from app.service.verification.types import Kind, Status
+from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 
 from .context_operation import audit
 from .context_verification import (
     normalize_run_id_token,
     _verification_sources_signature,
 )
-from .problem_config import normalize_pass_limit, normalize_problem_mode, read_problem_config
+from .problem_config import read_problem_config
 from .verification_dag import run_workspace_verification_dag
 
 _C = config.constants

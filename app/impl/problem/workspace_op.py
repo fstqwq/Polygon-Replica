@@ -7,9 +7,9 @@ from app.impl.auth.session import session_user
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _has_destructive_sudo_for_ctx, _sudo_redirect_for_destructive
 from app.impl.workspace.context_operation import audit, normalize_page_target
-from app.impl.workspace.problem_config import form_text
 from app.impl.workspace.access import require_manage_access, require_write_access, workspace_access_context
 from app.impl.workspace.context_ui import page_ctx
+from app.main_util import form_text
 
 _C = config.constants
 

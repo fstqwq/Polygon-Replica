@@ -9,9 +9,9 @@ from pathlib import Path
 from app.impl.runtime.config import config
 from app.service.platform.testlib_source import workspace_testlib_header
 from app.service.verification.service import CPP_EXTENSIONS, DEFAULT_TIME_LIMIT_MS, SOLUTION_SOURCE_EXTENSIONS
+from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.service.verification.source import resolve_source
 from .context_operation import list_solution_entries, resolve_build_accepted_solution_source
-from .problem_config import normalize_pass_limit, normalize_problem_mode
 
 
 @dataclass(frozen=True)

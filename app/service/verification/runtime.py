@@ -10,7 +10,7 @@ def coerce_int(raw: object, default: int, min_value: int, max_value: int) -> int
 
 
 def normalize_problem_mode(raw: object, default: str = "pass-fail") -> str:
-    token = str(raw or "").strip().lower()
+    token = str(raw or "").strip().lower().replace("_", "-").replace(" ", "-")
     if not token:
         return default
     if token in {"pass-fail", "interactive"}:
@@ -18,14 +18,34 @@ def normalize_problem_mode(raw: object, default: str = "pass-fail") -> str:
     raise ValueError(f"invalid problem mode: {token}")
 
 
-def normalize_pass_limit(raw: object, default: int = 1) -> int:
+def normalize_pass_limit(
+    raw: object,
+    default: int = 1,
+    *,
+    min_value: int = 1,
+    max_value: int | None = None,
+) -> int:
     if raw is None:
-        return default
+        base_value = int(default)
+        if max_value is None:
+            return max(int(min_value), base_value)
+        return coerce_int(base_value, base_value, int(min_value), int(max_value))
+    if isinstance(raw, str) and not raw.strip():
+        base_value = int(default)
+        if max_value is None:
+            return max(int(min_value), base_value)
+        return coerce_int(base_value, base_value, int(min_value), int(max_value))
     try:
         value = int(raw)
     except Exception as exc:
         raise ValueError("pass limit must be an integer") from exc
-    return max(1, value)
+    safe_min = int(min_value)
+    if max_value is None:
+        return max(safe_min, value)
+    safe_max = int(max_value)
+    if value < safe_min or value > safe_max:
+        raise ValueError(f"pass limit must be between {safe_min} and {safe_max}")
+    return value
 
 
 def normalize_time_limit_ms(raw: object, *, default_ms: int, min_ms: int, max_ms: int) -> int:

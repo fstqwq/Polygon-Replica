@@ -25,6 +25,7 @@ from app.service.verification.task_result_finalize import verification_task_fail
 from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
 from app.service.verification.types import is_cancel_reason
+from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 
 from .context_job_helper import allocate_run_id
 from .context_operation import audit
@@ -41,7 +42,7 @@ from .sanity_checks import (
     run_verification_sanity_checks,
 )
 from .verification_dag_plan import VerificationTestPlan, build_verification_execution_plan
-from .problem_config import normalize_pass_limit, normalize_problem_mode, read_problem_config
+from .problem_config import read_problem_config
 
 _C = config.constants
 

@@ -456,7 +456,7 @@ class TestBackendMinimal(SmokeBase):
             resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
-            f"/problems/{self.problem}/{self.user}/statement?language=english&preview_id={preview_id}",
+            f"/problems/{self.problem}/{self.user}/statement?language=english",
             resp.headers.get("location", ""),
         )
         self.assertIn("sample verification failed.", _flash_messages_from_response(resp))

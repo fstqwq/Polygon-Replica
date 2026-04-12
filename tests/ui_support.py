@@ -13,7 +13,7 @@ from urllib.parse import quote_plus, urlencode
 from starlette.requests import Request
 
 from .common import SmokeBase
-import app.impl.auth.api as auth_api_module
+import app.impl.auth.middleware as auth_middleware_module
 import app.impl.contest.access as contest_access_module
 import app.impl.contest.overview as contest_overview_module
 import app.impl.contest.package as contest_package_module
@@ -32,7 +32,9 @@ import app.impl.problem.setting as problem_setting_module
 import app.impl.problem.solution as problem_solution_module
 import app.impl.problem.validator as problem_validator_module
 import app.impl.problem.workspace_op as problem_workspace_op_module
-import app.impl.root.api as root_api_module
+import app.impl.root.auth_pages as root_auth_pages_module
+import app.impl.root.contests as root_contests_module
+import app.impl.root.problems as root_problems_module
 import app.impl.run_export.artifact as run_export_artifact_module
 import app.impl.run_export.export as run_export_export_module
 import app.impl.run_export.import_source as run_export_import_module
@@ -48,7 +50,7 @@ import app.impl.workspace.run_view_detail as workspace_run_view_detail_module
 import app.impl.workspace.run_view_list as workspace_run_view_list_module
 from app.impl.runtime.config import config
 _API_MODULES = (
-    auth_api_module,
+    auth_middleware_module,
     tests_spec_module,
     tests_spec_verification_module,
     preview_module,
@@ -75,7 +77,9 @@ _API_MODULES = (
     run_export_run_module,
     workspace_job_module,
     workspace_ui_module,
-    root_api_module,
+    root_auth_pages_module,
+    root_contests_module,
+    root_problems_module,
 )
 
 def _verification_record_run_ids(problem_id: int, workspace_id: int, verification_id: str) -> list[str]:

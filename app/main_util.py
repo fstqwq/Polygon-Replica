@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -190,6 +190,15 @@ def preserve_error_text(raw: str | None, *, max_chars: int = 1600, max_lines: in
         if not result.endswith("..."):
             result = f"{result}\n..."
     return result
+
+
+def form_text(value: str | object) -> str:
+    default = getattr(value, "default", value)
+    if default is Ellipsis:
+        return ""
+    if default is None:
+        return ""
+    return str(default)
 
 
 def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:

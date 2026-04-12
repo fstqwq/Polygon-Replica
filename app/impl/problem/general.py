@@ -10,11 +10,11 @@ from fastapi import Form, HTTPException
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, normalize_problem_name_required
-from app.impl.workspace.problem_config import coerce_int, normalize_problem_mode, read_problem_config
-from app.impl.workspace.problem_config import normalize_pass_limit
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.context import normalize_statement_language, pick_statement_language, statement_languages
+from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
+from app.impl.workspace.problem_config import read_problem_config
 
 _C = config.constants
 
@@ -38,7 +38,12 @@ def general_save(
         safe_time_limit = coerce_int(time_limit_ms, int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS)
         safe_memory = coerce_int(memory_limit_mb, int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB)
         safe_mode = normalize_problem_mode(mode, str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
-        safe_pass_limit = normalize_pass_limit(pass_limit, int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))
+        safe_pass_limit = normalize_pass_limit(
+            pass_limit,
+            int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']),
+            min_value=_C.GENERAL_PASS_LIMIT_MIN,
+            max_value=_C.GENERAL_PASS_LIMIT_MAX,
+        )
         requested_problem_name = problem_name.strip()
         current_problem_name = ctx['problem']['name'].strip()
         safe_problem_name = normalize_problem_name_required(requested_problem_name or current_problem_name)

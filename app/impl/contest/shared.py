@@ -12,7 +12,6 @@ from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from .common import _contest_problem_slug_file_token
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required, normalize_problem_name_required
-from app.impl.workspace.problem_config import coerce_int, normalize_problem_mode, read_problem_config
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_verification import latest_workspace_signature_verification
 from app.impl.workspace.access import workspace_access_context
@@ -20,7 +19,9 @@ from app.impl.workspace.revision import workspace_revision_info
 from app.service.sandbox.base import ExecSpec, ExecResult
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.platform.git_process import run_git
+from app.service.verification.runtime import coerce_int, normalize_problem_mode
 from app.service.verification.signature import verification_signature
+from app.impl.workspace.problem_config import read_problem_config
 
 _C = config.constants
 
