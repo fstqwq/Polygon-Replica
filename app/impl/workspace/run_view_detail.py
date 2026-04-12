@@ -431,7 +431,7 @@ def build_run_detail_context(
         return {
             'text': '..',
             'short': '..',
-            'metrics': 'pending',
+            'metrics': '',
             'kind': 'neutral',
             'detail': None,
         }
@@ -620,7 +620,7 @@ def build_run_detail_context(
             elif status_label == 'ok':
                 text = 'ready'
             else:
-                text = '.. pending'
+                text = ''
             detail = preserve_error_text(str(row['error_text'] or '')) or preserve_error_text(str(row['feedback_text'] or ''))
             target[test_name] = {
                 'tone': tone,
@@ -653,23 +653,27 @@ def build_run_detail_context(
         if tone in {'running', 'pending'}:
             visible_name = actual_test_name or fallback_name
             meta = note_text.removeprefix('.. ').strip()
+            if tone == 'pending':
+                meta = ''
             if visible_name:
                 return {
                     'kind': 'running' if tone == 'running' else 'neutral',
                     'text': visible_name,
                     'short': '',
-                    'meta': meta or ('running' if tone == 'running' else 'pending'),
+                    'meta': meta or ('running' if tone == 'running' else ''),
                     'detail': note_detail,
                     'clickable': False,
                 }
             short = note_text
             if note_text.startswith('.. '):
                 short = '..'
+            if tone == 'pending':
+                short = '..'
             return {
                 'kind': 'running' if tone == 'running' else 'neutral',
                 'text': '',
                 'short': short or '..',
-                'meta': meta or ('running' if tone == 'running' else 'pending'),
+                'meta': meta or ('running' if tone == 'running' else ''),
                 'detail': note_detail,
                 'clickable': False,
             }
@@ -1158,7 +1162,7 @@ def build_run_detail_context(
                             {
                                 'text': '..' if (missing_running or missing_pending) else '--',
                                 'short': '..' if (missing_running or missing_pending) else '--',
-                                'metrics': 'running' if missing_running else 'pending' if missing_pending else '-',
+                                'metrics': 'running' if missing_running else '' if missing_pending else '-',
                                 'kind': 'neutral',
                                 'detail': None,
                             }

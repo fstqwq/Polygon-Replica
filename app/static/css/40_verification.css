@@ -18,13 +18,17 @@
   margin: 2px 0 8px;
 }
 
+.page-title-inline.page-title-inline-status {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
 .verification-page-title-tools {
-  display: inline-flex;
+  display: flex;
   align-items: baseline;
   gap: var(--space-4);
   white-space: nowrap;
   min-width: 0;
-  overflow-x: auto;
+  width: 100%;
   font-size: var(--font-size-body);
   line-height: 1.2;
 }
@@ -51,6 +55,7 @@ section.verification-header-section {
   align-items: baseline;
   gap: var(--space-5);
   flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .verification-page-title-tools .verification-detail-actions {

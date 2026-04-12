@@ -37,7 +37,7 @@
   <div class="preview-card verification-task-status-card">
     <div class="preview-head verification-task-status-head">
       <div class="verification-task-status-title">
-        <strong>Task Status</strong>
+        <strong>Status</strong>
         {% if detail_status %}
           {% if detail_status == "ok" %}
           <span class="verification-task-status-state ok">{{ detail_status }}</span>
@@ -163,7 +163,6 @@
         {% for _col in detail_columns %}
         <td class="vcell tone-neutral">
           <span class="vcode">..</span>
-          <span class="vmeta">pending</span>
         </td>
         {% endfor %}
       </tr>

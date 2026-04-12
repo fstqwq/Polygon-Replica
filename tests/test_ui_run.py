@@ -1328,7 +1328,7 @@ class TestUIRun(UIBaseSuite):
         before_html = details_before.body.decode("utf-8", errors="replace")
         self.assertIn(">Cancel</a>", before_html)
         self.assertIn('class="linkish danger-link" data-submit-form="1">Cancel</a>', before_html)
-        self.assertIn("Task Status", before_html)
+        self.assertIn("Status", before_html)
 
         cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
         self.assertEqual(cancel_resp.status_code, 303)
@@ -1784,7 +1784,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("Last&nbsp;updated:", html)
         self.assertRegex(
             html,
-            r'Task Status</strong>\s*<span class="verification-task-status-state info">running</span>',
+            r'Status</strong>\s*<span class="verification-task-status-state info">running</span>',
         )
         self.assertIn('class="verification-task-note">luangao.cpp: cancelled on service startup</p>', html)
         self.assertIn("Running Now", html)
@@ -2234,7 +2234,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("001.in", html)
         self.assertIn("002.in", html)
         self.assertIn("running", html)
-        self.assertIn("pending", html)
+        self.assertNotIn('class="vmeta">pending</span>', html)
 
     def test_run_details_task_graph_keeps_cancelled_solution_columns_visible_after_failed_cancel(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
