@@ -114,3 +114,19 @@ def domjudge_feedback_text_from_bytes(blob: bytes) -> str:
     )
 
 
+def domjudge_verdict_from_runresult(runresult: str) -> str:
+    token = str(runresult or "").strip().lower()
+    mapping = {
+        "correct": "OK",
+        "compiler-error": "CE",
+        "timelimit": "TL",
+        "run-error": "RE",
+        "wrong-answer": "WA",
+        "no-output": "WA",
+        "checker-fail": "FL",
+        "output-limit": "FL",
+        "compare-error": "FL",
+        "internal-error": "FL",
+    }
+    return mapping.get(token, "FL")
+

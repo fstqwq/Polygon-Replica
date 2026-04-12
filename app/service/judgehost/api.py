@@ -1,11 +1,9 @@
 ﻿from __future__ import annotations
 
-import threading
 from pathlib import Path
 from app.db import DB
 from app.service.disk.verification_store import VerificationStore
 from app.runtime_value import RuntimeValues
-from app.service.memory.judgehost_state_store import JudgehostStateStore
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.platform.fs.layout import FsManager
 from app.service.repository.workspace import WorkspaceService
@@ -17,6 +15,7 @@ from .internal.domjudge_result import JudgehostDomjudgeResultsMixin
 from .internal.domjudge_util import JudgehostDomjudgeUtilsMixin
 from .internal.enqueue import JudgehostEnqueueMixin
 from .internal.queue import JudgehostQueueMixin
+from .state import JudgehostState
 
 
 class Judgehost(
@@ -27,6 +26,39 @@ class Judgehost(
     JudgehostDomjudgeDispatchMixin,
     JudgehostDomjudgeResultsMixin,
 ):
+    _STATE_ATTR_MAP = {
+        "_workspace_service": "workspace_service",
+        "_fs_manager": "fs_manager",
+        "_constants": "constants",
+        "_lock": "lock",
+        "_enabled": "enabled",
+        "_api_token": "api_token",
+        "_api_username": "api_username",
+        "_fetch_batch_size": "fetch_batch_size",
+        "_lease_sec": "lease_sec",
+        "_wait_timeout_sec": "wait_timeout_sec",
+        "_wait_poll_sec": "wait_poll_sec",
+        "_online_window_sec": "online_window_sec",
+        "_max_source_bytes": "max_source_bytes",
+        "_max_tests_per_task": "max_tests_per_task",
+        "_include_build_payload": "include_build_payload",
+        "_max_binary_payload_bytes": "max_binary_payload_bytes",
+        "_lease_requeue_lock": "lease_requeue_lock",
+        "_lease_requeue_next_ts": "lease_requeue_next_ts",
+        "_testcase_registry_lock": "testcase_registry_lock",
+        "_testcase_registry_by_hash": "testcase_registry_by_hash",
+        "_state_lock": "state_lock",
+        "_tasks_by_id": "tasks_by_id",
+        "_task_id_by_run": "task_id_by_run",
+        "_hosts_state": "hosts_state",
+        "_peer_hostname_by_client_addr": "peer_hostname_by_client_addr",
+        "_host_judged_case_events": "host_judged_case_events",
+        "_host_last_judging": "host_last_judging",
+        "_judgehost_state_store": "judgehost_state_store",
+        "_verification_store": "verification_store",
+        "_judge_fs_index_service": "judge_fs_index_service",
+    }
+
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
     STATUS_COMPLETED = "completed"
@@ -44,38 +76,41 @@ class Judgehost(
         constants: RuntimeValues,
         judge_fs_index_service: JudgeFsIndexService | None = None,
     ) -> None:
-        self.db = db
-        self._workspace_service = workspace_service
-        self._fs_manager = fs_manager
-        self._constants = constants
-        self._lock = threading.Lock()
-        self._enabled = False
-        self._api_token = ""
-        self._api_username = "judgehost"
-        self._fetch_batch_size = 1
-        self._lease_sec = 120
-        self._wait_timeout_sec = 900
-        self._wait_poll_sec = 0.5
-        self._online_window_sec = 120
-        self._max_source_bytes = 262144
-        self._max_tests_per_task = 512
-        self._include_build_payload = True
-        self._max_binary_payload_bytes = 8388608
-        self._lease_requeue_lock = threading.Lock()
-        self._lease_requeue_next_ts = 0.0
-        self._testcase_registry_lock = threading.RLock()
-        self._testcase_registry_by_hash: dict[str, dict[str, object]] = {}
-        self._state_lock = threading.RLock()
-        self._tasks_by_id: dict[str, dict[str, object]] = {}
-        self._task_id_by_run: dict[str, str] = {}
-        self._hosts_state: dict[str, dict[str, object]] = {}
-        self._peer_hostname_by_client_addr: dict[str, str] = {}
-        self._host_judged_case_events: dict[str, list[float]] = {}
-        self._host_last_judging: dict[str, dict[str, str]] = {}
-        self._judgehost_state_store = JudgehostStateStore()
-        self._verification_store = VerificationStore(self.db)
-        self._judge_fs_index_service = judge_fs_index_service
+        _ = settings
+        object.__setattr__(self, "db", db)
+        object.__setattr__(
+            self,
+            "_state",
+            JudgehostState(
+                db=db,
+                workspace_service=workspace_service,
+                fs_manager=fs_manager,
+                constants=constants,
+                judge_fs_index_service=judge_fs_index_service,
+                verification_store=VerificationStore(db),
+            ),
+        )
         self.apply_runtime_values(constants)
+
+    def __getattribute__(self, name: str):
+        state_attr_map = object.__getattribute__(self, "_STATE_ATTR_MAP")
+        if name in state_attr_map:
+            instance_dict = object.__getattribute__(self, "__dict__")
+            state = instance_dict.get("_state")
+            if state is not None:
+                return getattr(state, state_attr_map[name])
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        state_attr_map = type(self)._STATE_ATTR_MAP
+        if name in state_attr_map and "_state" in self.__dict__:
+            setattr(self._state, state_attr_map[name], value)
+            return
+        object.__setattr__(self, name, value)
+
+    @property
+    def state(self) -> JudgehostState:
+        return self._state
 
     def run_submission(
         self,

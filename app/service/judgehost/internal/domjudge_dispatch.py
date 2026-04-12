@@ -13,7 +13,13 @@ from app.service.judgehost.domjudge.cache import domjudge_json_hash
 from app.service.judgehost.domjudge.client import domjudge_script_id
 from app.service.memory.judgehost_state_store import JudgehostCaseRow, JudgehostJobRow
 from app.service.judgehost.internal.shared import domjudge_lower_text, domjudge_path_name, domjudge_text
-from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_float, domjudge_parse_int, domjudge_rewrite_untrusted_runresult
+from app.service.judgehost.runtime import (
+    domjudge_bool,
+    domjudge_parse_float,
+    domjudge_parse_int,
+    domjudge_rewrite_untrusted_runresult,
+    domjudge_verdict_from_runresult,
+)
 from app.service.platform.hashing import sha256_hex_bytes as domjudge_sha256_bytes
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.verification.task_scheduler import notify_verification_case_leased
@@ -596,7 +602,7 @@ class JudgehostDomjudgeDispatchMixin:
                 ),
                 run_cfg_obj=run_cfg_obj,
             )
-            cached_verdict = self._domjudge_verdict_from_runresult(cached_runresult)
+            cached_verdict = domjudge_verdict_from_runresult(cached_runresult)
             if cached_verdict == "FL":
                 self._domjudge_cache_delete(self.CASE_CACHE_KIND, case_key_hash, case_signature)
                 return None
@@ -715,7 +721,7 @@ class JudgehostDomjudgeDispatchMixin:
                 task_id=domjudge_text(cached["task_id"]),
                 source_path=domjudge_text(job_row["source_path"]),
                 test_name=domjudge_text(cached["test_name"]),
-                verdict=self._domjudge_verdict_from_runresult(domjudge_text(cached["runresult"])),
+                verdict=domjudge_verdict_from_runresult(domjudge_text(cached["runresult"])),
                 runtime_sec=domjudge_parse_float(cached["runtime_sec"], 0.0),
                 cpu_sec=domjudge_parse_float(cached["cpu_sec"], 0.0),
                 wall_sec=domjudge_parse_float(cached["wall_sec"], 0.0),

@@ -1162,7 +1162,7 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(first_feedback_token.endswith("judgemessage.txt"))
         self.assertEqual(service.resolve_artifact_blob(first_feedback_token), b"ok\n")
 
-        run_root = self._verification_artifact_root(str(run_row["verification_id"] or "")) / "runs" / run_id
+        run_root = self._verification_artifact_root(verification_id) / "runs" / run_id
         self.assertFalse((run_root / "001.out").exists())
 
     def test_domjudge_rewrites_untrusted_non_tl_result_when_cpu_exceeds_time_limit(self) -> None:

@@ -24,6 +24,7 @@ from app.service.judgehost.runtime import (
     domjudge_parse_int,
     domjudge_parse_meta_text,
     domjudge_rewrite_untrusted_runresult,
+    domjudge_verdict_from_runresult,
 )
 from app.service.verification.test_rows import (
     build_verification_test_pass_row,
@@ -305,20 +306,7 @@ class JudgehostDomjudgeResultsMixin:
 
     @staticmethod
     def _domjudge_verdict_from_runresult(raw: str) -> str:
-        token = domjudge_lower_text(raw)
-        mapping = {
-            "correct": "OK",
-            "compiler-error": "CE",
-            "timelimit": "TL",
-            "run-error": "RE",
-            "wrong-answer": "WA",
-            "no-output": "WA",
-            "checker-fail": "FL",
-            "output-limit": "FL",
-            "compare-error": "FL",
-            "internal-error": "FL",
-        }
-        return mapping.get(token, "FL")
+        return domjudge_verdict_from_runresult(raw)
 
     def _domjudge_task_lease_owner(self, task_id: str) -> str:
         return domjudge_task_lease_owner(self._task_by_id(task_id), default="judgehost")

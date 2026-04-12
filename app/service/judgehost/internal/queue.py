@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 
 from app.db import now_iso
-from app.service.judgehost.runtime import now_iso_after, parse_iso_utc
+from app.service.judgehost.runtime import domjudge_verdict_from_runresult, now_iso_after, parse_iso_utc
 from app.service.verification.task_scheduler import notify_verification_task_terminal
 from app.service.verification.test_rows import build_verification_test_pass_row, build_verification_test_row
 
@@ -415,7 +415,7 @@ class JudgehostQueueMixin:
                 memory_kb = max(0, int(case_row["memory_kb"] or 0))
                 selected_test_row = build_verification_test_row(
                     test_name=test_name,
-                    verdict=self._domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
+                    verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
                     time_ms=cpu_ms,
                     time_user_ms=cpu_ms,
                     time_wall_ms=wall_ms,
@@ -425,7 +425,7 @@ class JudgehostQueueMixin:
                     feedback_files=[],
                     passes=[
                         build_verification_test_pass_row(
-                            verdict=self._domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
+                            verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
                             time_ms=cpu_ms,
                             time_user_ms=cpu_ms,
                             time_wall_ms=wall_ms,
@@ -445,7 +445,7 @@ class JudgehostQueueMixin:
             }
             task_kind = str((row.get("payload") or {}).get("task_kind") or "")
             runresult = str(case_row["runresult"] or "")
-            verdict = self._domjudge_verdict_from_runresult(runresult)
+            verdict = domjudge_verdict_from_runresult(runresult)
             if task_kind == self._TASK_KIND_MAIN_CORRECT:
                 run_status = "ok" if verdict == "OK" else "failed"
             elif runresult in {"compiler-error", "checker-fail", "compare-error", "internal-error"}:

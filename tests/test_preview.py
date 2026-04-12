@@ -855,7 +855,7 @@ class TestPreview(SmokeBase):
             "I can't find the format file `pdflatex.fmt'!\n",
             1,
         )
-        self.assertIn("pdflatex.fmt", detail)
+        self.assertIn("missing LaTeX format file", detail)
         self.assertIn("fmtutil", detail)
 
     def test_preview_service_reports_missing_latex_package_name(self) -> None:
