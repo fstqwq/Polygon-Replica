@@ -114,6 +114,86 @@
     });
   }
 
+  function initAgentSessionsConnect() {
+    var button = document.querySelector("[data-agent-connect-button='1']");
+    var result = document.querySelector("[data-agent-connect-result='1']");
+    var urlInput = document.querySelector("[data-agent-register-url='1']");
+    var meta = document.querySelector("[data-agent-register-meta='1']");
+    var copyButton = document.querySelector("[data-agent-copy-url='1']");
+    if (!button || !result || !urlInput || !meta || !copyButton) return;
+
+    var baseLabel = String(button.textContent || "Connect to Agent").trim() || "Connect to Agent";
+
+    function showResult(text, url) {
+      urlInput.value = String(url || "");
+      meta.textContent = String(text || "").trim();
+      result.hidden = false;
+    }
+
+    async function copyToClipboard(text) {
+      var safeText = String(text || "");
+      if (!safeText) return;
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(safeText);
+        return;
+      }
+      urlInput.focus();
+      urlInput.select();
+      if (!document.execCommand || !document.execCommand("copy")) {
+        throw new Error("copy failed");
+      }
+    }
+
+    button.addEventListener("click", async function () {
+      if (button.disabled) return;
+      setSubmitting(button, baseLabel, "Creating...", true);
+      try {
+        var response = await fetch("/agent/connect", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "X-Requested-With": "fetch",
+            Accept: "application/json",
+          },
+        });
+        var payload = {};
+        try {
+          payload = await response.json();
+        } catch (_err) {
+          payload = {};
+        }
+        if (!response.ok || !payload.ok) {
+          showResult((payload && payload.error) || "request failed", "");
+          return;
+        }
+        showResult(
+          "Expires at " +
+            String((payload && payload.expires_at) || "-") +
+            " (" +
+            String((payload && payload.expires_in) || "-") +
+            "s)",
+          String((payload && payload.register_url) || "")
+        );
+      } catch (_err) {
+        showResult("request failed: network error", "");
+      } finally {
+        setSubmitting(button, baseLabel, "Creating...", false);
+      }
+    });
+
+    copyButton.addEventListener("click", async function () {
+      var text = String(urlInput.value || "");
+      if (!text) return;
+      try {
+        await copyToClipboard(text);
+      } catch (_err) {
+        showResult("copy failed; select the URL manually", text);
+        return;
+      }
+      showResult(String(meta.textContent || "").trim() || "Registration URL copied.", text);
+    });
+  }
+
   function initSettingsJudgehostRunnerControls() {
     var judgehostToggle = document.querySelector("[data-judgehost-enable-toggle='1']");
     var judgehostAuthBlock = document.querySelector("[data-judgehost-auth-block='1']");
@@ -2696,6 +2776,7 @@
     initStatementLanguageSwitch();
     initAutoSubmitSelects();
     initPolygonImportSlugSuggest();
+    initAgentSessionsConnect();
     initSettingsTokenGenerators();
     initSettingsJudgehostRunnerControls();
     initSettingsJudgehostTableFilter();

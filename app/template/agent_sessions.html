@@ -9,15 +9,15 @@
       <strong>Connect to Agent</strong>
       <p class="muted">Create a one-time registration URL and pass it to your skill.</p>
     </div>
-    <button class="btn" type="button" id="agent-connect-button">Connect to Agent</button>
+    <button class="btn" type="button" data-agent-connect-button="1">Connect to Agent</button>
   </div>
-  <div id="agent-connect-result" hidden>
+  <div data-agent-connect-result="1" hidden>
     <label for="agent-register-url">Registration URL</label>
     <div class="form-input-with-action">
-      <input id="agent-register-url" type="text" readonly spellcheck="false" />
-      <button class="btn" type="button" id="agent-copy-url">Copy</button>
+      <input id="agent-register-url" type="text" readonly spellcheck="false" data-agent-register-url="1" />
+      <button class="btn" type="button" data-agent-copy-url="1">Copy</button>
     </div>
-    <p class="muted" id="agent-register-meta"></p>
+    <p class="muted" data-agent-register-meta="1"></p>
   </div>
 </section>
 
@@ -75,31 +75,4 @@
 {% else %}
   <p class="muted">No connected agents.</p>
 {% endif %}
-
-<script>
-(() => {
-  const button = document.getElementById('agent-connect-button');
-  const result = document.getElementById('agent-connect-result');
-  const urlInput = document.getElementById('agent-register-url');
-  const meta = document.getElementById('agent-register-meta');
-  const copyButton = document.getElementById('agent-copy-url');
-  if (!button || !result || !urlInput || !meta || !copyButton) return;
-  button.addEventListener('click', async () => {
-    const response = await fetch('/agent/connect', { method: 'POST', credentials: 'same-origin' });
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) {
-      meta.textContent = payload.error || 'request failed';
-      result.hidden = false;
-      return;
-    }
-    urlInput.value = payload.register_url || '';
-    meta.textContent = `Expires at ${payload.expires_at || '-'} (${payload.expires_in || '-'}s)`;
-    result.hidden = false;
-  });
-  copyButton.addEventListener('click', async () => {
-    if (!urlInput.value) return;
-    await navigator.clipboard.writeText(urlInput.value);
-  });
-})();
-</script>
 {% endblock %}
