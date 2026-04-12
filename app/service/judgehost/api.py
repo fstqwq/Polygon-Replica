@@ -1,20 +1,15 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+
 from app.db import DB
-from app.service.disk.verification_store import VerificationStore
 from app.runtime_value import RuntimeValues
-from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
+from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.repository.workspace import WorkspaceService
 from app.setting import Settings
 
-from .internal.core import JudgehostCoreMixin
-from .internal.domjudge_dispatch import JudgehostDomjudgeDispatchMixin
-from .internal.domjudge_result import JudgehostDomjudgeResultsMixin
-from .internal.domjudge_util import JudgehostDomjudgeUtilsMixin
-from .internal.enqueue import JudgehostEnqueueMixin
-from .internal.queue import JudgehostQueueMixin
 from .core import JudgehostCore
 from .dispatch import DispatchHandler
 from .enqueue import TaskEnqueue
@@ -24,47 +19,7 @@ from .task_queue import TaskQueue
 from .toolkit import DomjudgeToolkit
 
 
-class Judgehost(
-    JudgehostCoreMixin,
-    JudgehostEnqueueMixin,
-    JudgehostQueueMixin,
-    JudgehostDomjudgeUtilsMixin,
-    JudgehostDomjudgeDispatchMixin,
-    JudgehostDomjudgeResultsMixin,
-):
-    _STATE_ATTR_MAP = {
-        "_workspace_service": "workspace_service",
-        "_fs_manager": "fs_manager",
-        "_constants": "constants",
-        "_lock": "lock",
-        "_enabled": "enabled",
-        "_api_token": "api_token",
-        "_api_username": "api_username",
-        "_fetch_batch_size": "fetch_batch_size",
-        "_lease_sec": "lease_sec",
-        "_wait_timeout_sec": "wait_timeout_sec",
-        "_wait_poll_sec": "wait_poll_sec",
-        "_online_window_sec": "online_window_sec",
-        "_max_source_bytes": "max_source_bytes",
-        "_max_tests_per_task": "max_tests_per_task",
-        "_include_build_payload": "include_build_payload",
-        "_max_binary_payload_bytes": "max_binary_payload_bytes",
-        "_lease_requeue_lock": "lease_requeue_lock",
-        "_lease_requeue_next_ts": "lease_requeue_next_ts",
-        "_testcase_registry_lock": "testcase_registry_lock",
-        "_testcase_registry_by_hash": "testcase_registry_by_hash",
-        "_state_lock": "state_lock",
-        "_tasks_by_id": "tasks_by_id",
-        "_task_id_by_run": "task_id_by_run",
-        "_hosts_state": "hosts_state",
-        "_peer_hostname_by_client_addr": "peer_hostname_by_client_addr",
-        "_host_judged_case_events": "host_judged_case_events",
-        "_host_last_judging": "host_last_judging",
-        "_judgehost_state_store": "judgehost_state_store",
-        "_verification_store": "verification_store",
-        "_judge_fs_index_service": "judge_fs_index_service",
-    }
-
+class Judgehost:
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
     STATUS_COMPLETED = "completed"
@@ -83,54 +38,266 @@ class Judgehost(
         judge_fs_index_service: JudgeFsIndexService | None = None,
     ) -> None:
         _ = settings
-        object.__setattr__(self, "db", db)
-        object.__setattr__(
-            self,
-            "_state",
-            JudgehostState(
-                db=db,
-                workspace_service=workspace_service,
-                fs_manager=fs_manager,
-                constants=constants,
-                judge_fs_index_service=judge_fs_index_service,
-                verification_store=VerificationStore(db),
-            ),
+        self.db = db
+        self._state = JudgehostState(
+            db=db,
+            workspace_service=workspace_service,
+            fs_manager=fs_manager,
+            constants=constants,
+            judge_fs_index_service=judge_fs_index_service,
+            verification_store=VerificationStore(db),
         )
-        object.__setattr__(self, "_toolkit", DomjudgeToolkit(self._state))
-        object.__setattr__(self, "_core", JudgehostCore(self._state))
-        object.__setattr__(self, "_queue", TaskQueue(self._state, self._core, self._toolkit))
-        object.__setattr__(self, "_result", ResultProcessor(self._state, self._core, self._queue, self._toolkit))
-        object.__setattr__(
-            self,
-            "_dispatch",
-            DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit),
-        )
-        object.__setattr__(
-            self,
-            "_enqueue",
-            TaskEnqueue(self._state, self._core, self._dispatch, self._result, self._toolkit, self),
-        )
+        self._toolkit = DomjudgeToolkit(self._state)
+        self._core = JudgehostCore(self._state)
+        self._queue = TaskQueue(self._state, self._core, self._toolkit)
+        self._result = ResultProcessor(self._state, self._core, self._queue, self._toolkit)
+        self._dispatch = DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit)
+        self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._result, self._toolkit, self)
         self.apply_runtime_values(constants)
-
-    def __getattribute__(self, name: str):
-        state_attr_map = object.__getattribute__(self, "_STATE_ATTR_MAP")
-        if name in state_attr_map:
-            instance_dict = object.__getattribute__(self, "__dict__")
-            state = instance_dict.get("_state")
-            if state is not None:
-                return getattr(state, state_attr_map[name])
-        return object.__getattribute__(self, name)
-
-    def __setattr__(self, name: str, value) -> None:
-        state_attr_map = type(self)._STATE_ATTR_MAP
-        if name in state_attr_map and "_state" in self.__dict__:
-            setattr(self._state, state_attr_map[name], value)
-            return
-        object.__setattr__(self, name, value)
 
     @property
     def state(self) -> JudgehostState:
         return self._state
+
+    # Compatibility state proxies for tests during transition.
+    @property
+    def _enabled(self) -> bool:
+        return self._state.enabled
+
+    @_enabled.setter
+    def _enabled(self, value: bool) -> None:
+        self._state.enabled = value
+
+    @property
+    def _api_token(self) -> str:
+        return self._state.api_token
+
+    @_api_token.setter
+    def _api_token(self, value: str) -> None:
+        self._state.api_token = value
+
+    @property
+    def _api_username(self) -> str:
+        return self._state.api_username
+
+    @_api_username.setter
+    def _api_username(self, value: str) -> None:
+        self._state.api_username = value
+
+    @property
+    def _constants(self) -> RuntimeValues:
+        return self._state.constants
+
+    @_constants.setter
+    def _constants(self, value: RuntimeValues) -> None:
+        self._state.constants = value
+
+    @property
+    def _include_build_payload(self) -> bool:
+        return self._state.include_build_payload
+
+    @_include_build_payload.setter
+    def _include_build_payload(self, value: bool) -> None:
+        self._state.include_build_payload = value
+
+    @property
+    def _max_tests_per_task(self) -> int:
+        return self._state.max_tests_per_task
+
+    @_max_tests_per_task.setter
+    def _max_tests_per_task(self, value: int) -> None:
+        self._state.max_tests_per_task = value
+
+    @property
+    def _state_lock(self):
+        return self._state.state_lock
+
+    @property
+    def _tasks_by_id(self) -> dict[str, dict[str, object]]:
+        return self._state.tasks_by_id
+
+    @property
+    def _judgehost_state_store(self):
+        return self._state.judgehost_state_store
+
+    # Compatibility helper forwards for tests during transition.
+    def _task_by_id(self, task_id: str) -> dict[str, object]:
+        return self._core.task_by_id(task_id)
+
+    def _load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
+        return self._queue.load_run_summary(run_id, verification_id)
+
+    def _domjudge_work_root(self, task_id: str) -> Path:
+        return self._toolkit.work_root(task_id)
+
+    def _domjudge_b64_decode(self, text: str | bytes | bytearray | memoryview | None) -> bytes:
+        return self._toolkit.b64_decode(text)
+
+    def _domjudge_compile_script(self, *args, **kwargs) -> bytes:
+        return self._toolkit.compile_script(*args, **kwargs)
+
+    def _domjudge_compare_script(self, *args, **kwargs) -> bytes:
+        return self._toolkit.compare_script(*args, **kwargs)
+
+    def _domjudge_run_script(self, *args, **kwargs) -> bytes:
+        return self._toolkit.run_script(*args, **kwargs)
+
+    def _domjudge_cpp_executable_build_script(self, *args, **kwargs) -> bytes:
+        return self._toolkit.cpp_executable_build_script(*args, **kwargs)
+
+    def _domjudge_payload_blob_bytes(self, value: str | bytes | bytearray | memoryview | None) -> bytes:
+        return self._toolkit.payload_blob_bytes(value)
+
+    def _domjudge_precomputed_fields_from_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        return self._enqueue._domjudge_precomputed_fields_from_payload(payload)
+
+    def _domjudge_prepare_job(self, hostname: str, task_row: dict[str, object]) -> int:
+        return self._dispatch._domjudge_prepare_job(hostname, task_row)
+
+    def _domjudge_release_prepared_job_for_queue(self, *args, **kwargs):
+        return self._dispatch._domjudge_release_prepared_job_for_queue(*args, **kwargs)
+
+    def _domjudge_lease_cases(self, *args, **kwargs):
+        return self._dispatch._domjudge_lease_cases(*args, **kwargs)
+
+    def _domjudge_try_prequeue_cache_finalize(self, *args, **kwargs):
+        return self._dispatch._domjudge_try_prequeue_cache_finalize(*args, **kwargs)
+
+    def _domjudge_strip_protocol_trace(self, text: str) -> str:
+        return self._toolkit.strip_protocol_trace(text)
+
+    # Public API delegation.
+    def apply_runtime_values(self, constants: RuntimeValues) -> None:
+        return self._core.apply_runtime_values(constants)
+
+    def enabled(self) -> bool:
+        return self._core.enabled()
+
+    def auth_token_configured(self) -> bool:
+        return self._core.auth_token_configured()
+
+    def check_api_token(self, token: str) -> bool:
+        return self._core.check_api_token(token)
+
+    def api_username(self) -> str:
+        return self._core.api_username()
+
+    def check_api_basic(self, username: str, password: str) -> bool:
+        return self._core.check_api_basic(username, password)
+
+    def bind_request_peer_hostname(self, peer_addr: str, hostname: str) -> None:
+        return self._core.bind_request_peer_hostname(peer_addr, hostname)
+
+    def hostname_for_request_peer(self, peer_addr: str) -> str:
+        return self._core.hostname_for_request_peer(peer_addr)
+
+    def prepare_enqueue_payload(self, **kwargs) -> dict[str, object]:
+        return self._enqueue.prepare_enqueue_payload(**kwargs)
+
+    def enqueue_task(self, **kwargs) -> str:
+        return self._enqueue.enqueue_task(**kwargs)
+
+    def enqueue_compile_only_task(self, **kwargs) -> str:
+        return self._enqueue.enqueue_compile_only_task(**kwargs)
+
+    def domjudge_runs_with_leased_cases(self, *args, **kwargs):
+        return self._queue.domjudge_runs_with_leased_cases(*args, **kwargs)
+
+    def fetch_work(self, *args, **kwargs):
+        return self._queue.fetch_work(*args, **kwargs)
+
+    def renew_lease(self, *args, **kwargs):
+        return self._queue.renew_lease(*args, **kwargs)
+
+    def report_result(self, *args, **kwargs):
+        return self._queue.report_result(*args, **kwargs)
+
+    def wait_for_task_result(self, *args, **kwargs):
+        return self._queue.wait_for_task_result(*args, **kwargs)
+
+    def poll_task_result(self, *args, **kwargs):
+        return self._queue.poll_task_result(*args, **kwargs)
+
+    def wait_for_task_case_result(self, *args, **kwargs):
+        return self._queue.wait_for_task_case_result(*args, **kwargs)
+
+    def poll_task_case_result(self, *args, **kwargs):
+        return self._queue.poll_task_case_result(*args, **kwargs)
+
+    def wait_for_task(self, *args, **kwargs):
+        return self._queue.wait_for_task(*args, **kwargs)
+
+    def set_host_enabled(self, *args, **kwargs):
+        return self._queue.set_host_enabled(*args, **kwargs)
+
+    def status(self, *args, **kwargs):
+        return self._queue.status(*args, **kwargs)
+
+    def cancel_tasks_for_runs(self, *args, **kwargs):
+        return self._queue.cancel_tasks_for_runs(*args, **kwargs)
+
+    def startup_cancel_inflight_tasks(self, *args, **kwargs):
+        return self._queue.startup_cancel_inflight_tasks(*args, **kwargs)
+
+    def forget_problem_tasks(self, *args, **kwargs):
+        return self._queue.forget_problem_tasks(*args, **kwargs)
+
+    def cancel_domjudge_jobs_for_runs(self, *args, **kwargs):
+        return self._queue.cancel_domjudge_jobs_for_runs(*args, **kwargs)
+
+    def cancel_all_domjudge_inflight(self, *args, **kwargs):
+        return self._queue.cancel_all_domjudge_inflight(*args, **kwargs)
+
+    def forget_domjudge_runs(self, *args, **kwargs):
+        return self._queue.forget_domjudge_runs(*args, **kwargs)
+
+    def resolve_artifact_blob(self, *args, **kwargs):
+        return self._toolkit.resolve_artifact_blob(*args, **kwargs)
+
+    def clear_testcase_registry(self, *args, **kwargs):
+        return self._toolkit.clear_testcase_registry(*args, **kwargs)
+
+    def domjudge_config(self, *args, **kwargs):
+        return self._toolkit.config(*args, **kwargs)
+
+    def domjudge_languages(self, *args, **kwargs):
+        return self._toolkit.languages(*args, **kwargs)
+
+    def domjudge_list_hosts(self, *args, **kwargs):
+        return self._toolkit.list_hosts(*args, **kwargs)
+
+    def domjudge_register_host(self, *args, **kwargs):
+        return self._dispatch.domjudge_register_host(*args, **kwargs)
+
+    def domjudge_fetch_work(self, *args, **kwargs):
+        return self._dispatch.domjudge_fetch_work(*args, **kwargs)
+
+    def domjudge_get_source_files(self, *args, **kwargs):
+        return self._result.domjudge_get_source_files(*args, **kwargs)
+
+    def domjudge_get_testcase_files(self, *args, **kwargs):
+        return self._result.domjudge_get_testcase_files(*args, **kwargs)
+
+    def domjudge_get_executable_files(self, *args, **kwargs):
+        return self._result.domjudge_get_executable_files(*args, **kwargs)
+
+    def domjudge_get_version_commands(self, *args, **kwargs):
+        return self._result.domjudge_get_version_commands(*args, **kwargs)
+
+    def domjudge_check_versions(self, *args, **kwargs):
+        return self._result.domjudge_check_versions(*args, **kwargs)
+
+    def domjudge_update_judging(self, *args, **kwargs):
+        return self._result.domjudge_update_judging(*args, **kwargs)
+
+    def domjudge_add_judging_run(self, *args, **kwargs):
+        return self._result.domjudge_add_judging_run(*args, **kwargs)
+
+    def domjudge_internal_error(self, *args, **kwargs):
+        return self._result.domjudge_internal_error(*args, **kwargs)
+
+    def domjudge_add_debug_info(self, *args, **kwargs):
+        return self._result.domjudge_add_debug_info(*args, **kwargs)
 
     def run_submission(
         self,
@@ -214,7 +381,7 @@ class Judgehost(
         return self.wait_for_task_result(task_id, timeout_sec=None)
 
     def domjudge_case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, Path | None, int]:
-        row = self._judgehost_state_store.case_output_for_task(task_id, test_name)
+        row = self._state.judgehost_state_store.case_output_for_task(task_id, test_name)
         if row is None:
             return ("", None, 0)
         work_root = str(row["work_root"])
@@ -225,13 +392,13 @@ class Judgehost(
         return (output_ref, Path(work_root).resolve(), case_id)
 
     def reset_runtime_state(self) -> None:
-        with self._state_lock:
-            self._tasks_by_id.clear()
-            self._task_id_by_run.clear()
-            self._hosts_state.clear()
-            self._peer_hostname_by_client_addr.clear()
-            self._host_judged_case_events.clear()
-            self._host_last_judging.clear()
-        with self._testcase_registry_lock:
-            self._testcase_registry_by_hash.clear()
-        self._judgehost_state_store.reset()
+        with self._state.state_lock:
+            self._state.tasks_by_id.clear()
+            self._state.task_id_by_run.clear()
+            self._state.hosts_state.clear()
+            self._state.peer_hostname_by_client_addr.clear()
+            self._state.host_judged_case_events.clear()
+            self._state.host_last_judging.clear()
+        with self._state.testcase_registry_lock:
+            self._state.testcase_registry_by_hash.clear()
+        self._state.judgehost_state_store.reset()
