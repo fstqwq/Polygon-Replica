@@ -63,20 +63,20 @@ def _cleanup_stale_testsuite_roots(exclude: Path | None = None) -> None:
         _rmtree_retry(path)
 
 
-def testsuite_root() -> Path:
+def suite_root() -> Path:
     return _TESTSUITE_ROOT
 
 
 def _cleanup_testsuite_root() -> None:
-    _rmtree_retry(testsuite_root())
+    _rmtree_retry(suite_root())
 
 
 atexit.register(_cleanup_testsuite_root)
-_cleanup_stale_testsuite_roots(exclude=testsuite_root())
+_cleanup_stale_testsuite_roots(exclude=suite_root())
 
 
 def ensure_local_env() -> None:
-    root = testsuite_root()
+    root = suite_root()
     os.environ["POLYGON_REPLICA_DB"] = str(root / "var" / "lib" / "polygon-replica" / "metadata.db")
     os.environ["POLYGON_REPLICA_BARE_ROOT"] = str(root / "srv" / "git")
     os.environ["POLYGON_REPLICA_WORKSPACE_ROOT"] = str(root / "srv" / "workspaces")
@@ -135,7 +135,7 @@ class SmokeBase(unittest.TestCase):
         with workspace_service._cache_lock:
             workspace_service._problem_cache.clear()
             workspace_service._user_cache.clear()
-        _cleanup_stale_testsuite_roots(exclude=testsuite_root())
+        _cleanup_stale_testsuite_roots(exclude=suite_root())
         _cleanup_testsuite_root()
         self.addCleanup(_cleanup_testsuite_root)
         db.init()

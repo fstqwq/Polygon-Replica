@@ -6,7 +6,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from app.db import DB, now_iso, sqlite3
-from .common import testsuite_root
+from .common import suite_root
 
 
 class _TraceValues:
@@ -16,7 +16,7 @@ class _TraceValues:
 
 class TestDBSqlTrace(TestCase):
     def _make_db(self) -> DB:
-        root = testsuite_root() / f"db-trace-{uuid.uuid4().hex[:8]}"
+        root = suite_root() / f"db-trace-{uuid.uuid4().hex[:8]}"
         root.mkdir(parents=True, exist_ok=True)
         return DB(root / "trace.db")
 

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from .common import SmokeBase, testsuite_root
+from .common import SmokeBase, suite_root
 from app.impl.runtime.config import config
 from app.impl.problem.checker import checker_set_standard
 from app.impl.problem.file import (
@@ -265,7 +265,7 @@ class TestSecurity(SmokeBase):
         self.assertIn("invalid artifact path", str(denied.exception.detail))
 
     def test_tests_spec_gen_command_shell_tokens_do_not_escape(self) -> None:
-        marker = testsuite_root() / f"compile-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = suite_root() / f"compile-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         injected_cmd = f"gen.cpp 7 && touch {marker.as_posix()}"
         tokens = parse_gen_command_tokens(injected_cmd)
@@ -275,7 +275,7 @@ class TestSecurity(SmokeBase):
         self.assertFalse(marker.exists())
 
     def test_files_save_rejects_path_traversal_escape(self) -> None:
-        marker = testsuite_root() / f"files-save-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = suite_root() / f"files-save-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_save(
             problem="alice/sample",
@@ -290,7 +290,7 @@ class TestSecurity(SmokeBase):
         self.assertFalse(marker.exists())
 
     def test_files_upload_rejects_path_traversal_escape(self) -> None:
-        marker = testsuite_root() / f"files-upload-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = suite_root() / f"files-upload-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         upload = self._FakeUpload(b"owned\n")
         with self.assertRaises(HTTPException) as denied:
@@ -307,7 +307,7 @@ class TestSecurity(SmokeBase):
         self.assertFalse(marker.exists())
 
     def test_files_new_rejects_path_traversal_escape(self) -> None:
-        marker = testsuite_root() / f"files-new-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = suite_root() / f"files-new-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_new(
             problem="alice/sample",
@@ -319,7 +319,7 @@ class TestSecurity(SmokeBase):
         self.assertFalse(marker.exists())
 
     def test_files_create_template_rejects_path_traversal_escape(self) -> None:
-        marker = testsuite_root() / f"files-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"files-template-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = files_create_template(
             problem="alice/sample",
@@ -332,7 +332,7 @@ class TestSecurity(SmokeBase):
         self.assertFalse(marker.exists())
 
     def test_files_delete_rejects_path_traversal_escape(self) -> None:
-        marker = testsuite_root() / f"files-delete-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = suite_root() / f"files-delete-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_delete(
             problem="alice/sample",
@@ -363,7 +363,7 @@ class TestSecurity(SmokeBase):
         old_abs.parent.mkdir(parents=True, exist_ok=True)
         old_abs.write_text("keep\n", encoding="utf-8")
 
-        marker = testsuite_root() / f"files-rename-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = suite_root() / f"files-rename-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_rename(
             problem="alice/sample",
@@ -385,7 +385,7 @@ class TestSecurity(SmokeBase):
         self.assertIn("invalid path", str(denied.exception.detail).lower())
 
     def test_generator_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = testsuite_root() / f"generator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"generator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = generator_create_template(
             problem="alice/sample",
@@ -398,7 +398,7 @@ class TestSecurity(SmokeBase):
         self.assertTrue((ws / "generators" / "generator.cpp").exists())
 
     def test_validator_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = testsuite_root() / f"validator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"validator-template-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = validator_create_template(
             problem="alice/sample",
@@ -411,7 +411,7 @@ class TestSecurity(SmokeBase):
         self.assertTrue((ws / "validators" / "validator.cpp").exists())
 
     def test_validator_save_source_path_traversal_stays_in_workspace(self) -> None:
-        marker = testsuite_root() / f"validator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"validator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
         with patch("app.impl.problem.validator.judgehost_compile_check_error", return_value=""):
@@ -429,7 +429,7 @@ class TestSecurity(SmokeBase):
         self.assertEqual(target.read_text(encoding="utf-8"), content)
 
     def test_interactor_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = testsuite_root() / f"interactor-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"interactor-template-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = interactor_create_template(
             problem="alice/sample",
@@ -442,7 +442,7 @@ class TestSecurity(SmokeBase):
         self.assertTrue((ws / "interactors" / "interactor.cpp").exists())
 
     def test_interactor_save_source_path_traversal_stays_in_workspace(self) -> None:
-        marker = testsuite_root() / f"interactor-save-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"interactor-save-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
         with patch("app.impl.problem.interactor.judgehost_compile_check_error", return_value=""):
@@ -460,7 +460,7 @@ class TestSecurity(SmokeBase):
         self.assertEqual(target.read_text(encoding="utf-8"), content)
 
     def test_solutions_create_template_path_traversal_stays_in_workspace(self) -> None:
-        marker = testsuite_root() / f"solution-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"solution-template-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = solutions_create_template(
             problem="alice/sample",
@@ -474,7 +474,7 @@ class TestSecurity(SmokeBase):
         self.assertTrue((ws / "solutions" / "accepted.cpp.desc").exists())
 
     def test_solutions_save_source_rejects_path_traversal_escape(self) -> None:
-        marker = testsuite_root() / f"solution-save-escape-{uuid.uuid4().hex[:8]}.py"
+        marker = suite_root() / f"solution-save-escape-{uuid.uuid4().hex[:8]}.py"
         marker.unlink(missing_ok=True)
         resp = solutions_save_source(
             request=_post_request("/problems/alice/sample/alice/solutions/editor"),
@@ -489,7 +489,7 @@ class TestSecurity(SmokeBase):
         self.assertFalse(marker.exists())
 
     def test_solutions_set_tag_rejects_path_traversal_escape(self) -> None:
-        marker = testsuite_root() / f"solution-tag-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"solution-tag-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = solutions_set_tag(
             problem="alice/sample",
@@ -508,7 +508,7 @@ class TestSecurity(SmokeBase):
         old_abs.parent.mkdir(parents=True, exist_ok=True)
         old_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        marker = testsuite_root() / f"solution-rename-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"solution-rename-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = solutions_rename(
             problem="alice/sample",
@@ -528,7 +528,7 @@ class TestSecurity(SmokeBase):
         keep_abs.parent.mkdir(parents=True, exist_ok=True)
         keep_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        marker = testsuite_root() / f"solution-delete-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = suite_root() / f"solution-delete-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         resp = solutions_delete(
             problem="alice/sample",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from time import monotonic
 
 from fastapi import FastAPI, Request
@@ -17,18 +18,17 @@ from app.route import (
     run_export_route,
 )
 
-app = FastAPI(title="Polygonlike")
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-
-
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
     auth_startup()
+    try:
+        yield
+    finally:
+        auth_shutdown()
 
 
-@app.on_event("shutdown")
-def shutdown() -> None:
-    auth_shutdown()
+app = FastAPI(title="Polygonlike", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.middleware("http")
