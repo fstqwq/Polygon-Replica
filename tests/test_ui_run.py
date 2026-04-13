@@ -3782,11 +3782,11 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("<h2>Diagnostics</h2>", html)
         self.assertNotIn("Compile Diagnostics", html)
 
-    def test_source_aware_run_detail_failure_reason_prefers_column_source(self) -> None:
-        from app.impl.workspace.run_view_detail import _prefer_source_aware_failure_reason
+    def test_run_detail_failure_reason_rewrites_generic_reason_with_source(self) -> None:
+        from app.impl.workspace.run_view_detail import _rewrite_failure_reason_with_source
 
         generic_reason = "required=[AC], allowed=[AC], got=[TL]"
-        reason = _prefer_source_aware_failure_reason(
+        reason = _rewrite_failure_reason_with_source(
             generic_reason,
             [
                 {
@@ -3809,11 +3809,11 @@ class TestUIRun(UIBaseSuite):
         self.assertFalse(observed_pass)
         self.assertEqual(reason, "")
 
-    def test_source_aware_run_detail_failure_reason_prefers_column_error_when_rule_is_incomplete(self) -> None:
-        from app.impl.workspace.run_view_detail import _prefer_source_aware_failure_reason
+    def test_run_detail_failure_reason_rewrites_incomplete_reason_with_column_error(self) -> None:
+        from app.impl.workspace.run_view_detail import _rewrite_failure_reason_with_source
 
         generic_reason = "required=[WA, TL, RE, CE], allowed=[AC, WA, TL, RE, CE], got=[]: cancelled on service startup"
-        reason = _prefer_source_aware_failure_reason(
+        reason = _rewrite_failure_reason_with_source(
             generic_reason,
             [
                 {
@@ -3824,6 +3824,21 @@ class TestUIRun(UIBaseSuite):
             ],
         )
         self.assertEqual(reason, "luangao.cpp: cancelled on service startup")
+
+    def test_run_detail_failure_reason_does_not_promote_transient_running_state(self) -> None:
+        from app.impl.workspace.run_view_detail import _rewrite_failure_reason_with_source
+
+        reason = _rewrite_failure_reason_with_source(
+            "",
+            [
+                {
+                    "source": "solutions/std.cpp",
+                    "match_reason": "running",
+                    "error": "",
+                }
+            ],
+        )
+        self.assertEqual(reason, "")
 
     def test_run_details_reads_runtime_inputs_answers_and_column_outputs_for_task_graph(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
