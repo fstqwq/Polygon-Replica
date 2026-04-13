@@ -59,7 +59,7 @@
       <td class="tests-editor-actions-cell">
         <a class="linkish" href="#tests-edit-popup-{{ row.index }}" data-popup-open="tests-edit-popup-{{ row.index }}">Edit</a>
         <a class="linkish" href="#tests-reindex-popup-{{ row.index }}" data-popup-open="tests-reindex-popup-{{ row.index }}">Reindex</a>
-        <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/delete" data-confirm-message="Delete test #{{ row.index }} ({{ row.id }})? This cannot be undone; uncommitted changes will be lost.">
+        <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/tests/spec/delete" data-confirm-message="Delete test #{{ row.index }} ({{ row.id }})? This cannot be undone; uncommitted changes will be lost.">
           <input type="hidden" name="index" value="{{ row.index }}" />
           <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
         </form>
@@ -81,8 +81,8 @@
         Size: {{ row.payload_size_human }}.
       </p>
       <div class="tests-editor-actions tests-editor-actions-row">
-        <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/payload/download?index={{ row.index }}">Download payload</a>
-        <form method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/payload/upload">
+        <a class="button-link" href="/problems/{{ ctx.problem.slug }}/tests/spec/payload/download?index={{ row.index }}">Download payload</a>
+        <form method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/tests/spec/payload/upload">
           <input type="hidden" name="index" value="{{ row.index }}" />
           <label class="sr-only" for="payload-upload-popup-{{ row.index }}">Upload payload</label>
           <input id="payload-upload-popup-{{ row.index }}" type="file" name="payload_upload" required />
@@ -90,7 +90,7 @@
         </form>
       </div>
       {% endif %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/edit" data-sample-form="1">
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/tests/spec/edit" data-sample-form="1">
         <input type="hidden" name="index" value="{{ row.index }}" />
         <p><strong>ID:</strong> <code>{{ "%03d"|format(row.index) }}</code></p>
         <input type="hidden" name="test_id" value="{{ row.id }}" />
@@ -118,7 +118,7 @@
 {% endcall %}
 
 {% call ui_popup('tests-reindex-popup-' ~ row.index, 'Reindex Test ' ~ ('%03d'|format(row.index)), title_tag='h3', title_class='') %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/reindex">
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/tests/spec/reindex">
         <input type="hidden" name="source_index" value="{{ row.index }}" />
         <label for="tests-reindex-target-popup-{{ row.index }}">Target position</label>
         <input id="tests-reindex-target-popup-{{ row.index }}" type="number" name="target_index" min="1" max="{{ tests_editor.summary.total if tests_editor.summary.total else 1 }}" value="{{ row.index }}" />
@@ -129,7 +129,7 @@
 {% endfor %}
 
 {% call ui_popup('tests-add-manual-popup', 'Add Manual Test', title_tag='h3', title_class='') %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-manual" data-sample-form="1">
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/tests/spec/add-manual" data-sample-form="1">
         <label for="add-manual-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-id-popup" type="text" name="test_id" />
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" /> sample</label>
@@ -148,7 +148,7 @@
 {% endcall %}
 
 {% call ui_popup('tests-upload-manual-popup', 'Upload Manual Test', title_tag='h3', title_class='') %}
-      <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/add-manual-upload" data-sample-form="1">
+      <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/tests/spec/add-manual-upload" data-sample-form="1">
         <label for="add-manual-upload-id-popup">ID (optional, auto = next)</label>
         <input id="add-manual-upload-id-popup" type="text" name="test_id" />
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" /> sample</label>
@@ -168,7 +168,7 @@
 <div class="tests-form-grid tests-form-grid-single-extra">
   <section class="tests-subsection">
     <h2>Gen Script</h2>
-    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests/spec/gen-script">
+    <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/tests/spec/gen-script">
       <label for="tests-gen-script-text">Generator commands</label>
       <textarea
         id="tests-gen-script-text"

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 import io
 import re
@@ -6,9 +7,9 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict, cast, Annotated, Annotated
 
-from fastapi import File, Form, UploadFile
+from fastapi import File, Form, UploadFile, Depends
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response
@@ -422,7 +423,7 @@ def import_package_warnings(import_result: dict[str, object] | None) -> list[str
         warnings.append(warning)
     return warnings
 
-def export_import(problem: str, user: str, package_upload: UploadFile | None=File(None)):
+def export_import(problem: str, user: Annotated[str, Depends(require_session_user)], package_upload: UploadFile | None=File(None)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     try:
@@ -449,7 +450,7 @@ def export_import(problem: str, user: str, package_upload: UploadFile | None=Fil
         warnings = import_package_warnings(imported)
         if warnings:
             msg = f"{msg}; warning: {'; '.join(warnings)}"
-        return redirect_response(f'/problems/{target_problem}/{actor_user}/workspace', status_code=303, message=msg)
+        return redirect_response(f'/problems/{target_problem}/workspace', status_code=303, message=msg)
     except ValueError as exc:
         msg = str(exc)
     except Exception as exc:
@@ -457,9 +458,9 @@ def export_import(problem: str, user: str, package_upload: UploadFile | None=Fil
     finally:
         if package_upload is not None:
             package_upload.file.close()
-    return redirect_response(f'/problems/{problem}/{user}/export', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/export', status_code=303, message=msg)
 
-def export_import_slug_hint(problem: str, user: str, filename: str = "", requested_slug: str = ""):
+def export_import_slug_hint(problem: str, user: Annotated[str, Depends(require_session_user)], filename: str = "", requested_slug: str = ""):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     actor_user = ctx["user"]["username"]

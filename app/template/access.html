@@ -29,7 +29,7 @@
           {% if row.role == "owner" %}
           <span class="muted">fixed owner</span>
           {% else %}
-          <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access/grant">
+          <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/access/grant">
             <input type="hidden" name="target_user" value="{{ row.username }}" />
             <select name="role">
               {% for opt in repo_role_options %}
@@ -38,7 +38,7 @@
             </select>
             <button class="btn" type="submit">Save Role</button>
           </form>
-          <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access/revoke" data-confirm-message="Revoke access for {{ row.username }}? Any uncommitted workspace changes under this account may be discarded; uncommitted changes will be lost.">
+          <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/access/revoke" data-confirm-message="Revoke access for {{ row.username }}? Any uncommitted workspace changes under this account may be discarded; uncommitted changes will be lost.">
             <input type="hidden" name="target_user" value="{{ row.username }}" />
             <button class="btn" type="submit">Revoke</button>
           </form>
@@ -54,7 +54,7 @@
     <p class="muted">No access members found.</p>
     {% endif %}
     {% if ctx.access.can_manage %}
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access/grant">
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/access/grant">
       <label for="target-user">User</label>
       <input id="target-user" name="target_user" />
       <label for="target-role">Role</label>

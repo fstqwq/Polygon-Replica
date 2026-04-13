@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <h1 class="page-title">Run Solutions</h1>
-<p><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">&laquo; Back to verifications</a></p>
+<p><a href="/problems/{{ ctx.problem.slug }}/run">&laquo; Back to verifications</a></p>
 {% include "_flash_message.html" %}
 
 <section>
   <h2>Execute</h2>
-  <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
+  <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/run/execute">
     {% if force_recompile %}
     <input type="hidden" name="force_recompile" value="1" />
     {% endif %}

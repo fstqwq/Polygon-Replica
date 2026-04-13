@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
@@ -17,7 +19,7 @@ from app.service.platform.workspace_path import normalize_component_source_path,
 _C = config.constants
 
 
-def validator_page(request: Request, problem: str, user: str):
+def validator_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     validator_status = validator_status_context(workspace)
@@ -36,7 +38,7 @@ def validator_page(request: Request, problem: str, user: str):
         repo_content = template_for_kind('validator')
     return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'repo_source': repo_source, 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
-def validator_create_template(problem: str, user: str, path: str=Form('validators/validator.cpp')):
+def validator_create_template(problem: str, user: Annotated[str, Depends(require_session_user)], path: str=Form('validators/validator.cpp')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -57,11 +59,11 @@ def validator_create_template(problem: str, user: str, path: str=Form('validator
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/validator', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/validator', status_code=303, message=msg)
 
 def validator_save_source(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: str = Form('validators/validator.cpp'),
     content: str = Form(''),
     response_mode: str = Form(''),
@@ -110,7 +112,7 @@ def validator_save_source(
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    redirect_url = f'/problems/{problem}/{user}/validator'
+    redirect_url = f'/problems/{problem}/validator'
     if json_requested:
         if save_ok:
             return json_redirect_response(redirect_url, msg)

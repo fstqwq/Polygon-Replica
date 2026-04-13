@@ -18,48 +18,48 @@ from app.impl.preview.preview import (
 router = APIRouter()
 
 router.add_api_route(
-    "/problems/{problem:path}/{user}/preview",
+    "/problems/{problem:path}/preview",
     preview_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/preview/run",
+    "/problems/{problem:path}/preview/run",
     preview_run,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/preview/status",
+    "/problems/{problem:path}/preview/status",
     preview_status,
     methods=["GET"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/preview/save",
+    "/problems/{problem:path}/preview/save",
     preview_save,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/statement/assets/upload",
+    "/problems/{problem:path}/statement/assets/upload",
     statement_compile_asset_upload,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/statement/assets/delete",
+    "/problems/{problem:path}/statement/assets/delete",
     statement_compile_asset_delete,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/statement/attachments/upload",
+    "/problems/{problem:path}/statement/attachments/upload",
     statement_attachment_upload,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/statement/attachments/delete",
+    "/problems/{problem:path}/statement/attachments/delete",
     statement_attachment_delete,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/statement/languages/add",
+    "/problems/{problem:path}/statement/languages/add",
     statement_language_add,
     methods=["POST"],
 )

@@ -6,12 +6,12 @@
 
 <section>
   <h2>Add Problems</h2>
-  <form class="form-row" method="get" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems">
+  <form class="form-row" method="get" action="/contests/{{ ctx.contest.slug }}/problems">
     <label for="contest-problem-search">Search</label>
     <input id="contest-problem-search" name="q" value="{{ query }}" placeholder="slug or title" />
     <button class="btn" type="submit">Filter</button>
   </form>
-  <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/add">
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/add">
     <input type="hidden" name="q" value="{{ query }}" />
     {% if available_rows %}
     <table class="table-base">
@@ -38,7 +38,7 @@
 <section>
   <h2>Reorder / Remove</h2>
   {% if problem_rows %}
-  <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/reorder">
     <table class="table-base">
       <tr>
         <th>Select</th>
@@ -61,9 +61,9 @@
       {% endfor %}
     </table>
     <div class="form-row">
-      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/reorder">Save Index Order</button>
-      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/renumber">Renumber A,B,C...</button>
-      <button class="btn danger-link" type="submit" formaction="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
+      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/reorder">Save Index Order</button>
+      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/renumber">Renumber A,B,C...</button>
+      <button class="btn danger-link" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
     </div>
   </form>
   {% else %}
@@ -75,7 +75,7 @@
   <h2>Change Names And TL/ML (Commit Required)</h2>
   <p class="muted">Each selected problem applies source updates and creates one commit with message: <code>contest {{ ctx.contest.slug }}: bulk update name/TL/ML</code>.</p>
   {% if problem_rows %}
-  <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/problems/change-general">
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/change-general">
     <table class="table-base">
       <tr>
         <th>Select</th>

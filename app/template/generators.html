@@ -12,14 +12,14 @@
       <tr><th>Path</th><th>Used in Build</th></tr>
       {% for row in source_rows %}
       <tr>
-        <td><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators?path={{ row.path }}"><code>{{ row.path }}</code></a></td>
+        <td><a href="/problems/{{ ctx.problem.slug }}/generators?path={{ row.path }}"><code>{{ row.path }}</code></a></td>
         <td>{{ "used" if row.configured else "unused" }}</td>
       </tr>
       {% endfor %}
     </table>
     {% if source_rows_truncated %}
     {% endif %}
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators/create-template">
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/generators/create-template">
       <label for="generator-create-path">Create template</label>
       <input id="generator-create-path" name="path" placeholder="{{ create_template_path_default }}" />
       <button class="btn" type="submit">Create Generator Template</button>
@@ -31,7 +31,7 @@
     {% if selected_exists or editor_error %}
     <p><strong>{{ "File path" if selected_exists else "New file" }}:</strong> <code>{{ selected_source }}</code></p>
     {{ source_editor_form(
-      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/generators/save-source",
+      "/problems/" ~ ctx.problem.slug ~ "/generators/save-source",
       selected_source,
       repo_content,
       repo_content_truncated,

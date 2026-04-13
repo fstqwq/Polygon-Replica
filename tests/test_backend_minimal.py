@@ -458,7 +458,7 @@ class TestBackendMinimal(SmokeBase):
             resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
-            f"/problems/{self.problem}/{self.user}/statement?language=english",
+            f"/problems/{self.problem}/statement?language=english",
             resp.headers.get("location", ""),
         )
         self.assertIn("sample verification failed.", _flash_messages_from_response(resp))
@@ -474,7 +474,7 @@ class TestBackendMinimal(SmokeBase):
 
         resp = preview_page(
             _request(
-                f"/problems/{self.problem}/{self.user}/statement",
+                f"/problems/{self.problem}/statement",
                 "language=chinese",
             ),
             self.problem,
@@ -492,7 +492,7 @@ class TestBackendMinimal(SmokeBase):
         resp = statement_language_add(self.problem, self.user, language="japanese", page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
-            f"/problems/{self.problem}/{self.user}/statement?language=japanese",
+            f"/problems/{self.problem}/statement?language=japanese",
             resp.headers.get("location", ""),
         )
         for rel in (
@@ -515,7 +515,7 @@ class TestBackendMinimal(SmokeBase):
         (ws / "attachments").mkdir(parents=True, exist_ok=True)
         (ws / "attachments" / "guess_number_testing_tool.py").write_text("print('ok')\n", encoding="utf-8")
 
-        resp = preview_page(_request(f"/problems/{self.problem}/{self.user}/statement"), self.problem, self.user)
+        resp = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Statement attachments", html)
@@ -563,7 +563,7 @@ class TestBackendMinimal(SmokeBase):
         )
 
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{self.problem}/{self.user}/statement?language=english", resp.headers.get("location", ""))
+        self.assertIn(f"/problems/{self.problem}/statement?language=english", resp.headers.get("location", ""))
         self.assertEqual((ws / "statement-sections" / "english" / "figures" / "diagram.png").read_bytes(), b"PNG")
 
     def test_statement_attachment_upload_stores_file_under_attachments_root(self) -> None:
@@ -582,7 +582,7 @@ class TestBackendMinimal(SmokeBase):
         )
 
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{self.problem}/{self.user}/statement?language=english", resp.headers.get("location", ""))
+        self.assertIn(f"/problems/{self.problem}/statement?language=english", resp.headers.get("location", ""))
         self.assertEqual(
             (ws / "attachments" / "tools" / "guess_number_testing_tool.py").read_text(encoding="utf-8"),
             "print('ok')\n",
@@ -637,7 +637,7 @@ class TestBackendMinimal(SmokeBase):
             resp = preview_run(self.problem, self.user, page="statement", language="english")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
-            f"/problems/{self.problem}/{self.user}/statement?language=english&preview_id={preview_id}",
+            f"/problems/{self.problem}/statement?language=english&preview_id={preview_id}",
             resp.headers.get("location", ""),
         )
 
@@ -676,7 +676,7 @@ class TestBackendMinimal(SmokeBase):
         )
         resp = preview_page(
             _request(
-                f"/problems/{self.problem}/{self.user}/statement",
+                f"/problems/{self.problem}/statement",
                 f"preview_id={preview_id}",
             ),
             self.problem,
@@ -746,7 +746,7 @@ class TestBackendMinimal(SmokeBase):
 
         resp = preview_page(
             _request(
-                f"/problems/{self.problem}/{self.user}/preview",
+                f"/problems/{self.problem}/preview",
                 f"preview_id={preview_id}",
             ),
             self.problem,
@@ -896,7 +896,7 @@ class TestBackendMinimal(SmokeBase):
         with patch.object(config.preview_service, "compile_preview", side_effect=RuntimeError("preview failed")):
             resp = preview_run(self.problem, self.user, page="statement")
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{self.problem}/{self.user}/statement", resp.headers.get("location", ""))
+        self.assertIn(f"/problems/{self.problem}/statement", resp.headers.get("location", ""))
 
     def test_export_worker_propagates_exception(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

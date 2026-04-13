@@ -1,8 +1,10 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
+from typing import Annotated
 
 from urllib.parse import quote_plus
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.impl.auth.shared import template_response
@@ -18,13 +20,13 @@ from .shared import (
 )
 
 
-def contest_packages_preview_start(contest: str, user: str):
+def contest_packages_preview_start(contest: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = _contest_ctx(contest, user, "packages")
     if not bool(ctx["access"].get("can_write")):
         raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     if config.contest_service.problem_count(contest_id) <= 0:
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", message="add at least one problem first")
+        return _contest_redirect(str(ctx["contest"]["slug"]), "packages", message="add at least one problem first")
     job_id, queued, reason = _queue_contest_job(
         contest_id=contest_id,
         contest_slug=str(ctx["contest"]["slug"]),
@@ -52,20 +54,19 @@ def contest_packages_preview_start(contest: str, user: str):
     )
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
-        user,
         "packages",
         query=f"job_id={quote_plus(job_id)}" if job_id else "",
         message=message,
     )
 
 
-def contest_packages_build_start(contest: str, user: str):
+def contest_packages_build_start(contest: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = _contest_ctx(contest, user, "packages")
     if not bool(ctx["access"].get("can_write")):
         raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
     contest_id = int(ctx["contest"]["id"])
     if config.contest_service.problem_count(contest_id) <= 0:
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "packages", message="add at least one problem first")
+        return _contest_redirect(str(ctx["contest"]["slug"]), "packages", message="add at least one problem first")
     job_id, queued, reason = _queue_contest_job(
         contest_id=contest_id,
         contest_slug=str(ctx["contest"]["slug"]),
@@ -93,14 +94,13 @@ def contest_packages_build_start(contest: str, user: str):
     )
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
-        user,
         "packages",
         query=f"job_id={quote_plus(job_id)}" if job_id else "",
         message=message,
     )
 
 
-def contest_packages_job_status(contest: str, user: str, job_id: str = ""):
+def contest_packages_job_status(contest: str, user: Annotated[str, Depends(require_session_user)], job_id: str = ""):
     ctx = _contest_ctx(contest, user, "packages")
     contest_id = int(ctx["contest"]["id"])
     job = config.contest_service.load_job(contest_id, job_id.strip())
@@ -120,7 +120,7 @@ def contest_packages_job_status(contest: str, user: str, job_id: str = ""):
     )
 
 
-def contest_packages_artifact_download(contest: str, user: str, artifact_id: str):
+def contest_packages_artifact_download(contest: str, user: Annotated[str, Depends(require_session_user)], artifact_id: str):
     ctx = _contest_ctx(contest, user, "packages")
     contest_id = int(ctx["contest"]["id"])
     artifact = config.contest_service.artifact_download(contest_id, artifact_id)
@@ -130,7 +130,7 @@ def contest_packages_artifact_download(contest: str, user: str, artifact_id: str
     return FileResponse(file_path, filename=filename)
 
 
-def contest_packages_page(request: Request, contest: str, user: str, job_id: str = ""):
+def contest_packages_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], job_id: str = ""):
     ctx = _contest_ctx(contest, user, "packages")
     contest_id = int(ctx["contest"]["id"])
     requested_job_id = str(job_id).strip()
@@ -144,7 +144,7 @@ def contest_packages_page(request: Request, contest: str, user: str, job_id: str
         item = dict(row)
         safe_id = str(item["id"] or "")
         item["download_href"] = (
-            f"/contests/{ctx['contest']['slug']}/{ctx['user']['username']}/packages/artifacts/{safe_id}"
+            f"/contests/{ctx['contest']['slug']}/packages/artifacts/{safe_id}"
             if bool(item["downloadable"])
             else ""
         )

@@ -67,7 +67,7 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
         warnings = import_package_warnings(imported)
         if warnings:
             msg = f"{msg}; warning: {'; '.join(warnings)}"
-        return redirect_response(f"/problems/{target_problem}/{gctx['user']['username']}/statement", status_code=303, message=msg)
+        return redirect_response(f"/problems/{target_problem}/statement", status_code=303, message=msg)
     except Exception as exc:
         msg = str(exc)
     finally:

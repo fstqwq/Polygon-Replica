@@ -6,7 +6,7 @@
 
 <section>
   <h2>General</h2>
-  <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/properties/save">
+  <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/properties/save">
     <div class="form-row">
       <label for="contest-title">Title</label>
       <input id="contest-title" name="title" value="{{ ctx.contest.title }}" />

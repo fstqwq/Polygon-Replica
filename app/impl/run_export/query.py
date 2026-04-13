@@ -108,7 +108,7 @@ def _verification_runtime_progress(
     validated_count = _build_validated_count_from_log(validate_log)
 
     def _log_href(name: str) -> str:
-        return f"/problems/{problem_slug}/{username}/artifacts/{verification_id}/logs/{name}"
+        return f"/problems/{problem_slug}/artifacts/{verification_id}/logs/{name}"
 
     if event_status == "running":
         if verification_status in {"queued", "pending"}:
@@ -191,7 +191,7 @@ def _verification_href(
         return ""
     if not config.verification_service.has_export_detail_verification(int(problem_id), verification_id):
         return ""
-    return f"/problems/{problem_slug}/{username}/run/details?verification_id={quote_plus(verification_id)}"
+    return f"/problems/{problem_slug}/run/details?verification_id={quote_plus(verification_id)}"
 
 def _rerun_solution_paths_from_verification(
     *,

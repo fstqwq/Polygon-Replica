@@ -674,7 +674,7 @@ class TestExport(SmokeBase):
         )
 
         resp = export_page_module.export_page(
-            _request(f"/problems/{self.problem}/{self.user}/export"),
+            _request(f"/problems/{self.problem}/export"),
             self.problem,
             self.user,
         )
@@ -687,7 +687,7 @@ class TestExport(SmokeBase):
         self.assertIn("Activity", html)
         self.assertNotIn("Generation Tasks", html)
         self.assertNotIn("Generated Exports", html)
-        self.assertIn(f'/problems/{self.problem}/{self.user}/export/import', html)
+        self.assertIn(f'/problems/{self.problem}/export/import', html)
         self.assertIn("working tree", html)
         self.assertIn(">running<", html)
         self.assertEqual(html.count(">RUNNING<"), 1)
@@ -724,7 +724,7 @@ class TestExport(SmokeBase):
             package_upload=_Upload(package_bytes),
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{self.problem}/{self.user}/workspace", str(resp.headers.get("location", "")))
+        self.assertIn(f"/problems/{self.problem}/workspace", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn(f"native package imported into working copy {self.problem}", messages[0])
@@ -755,7 +755,7 @@ class TestExport(SmokeBase):
             package_upload=_Upload(package_bytes),
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{self.problem}/{self.user}/workspace", str(resp.headers.get("location", "")))
+        self.assertIn(f"/problems/{self.problem}/workspace", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn(f"native package imported into working copy {self.problem}", messages[0])

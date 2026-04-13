@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 import os
 import re
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus, urlencode
 
-from fastapi import File, Form, HTTPException, Request, UploadFile
+from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response, template_response
@@ -192,7 +193,7 @@ def statement_redirect_url(
     language: str = "",
     preview_id: str = "",
 ) -> str:
-    base = f"/problems/{problem}/{user}/{normalize_statement_target_page(page)}"
+    base = f"/problems/{problem}/{normalize_statement_target_page(page)}"
     query: dict[str, str] = {}
     safe_language = normalize_statement_language(language)
     safe_preview_id = str(preview_id or "").strip()
@@ -295,7 +296,7 @@ def extract_latex_failure_summary(log_text: str, summary_obj: dict[str, object] 
     return ""
 
 
-def preview_page(request: Request, problem: str, user: str):
+def preview_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace_id = ctx['workspace']['id']
     problem_id = int(ctx['problem']['id'])
@@ -386,7 +387,7 @@ def preview_page(request: Request, problem: str, user: str):
         else:
             preview_id = ''
         if preview_id and lp is not None:
-            latex_log_href = f'/problems/{problem}/{user}/artifacts/{preview_id}/logs/latex.log'
+            latex_log_href = f'/problems/{problem}/artifacts/{preview_id}/logs/latex.log'
             raw_log, log_truncated = read_text_safe_limited(lp, _C.UI_LOG_TEXT_CHAR_LIMIT)
             redact_prefixes: list[tuple[str, str]] = [
                 (str(workspace.resolve()), '.'),
@@ -478,7 +479,7 @@ def preview_page(request: Request, problem: str, user: str):
 
 def preview_run(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
 ):
@@ -555,7 +556,7 @@ def preview_run(
         redirect_url = statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id)
     return redirect_response(redirect_url, status_code=303, message=msg)
 
-def preview_status(problem: str, user: str, language: str = ""):
+def preview_status(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
@@ -599,7 +600,7 @@ def preview_status(problem: str, user: str, language: str = ""):
 
 def preview_save(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     legend_tex: Annotated[str, Form()] = '',
     input_tex: Annotated[str, Form()] = '',
     output_tex: Annotated[str, Form()] = '',
@@ -668,7 +669,7 @@ def preview_save(
 
 def statement_compile_asset_delete(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()] = ...,
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
@@ -717,7 +718,7 @@ def statement_compile_asset_delete(
 
 async def statement_compile_asset_upload(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()] = "",
     upload: Annotated[UploadFile, File()] = ...,
     page: Annotated[str, Form()] = 'statement',
@@ -777,7 +778,7 @@ async def statement_compile_asset_upload(
 
 async def statement_attachment_upload(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()] = "",
     upload: Annotated[UploadFile, File()] = ...,
     page: Annotated[str, Form()] = 'statement',
@@ -836,7 +837,7 @@ async def statement_attachment_upload(
 
 def statement_attachment_delete(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()] = ...,
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
@@ -876,7 +877,7 @@ def statement_attachment_delete(
 
 def statement_language_add(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     language: Annotated[str, Form()] = ...,
     page: Annotated[str, Form()] = 'statement',
     preview_id: Annotated[str, Form()] = '',

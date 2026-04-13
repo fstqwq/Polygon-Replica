@@ -1,6 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from fastapi import Form, Request
+from typing import Annotated
+
+from app.impl.auth.session import require_session_user
+
+from fastapi import Form, Request, Depends
 
 from app.impl.auth.shared import login_redirect, redirect_response
 from app.impl.auth.session import session_user
@@ -27,11 +31,10 @@ def _problem_slug_segment(value: str | object) -> str:
 def switch_workspace(
     request: Request,
     problem: str = Form(...),
-    user: str = Form(""),
     page: str = Form("statement"),
     problem_name: str = Form(""),
 ):
-    active_user = session_user(request) or user.strip()
+    active_user = session_user(request)
     if not active_user:
         return login_redirect(request)
     raw_problem = problem.strip()
@@ -64,12 +67,12 @@ def switch_workspace(
         msg = str(exc)
         return redirect_response('/problems', status_code=303, message=msg)
     target_page = normalize_page_target(page)
-    return redirect_response(f'/problems/{safe_problem}/{active_user}/{target_page}', status_code=303)
+    return redirect_response(f'/problems/{safe_problem}/{target_page}', status_code=303)
 
-def workspace_delete(request: Request, problem: str, user: str):
+def workspace_delete(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
-    next_path = f'/problems/{problem}/{user}/workspace'
+    next_path = f'/problems/{problem}/workspace'
     if not _has_destructive_sudo_for_ctx(request, ctx):
         return _sudo_redirect_for_destructive(next_path)
     msg = 'working copy deleted; it will be recreated on next open'
@@ -92,10 +95,10 @@ def workspace_delete(request: Request, problem: str, user: str):
         return redirect_response(next_path, status_code=303, message=msg)
     return redirect_response("/problems", status_code=303, message=msg)
 
-def problem_delete(request: Request, problem: str, user: str, confirm_problem: str=Form('')):
+def problem_delete(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], confirm_problem: str=Form('')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_manage_access(ctx)
-    next_path = f'/problems/{problem}/{user}/workspace'
+    next_path = f'/problems/{problem}/workspace'
     if not _has_destructive_sudo_for_ctx(request, ctx):
         return _sudo_redirect_for_destructive(next_path)
     msg = 'problem deleted'

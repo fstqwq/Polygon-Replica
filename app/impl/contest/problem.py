@@ -1,8 +1,10 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
+from typing import Annotated
 
 from urllib.parse import quote_plus
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
@@ -25,7 +27,7 @@ from .shared import (
 _C = config.constants
 
 
-def contest_problems_page(request: Request, contest: str, user: str, q: str = "", job_id: str = ""):
+def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = "", job_id: str = ""):
     ctx = _contest_ctx(contest, user, "problems")
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
@@ -51,7 +53,7 @@ def contest_problems_page(request: Request, contest: str, user: str, q: str = ""
     )
 
 
-def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = Form([]), q: str = Form("")):
+def contest_problems_add(contest: str, user: Annotated[str, Depends(require_session_user)], problem_slugs: list[str] = Form([]), q: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
         write_block_reason = ctx["access"].get("write_block_reason")
@@ -63,7 +65,6 @@ def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = For
         safe_query = q.strip()
         return _contest_redirect(
             str(ctx["contest"]["slug"]),
-            user,
             "problems",
             query=f"q={quote_plus(safe_query)}" if safe_query else "",
             message="select at least one problem to add",
@@ -110,10 +111,10 @@ def contest_problems_add(contest: str, user: str, problem_slugs: list[str] = For
     safe_query = q.strip()
     if safe_query:
         query_parts.append(f"q={quote_plus(safe_query)}")
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", query="&".join(query_parts), message=msg)
+    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", query="&".join(query_parts), message=msg)
 
 
-def contest_problems_remove(contest: str, user: str, problem_id: str = Form("")):
+def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_session_user)], problem_id: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
         write_block_reason = ctx["access"].get("write_block_reason")
@@ -129,10 +130,10 @@ def contest_problems_remove(contest: str, user: str, problem_id: str = Form(""))
         msg = "invalid problem id"
     else:
         config.contest_service.remove_problem(int(ctx["contest"]["id"]), pid)
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message=msg)
+    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=msg)
 
 
-def contest_problems_remove_selected(contest: str, user: str, selected_problem_ids: list[str] = Form([])):
+def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(require_session_user)], selected_problem_ids: list[str] = Form([])):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
         write_block_reason = ctx["access"].get("write_block_reason")
@@ -148,14 +149,14 @@ def contest_problems_remove_selected(contest: str, user: str, selected_problem_i
         if value > 0 and value not in ids:
             ids.append(value)
     if not ids:
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="select at least one problem to remove")
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="select at least one problem to remove")
     removed = config.contest_service.remove_problems(int(ctx["contest"]["id"]), ids)
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message=f"removed {removed} problem(s)")
+    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=f"removed {removed} problem(s)")
 
 
 def contest_problems_reorder(
     contest: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     contest_problem_ids: list[str] = Form([]),
     contest_problem_indices: list[str] = Form([]),
 ):
@@ -168,7 +169,7 @@ def contest_problems_reorder(
     ids_raw = list(contest_problem_ids)
     idx_raw = list(contest_problem_indices)
     if not ids_raw or len(ids_raw) != len(idx_raw):
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="invalid reorder payload")
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="invalid reorder payload")
     pairs: list[tuple[int, str]] = []
     seen_ids: set[int] = set()
     seen_idx: set[str] = set()
@@ -176,21 +177,21 @@ def contest_problems_reorder(
         try:
             contest_problem_id = int(raw_id)
         except Exception:
-            return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="invalid contest problem id")
+            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="invalid contest problem id")
         if contest_problem_id <= 0 or contest_problem_id in seen_ids:
-            return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="invalid contest problem id")
+            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="invalid contest problem id")
         idx = _normalize_contest_problem_idx_required(idx_raw[index])
         if idx in seen_idx:
-            return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="duplicate problem index")
+            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="duplicate problem index")
         seen_ids.add(contest_problem_id)
         seen_idx.add(idx)
         pairs.append((contest_problem_id, idx))
     if not config.contest_service.reorder_problem_indices(int(ctx["contest"]["id"]), pairs):
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="contest problem not found")
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="problem order saved")
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="contest problem not found")
+    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="problem order saved")
 
 
-def contest_problems_renumber(contest: str, user: str):
+def contest_problems_renumber(contest: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
         write_block_reason = ctx["access"].get("write_block_reason")
@@ -198,12 +199,12 @@ def contest_problems_renumber(contest: str, user: str):
             raise RuntimeError("missing write_block_reason")
         raise HTTPException(status_code=403, detail=write_block_reason)
     config.contest_service.renumber_problem_indices(int(ctx["contest"]["id"]))
-    return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="problem indices renumbered")
+    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="problem indices renumbered")
 
 
 def contest_problems_change_general(
     contest: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     selected_problem_ids: list[str] = Form([]),
     problem_ids: list[str] = Form([]),
     problem_names: list[str] = Form([]),
@@ -237,12 +238,12 @@ def contest_problems_change_general(
     if safe_retry_job_id and not selected_ids:
         retry_job = config.contest_service.load_job(contest_id, safe_retry_job_id)
         if retry_job is None:
-            return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="retry job not found")
+            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="retry job not found")
         retry_job_type = retry_job.get("job_type")
         if not isinstance(retry_job_type, str):
             raise RuntimeError("invalid retry job payload: missing job_type")
         if retry_job_type != "change-general":
-            return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="retry job type is invalid")
+            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="retry job type is invalid")
         summary = retry_job.get("summary")
         if isinstance(summary, dict):
             results = summary.get("results")
@@ -273,10 +274,10 @@ def contest_problems_change_general(
                     if pid not in selected_ids:
                         selected_ids.append(pid)
     if not selected_ids:
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="select at least one problem to update")
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="select at least one problem to update")
     rows = config.contest_service.selected_problems(contest_id, selected_ids)
     if not rows:
-        return _contest_redirect(str(ctx["contest"]["slug"]), user, "problems", message="selected problems are not part of this contest")
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="selected problems are not part of this contest")
     results: list[dict[str, object]] = []
     for row in rows:
         pid = int(row["problem_id"])
@@ -329,7 +330,6 @@ def contest_problems_change_general(
     )
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
-        user,
         "problems",
         query=f"job_id={quote_plus(job_id)}",
         message=f"change names/TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped",

@@ -1,9 +1,11 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
+from typing import Annotated
 
 import secrets
 from urllib.parse import quote_plus
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.impl.auth.session import create_session_for_user, revoke_sudo_sessions_for_user
@@ -19,7 +21,7 @@ from app.service.verification.runtime import coerce_int
 _C = config.constants
 
 
-def settings_page(request: Request, user: str):
+def settings_page(request: Request, user: Annotated[str, Depends(require_session_user)]):
     ctx = _settings_user_ctx(user)
     user_row = dict(ctx['user'])
     is_system_admin = is_system_admin_user_id(int(user_row['id']))
@@ -49,7 +51,7 @@ def settings_page(request: Request, user: str):
         admin_sections = config.system_config_service.ui_sections()
         for section in admin_sections:
             category_slug = section['slug'] if isinstance(section.get('slug'), str) else ''
-            section['href'] = f"/problems/{user_row['username']}/settings/config/{quote_plus(category_slug)}"
+            section['href'] = f"/settings/config/{quote_plus(category_slug)}"
         admin_changed_total = sum((int(section['changed_count']) for section in admin_sections if isinstance(section.get('changed_count'), (int, float))))
         if admin_sections:
             admin_default_category_slug = admin_sections[0]['slug'] if isinstance(admin_sections[0].get('slug'), str) else ''
@@ -74,14 +76,14 @@ def settings_page(request: Request, user: str):
     return template_response(request, 'settings.html', {'user': user_row, 'default_problem': default_problem, 'active_main': 'settings', 'problems': problems, 'password_csrf_token': issue_password_form_csrf_token('settings-password'), 'current_password_salt': current_salt, 'current_password_iters': current_iters, 'new_password_salt': secrets.token_hex(16), 'new_password_iters': int(_C.PASSWORD_HASH_ITERS), 'is_system_admin': is_system_admin, 'admin_config_sections': admin_sections, 'admin_config_changed_total': admin_changed_total, 'admin_default_category_slug': admin_default_category_slug, 'judgehost_status': judgehost_status, 'admin_runtime_controls': admin_runtime_controls})
 
 def settings_judgehost_runtime_update(
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     judgehost_enable: str = Form("0"),
     judgehost_api_token: str = Form(""),
     judgehost_api_username: str = Form(""),
 ):
     ctx = _settings_user_ctx(user)
     require_system_admin(ctx)
-    redirect_target = f"/problems/{user}/settings"
+    redirect_target = f"/settings"
     msg = "judgehost runtime settings updated"
     try:
         payload = {
@@ -108,7 +110,7 @@ def settings_judgehost_runtime_update(
         msg = str(exc)
     return redirect_response(redirect_target, status_code=303, message=msg)
 
-def settings_worker_queue_snapshot(user: str, limit: int=200):
+def settings_worker_queue_snapshot(user: Annotated[str, Depends(require_session_user)], limit: int=200):
     ctx = _settings_user_ctx(user)
     require_system_admin(ctx)
     cap = coerce_int(limit, 200, 1, 2000)
@@ -116,7 +118,7 @@ def settings_worker_queue_snapshot(user: str, limit: int=200):
     payload['limit'] = cap
     return JSONResponse(payload)
 
-def settings_judgehost_snapshot(user: str):
+def settings_judgehost_snapshot(user: Annotated[str, Depends(require_session_user)]):
     ctx = _settings_user_ctx(user)
     require_system_admin(ctx)
     payload = config.judgehost_task_service.status()
@@ -125,7 +127,7 @@ def settings_judgehost_snapshot(user: str):
     return JSONResponse(dict(payload))
 
 def settings_judgehost_host_action(
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     hostname: str = Form(""),
     action: str = Form(""),
 ):
@@ -133,7 +135,7 @@ def settings_judgehost_host_action(
     require_system_admin(ctx)
     safe_host = str(hostname or "").strip()
     safe_action = str(action or "").strip().lower()
-    redirect_target = f"/problems/{user}/settings"
+    redirect_target = f"/settings"
     if not safe_host:
         return redirect_response(redirect_target, status_code=303, message="judgehost hostname is required")
     if safe_action not in {"disable", "enable"}:
@@ -165,7 +167,7 @@ def settings_judgehost_host_action(
         msg = f"judgehost action failed: {exc}"
     return redirect_response(redirect_target, status_code=303, message=msg)
 
-def settings_config_category_page(request: Request, user: str, category: str):
+def settings_config_category_page(request: Request, user: Annotated[str, Depends(require_session_user)], category: str):
     ctx = _settings_user_ctx(user)
     require_system_admin(ctx)
     user_row = dict(ctx['user'])
@@ -173,7 +175,7 @@ def settings_config_category_page(request: Request, user: str, category: str):
     sections = config.system_config_service.ui_sections()
     for section in sections:
         category_slug = section['slug'] if isinstance(section.get('slug'), str) else ''
-        section['href'] = f"/problems/{user_row['username']}/settings/config/{quote_plus(category_slug)}"
+        section['href'] = f"/settings/config/{quote_plus(category_slug)}"
     requested_slug = config.system_config_service.category_slug(category)
     selected_section = None
     for section in sections:
@@ -204,11 +206,11 @@ def settings_config_category_page(request: Request, user: str, category: str):
         },
     )
 
-async def settings_config_category_update(request: Request, user: str, category: str):
+async def settings_config_category_update(request: Request, user: Annotated[str, Depends(require_session_user)], category: str):
     ctx = _settings_user_ctx(user)
     require_system_admin(ctx)
     safe_category_slug = config.system_config_service.category_slug(category)
-    redirect_target = f'/problems/{user}/settings/config/{safe_category_slug}'
+    redirect_target = f'/settings/config/{safe_category_slug}'
     msg = 'system config updated'
     try:
         config.system_config_service.refresh()
@@ -258,22 +260,22 @@ async def settings_config_category_update(request: Request, user: str, category:
         msg = str(exc)
     return redirect_response(redirect_target, status_code=303, message=msg)
 
-def settings_system_config_reset(user: str):
+def settings_system_config_reset(user: Annotated[str, Depends(require_session_user)]):
     ctx = _settings_user_ctx(user)
     require_system_admin(ctx)
     config.system_config_service.reset()
     config.reload_runtime_values()
     audit(ctx['user']['id'], None, 'system_config.reset', {})
-    return redirect_response(f'/problems/{user}/settings', status_code=303, message='system config reset to defaults; runtime keys reloaded, restart-marked keys need restart')
+    return redirect_response(f'/settings', status_code=303, message='system config reset to defaults; runtime keys reloaded, restart-marked keys need restart')
 
-def settings_password_update(user: str, current_password: str=Form(''), new_password: str=Form(''), new_password_confirm: str=Form(''), current_password_proof: str=Form(''), new_password_verifier: str=Form(''), new_password_proof: str=Form(''), csrf_token: str=Form(''), new_password_salt: str=Form(''), new_password_iters: str=Form('')):
+def settings_password_update(user: Annotated[str, Depends(require_session_user)], current_password: str=Form(''), new_password: str=Form(''), new_password_confirm: str=Form(''), current_password_proof: str=Form(''), new_password_verifier: str=Form(''), new_password_proof: str=Form(''), csrf_token: str=Form(''), new_password_salt: str=Form(''), new_password_iters: str=Form('')):
     row = lookup_user_auth(user)
     msg = 'password updated'
     response: RedirectResponse
     _ = (current_password, new_password, new_password_confirm)
     if row is None:
         msg = 'user not found'
-        return redirect_response(f'/problems/{user}/settings', status_code=303, message=msg)
+        return redirect_response(f'/settings', status_code=303, message=msg)
     try:
         proof_token = form_text(csrf_token).strip()
         current_proof_value = form_text(current_password_proof).strip().lower()
@@ -305,11 +307,11 @@ def settings_password_update(user: str, current_password: str=Form(''), new_pass
         config.auth_service.revoke_auth_sessions_for_user(int(row["id"]))
         revoke_sudo_sessions_for_user(int(row['id']))
         token = create_session_for_user(int(row['id']))
-        response = redirect_response(f'/problems/{user}/settings', status_code=303, message=msg)
+        response = redirect_response(f'/settings', status_code=303, message=msg)
         response.set_cookie(_C.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
         return response
     except ValueError as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{user}/settings', status_code=303, message=msg)
+    return redirect_response(f'/settings', status_code=303, message=msg)
 
 

@@ -221,7 +221,7 @@ def sudo_page(request: Request):
     identity = session_identity(request)
     if identity is None:
         return redirect_response('/login', status_code=303)
-    next_path = safe_next_path(request.query_params.get('next'), f"/problems/{identity['username']}/settings")
+    next_path = safe_next_path(request.query_params.get('next'), f"/settings")
     if has_sudo_session(request, user_id=int(identity['user_id']), scope=str(_C.SUDO_SCOPE_DESTRUCTIVE)):
         return redirect_response(next_path, status_code=303)
     auth_row = lookup_user_auth(str(identity['username']))
@@ -254,7 +254,7 @@ def sudo_submit(request: Request, password: str = Form(''), password_proof: str 
     identity = session_identity(request)
     if identity is None:
         return redirect_response('/login', status_code=303)
-    next_path = safe_next_path(form_text(next), f"/problems/{identity['username']}/settings")
+    next_path = safe_next_path(form_text(next), f"/settings")
     try:
         proof_token = form_text(csrf_token).strip()
         proof_value = form_text(password_proof).strip().lower()

@@ -6,14 +6,14 @@
 {% set nav = ctx.nav_status if ctx.nav_status is defined else {} %}
 {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
 {% set readiness_items = [
-  {'label': 'Statement', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/statement', 'meta': nav.get('statement_languages', {}).get('text', '-'), 'danger': nav.get('statement_languages', {}).get('danger', False), 'warn': nav.get('statement_languages', {}).get('warn', False)},
-  {'label': 'Judge Pipeline', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/run/new', 'meta': nav.get('pipeline', {}).get('text', '-'), 'danger': nav.get('pipeline', {}).get('danger', False), 'warn': nav.get('pipeline', {}).get('warn', False)},
-  {'label': 'Checker', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/checker', 'meta': nav.get('checker', {}).get('text', '-'), 'danger': nav.get('checker', {}).get('danger', False), 'warn': nav.get('checker', {}).get('warn', False), 'mode': 'pass-fail'},
-  {'label': 'Interactor', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/interactor', 'meta': nav.get('interactor', {}).get('text', '-'), 'danger': nav.get('interactor', {}).get('danger', False), 'warn': nav.get('interactor', {}).get('warn', False), 'mode': 'interactive'},
-  {'label': 'Validator', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/validator', 'meta': nav.get('validator', {}).get('text', '-'), 'danger': nav.get('validator', {}).get('danger', False), 'warn': nav.get('validator', {}).get('warn', False)},
-  {'label': 'Tests', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/tests', 'meta': nav.get('tests', {}).get('text', '-'), 'danger': nav.get('tests', {}).get('danger', False), 'warn': nav.get('tests', {}).get('warn', False)},
-  {'label': 'Solutions', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/solutions', 'meta': nav.get('solutions', {}).get('text', '-'), 'danger': nav.get('solutions', {}).get('danger', False), 'warn': nav.get('solutions', {}).get('warn', False)},
-  {'label': 'Packages', 'href': '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/export', 'meta': nav.get('export', {}).get('text', '-'), 'danger': nav.get('export', {}).get('danger', False), 'warn': nav.get('export', {}).get('warn', False)}
+  {'label': 'Statement', 'href': '/problems/' ~ ctx.problem.slug ~ '/statement', 'meta': nav.get('statement_languages', {}).get('text', '-'), 'danger': nav.get('statement_languages', {}).get('danger', False), 'warn': nav.get('statement_languages', {}).get('warn', False)},
+  {'label': 'Judge Pipeline', 'href': '/problems/' ~ ctx.problem.slug ~ '/run/new', 'meta': nav.get('pipeline', {}).get('text', '-'), 'danger': nav.get('pipeline', {}).get('danger', False), 'warn': nav.get('pipeline', {}).get('warn', False)},
+  {'label': 'Checker', 'href': '/problems/' ~ ctx.problem.slug ~ '/checker', 'meta': nav.get('checker', {}).get('text', '-'), 'danger': nav.get('checker', {}).get('danger', False), 'warn': nav.get('checker', {}).get('warn', False), 'mode': 'pass-fail'},
+  {'label': 'Interactor', 'href': '/problems/' ~ ctx.problem.slug ~ '/interactor', 'meta': nav.get('interactor', {}).get('text', '-'), 'danger': nav.get('interactor', {}).get('danger', False), 'warn': nav.get('interactor', {}).get('warn', False), 'mode': 'interactive'},
+  {'label': 'Validator', 'href': '/problems/' ~ ctx.problem.slug ~ '/validator', 'meta': nav.get('validator', {}).get('text', '-'), 'danger': nav.get('validator', {}).get('danger', False), 'warn': nav.get('validator', {}).get('warn', False)},
+  {'label': 'Tests', 'href': '/problems/' ~ ctx.problem.slug ~ '/tests', 'meta': nav.get('tests', {}).get('text', '-'), 'danger': nav.get('tests', {}).get('danger', False), 'warn': nav.get('tests', {}).get('warn', False)},
+  {'label': 'Solutions', 'href': '/problems/' ~ ctx.problem.slug ~ '/solutions', 'meta': nav.get('solutions', {}).get('text', '-'), 'danger': nav.get('solutions', {}).get('danger', False), 'warn': nav.get('solutions', {}).get('warn', False)},
+  {'label': 'Packages', 'href': '/problems/' ~ ctx.problem.slug ~ '/export', 'meta': nav.get('export', {}).get('text', '-'), 'danger': nav.get('export', {}).get('danger', False), 'warn': nav.get('export', {}).get('warn', False)}
 ] %}
 
 <section class="readiness-overview">
@@ -46,14 +46,14 @@
     {% endif %}
 
     <h2>Commit</h2>
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/commit">
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/git/commit">
       <input name="message" />
       <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Commit and Publish</button>
     </form>
 
     <div class="form-row">
       {% if ctx.workspace_needs_update %}
-      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull"><button class="btn text-nowrap" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button></form>
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/git/pull"><button class="btn text-nowrap" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button></form>
       {% endif %}
     </div>
 
@@ -61,20 +61,20 @@
     <h2>Rebase In Progress</h2>
     <p class="muted">Resolve conflicted files, then continue or abort the rebase.</p>
     <div class="form-row">
-      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/rebase/continue"><button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Continue Rebase</button></form>
-      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/rebase/abort"><button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Abort Rebase</button></form>
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/git/rebase/continue"><button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Continue Rebase</button></form>
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/git/rebase/abort"><button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Abort Rebase</button></form>
     </div>
     {% if status.conflicted_files %}
     <ul class="files">
       {% for p in status.conflicted_files %}
-      <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ p }}">{{ p }}</a></li>
+      <li><a href="/problems/{{ ctx.problem.slug }}/files?path={{ p }}">{{ p }}</a></li>
       {% endfor %}
     </ul>
     {% endif %}
     {% endif %}
 
     {% if ctx.access.can_write or ctx.access.can_manage %}
-    {% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/' ~ ctx.user.username ~ '/workspace?sudo_popup_done=1' %}
+    {% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/workspace?sudo_popup_done=1' %}
     <details class="danger-zone">
       <summary>Danger Zone</summary>
       <div class="danger-zone-body">
@@ -83,7 +83,7 @@
         <form
           class="danger-zone-delete"
           method="post"
-          action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace/delete"
+          action="/problems/{{ ctx.problem.slug }}/workspace/delete"
           data-confirm-message="Delete current working copy for {{ ctx.problem.slug }}? Local uncommitted changes will be lost."
           data-sudo-gated="1"
           data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
@@ -96,7 +96,7 @@
         <form
           class="form-stack danger-zone-delete"
           method="post"
-          action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/problem/delete"
+          action="/problems/{{ ctx.problem.slug }}/problem/delete"
           data-confirm-message="Delete problem {{ ctx.problem.slug }} permanently? Repository, workspaces and artifacts will be removed; uncommitted changes will be lost."
           data-sudo-gated="1"
           data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
@@ -119,7 +119,7 @@
     <div class="workspace-diff-files">
       {% for row in change_rows %}
       {% set active = (row.link_path == selected_path) %}
-      <a class="workspace-diff-file workspace-diff-file-{{ row.kind }} {{ 'active' if active else '' }}" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace?path={{ row.link_path }}">
+      <a class="workspace-diff-file workspace-diff-file-{{ row.kind }} {{ 'active' if active else '' }}" href="/problems/{{ ctx.problem.slug }}/workspace?path={{ row.link_path }}">
         <code class="change-code">{{ row.code }}</code>
         <span>{{ row.path }}</span>
       </a>

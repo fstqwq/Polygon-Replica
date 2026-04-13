@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Form
+from fastapi import Form, Depends
 
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
@@ -11,7 +13,7 @@ from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 
 
-def git_commit(problem: str, user: str, message: str=Form(...)):
+def git_commit(problem: str, user: Annotated[str, Depends(require_session_user)], message: str=Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -47,9 +49,9 @@ def git_commit(problem: str, user: str, message: str=Form(...)):
             msg = 'publish failed: upstream advanced; rebase required, commit rolled back'
         else:
             msg = err
-    return redirect_response(f'/problems/{problem}/{user}/workspace', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
 
-def git_push(problem: str, user: str):
+def git_push(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -60,9 +62,9 @@ def git_push(problem: str, user: str):
         msg = 'push ok'
     except Exception as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/workspace', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
 
-def git_pull(problem: str, user: str):
+def git_pull(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -73,9 +75,9 @@ def git_pull(problem: str, user: str):
         msg = 'pull ok'
     except Exception as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/workspace', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
 
-def git_restore_revision(problem: str, user: str, revision: str=Form(...), page: str=Form('history')):
+def git_restore_revision(problem: str, user: Annotated[str, Depends(require_session_user)], revision: str=Form(...), page: str=Form('history')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -87,9 +89,9 @@ def git_restore_revision(problem: str, user: str, revision: str=Form(...), page:
         msg = f'restored files from {resolved[:12]} on top of latest main; commit when ready'
     except Exception as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/{target_page}', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/{target_page}', status_code=303, message=msg)
 
-def git_rebase_continue(problem: str, user: str):
+def git_rebase_continue(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -100,9 +102,9 @@ def git_rebase_continue(problem: str, user: str):
         msg = 'rebase continue ok'
     except Exception as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/workspace', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
 
-def git_rebase_abort(problem: str, user: str):
+def git_rebase_abort(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -113,7 +115,7 @@ def git_rebase_abort(problem: str, user: str):
         msg = 'rebase aborted'
     except Exception as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/workspace', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
 
 
 

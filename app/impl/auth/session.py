@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from app.impl.runtime.config import config
 
@@ -49,3 +49,10 @@ def session_user(request: Request) -> str:
     if identity is None:
         return ""
     return str(identity["username"])
+
+
+def require_session_user(request: Request) -> str:
+    username = session_user(request)
+    if not username:
+        raise HTTPException(status_code=401, detail="login required")
+    return username

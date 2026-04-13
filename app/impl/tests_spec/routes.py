@@ -1,11 +1,12 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 import os
 import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import File, Form, HTTPException, Request, UploadFile
+from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
@@ -47,7 +48,7 @@ from app.service.problem.test_spec import (
 )
 
 
-def render_tests_page(request: Request, problem: str, user: str):
+def render_tests_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     tests_editor_error = ''
@@ -67,7 +68,7 @@ def render_tests_page(request: Request, problem: str, user: str):
 
 def add_manual_test(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     test_id: Annotated[str, Form()] = '',
     sample: Annotated[str, Form()] = '0',
     manual_input: Annotated[str, Form()] = '',
@@ -116,14 +117,14 @@ def add_manual_test(
         )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    redirect_url = f'/problems/{problem}/{user}/tests'
+    redirect_url = f'/problems/{problem}/tests'
     if redirect_query:
         redirect_url = f'{redirect_url}?{redirect_query}'
     return redirect_response(redirect_url, status_code=303, message=msg)
 
 async def upload_manual_test(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     manual_upload: Annotated[UploadFile, File(...)],
     test_id: Annotated[str, Form()] = '',
     sample: Annotated[str, Form()] = '0',
@@ -183,14 +184,14 @@ async def upload_manual_test(
             await manual_upload.close()
         except Exception:
             pass
-    redirect_url = f'/problems/{problem}/{user}/tests'
+    redirect_url = f'/problems/{problem}/tests'
     if redirect_query:
         redirect_url = f'{redirect_url}?{redirect_query}'
     return redirect_response(redirect_url, status_code=303, message=msg)
 
 def add_generator_test(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     test_id: Annotated[str, Form()] = '',
     sample: Annotated[str, Form()] = '0',
     command: Annotated[str, Form()] = '',
@@ -240,14 +241,14 @@ def add_generator_test(
         )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    redirect_url = f'/problems/{problem}/{user}/tests'
+    redirect_url = f'/problems/{problem}/tests'
     if redirect_query:
         redirect_url = f'{redirect_url}?{redirect_query}'
     return redirect_response(redirect_url, status_code=303, message=msg)
 
 def edit_spec_test(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     index: Annotated[str, Form(...)],
     test_id: Annotated[str, Form()] = '',
     kind: Annotated[str, Form()] = '',
@@ -318,9 +319,9 @@ def edit_spec_test(
         )
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/tests', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
 
-def delete_spec_test(problem: str, user: str, index: Annotated[str, Form(...)]):
+def delete_spec_test(problem: str, user: Annotated[str, Depends(require_session_user)], index: Annotated[str, Form(...)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -337,11 +338,11 @@ def delete_spec_test(problem: str, user: str, index: Annotated[str, Form(...)]):
         audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.delete', {'index': idx, 'kind': normalize_test_kind(deleted.get('kind')), 'id': deleted_id})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/tests', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
 
 def reindex_spec_test(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     test_id: Annotated[str, Form()] = '',
     source_index: Annotated[str, Form()] = '',
     target_index: Annotated[str, Form()] = '',
@@ -389,12 +390,12 @@ def reindex_spec_test(
         audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.reindex', audit_payload)
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    url = f'/problems/{problem}/{user}/tests'
+    url = f'/problems/{problem}/tests'
     if redirect_query:
         url = f'{url}?{redirect_query}'
     return redirect_response(url, status_code=303, message=msg)
 
-def save_gen_script(problem: str, user: str, gen_script_text: Annotated[str, Form()] = ''):
+def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_user)], gen_script_text: Annotated[str, Form()] = ''):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -506,9 +507,9 @@ def save_gen_script(problem: str, user: str, gen_script_text: Annotated[str, For
         audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.gen_script', {'commands': len(desired_commands)})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/tests', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
 
-def download_test_payload(problem: str, user: str, index: str):
+def download_test_payload(problem: str, user: Annotated[str, Depends(require_session_user)], index: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     with config.workspace_service.workspace_lock(workspace):
@@ -537,7 +538,7 @@ def download_test_payload(problem: str, user: str, index: str):
 
 async def upload_test_payload(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     index: Annotated[str, Form(...)],
     payload_upload: Annotated[UploadFile, File(...)],
 ):
@@ -569,7 +570,7 @@ async def upload_test_payload(
             await payload_upload.close()
         except Exception:
             pass
-    return redirect_response(f'/problems/{problem}/{user}/tests', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
 
 
 

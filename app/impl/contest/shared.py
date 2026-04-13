@@ -34,8 +34,8 @@ _CONTEST_LATEX_JOB_NAME = "statements"
 _CONTEST_LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
 
 
-def _contest_nav(contest_slug: str, user: str, active: str) -> list[dict[str, str]]:
-    base = f"/contests/{contest_slug}/{user}"
+def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str]]:
+    base = f"/contests/{contest_slug}"
     return [
         {"key": "overview", "label": "Overview", "href": f"{base}/overview", "active": "1" if active == "overview" else "0"},
         {"key": "problems", "label": "Problems", "href": f"{base}/problems", "active": "1" if active == "problems" else "0"},
@@ -68,7 +68,7 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
         },
         "access": access,
         "active_main": "contests",
-        "contest_nav": _contest_nav(str(contest_row["slug"]), str(gctx["user"]["username"]), active_page),
+        "contest_nav": _contest_nav(str(contest_row["slug"]), active_page),
     }
 
 
@@ -377,8 +377,8 @@ def _prepare_contest_pdf_problem(
     return item
 
 
-def _contest_redirect(contest_slug: str, user: str, page: str, *, query: str = "", message: str = ""):
-    target = f"/contests/{contest_slug}/{user}/{page}"
+def _contest_redirect(contest_slug: str, page: str, *, query: str = "", message: str = ""):
+    target = f"/contests/{contest_slug}/{page}"
     if query:
         target += f"?{query}"
     return redirect_response(target, status_code=303, message=message)

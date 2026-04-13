@@ -19,7 +19,7 @@
     <form
       class="inline-form statement-language-switch-form"
       method="get"
-      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/{{ return_page if return_page is defined else 'statement' }}"
+      action="/problems/{{ ctx.problem.slug }}/{{ return_page if return_page is defined else 'statement' }}"
       data-statement-language-form="1"
       data-statement-language-problem="{{ ctx.problem.slug }}"
       data-statement-language-user="{{ ctx.user.username }}"
@@ -49,7 +49,7 @@
     </div>
     <form
       method="post"
-      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/save"
+      action="/problems/{{ ctx.problem.slug }}/preview/save"
       data-statement-draft-form="1"
       data-draft-scope-problem="{{ ctx.problem.slug }}"
       data-draft-scope-user="{{ ctx.user.username }}"
@@ -101,7 +101,7 @@
     {% if not (preview_id and pdf_exists) %}
     <form
       method="post"
-      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run"
+      action="/problems/{{ ctx.problem.slug }}/preview/run"
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
@@ -128,18 +128,18 @@
     {% if preview_is_stale %}
     <p class="muted">
       PDF is ready, but statement is stale (sources have changed).
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+      <a href="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
     </p>
     {% else %}
     <p class="muted">
       PDF is ready.
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+      <a href="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
     </p>
     {% endif %}
-    <iframe class="pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf"></iframe>
+    <iframe class="pdf-preview" src="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf"></iframe>
     <form
       method="post"
-      action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/preview/run"
+      action="/problems/{{ ctx.problem.slug }}/preview/run"
       data-preview-compile-form="1"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
@@ -157,7 +157,7 @@
       {% endif %}
       <ul>
         {% for r in log_refs %}
-        <li><a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
+        <li><a href="/problems/{{ ctx.problem.slug }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
         {% endfor %}
       </ul>
     </details>
@@ -184,7 +184,7 @@
 {% endcall %}
 
 {% call ui_popup('statement-settings-popup', 'Edit Statement Settings') %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/save">
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/statement/save">
         <input type="hidden" name="language" value="{{ current_language }}" />
         {% if preview_id %}
         <input type="hidden" name="preview_id" value="{{ preview_id }}" />
@@ -225,7 +225,7 @@
 {% endcall %}
 
 {% call ui_popup('statement-language-popup', 'Add Statement Language') %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/languages/add">
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/statement/languages/add">
         <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
         {% if preview_id %}
         <input type="hidden" name="preview_id" value="{{ preview_id }}" />
@@ -245,7 +245,7 @@
     <p class="muted statement-assets-card-copy">Stored under <code>{{ statement_section_dir }}/</code>. Used while compiling the statement and kept out of contestant package attachments.</p>
     <div class="statement-assets-card-body">
       <div class="form-block statement-assets-upload-block">
-        <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/assets/upload">
+        <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/statement/assets/upload">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
           <input type="hidden" name="language" value="{{ current_language }}" />
           {% if preview_id %}
@@ -270,10 +270,10 @@
         <tr>
           <td><code>{{ row.display_path }}</code></td>
           <td>
-            <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?dir={{ statement_section_dir }}&path={{ row.path_q }}">Open</a>
+            <a href="/problems/{{ ctx.problem.slug }}/files?dir={{ statement_section_dir }}&path={{ row.path_q }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ row.path_q }}">Download</a>
-            <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/assets/delete" data-confirm-message="Delete statement asset {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
+            <a href="/problems/{{ ctx.problem.slug }}/files/download?path={{ row.path_q }}">Download</a>
+            <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/assets/delete" data-confirm-message="Delete statement asset {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />
@@ -301,7 +301,7 @@
     <p class="muted statement-assets-card-copy">Stored under <code>attachments/</code>. Imported from and exported to ICPC packages.</p>
     <div class="statement-assets-card-body">
       <div class="form-block statement-assets-upload-block">
-        <form id="contestant-attachments-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/attachments/upload">
+        <form id="contestant-attachments-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/statement/attachments/upload">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
           <input type="hidden" name="language" value="{{ current_language }}" />
           {% if preview_id %}
@@ -326,10 +326,10 @@
         <tr>
           <td><code>{{ row.display_path }}</code></td>
           <td>
-            <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files?dir=attachments&path={{ row.path_q }}">Open</a>
+            <a href="/problems/{{ ctx.problem.slug }}/files?dir=attachments&path={{ row.path_q }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ row.path_q }}">Download</a>
-            <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement/attachments/delete" data-confirm-message="Delete attachment {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
+            <a href="/problems/{{ ctx.problem.slug }}/files/download?path={{ row.path_q }}">Download</a>
+            <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/attachments/delete" data-confirm-message="Delete attachment {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />

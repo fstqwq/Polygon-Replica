@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote_plus
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
@@ -28,7 +30,7 @@ def _generator_template_for_target(path: str) -> str:
     return template_for_kind('generator')
 
 
-def generators_page(request: Request, problem: str, user: str):
+def generators_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     generator_status = generator_status_context(workspace)
@@ -63,7 +65,7 @@ def generators_page(request: Request, problem: str, user: str):
     create_template_path_default = Path(selected_source).name if selected_source else 'generator.cpp'
     return template_response(request, 'generators.html', {'ctx': ctx, 'generator_status': generator_status, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'source_rows': source_rows, 'source_rows_truncated': bool(generator_status.get('source_rows_truncated')), 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'create_template_path_default': create_template_path_default})
 
-def generator_create_template(problem: str, user: str, path: str=Form('generator.cpp')):
+def generator_create_template(problem: str, user: Annotated[str, Depends(require_session_user)], path: str=Form('generator.cpp')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -90,11 +92,11 @@ def generator_create_template(problem: str, user: str, path: str=Form('generator
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/generators?path={quote_plus(target)}', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/generators?path={quote_plus(target)}', status_code=303, message=msg)
 
 def generator_save_source(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: str = Form('generators/generator.cpp'),
     content: str = Form(''),
     response_mode: str = Form(''),
@@ -146,7 +148,7 @@ def generator_save_source(
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    redirect_url = f'/problems/{problem}/{user}/generators?path={quote_plus(target)}'
+    redirect_url = f'/problems/{problem}/generators?path={quote_plus(target)}'
     if json_requested:
         if save_ok:
             return json_redirect_response(redirect_url, msg)

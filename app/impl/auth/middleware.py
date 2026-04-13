@@ -9,7 +9,6 @@ from app.impl.auth.shared import (
     _apply_security_headers,
     enforce_same_origin_state_change,
     login_redirect,
-    redirect_response,
 )
 
 _C = config.constants
@@ -25,11 +24,12 @@ async def auth_middleware(request: Request, call_next):
         return response
     protected = (
         path == "/"
-        or path in {"/problems", "/contests"}
+        or path in {"/problems", "/contests", "/settings"}
         or path == "/agent"
         or (path.startswith("/agent/") and (not path.startswith("/agent/v1/")))
         or path.startswith("/problems/")
         or path.startswith("/contests/")
+        or path.startswith("/settings/")
         or path.startswith("/switch-")
         or path.startswith("/sudo")
         or (path == "/logout")
@@ -48,31 +48,6 @@ async def auth_middleware(request: Request, call_next):
         response = await call_next(request)
         _apply_security_headers(response)
         return response
-    sm = _C.SETTINGS_USER_PATH_RE.match(path)
-    if sm:
-        if sm.group("user") != user:
-            rest = sm.group("rest") or ""
-            target = f"/problems/{user}/settings{rest}"
-            if request.url.query:
-                target += f"?{request.url.query}"
-            return redirect_response(target, status_code=303)
-        response = await call_next(request)
-        _apply_security_headers(response)
-        return response
-    pm = _C.PROBLEM_USER_PATH_RE.match(path)
-    if pm and pm.group("user") != user:
-        rest = pm.group("rest") or ""
-        target = f"/problems/{pm.group('problem')}/{user}{rest}"
-        if request.url.query:
-            target += f"?{request.url.query}"
-        return redirect_response(target, status_code=303)
-    cm = _C.CONTEST_USER_PATH_RE.match(path)
-    if cm and cm.group("user") != user:
-        rest = cm.group("rest") or ""
-        target = f"/contests/{cm.group('contest')}/{user}{rest}"
-        if request.url.query:
-            target += f"?{request.url.query}"
-        return redirect_response(target, status_code=303)
     response = await call_next(request)
     _apply_security_headers(response)
     return response

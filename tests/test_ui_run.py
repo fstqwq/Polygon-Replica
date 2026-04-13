@@ -314,7 +314,7 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(add_manual.status_code, 303)
         add_manual_loc = str(add_manual.headers.get("location", ""))
-        self.assertIn("/problems/alice/sample/alice/tests", add_manual_loc)
+        self.assertIn("/problems/alice/sample/tests", add_manual_loc)
         add_manual_query = parse_qs(urlparse(add_manual_loc).query)
         self.assertIsNone(add_manual_query.get("mode"))
         self.assertEqual(add_manual_query.get("focus"), ["1"])
@@ -380,7 +380,7 @@ class TestUIRun(UIBaseSuite):
         self.assertTrue(bool(tests_after[0].get("sample")))
         self.assertEqual((generator_dir / "002.in").read_text(encoding="utf-8"), "gen 99")
 
-        page = ui_tests_page(_request("/problems/alice/sample/alice/tests"), "alice/sample", "alice")
+        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("tests/spec.json", html)
         self.assertIn("tests/generator/002.in", html)
@@ -447,7 +447,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(len(tests_checked), 1)
         self.assertTrue(bool(tests_checked[0].get("sample_output_validate", True)))
 
-        page = ui_tests_page(_request("/problems/alice/sample/alice/tests"), "alice/sample", "alice")
+        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('type="hidden" name="sample_output_validate" value="0"', html)
 
@@ -483,7 +483,7 @@ class TestUIRun(UIBaseSuite):
             gen_script_text="gen 10 1\ngen 30 3\n",
         )
         self.assertEqual(updated.status_code, 303)
-        self.assertTrue(str(updated.headers.get("location", "")).endswith("/problems/alice/sample/alice/tests"))
+        self.assertTrue(str(updated.headers.get("location", "")).endswith("/problems/alice/sample/tests"))
 
         payload = json.loads(spec_path.read_text(encoding="utf-8"))
         tests = payload.get("tests") or []
@@ -524,7 +524,7 @@ class TestUIRun(UIBaseSuite):
         huge_manual = ("A" * 200000) + "\n"
         (manual_dir / "001.in").write_text(huge_manual, encoding="utf-8")
 
-        page = ui_tests_page(_request("/problems/alice/sample/alice/tests"), "alice/sample", "alice")
+        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Inline payload editor is disabled for large manual tests.", html)
@@ -567,7 +567,7 @@ class TestUIRun(UIBaseSuite):
             )
         )
         self.assertEqual(uploaded.status_code, 303)
-        self.assertIn("/problems/alice/sample/alice/tests", uploaded.headers.get("location", ""))
+        self.assertIn("/problems/alice/sample/tests", uploaded.headers.get("location", ""))
         self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "7 8 9\n10 11\n")
 
         downloaded = download_payload_call(problem="alice/sample", user="alice", index="1")
@@ -707,7 +707,7 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(created.status_code, 303)
         location = str(created.headers.get("location", ""))
-        self.assertIn("/problems/alice/sample/alice/tests", location)
+        self.assertIn("/problems/alice/sample/tests", location)
         query = parse_qs(urlparse(location).query)
         self.assertIsNone(query.get("mode"))
         self.assertEqual(query.get("focus"), ["1"])
@@ -813,19 +813,19 @@ class TestUIRun(UIBaseSuite):
 
     def test_tests_page_includes_templates_examples_and_mode_controls(self) -> None:
         add_manual_call(problem="alice/sample", user="alice", test_id="001", manual_input="1\n")
-        page = ui_tests_page(_request("/problems/alice/sample/alice/tests"), "alice/sample", "alice")
+        page = ui_tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('data-popup-open="tests-add-manual-popup"', html)
         self.assertIn('data-popup-open="tests-upload-manual-popup"', html)
         self.assertIn('data-popup-open="tests-reindex-popup-1"', html)
-        self.assertIn('action="/problems/alice/sample/alice/tests/spec/gen-script"', html)
+        self.assertIn('action="/problems/alice/sample/tests/spec/gen-script"', html)
         self.assertRegex(
             html,
             r'<textarea[^>]*id="tests-gen-script-text"[^>]*data-code-editor="1"[^>]*data-code-path="tests/spec/gen-script\.txt"[^>]*data-code-height="220"[^>]*data-code-wrap="1"[^>]*>',
         )
-        self.assertIn('action="/problems/alice/sample/alice/tests/spec/reindex"', html)
-        self.assertIn('action="/problems/alice/sample/alice/tests/spec/add-manual-upload"', html)
+        self.assertIn('action="/problems/alice/sample/tests/spec/reindex"', html)
+        self.assertIn('action="/problems/alice/sample/tests/spec/add-manual-upload"', html)
         self.assertIn('class="tests-editor-table"', html)
         self.assertIn("<th>Test</th>", html)
         self.assertIn('data-sample-output-validate-group="1"', html)
@@ -868,7 +868,7 @@ class TestUIRun(UIBaseSuite):
             )
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/alice/run/details?verification_id=", loc)
+        self.assertIn("/problems/alice/sample/run/details?verification_id=", loc)
         run_messages = _flash_messages_from_response(resp)
         self.assertTrue(run_messages)
         self.assertIn("verification running", run_messages[0])
@@ -961,7 +961,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(resp.status_code, 303)
         self.assertTrue(observed["checked"])
         loc = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/alice/run/details?verification_id=", loc)
+        self.assertIn("/problems/alice/sample/run/details?verification_id=", loc)
         verification_id = (parse_qs(urlparse(loc).query).get("verification_id") or [""])[0]
         self.assertTrue(verification_id)
         mapped_row = db_fetch_one(
@@ -1101,7 +1101,7 @@ class TestUIRun(UIBaseSuite):
 
         (ws / "tests" / "manual" / "001.in").write_text("8\n", encoding="utf-8")
 
-        page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
+        page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
@@ -1148,7 +1148,7 @@ class TestUIRun(UIBaseSuite):
         payload["time_limit_ms"] = int(payload.get("time_limit_ms") or 2000) + 100
         problem_cfg.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
-        page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
+        page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
@@ -1166,7 +1166,7 @@ class TestUIRun(UIBaseSuite):
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
 
-        page = run_new_page(_request("/problems/alice/sample/alice/run/new", "solution_paths=solutions/wa.cpp"), "alice/sample", "alice")
+        page = run_new_page(_request("/problems/alice/sample/run/new", "solution_paths=solutions/wa.cpp"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("id=\"solution-paths\"", html)
@@ -1267,14 +1267,14 @@ class TestUIRun(UIBaseSuite):
             ],
             edges=[],
         )
-        list_page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
+        list_page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(list_page.status_code, 200)
         list_html = list_page.body.decode("utf-8", errors="replace")
         self.assertIn(f"/run/new?rerun_verification_id={verification_id}&force_recompile=1", list_html)
         self.assertNotIn("/run/new?solution_paths=", list_html)
 
         new_page = run_new_page(
-            _request("/problems/alice/sample/alice/run/new", f"rerun_verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/new", f"rerun_verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -1303,7 +1303,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn('name="test_names" value="002.in" checked', html)
 
     def test_run_page_uses_default_sidebar_without_verification_table(self) -> None:
-        page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
+        page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("No verification yet.", html)
@@ -1437,14 +1437,14 @@ class TestUIRun(UIBaseSuite):
             },
         )
 
-        list_page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
+        list_page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         list_html = list_page.body.decode("utf-8", errors="replace")
         self.assertNotIn("Rejudge unavailable:", list_html)
         self.assertNotIn(">Rejudge</a>", list_html)
         self.assertNotIn("/run/new?solution_paths=solutions%2Faccepted.cpp", list_html)
 
         details_page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -1510,7 +1510,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         details_before = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -1522,7 +1522,7 @@ class TestUIRun(UIBaseSuite):
         cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
         self.assertEqual(cancel_resp.status_code, 303)
         self.assertIn(
-            f"/problems/alice/sample/alice/run/details?verification_id={verification_id}",
+            f"/problems/alice/sample/run/details?verification_id={verification_id}",
             str(cancel_resp.headers.get("location", "")),
         )
         cancel_messages = _flash_messages_from_response(cancel_resp)
@@ -1540,7 +1540,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(str(rows["vt-cancel-pending"]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
 
         details_after = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -1742,7 +1742,7 @@ class TestUIRun(UIBaseSuite):
             },
         )
 
-        page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
+        page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(verification_id, html)
@@ -1963,7 +1963,7 @@ class TestUIRun(UIBaseSuite):
             ["luangao.cpp: cancelled on service startup", verification_id],
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -2105,7 +2105,7 @@ class TestUIRun(UIBaseSuite):
             ],
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -2309,7 +2309,7 @@ class TestUIRun(UIBaseSuite):
             edges=[("vt-generate-1", "vt-solution-1")],
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -2414,7 +2414,7 @@ class TestUIRun(UIBaseSuite):
             edges=[],
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -2543,7 +2543,7 @@ class TestUIRun(UIBaseSuite):
             edges=[],
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -2745,7 +2745,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
+        page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
@@ -2780,7 +2780,7 @@ class TestUIRun(UIBaseSuite):
             ):
                 start_resp = verification_start(problem=problem, user="alice", page="statement")
             self.assertEqual(start_resp.status_code, 303)
-            page = general_page(_request(f"/problems/{problem}/alice/statement"), problem, "alice")
+            page = general_page(_request(f"/problems/{problem}/statement"), problem, "alice")
             self.assertEqual(page.status_code, 200)
             html = page.body.decode("utf-8", errors="replace")
             self.assertRegex(
@@ -2831,7 +2831,7 @@ class TestUIRun(UIBaseSuite):
             },
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -2927,7 +2927,7 @@ class TestUIRun(UIBaseSuite):
             ],
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -2982,7 +2982,7 @@ class TestUIRun(UIBaseSuite):
             },
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3053,7 +3053,7 @@ class TestUIRun(UIBaseSuite):
             ],
         )
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3125,7 +3125,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3212,7 +3212,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3314,7 +3314,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3357,7 +3357,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3438,7 +3438,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3526,7 +3526,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3538,7 +3538,7 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("Check Expectations", html)
 
     def test_run_details_uses_default_sidebar_without_detail_table(self) -> None:
-        page = run_details_page(_request("/problems/alice/sample/alice/run/details"), "alice/sample", "alice")
+        page = run_details_page(_request("/problems/alice/sample/run/details"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("No verification selected.", html)
@@ -3556,7 +3556,7 @@ class TestUIRun(UIBaseSuite):
         workspace_service.ensure_workspace("alice/sample", "alice")
         token = "cache://judgehost-domjudge-case/" + ("a" * 64) + "/" + ("b" * 64) + "/program.out"
         encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
-        download_href = f"/problems/alice/sample/alice/artifacts/ver-r-transcript/blob/{encoded}/program.out"
+        download_href = f"/problems/alice/sample/artifacts/ver-r-transcript/blob/{encoded}/program.out"
         detail_ctx = {
             "detail_rows": [
                 {
@@ -3598,7 +3598,7 @@ class TestUIRun(UIBaseSuite):
 
         with patch("app.impl.run_export.run.build_run_detail_context", return_value=detail_ctx):
             detail = run_details_test_fragment(
-                _request("/problems/alice/sample/alice/run/details/test-fragment", "verification_id=ver-r-transcript&test=001.in"),
+                _request("/problems/alice/sample/run/details/test-fragment", "verification_id=ver-r-transcript&test=001.in"),
                 "alice/sample",
                 "alice",
             )
@@ -3772,7 +3772,7 @@ class TestUIRun(UIBaseSuite):
         )
         verification_id = self._verification_id_for_run(run_id)
         page = run_details_page(
-            _request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"),
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
@@ -3898,7 +3898,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
             "alice/sample",
             "alice",
         )
@@ -3909,14 +3909,14 @@ class TestUIRun(UIBaseSuite):
         self.assertRegex(detail_html, r"(?s)<strong>Output</strong>.*?<pre[^>]*>\s*6\s*</pre>")
         self.assertNotIn("<strong>Generation</strong>", detail_html)
         self.assertIn(
-            f"/problems/alice/sample/alice/artifacts/{verification_id}/tests/001.in",
+            f"/problems/alice/sample/artifacts/{verification_id}/tests/001.in",
             detail_html,
         )
         self.assertIn(
-            f"/problems/alice/sample/alice/artifacts/{verification_id}/ans/001.ans",
+            f"/problems/alice/sample/artifacts/{verification_id}/ans/001.ans",
             detail_html,
         )
-        self.assertIn(f"/problems/alice/sample/alice/artifacts/{verification_id}/output/", detail_html)
+        self.assertIn(f"/problems/alice/sample/artifacts/{verification_id}/output/", detail_html)
         self.assertIn("/001.out", detail_html)
         self.assertNotIn("(output file missing)", detail_html)
         self.assertNotIn(">missing<", detail_html)
@@ -4041,7 +4041,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
             "alice/sample",
             "alice",
         )
@@ -4124,13 +4124,13 @@ class TestUIRun(UIBaseSuite):
             edges=[],
         )
 
-        page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
+        page = run_details_page(_request("/problems/alice/sample/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         page_html = page.body.decode("utf-8", errors="replace")
         self.assertIn('data-test-name="001.in"', page_html)
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
             "alice/sample",
             "alice",
         )
@@ -4196,7 +4196,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
             "alice/sample",
             "alice",
         )
@@ -4246,7 +4246,7 @@ class TestUIRun(UIBaseSuite):
         )
 
         verification_id = self._verification_id_for_run(run_id)
-        page = run_details_page(_request("/problems/alice/sample/alice/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
+        page = run_details_page(_request("/problems/alice/sample/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertNotIn("No per-test details yet.", html)
@@ -4254,7 +4254,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn('vcode">FL</span>', html)
 
         detail = run_details_test_fragment(
-            _request("/problems/alice/sample/alice/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
             "alice/sample",
             "alice",
         )
@@ -4292,7 +4292,7 @@ class TestUIRun(UIBaseSuite):
             ],
         )
         write_preview_summary(preview_id, {"statement_signature": statement_sig})
-        preview_resp = preview_page(_request("/problems/alice/sample/alice/preview", f"preview_id={preview_id}"), "alice/sample", "alice")
+        preview_resp = preview_page(_request("/problems/alice/sample/preview", f"preview_id={preview_id}"), "alice/sample", "alice")
         preview_html = preview_resp.body.decode("utf-8", errors="replace")
         self.assertNotIn("src=statement", preview_html)
         self.assertNotIn(f"sid={preview_id}", preview_html)
@@ -4327,9 +4327,9 @@ class TestUIRun(UIBaseSuite):
             created_at="2026-02-23T00:02:00Z",
             finished_at="2026-02-23T00:02:01Z",
         )
-        run_resp = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
+        run_resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         run_html = run_resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f"/problems/alice/sample/alice/run/details?verification_id=ver-{run_id}", run_html)
+        self.assertIn(f"/problems/alice/sample/run/details?verification_id=ver-{run_id}", run_html)
     def test_run_verification_details_prefers_verification_record_over_audit(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary
 
@@ -4412,7 +4412,7 @@ class TestUIRun(UIBaseSuite):
             summary_extra={"status": "running", "error": "cancelled on service startup"},
         )
 
-        page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
+        page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(verification_id, html)
@@ -4490,7 +4490,7 @@ class TestUIRun(UIBaseSuite):
             },
         )
 
-        page = run_page(_request("/problems/alice/sample/alice/run"), "alice/sample", "alice")
+        page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(">Verification</span>", html)

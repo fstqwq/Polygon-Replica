@@ -22,7 +22,7 @@
       {% if ctx.access.can_manage %}
       <td>
         {% if row.role != "owner" %}
-        <form method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/access/revoke" class="inline-form">
+        <form method="post" action="/contests/{{ ctx.contest.slug }}/access/revoke" class="inline-form">
           <input type="hidden" name="target_user" value="{{ row.username }}" />
           <button class="btn" type="submit" onclick="return confirm('Revoke access for {{ row.username }}? uncommitted changes will be lost.');">Revoke</button>
         </form>
@@ -42,7 +42,7 @@
 {% if ctx.access.can_manage %}
 <section>
   <h2>Grant / Update</h2>
-  <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/{{ ctx.user.username }}/access/grant">
+  <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/access/grant">
     <label for="contest-target-user">User</label>
     <input id="contest-target-user" name="target_user" />
     <label for="contest-target-role">Role</label>

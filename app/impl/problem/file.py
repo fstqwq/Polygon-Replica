@@ -1,4 +1,5 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 import mimetypes
 import os
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
 
-from fastapi import File, Form, HTTPException, Request, UploadFile
+from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 from fastapi.responses import FileResponse
 
 from app.impl.auth.shared import redirect_response, template_response
@@ -35,10 +36,10 @@ def _files_redirect_href(
     if browse_tail:
         query_parts.append(browse_tail.lstrip('&'))
     if not query_parts:
-        return f'/problems/{problem}/{user}/files'
-    return f'/problems/{problem}/{user}/files?' + '&'.join(query_parts)
+        return f'/problems/{problem}/files'
+    return f'/problems/{problem}/files?' + '&'.join(query_parts)
 
-def files_page(request: Request, problem: str, user: str):
+def files_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     selected = normalize_workspace_rel_path(request.query_params.get('path'))
@@ -90,7 +91,7 @@ def files_page(request: Request, problem: str, user: str):
 
 def files_save(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     content: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
@@ -114,7 +115,7 @@ def files_save(
 
 def files_new(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
 ):
@@ -136,7 +137,7 @@ def files_new(
 
 def files_create_template(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     kind: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
@@ -173,7 +174,7 @@ def files_create_template(
 
 async def files_upload(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     upload: Annotated[UploadFile, File(...)],
     dir: Annotated[str, Form()] = '',
@@ -217,7 +218,7 @@ async def files_upload(
 
 def files_rename(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     old_path: Annotated[str, Form()],
     new_path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
@@ -242,7 +243,7 @@ def files_rename(
 
 def files_delete(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()],
     dir: Annotated[str, Form()] = '',
 ):
@@ -262,7 +263,7 @@ def files_delete(
         message=msg,
     )
 
-def files_download(problem: str, user: str, path: str):
+def files_download(problem: str, user: Annotated[str, Depends(require_session_user)], path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
     file_path = safe_workspace_path(workspace, path)

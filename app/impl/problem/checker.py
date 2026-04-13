@@ -1,8 +1,10 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
@@ -18,10 +20,10 @@ from app.service.verification.standard_checker import copy_standard_checker
 _C = config.constants
 
 
-def checker_page(request: Request, problem: str, user: str):
+def checker_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     if ctx.get('problem_mode') == 'interactive':
-        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
+        return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
     checker_status = checker_status_context(workspace)
     standard_checker_options = standard_checker_catalog()
@@ -42,10 +44,10 @@ def checker_page(request: Request, problem: str, user: str):
         repo_content = template_for_kind('checker')
     return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'repo_source': repo_source, 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
-def checker_view_standard(request: Request, problem: str, user: str, checker_name: str=''):
+def checker_view_standard(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=''):
     ctx = page_ctx(problem, user)
     if ctx.get('problem_mode') == 'interactive':
-        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
+        return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
     checker_status = checker_status_context(workspace)
     selected = checker_name.strip()
@@ -56,22 +58,22 @@ def checker_view_standard(request: Request, problem: str, user: str, checker_nam
         if catalog:
             selected = catalog[0]['value']
     if not selected:
-        return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message='no standard checker available')
+        return redirect_response(f'/problems/{problem}/checker', status_code=303, message='no standard checker available')
     try:
         normalized_name, source_path = resolve_standard_checker_path(selected)
         canonical = f'std::{normalized_name}'
         source_text = source_path.read_text(encoding='utf-8', errors='replace')
         description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(normalized_name, 'general-purpose standard checker from testlib'))
     except ValueError as exc:
-        return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message=str(exc))
+        return redirect_response(f'/problems/{problem}/checker', status_code=303, message=str(exc))
     except OSError as exc:
-        return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message=str(exc))
+        return redirect_response(f'/problems/{problem}/checker', status_code=303, message=str(exc))
     return template_response(request, 'checker_standard_view.html', {'ctx': ctx, 'checker_name': canonical, 'checker_description': description, 'checker_source': source_text, 'checker_lines': len(source_text.splitlines())})
 
-def checker_set_standard(problem: str, user: str, checker_name: str=Form(...)):
+def checker_set_standard(problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     if ctx.get('problem_mode') == 'interactive':
-        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
+        return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'checker updated'
@@ -91,12 +93,12 @@ def checker_set_standard(problem: str, user: str, checker_name: str=Form(...)):
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/checker', status_code=303, message=msg)
 
-def checker_create_template(problem: str, user: str):
+def checker_create_template(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     if ctx.get('problem_mode') == 'interactive':
-        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
+        return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'checker template created'
@@ -117,18 +119,18 @@ def checker_create_template(problem: str, user: str):
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/checker', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/checker', status_code=303, message=msg)
 
 def checker_save_source(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: str = Form('checkers/checker.cpp'),
     content: str = Form(''),
     response_mode: str = Form(''),
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     if ctx.get('problem_mode') == 'interactive':
-        return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
+        return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     target = 'checkers/checker.cpp'
@@ -172,7 +174,7 @@ def checker_save_source(
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    redirect_url = f'/problems/{problem}/{user}/checker'
+    redirect_url = f'/problems/{problem}/checker'
     if json_requested:
         if save_ok:
             return json_redirect_response(redirect_url, msg)

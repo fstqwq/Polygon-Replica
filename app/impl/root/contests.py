@@ -387,7 +387,7 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             suffix = f" (+{extra} more)" if extra > 0 else ""
             message = f"{message}; warning: {first_warning}{suffix}"
         return redirect_response(
-            f"/contests/{target_contest_slug}/{actor_username}/overview",
+            f"/contests/{target_contest_slug}/overview",
             status_code=303,
             message=message,
         )

@@ -1,6 +1,8 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
+from typing import Annotated
 
-from fastapi import Request
+from fastapi import Request, Depends
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
@@ -8,7 +10,7 @@ from app.impl.runtime.config import config
 from .shared import _contest_ctx, _contest_problem_rows
 
 
-def contest_overview_page(request: Request, contest: str, user: str):
+def contest_overview_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = _contest_ctx(contest, user, "overview")
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])

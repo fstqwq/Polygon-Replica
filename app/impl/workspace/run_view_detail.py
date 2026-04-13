@@ -756,9 +756,9 @@ def build_run_detail_context(
         if problem_slug and username and source_rel and workspace_rel_file_exists(workspace, source_rel):
             safe_solution = normalize_optional_component_source_path_safe(source_rel, 'solutions', 'solution path')
             if safe_solution:
-                source_href = f'/problems/{problem_slug}/{username}/solutions/editor?path={quote_plus(safe_solution)}'
+                source_href = f'/problems/{problem_slug}/solutions/editor?path={quote_plus(safe_solution)}'
             else:
-                source_href = f'/problems/{problem_slug}/{username}/files?path={quote_plus(source_rel)}'
+                source_href = f'/problems/{problem_slug}/files?path={quote_plus(source_rel)}'
         expected_behavior = _run_expected_behavior_from_summary(summary, source_for_display)
         if expected_behavior == 'unknown':
             mapped_expected = expected_by_run_id.get(run_id)
@@ -1200,7 +1200,7 @@ def build_run_detail_context(
             safe_rel_path = (rel_path or '').lstrip('/')
             if not problem_slug or not username or (not safe_rel_path) or (not is_canonical_artifact_id(safe_verification_id)):
                 return _run_detail_preview_unavailable('missing')
-            download_href = f'/problems/{problem_slug}/{username}/artifacts/{safe_verification_id}/{safe_rel_path}'
+            download_href = f'/problems/{problem_slug}/artifacts/{safe_verification_id}/{safe_rel_path}'
             resolved = verification_artifact_blob(safe_verification_id, safe_rel_path)
             if resolved is None:
                 return _run_detail_preview_unavailable('missing')

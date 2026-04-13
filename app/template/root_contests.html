@@ -23,7 +23,7 @@
     </tr>
     {% for row in entries %}
     <tr class="{% if row.has_dirty %}table-row-dirty{% endif %}">
-      <td><a href="/contests/{{ row.slug }}/{{ user.username }}/overview">{{ row.title }}</a> - <code>{{ row.slug }}</code></td>
+      <td><a href="/contests/{{ row.slug }}/overview">{{ row.title }}</a> - <code>{{ row.slug }}</code></td>
       <td>{{ row.role }}</td>
       <td>
         {{ row.problem_count }}

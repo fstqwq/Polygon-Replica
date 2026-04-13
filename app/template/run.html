@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-title-inline">
   <h1 class="page-title">Verification</h1>
-  <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Start customized verification</a>
+  <a class="text-nowrap" href="/problems/{{ ctx.problem.slug }}/run/new">Start customized verification</a>
 </div>
 {% include "_flash_message.html" %}
 {% if runs %}
@@ -18,7 +18,7 @@
   {% for r in runs %}
   <tr class="{{ 'verification-row-failed' if r.is_failed else '' }}">
     <td>
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?verification_id={{ r.id }}">{{ r.created_at | local_time }}</a>
+      <a href="/problems/{{ ctx.problem.slug }}/run/details?verification_id={{ r.id }}">{{ r.created_at | local_time }}</a>
     </td>
     <td>
       {% if r.finished_at %}
@@ -47,21 +47,21 @@
       {% endif %}
     </td>
     <td class="verification-actions">
-      <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details?verification_id={{ r.id }}">View</a>
+      <a href="/problems/{{ ctx.problem.slug }}/run/details?verification_id={{ r.id }}">View</a>
       {% if r.has_running %}
-      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/cancel">
+      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/cancel">
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
       </form>
       {% endif %}
       {% if not r.has_running %}
-      <a class="verification-inline-action linkish danger-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
+      <a class="verification-inline-action linkish danger-link" href="/problems/{{ ctx.problem.slug }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
       {% endif %}
     </td>
   </tr>
   {% endfor %}
 </table>
 {% else %}
-<p class="muted">No verification yet. Start one from <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/new">Run solutions</a>.</p>
+<p class="muted">No verification yet. Start one from <a href="/problems/{{ ctx.problem.slug }}/run/new">Run solutions</a>.</p>
 {% endif %}
 {% endblock %}

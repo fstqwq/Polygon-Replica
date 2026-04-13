@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Request
+from fastapi import Request, Depends
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
@@ -11,7 +13,7 @@ from app.impl.workspace.context_ui import page_ctx
 _C = config.constants
 
 
-def history_page(request: Request, problem: str, user: str):
+def history_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     commits: list[dict] = []

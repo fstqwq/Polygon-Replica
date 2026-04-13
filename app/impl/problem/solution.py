@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote_plus
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response, set_flash_cookie, template_response
@@ -34,7 +36,7 @@ from app.service.platform.workspace_path import (
 _C = config.constants
 
 
-def solutions_page(request: Request, problem: str, user: str):
+def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     entries, entries_truncated = list_solution_entries(workspace)
@@ -59,7 +61,7 @@ def solutions_page(request: Request, problem: str, user: str):
     solution_create_default_path = 'accepted.cpp'
     return template_response(request, 'solutions.html', {'ctx': ctx, 'entries': entries_view, 'entries_truncated': entries_truncated, 'entries_limit': _C.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'expected_behavior_options': expected_behavior_options, 'accepted_source': accepted_source, 'accepted_source_exists': accepted_source_exists, 'solution_create_default_path': solution_create_default_path})
 
-def solutions_create_template(problem: str, user: str, path: str=Form('accepted.cpp')):
+def solutions_create_template(problem: str, user: Annotated[str, Depends(require_session_user)], path: str=Form('accepted.cpp')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -84,9 +86,9 @@ def solutions_create_template(problem: str, user: str, path: str=Form('accepted.
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/solutions/editor?path={quote_plus(target)}', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/solutions/editor?path={quote_plus(target)}', status_code=303, message=msg)
 
-def solutions_editor_page(request: Request, problem: str, user: str):
+def solutions_editor_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     entries, entries_truncated = list_solution_entries(workspace)
@@ -116,7 +118,7 @@ def solutions_editor_page(request: Request, problem: str, user: str):
         selected_entry = solution_metadata_entry(workspace, selected)
     return template_response(request, 'solutions_editor.html', {'ctx': ctx, 'entries': entries, 'entries_truncated': entries_truncated, 'entries_limit': _C.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'selected_exists': selected_exists, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'expected_behavior_options': solution_behavior_options()})
 
-def solutions_save_source(request: Request, problem: str, user: str, source_path: str=Form(...), content: str=Form(''), expected_behavior: str=Form('unknown')):
+def solutions_save_source(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...), content: str=Form(''), expected_behavior: str=Form('unknown')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -175,7 +177,7 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    editor_url = f'/problems/{problem}/{user}/solutions/editor?path={quote_plus(selected_for_redirect)}'
+    editor_url = f'/problems/{problem}/solutions/editor?path={quote_plus(selected_for_redirect)}'
     if json_requested:
         if save_ok:
             response = JSONResponse({'ok': True, 'redirect': editor_url, 'message': msg})
@@ -184,7 +186,7 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
         return JSONResponse({'ok': False, 'error': msg}, status_code=400)
     return redirect_response(editor_url, status_code=303, message=msg)
 
-def solutions_set_tag(problem: str, user: str, source_path: str=Form(...), expected_behavior: str=Form('unknown')):
+def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...), expected_behavior: str=Form('unknown')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -234,9 +236,9 @@ def solutions_set_tag(problem: str, user: str, source_path: str=Form(...), expec
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/solutions?path={quote_plus(selected)}', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/solutions?path={quote_plus(selected)}', status_code=303, message=msg)
 
-def solutions_rename(problem: str, user: str, old_path: str=Form(...), new_path: str=Form(...)):
+def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_user)], old_path: str=Form(...), new_path: str=Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -281,9 +283,9 @@ def solutions_rename(problem: str, user: str, old_path: str=Form(...), new_path:
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/solutions?path={quote_plus(selected)}', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/solutions?path={quote_plus(selected)}', status_code=303, message=msg)
 
-def solutions_delete(problem: str, user: str, source_path: str=Form(...)):
+def solutions_delete(problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -309,7 +311,7 @@ def solutions_delete(problem: str, user: str, source_path: str=Form(...)):
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/solutions', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/solutions', status_code=303, message=msg)
 
 
 

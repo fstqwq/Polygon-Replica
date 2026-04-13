@@ -1,11 +1,12 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 import json
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlencode
 
-from fastapi import Form, HTTPException
+from fastapi import Form, HTTPException, Depends
 
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
@@ -21,7 +22,7 @@ _C = config.constants
 
 def general_save(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     time_limit_ms: Annotated[str, Form()] = '2000',
     memory_limit_mb: Annotated[str, Form()] = '1024',
     mode: Annotated[str, Form()] = 'pass-fail',
@@ -68,7 +69,7 @@ def general_save(
     safe_preview_id = str(preview_id or '').strip()
     if safe_preview_id:
         query['preview_id'] = safe_preview_id
-    redirect_url = f'/problems/{problem}/{user}/statement'
+    redirect_url = f'/problems/{problem}/statement'
     if query:
         redirect_url = f'{redirect_url}?{urlencode(query)}'
     return redirect_response(redirect_url, status_code=303, message=msg)

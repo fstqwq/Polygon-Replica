@@ -57,14 +57,14 @@ class TestUIComponents(UIBaseSuite):
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
 
         cfg_path.write_text(json.dumps({"mode": "pass-fail", "pass_limit": 1}, indent=2) + "\n", encoding="utf-8")
-        pass_fail_resp = general_page(_request(f"/problems/{self.problem}/{self.user}/general"), self.problem, self.user)
+        pass_fail_resp = general_page(_request(f"/problems/{self.problem}/general"), self.problem, self.user)
         self.assertEqual(pass_fail_resp.status_code, 200)
         pass_fail_html = pass_fail_resp.body.decode("utf-8", errors="replace")
-        self.assertIn(f"/problems/{self.problem}/{self.user}/preview", pass_fail_html)
+        self.assertIn(f"/problems/{self.problem}/preview", pass_fail_html)
         self.assertNotIn(">Interactor</span>", pass_fail_html)
 
         cfg_path.write_text(json.dumps({"mode": "interactive", "pass_limit": 1}, indent=2) + "\n", encoding="utf-8")
-        interactive_resp = general_page(_request(f"/problems/{self.problem}/{self.user}/general"), self.problem, self.user)
+        interactive_resp = general_page(_request(f"/problems/{self.problem}/general"), self.problem, self.user)
         self.assertEqual(interactive_resp.status_code, 200)
         interactive_html = interactive_resp.body.decode("utf-8", errors="replace")
         self.assertIn(">Interactor</span>", interactive_html)
@@ -81,7 +81,7 @@ class TestUIComponents(UIBaseSuite):
         (ws / interactor_rel).write_text("int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n", encoding="utf-8")
         (ws / validator_rel).write_text("int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n", encoding="utf-8")
 
-        resp = general_page(_request(f"/problems/{self.problem}/{self.user}/general"), self.problem, self.user)
+        resp = general_page(_request(f"/problems/{self.problem}/general"), self.problem, self.user)
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
@@ -111,7 +111,7 @@ class TestUIComponents(UIBaseSuite):
         cfg.pop("accepted_solution_source", None)
         cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
-        resp = general_page(_request(f"/problems/{self.problem}/{self.user}/general"), self.problem, self.user)
+        resp = general_page(_request(f"/problems/{self.problem}/general"), self.problem, self.user)
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
@@ -124,7 +124,7 @@ class TestUIComponents(UIBaseSuite):
         rel = "checkers/checker.cpp"
         (ws / rel).write_text("// checker placeholder\n", encoding="utf-8")
 
-        before = checker_page(_request(f"/problems/{self.problem}/{self.user}/checker"), self.problem, self.user)
+        before = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
         self.assertEqual(before.status_code, 200)
         before_html = before.body.decode("utf-8", errors="replace")
         self.assertIn("Standard Checker", before_html)
@@ -141,14 +141,14 @@ class TestUIComponents(UIBaseSuite):
         )
         self.assertEqual(install.status_code, 303)
         loc = install.headers.get("location", "")
-        self.assertIn(f"/problems/{self.problem}/{self.user}/checker", loc)
+        self.assertIn(f"/problems/{self.problem}/checker", loc)
 
         build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
         self.assertEqual(build_cfg.get("checker_source"), "checkers/fcmp.cpp")
         self.assertNotIn("checker_standard", build_cfg)
         self.assertTrue((ws / "checkers/fcmp.cpp").exists())
 
-        after = checker_page(_request(f"/problems/{self.problem}/{self.user}/checker"), self.problem, self.user)
+        after = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
         self.assertEqual(after.status_code, 200)
         after_html = after.body.decode("utf-8", errors="replace")
         self.assertIn('aria-label="checker details"', after_html)
@@ -161,7 +161,7 @@ class TestUIComponents(UIBaseSuite):
         rel = "checkers/checker.cpp"
         (ws / rel).unlink(missing_ok=True)
 
-        resp = checker_page(_request(f"/problems/{self.problem}/{self.user}/checker"), self.problem, self.user)
+        resp = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Create checker.cpp template", html)
@@ -196,7 +196,7 @@ class TestUIComponents(UIBaseSuite):
             content="int main( { return 0; }\n",
         )
         self.assertEqual(failed.status_code, 303)
-        self.assertEqual(failed.headers.get("location", ""), f"/problems/{self.problem}/{self.user}/checker")
+        self.assertEqual(failed.headers.get("location", ""), f"/problems/{self.problem}/checker")
         messages = _flash_messages_from_response(failed)
         self.assertTrue(messages)
         self.assertIn("compile check failed", messages[0].lower())
@@ -235,7 +235,7 @@ class TestUIComponents(UIBaseSuite):
         (ws / rel).unlink(missing_ok=True)
         (ws / rel_second).unlink(missing_ok=True)
 
-        page = generators_page(_request(f"/problems/{self.problem}/{self.user}/generators"), self.problem, self.user)
+        page = generators_page(_request(f"/problems/{self.problem}/generators"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Generators", html)
@@ -253,7 +253,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertTrue((ws / rel).exists())
         created_text = (ws / rel).read_text(encoding="utf-8")
         self.assertIn("registerGen", created_text)
-        page_after_create = generators_page(_request(f"/problems/{self.problem}/{self.user}/generators"), self.problem, self.user)
+        page_after_create = generators_page(_request(f"/problems/{self.problem}/generators"), self.problem, self.user)
         self.assertEqual(page_after_create.status_code, 200)
         self.assertIn("generators/save-source", page_after_create.body.decode("utf-8", errors="replace"))
 
@@ -287,7 +287,7 @@ class TestUIComponents(UIBaseSuite):
 
         cfg_after_second = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual([str(x) for x in cfg_after_second.get("generator_sources", [])], [rel, rel_second])
-        list_page = generators_page(_request(f"/problems/{self.problem}/{self.user}/generators"), self.problem, self.user)
+        list_page = generators_page(_request(f"/problems/{self.problem}/generators"), self.problem, self.user)
         self.assertEqual(list_page.status_code, 200)
         list_html = list_page.body.decode("utf-8", errors="replace")
         self.assertIn(rel, list_html)
@@ -329,7 +329,7 @@ class TestUIComponents(UIBaseSuite):
             )
         self.assertEqual(failed.status_code, 303)
         failed_location = failed.headers.get("location", "")
-        self.assertIn(f"/problems/{self.problem}/{self.user}/generators", failed_location)
+        self.assertIn(f"/problems/{self.problem}/generators", failed_location)
         self.assertIn("path=generators%2Fgen_bad.cpp", failed_location)
         messages = _flash_messages_from_response(failed)
         self.assertTrue(messages)
@@ -359,7 +359,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertTrue(bool(payload.get("ok")))
         self.assertEqual(
             str(payload.get("redirect") or ""),
-            f"/problems/{self.problem}/{self.user}/generators?path=generators%2Fgen_async_ok.cpp",
+            f"/problems/{self.problem}/generators?path=generators%2Fgen_async_ok.cpp",
         )
         self.assertEqual((ws / rel).read_text(encoding="utf-8"), content)
 
@@ -371,7 +371,7 @@ class TestUIComponents(UIBaseSuite):
 
         page = validator_page(
             _request_with_cookie(
-                f"/problems/{self.problem}/{self.user}/validator",
+                f"/problems/{self.problem}/validator",
                 _flash_cookie_header("compile check failed: validators/validator.cpp: syntax error"),
             ),
             self.problem,
@@ -396,7 +396,7 @@ class TestUIComponents(UIBaseSuite):
 
         page = checker_page(
             _request_with_cookie(
-                f"/problems/{self.problem}/{self.user}/checker",
+                f"/problems/{self.problem}/checker",
                 _flash_cookie_header("compile check failed: checkers/checker.cpp: syntax error"),
             ),
             self.problem,
@@ -420,7 +420,7 @@ class TestUIComponents(UIBaseSuite):
         )
         page = validator_page(
             _request_with_cookie(
-                f"/problems/{self.problem}/{self.user}/validator",
+                f"/problems/{self.problem}/validator",
                 _flash_cookie_header(message),
             ),
             self.problem,
@@ -444,7 +444,7 @@ class TestUIComponents(UIBaseSuite):
 
         page = generators_page(
             _request_with_cookie(
-                f"/problems/{self.problem}/{self.user}/generators",
+                f"/problems/{self.problem}/generators",
                 _flash_cookie_header("compile check failed: generators/gen.cpp: syntax error"),
                 f"path={quote_plus(rel)}",
             ),
@@ -468,7 +468,7 @@ class TestUIComponents(UIBaseSuite):
 
         page = generators_page(
             _request_with_cookie(
-                f"/problems/{self.problem}/{self.user}/generators",
+                f"/problems/{self.problem}/generators",
                 _flash_cookie_header("compile check failed: generators/gen.cpp: syntax error"),
                 f"path={quote_plus(rel)}",
             ),
@@ -498,7 +498,7 @@ class TestUIComponents(UIBaseSuite):
             encoding="utf-8",
         )
 
-        page = generators_page(_request(f"/problems/{self.problem}/{self.user}/generators"), self.problem, self.user)
+        page = generators_page(_request(f"/problems/{self.problem}/generators"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn(existing_rel, html)
@@ -509,7 +509,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn("<strong>File path:</strong> <code>generators/keep.cpp</code>", html)
         self.assertNotIn("<strong>New file:</strong> <code>generators/generator.cpp</code>", html)
 
-        resp = general_page(_request(f"/problems/{self.problem}/{self.user}/general"), self.problem, self.user)
+        resp = general_page(_request(f"/problems/{self.problem}/general"), self.problem, self.user)
         self.assertEqual(resp.status_code, 200)
         general_html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
@@ -536,7 +536,7 @@ class TestUIComponents(UIBaseSuite):
         cfg["generator_sources"] = [rel]
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-        resp = general_page(_request(f"/problems/{self.problem}/{self.user}/general"), self.problem, self.user)
+        resp = general_page(_request(f"/problems/{self.problem}/general"), self.problem, self.user)
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
@@ -553,7 +553,7 @@ class TestUIComponents(UIBaseSuite):
         desc = ws / "solutions/std.cpp.desc"
         desc.write_text("expected: wrong-answer\nnote: baseline negative case\n", encoding="utf-8")
 
-        page = solutions_page(_request(f"/problems/{self.problem}/{self.user}/solutions"), self.problem, self.user)
+        page = solutions_page(_request(f"/problems/{self.problem}/solutions"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Solutions", html)
@@ -579,7 +579,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertTrue(desc.exists())
         self.assertIn("expected: accepted", desc.read_text(encoding="utf-8"))
 
-        after = general_page(_request(f"/problems/{self.problem}/{self.user}/general"), self.problem, self.user)
+        after = general_page(_request(f"/problems/{self.problem}/general"), self.problem, self.user)
         self.assertEqual(after.status_code, 200)
         after_html = after.body.decode("utf-8", errors="replace")
         self.assertIn("/checker", after_html)
@@ -595,7 +595,7 @@ class TestUIComponents(UIBaseSuite):
         (ws / target_rel).unlink(missing_ok=True)
         (ws / f"{target_rel}.desc").unlink(missing_ok=True)
 
-        page = solutions_page(_request(f"/problems/{self.problem}/{self.user}/solutions"), self.problem, self.user)
+        page = solutions_page(_request(f"/problems/{self.problem}/solutions"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("solutions/create-template", html)
@@ -607,7 +607,7 @@ class TestUIComponents(UIBaseSuite):
         create = solutions_create_template(problem=self.problem, user=self.user, path="new_wa.cpp")
         self.assertEqual(create.status_code, 303)
         location = create.headers.get("location", "")
-        self.assertIn(f"/problems/{self.problem}/{self.user}/solutions/editor", location)
+        self.assertIn(f"/problems/{self.problem}/solutions/editor", location)
         self.assertIn("path=solutions%2Fnew_wa.cpp", location)
         self.assertTrue((ws / target_rel).exists())
         self.assertEqual("", (ws / target_rel).read_text(encoding="utf-8"))
@@ -623,7 +623,7 @@ class TestUIComponents(UIBaseSuite):
         create = solutions_create_template(problem=self.problem, user=self.user, path="new_py.py")
         self.assertEqual(create.status_code, 303)
         location = create.headers.get("location", "")
-        self.assertIn(f"/problems/{self.problem}/{self.user}/solutions/editor", location)
+        self.assertIn(f"/problems/{self.problem}/solutions/editor", location)
         self.assertIn("path=solutions%2Fnew_py.py", location)
         self.assertTrue((ws / target_rel).exists())
         self.assertEqual("", (ws / target_rel).read_text(encoding="utf-8"))
@@ -638,7 +638,7 @@ class TestUIComponents(UIBaseSuite):
         source_abs.parent.mkdir(parents=True, exist_ok=True)
         source_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        page = solutions_page(_request(f"/problems/{self.problem}/{self.user}/solutions"), self.problem, self.user)
+        page = solutions_page(_request(f"/problems/{self.problem}/solutions"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("solutions/rename", html)
@@ -662,7 +662,7 @@ class TestUIComponents(UIBaseSuite):
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text("{}\n", encoding="utf-8")
 
-        before = solutions_page(_request(f"/problems/{self.problem}/{self.user}/solutions"), self.problem, self.user)
+        before = solutions_page(_request(f"/problems/{self.problem}/solutions"), self.problem, self.user)
         self.assertEqual(before.status_code, 200)
         before_html = before.body.decode("utf-8", errors="replace")
         self.assertIn("solutions/set-tag", before_html)
@@ -680,7 +680,7 @@ class TestUIComponents(UIBaseSuite):
         cfg_after = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual(str(cfg_after.get("accepted_solution_source") or ""), main_rel)
 
-        after = solutions_page(_request(f"/problems/{self.problem}/{self.user}/solutions"), self.problem, self.user)
+        after = solutions_page(_request(f"/problems/{self.problem}/solutions"), self.problem, self.user)
         self.assertEqual(after.status_code, 200)
         after_html = after.body.decode("utf-8", errors="replace")
         self.assertNotIn("Main correct solution is required.", after_html)
@@ -709,7 +709,7 @@ class TestUIComponents(UIBaseSuite):
         cfg_after = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertNotIn("accepted_solution_source", cfg_after)
 
-        page = solutions_page(_request(f"/problems/{self.problem}/{self.user}/solutions"), self.problem, self.user)
+        page = solutions_page(_request(f"/problems/{self.problem}/solutions"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
@@ -738,7 +738,7 @@ class TestUIComponents(UIBaseSuite):
         resp = solutions_rename(problem=self.problem, user=self.user, old_path=old_rel, new_path=Path(new_rel).name)
         self.assertEqual(resp.status_code, 303)
         location = resp.headers.get("location", "")
-        self.assertIn(f"/problems/{self.problem}/{self.user}/solutions", location)
+        self.assertIn(f"/problems/{self.problem}/solutions", location)
         self.assertIn(f"path={quote_plus(new_rel)}", location)
 
         self.assertFalse(old_abs.exists())
@@ -768,7 +768,7 @@ class TestUIComponents(UIBaseSuite):
 
         resp = solutions_delete(problem=self.problem, user=self.user, source_path=source_rel)
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{self.problem}/{self.user}/solutions", resp.headers.get("location", ""))
+        self.assertIn(f"/problems/{self.problem}/solutions", resp.headers.get("location", ""))
         self.assertFalse(source_abs.exists())
         self.assertFalse(desc_abs.exists())
 
@@ -786,7 +786,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn("/solutions/editor", created.headers.get("location", ""))
 
         editor = solutions_editor_page(
-            _request(f"/problems/{self.problem}/{self.user}/solutions/editor", f"path={target_rel}"),
+            _request(f"/problems/{self.problem}/solutions/editor", f"path={target_rel}"),
             self.problem,
             self.user,
         )
@@ -807,7 +807,7 @@ class TestUIComponents(UIBaseSuite):
         updated_content = "int main(){return 42;}\n"
         with patch("app.impl.problem.solution.judgehost_compile_check_error", return_value=""):
             saved = solutions_save_source(
-                _request(f"/problems/{self.problem}/{self.user}/solutions/save-source", method="POST"),
+                _request(f"/problems/{self.problem}/solutions/save-source", method="POST"),
                 problem=self.problem,
                 user=self.user,
                 source_path=target_rel,
@@ -823,7 +823,7 @@ class TestUIComponents(UIBaseSuite):
 
         toast_page = solutions_editor_page(
             _request_with_cookie(
-                f"/problems/{self.problem}/{self.user}/solutions/editor",
+                f"/problems/{self.problem}/solutions/editor",
                 _flash_cookie_header("solution source saved"),
                 "path=solutions/editor_case.cpp",
             ),
@@ -845,7 +845,7 @@ class TestUIComponents(UIBaseSuite):
 
         page = solutions_editor_page(
             _request_with_cookie(
-                f"/problems/{self.problem}/{self.user}/solutions/editor",
+                f"/problems/{self.problem}/solutions/editor",
                 _flash_cookie_header("compile check failed: solutions/editor_inline_error.cpp: syntax error"),
                 f"path={quote_plus(target_rel)}",
             ),
@@ -867,14 +867,14 @@ class TestUIComponents(UIBaseSuite):
         source_abs.write_text(original_content, encoding="utf-8")
 
         resp = solutions_save_source(
-            _request(f"/problems/{self.problem}/{self.user}/solutions/save-source", method="POST"),
+            _request(f"/problems/{self.problem}/solutions/save-source", method="POST"),
             problem=self.problem,
             user=self.user,
             source_path=target_rel,
             content="int main(){\n",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertEqual(resp.headers.get("location", ""), f"/problems/{self.problem}/{self.user}/solutions/editor?path=solutions%2Feditor_ce_case.cpp")
+        self.assertEqual(resp.headers.get("location", ""), f"/problems/{self.problem}/solutions/editor?path=solutions%2Feditor_ce_case.cpp")
         self.assertEqual(source_abs.read_text(encoding="utf-8"), original_content)
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
@@ -890,7 +890,7 @@ class TestUIComponents(UIBaseSuite):
         source_abs.write_text(original_content, encoding="utf-8")
 
         req = _request(
-            f"/problems/{self.problem}/{self.user}/solutions/save-source",
+            f"/problems/{self.problem}/solutions/save-source",
             method="POST",
             headers=[(b"x-requested-with", b"fetch"), (b"accept", b"application/json")],
         )
@@ -915,7 +915,7 @@ class TestUIComponents(UIBaseSuite):
         source_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
         req = _request(
-            f"/problems/{self.problem}/{self.user}/solutions/save-source",
+            f"/problems/{self.problem}/solutions/save-source",
             method="POST",
             headers=[(b"x-requested-with", b"fetch"), (b"accept", b"application/json")],
         )
@@ -934,7 +934,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertTrue(bool(payload.get("ok")))
         self.assertEqual(
             str(payload.get("redirect") or ""),
-            f"/problems/{self.problem}/{self.user}/solutions/editor?path=solutions%2Feditor_ajax_ok_case.cpp",
+            f"/problems/{self.problem}/solutions/editor?path=solutions%2Feditor_ajax_ok_case.cpp",
         )
         self.assertEqual(source_abs.read_text(encoding="utf-8"), updated_content)
         self.assertIn("expected: accepted", (ws / f"{target_rel}.desc").read_text(encoding="utf-8"))
@@ -953,7 +953,7 @@ class TestUIComponents(UIBaseSuite):
 
         with patch("app.impl.problem.solution.judgehost_compile_check_error", return_value=""):
             resp = solutions_save_source(
-                _request(f"/problems/{self.problem}/{self.user}/solutions/save-source", method="POST"),
+                _request(f"/problems/{self.problem}/solutions/save-source", method="POST"),
                 problem=self.problem,
                 user=self.user,
                 source_path=target_rel,
@@ -970,7 +970,7 @@ class TestUIComponents(UIBaseSuite):
 
     def test_checker_view_standard_page_shows_source(self) -> None:
         resp = checker_view_standard(
-            _request(f"/problems/{self.problem}/{self.user}/checker/view-standard", "checker_name=std%3A%3Afcmp.cpp"),
+            _request(f"/problems/{self.problem}/checker/view-standard", "checker_name=std%3A%3Afcmp.cpp"),
             self.problem,
             self.user,
             checker_name="std::fcmp.cpp",
@@ -990,7 +990,7 @@ class TestUIComponents(UIBaseSuite):
         (ws / validator_rel).unlink(missing_ok=True)
         (ws / interactor_rel).unlink(missing_ok=True)
 
-        validator_resp = validator_page(_request(f"/problems/{self.problem}/{self.user}/validator"), self.problem, self.user)
+        validator_resp = validator_page(_request(f"/problems/{self.problem}/validator"), self.problem, self.user)
         self.assertEqual(validator_resp.status_code, 200)
         validator_html = validator_resp.body.decode("utf-8", errors="replace")
         self.assertIn("Validator", validator_html)
@@ -998,7 +998,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertNotIn("validator/save-source", validator_html)
         self.assertNotIn("src=validator", validator_html)
 
-        interactor_resp = interactor_page(_request(f"/problems/{self.problem}/{self.user}/interactor"), self.problem, self.user)
+        interactor_resp = interactor_page(_request(f"/problems/{self.problem}/interactor"), self.problem, self.user)
         self.assertEqual(interactor_resp.status_code, 200)
         interactor_html = interactor_resp.body.decode("utf-8", errors="replace")
         self.assertIn("Interactor", interactor_html)
@@ -1010,13 +1010,13 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(validator_create.status_code, 303)
         self.assertTrue((ws / validator_rel).exists())
         self.assertIn("registerValidation", (ws / validator_rel).read_text(encoding="utf-8"))
-        validator_after_create = validator_page(_request(f"/problems/{self.problem}/{self.user}/validator"), self.problem, self.user)
+        validator_after_create = validator_page(_request(f"/problems/{self.problem}/validator"), self.problem, self.user)
         validator_after_html = validator_after_create.body.decode("utf-8", errors="replace")
         self.assertIn("validator/save-source", validator_after_html)
         self.assertIn("Save Validator Source", validator_after_html)
         self.assertIn("Create Validator Template", validator_after_html)
         self.assertIn(
-            f"formaction=\"/problems/{self.problem}/{self.user}/validator/create-template\"",
+            f"formaction=\"/problems/{self.problem}/validator/create-template\"",
             validator_after_html,
         )
 
@@ -1024,13 +1024,13 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(interactor_create.status_code, 303)
         self.assertTrue((ws / interactor_rel).exists())
         self.assertIn("registerInteraction", (ws / interactor_rel).read_text(encoding="utf-8"))
-        interactor_after_create = interactor_page(_request(f"/problems/{self.problem}/{self.user}/interactor"), self.problem, self.user)
+        interactor_after_create = interactor_page(_request(f"/problems/{self.problem}/interactor"), self.problem, self.user)
         interactor_after_html = interactor_after_create.body.decode("utf-8", errors="replace")
         self.assertIn("interactor/save-source", interactor_after_html)
         self.assertIn("Save Interactor Source", interactor_after_html)
         self.assertIn("Create Interactor Template", interactor_after_html)
         self.assertIn(
-            f"formaction=\"/problems/{self.problem}/{self.user}/interactor/create-template\"",
+            f"formaction=\"/problems/{self.problem}/interactor/create-template\"",
             interactor_after_html,
         )
 
@@ -1042,13 +1042,13 @@ class TestUIComponents(UIBaseSuite):
                 content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
             )
         self.assertEqual(checker_seed.status_code, 303)
-        checker_after_create = checker_page(_request(f"/problems/{self.problem}/{self.user}/checker"), self.problem, self.user)
+        checker_after_create = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
         checker_after_html = checker_after_create.body.decode("utf-8", errors="replace")
         self.assertIn("checker/save-source", checker_after_html)
         self.assertIn("Save Checker Source", checker_after_html)
         self.assertIn("Create checker.cpp template", checker_after_html)
         self.assertIn(
-            f"formaction=\"/problems/{self.problem}/{self.user}/checker/create-template\"",
+            f"formaction=\"/problems/{self.problem}/checker/create-template\"",
             checker_after_html,
         )
 
@@ -1112,7 +1112,7 @@ class TestUIComponents(UIBaseSuite):
         # Empty validator source should fail compile-check and preserve the previous content.
         self.assertEqual(validator_abs.read_text(encoding="utf-8"), "int main(){return 9;}\n")
 
-        page = validator_page(_request(f"/problems/{self.problem}/{self.user}/validator"), self.problem, self.user)
+        page = validator_page(_request(f"/problems/{self.problem}/validator"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertNotIn("registerValidation", html)

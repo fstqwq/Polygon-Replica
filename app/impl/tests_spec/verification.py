@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Form
+from fastapi import Form, Depends
 
 from app.impl.auth.shared import redirect_response
 from app.impl.tests_spec.shared import normalize_verification_target_page
@@ -14,7 +16,7 @@ from app.impl.workspace.context_operation import audit, run_solution_options_con
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
 
-def verification_start(problem: str, user: str, page: str=Form('statement')):
+def verification_start(problem: str, user: Annotated[str, Depends(require_session_user)], page: str=Form('statement')):
     target_page = normalize_verification_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     require_write_access(ctx)
@@ -77,7 +79,7 @@ def verification_start(problem: str, user: str, page: str=Form('statement')):
         verification_details['status'] = 'failed'
         verification_details['error'] = str(exc)
         msg = f'verification failed: {exc}'
-    base = f'/problems/{problem}/{user}/{target_page}'
+    base = f'/problems/{problem}/{target_page}'
     if verification_details['status'] == 'failed':
         audit(ctx['user']['id'], ctx['problem']['id'], 'verification.start', verification_details)
     return redirect_response(base, status_code=303, message=msg)

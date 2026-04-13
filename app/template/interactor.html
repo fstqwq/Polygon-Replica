@@ -9,19 +9,19 @@
     <p><strong>{{ "File path" if interactor_status.repo_source_exists else "New file" }}:</strong> <code>{{ repo_source }}</code></p>
     {% if interactor_status.repo_source_exists %}
     {{ source_editor_form(
-      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/interactor/save-source",
+      "/problems/" ~ ctx.problem.slug ~ "/interactor/save-source",
       repo_source,
       repo_content,
       repo_content_truncated,
       content_char_limit,
       "Save Interactor Source",
-      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/interactor/create-template",
+      "/problems/" ~ ctx.problem.slug ~ "/interactor/create-template",
       "Create Interactor Template",
       editor_error
     ) }}
     {% else %}
     {{ create_template_form(
-      "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/interactor/create-template",
+      "/problems/" ~ ctx.problem.slug ~ "/interactor/create-template",
       "Create Interactor Template",
       repo_source
     ) }}

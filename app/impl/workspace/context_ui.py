@@ -1,8 +1,9 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
 from pathlib import Path
-from typing import cast
+from typing import cast, Annotated, Annotated
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Depends
 
 from app.impl.auth.session import has_sudo_session
 from app.impl.auth.shared import template_response
@@ -380,7 +381,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     nav['workspace'] = nav['access']
     return nav
 
-def render_workspace_page(request: Request, problem: str, user: str, *, show_access_admin: bool=False):
+def render_workspace_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], *, show_access_admin: bool=False):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     status = config.git_service.status(workspace)

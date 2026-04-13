@@ -66,7 +66,7 @@ class TestUIAuth(UIBaseSuite):
         auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(auth_token)
         cookie_header = f"{AUTH_COOKIE_NAME}={auth_token}"
-        next_path = f"/problems/{username}/settings"
+        next_path = f"/settings"
 
         page = sudo_page(_request_with_cookie("/sudo", cookie_header, query=f"next={next_path}"))
         self.assertEqual(page.status_code, 200)
@@ -122,12 +122,12 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("Secure", set_cookie)
         token = _cookie_value_from_response(ok, AUTH_COOKIE_NAME)
         self.assertTrue(token)
-        req = _request_with_cookie("/problems/alice/sample/alice/general", f"{AUTH_COOKIE_NAME}={token}")
+        req = _request_with_cookie("/problems/alice/sample/general", f"{AUTH_COOKIE_NAME}={token}")
         self.assertEqual(session_user(req), username)
 
         changed = _settings_password_update_with_proof(username, password, updated)
         self.assertEqual(changed.status_code, 303)
-        self.assertIn(f"/problems/{username}/settings", changed.headers.get("location", ""))
+        self.assertIn(f"/settings", changed.headers.get("location", ""))
         changed_messages = _flash_messages_from_response(changed)
         self.assertTrue(any("password updated" in item for item in changed_messages))
         changed_set_cookie = _response_set_cookie_blob(changed)
@@ -237,7 +237,7 @@ class TestUIAuth(UIBaseSuite):
             new_password_iters=str(new_iters),
         )
         self.assertEqual(changed.status_code, 303)
-        self.assertIn(f"/problems/{username}/settings", changed.headers.get("location", ""))
+        self.assertIn(f"/settings", changed.headers.get("location", ""))
         changed_messages = _flash_messages_from_response(changed)
         self.assertTrue(any("password updated" in item for item in changed_messages))
 
@@ -482,7 +482,7 @@ class TestUIAuth(UIBaseSuite):
         resp = asyncio.run(auth_middleware(req, _next))
         self.assertEqual(resp.status_code, 200)
 
-    def test_auth_middleware_rewrites_contest_user_path(self) -> None:
+    def test_auth_middleware_allows_userless_contest_path(self) -> None:
         username = f"contestauth-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
@@ -491,7 +491,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(token)
 
         req = _request_with_cookie(
-            "/contests/demo/other-user/overview",
+            "/contests/demo/overview",
             f"{AUTH_COOKIE_NAME}={token}",
             method="GET",
         )
@@ -500,10 +500,10 @@ class TestUIAuth(UIBaseSuite):
             return PlainTextResponse("ok", status_code=200)
 
         resp = asyncio.run(auth_middleware(req, _next))
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(resp.headers.get("location", ""), f"/contests/demo/{username}/overview")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.body, b"ok")
 
-    def test_auth_middleware_rewrite_strips_old_message_query(self) -> None:
+    def test_auth_middleware_keeps_userless_contest_query_intact(self) -> None:
         username = f"contestauthmsg-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
@@ -512,7 +512,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(token)
 
         req = _request_with_cookie(
-            "/contests/demo/other-user/overview",
+            "/contests/demo/overview",
             f"{AUTH_COOKIE_NAME}={token}",
             query="keep=1&message=legacy+notice",
             method="GET",
@@ -522,11 +522,9 @@ class TestUIAuth(UIBaseSuite):
             return PlainTextResponse("ok", status_code=200)
 
         resp = asyncio.run(auth_middleware(req, _next))
-        self.assertEqual(resp.status_code, 303)
-        location = resp.headers.get("location", "")
-        self.assertIn(f"/contests/demo/{username}/overview", location)
-        self.assertIn("keep=1", location)
-        self.assertNotIn("message=", location)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.body, b"ok")
+        self.assertEqual(resp.headers.get("location", ""), "")
         self.assertEqual(_flash_messages_from_response(resp), [])
 
     def test_auth_middleware_does_not_retry_schema_operational_error(self) -> None:
@@ -541,7 +539,7 @@ class TestUIAuth(UIBaseSuite):
         init_mock.assert_not_called()
 
     def test_auth_middleware_redirects_to_setup_when_no_registered_users(self) -> None:
-        req = _request("/problems/alice/sample/alice/general")
+        req = _request("/problems/alice/sample/general")
 
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
@@ -556,7 +554,7 @@ class TestUIAuth(UIBaseSuite):
         with workspace_service._cache_lock:
             workspace_service._user_cache.clear()
 
-        resp = settings_page(_request("/problems/alice/settings"), user="alice")
+        resp = settings_page(_request("/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("System Admin Panel", html)
@@ -585,7 +583,7 @@ class TestUIAuth(UIBaseSuite):
         )
         config.reload_runtime_values()
 
-        resp = settings_page(_request("/problems/alice/settings"), user="alice")
+        resp = settings_page(_request("/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('data-popup-open="judgehost-gen-script-popup"', html)
@@ -614,7 +612,7 @@ class TestUIAuth(UIBaseSuite):
         )
         config.reload_runtime_values()
 
-        resp = settings_page(_request("/problems/alice/settings"), user="alice")
+        resp = settings_page(_request("/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('data-judgehost-enable-toggle="1"', html)
@@ -650,7 +648,7 @@ class TestUIAuth(UIBaseSuite):
             ],
         }
         with patch.object(config.judgehost_task_service, "status", return_value=fake_status):
-            resp = settings_page(_request("/problems/alice/settings"), user="alice")
+            resp = settings_page(_request("/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("judgehost-lastseen-time", html)
@@ -662,7 +660,7 @@ class TestUIAuth(UIBaseSuite):
             asyncio.run(
                 settings_config_category_update(
                     _post_form_request(
-                        "/problems/alice/settings/config/judging",
+                        "/settings/config/judging",
                         {"config_RUN_TEST_SELECTOR_LIMIT": "777"},
                     ),
                     user="alice",
@@ -681,7 +679,7 @@ class TestUIAuth(UIBaseSuite):
         update_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/problems/alice/settings/config/judging",
+                    "/settings/config/judging",
                     {"config_RUN_TEST_SELECTOR_LIMIT": str(override_value)},
                 ),
                 user="alice",
@@ -689,7 +687,7 @@ class TestUIAuth(UIBaseSuite):
             )
         )
         self.assertEqual(update_resp.status_code, 303)
-        self.assertIn("/problems/alice/settings/config/judging", update_resp.headers.get("location", ""))
+        self.assertIn("/settings/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(
             int(config.system_config_service.get("RUN_TEST_SELECTOR_LIMIT")),
             override_value,
@@ -723,7 +721,7 @@ class TestUIAuth(UIBaseSuite):
         set_override_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/problems/alice/settings/config/judging",
+                    "/settings/config/judging",
                     {"config_RUN_TEST_SELECTOR_LIMIT": str(override_value)},
                 ),
                 user="alice",
@@ -738,7 +736,7 @@ class TestUIAuth(UIBaseSuite):
         revert_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/problems/alice/settings/config/judging",
+                    "/settings/config/judging",
                     {
                         "config_RUN_TEST_SELECTOR_LIMIT": str(override_value + 999),
                         "config_reset_RUN_TEST_SELECTOR_LIMIT": "1",
@@ -767,7 +765,7 @@ class TestUIAuth(UIBaseSuite):
         resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/problems/alice/settings/config/judgehost",
+                    "/settings/config/judgehost",
                     {"config_JUDGEHOST_API_TOKEN": bad_token},
                 ),
                 user="alice",
@@ -775,7 +773,7 @@ class TestUIAuth(UIBaseSuite):
             )
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("/problems/alice/settings/config/judgehost", resp.headers.get("location", ""))
+        self.assertIn("/settings/config/judgehost", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("JUDGEHOST_API_TOKEN must contain only visible ASCII characters", messages[0])
@@ -792,7 +790,7 @@ class TestUIAuth(UIBaseSuite):
         resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/problems/alice/settings/config/toolchain",
+                    "/settings/config/toolchain",
                     {"config_TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS": flags},
                 ),
                 user="alice",
@@ -800,7 +798,7 @@ class TestUIAuth(UIBaseSuite):
             )
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("/problems/alice/settings/config/toolchain", resp.headers.get("location", ""))
+        self.assertIn("/settings/config/toolchain", resp.headers.get("location", ""))
         self.assertEqual(str(config.system_config_service.get("TOOLCHAIN_JUDGEHOST_CPP_COMPILE_FLAGS") or ""), flags)
 
     def test_settings_config_category_page_and_hot_reload(self) -> None:
@@ -811,7 +809,7 @@ class TestUIAuth(UIBaseSuite):
         self.addCleanup(settings_system_config_reset, user="alice")
 
         page_resp = settings_config_category_page(
-            _request("/problems/alice/settings/config/judging"),
+            _request("/settings/config/judging"),
             user="alice",
             category="judging",
         )
@@ -824,7 +822,7 @@ class TestUIAuth(UIBaseSuite):
         update_resp = asyncio.run(
             settings_config_category_update(
                 _post_form_request(
-                    "/problems/alice/settings/config/judging",
+                    "/settings/config/judging",
                     {"config_RUN_EXEC_MEMORY_MB": str(update_value)},
                 ),
                 user="alice",
@@ -832,7 +830,7 @@ class TestUIAuth(UIBaseSuite):
             )
         )
         self.assertEqual(update_resp.status_code, 303)
-        self.assertIn("/problems/alice/settings/config/judging", update_resp.headers.get("location", ""))
+        self.assertIn("/settings/config/judging", update_resp.headers.get("location", ""))
         self.assertEqual(int(config.system_config_service.get("RUN_EXEC_MEMORY_MB")), update_value)
         self.assertEqual(int(config.constants.RUN_EXEC_MEMORY_MB), update_value)
 
@@ -843,7 +841,7 @@ class TestUIAuth(UIBaseSuite):
             workspace_service._user_cache.clear()
 
         page_resp = settings_config_category_page(
-            _request("/problems/alice/settings/config/judgehost"),
+            _request("/settings/config/judgehost"),
             user="alice",
             category="judgehost",
         )
@@ -907,6 +905,14 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-admin-snapshot" for item in hosts))
 
     def test_problem_id_validation_requires_lowercase_dash_format(self) -> None:
+        username = f"switchauth-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        reg = _register_with_password_proof(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(token)
+        cookie_header = f"{AUTH_COOKIE_NAME}={token}"
+
         with self.assertRaises(ValueError) as bad_format:
             workspace_service.ensure_problem("Sample_Problem", "Bad Format")
         self.assertIn("Use <owner>/<slug>", str(bad_format.exception))
@@ -916,9 +922,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("Use <owner>/<slug>", str(bad_dash.exception))
 
         invalid_open = switch_workspace(
-            _request("/switch-workspace"),
+            _request_with_cookie("/switch-workspace", cookie_header),
             problem="Sample_Problem",
-            user="alice",
             page="statement",
         )
         self.assertEqual(invalid_open.status_code, 303)
@@ -930,10 +935,9 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("Use <owner>/<slug>", invalid_messages[0])
 
         valid = switch_workspace(
-            _request("/switch-workspace"),
+            _request_with_cookie("/switch-workspace", cookie_header),
             problem="minimal-spanning-tree",
-            user="alice",
             page="statement",
         )
         self.assertEqual(valid.status_code, 303)
-        self.assertIn("/problems/alice/minimal-spanning-tree/alice/statement", valid.headers.get("location", ""))
+        self.assertIn(f"/problems/{username}/minimal-spanning-tree/statement", valid.headers.get("location", ""))

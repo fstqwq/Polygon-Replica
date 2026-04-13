@@ -7,7 +7,7 @@
     {% if entries and (not accepted_source_exists) %}
     <p class="flash"><span class="danger">Main correct solution is required.</span></p>
     {% endif %}
-    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/create-template">
+    <form class="form-row" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/create-template">
       <label for="solution-create-path">New file</label>
       <input id="solution-create-path" name="path" placeholder="{{ solution_create_default_path }}" />
       <button class="btn" type="submit">Add Solution</button>
@@ -25,7 +25,7 @@
       {% for row in entries %}
       <tr>
         <td>
-          <a class="solutions-source-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/editor?path={{ row.source_path }}" title="{{ row.source_path }}">
+          <a class="solutions-source-link" href="/problems/{{ ctx.problem.slug }}/solutions/editor?path={{ row.source_path }}" title="{{ row.source_path }}">
             <code>{{ row.file_name }}</code>
           </a>
         </td>
@@ -46,7 +46,7 @@
           {% elif row.expected_behavior_effective == "unknown" %}
           {% set row_tag_class = "tag-select-neutral" %}
           {% endif %}
-          <form class="inline-form tag-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/set-tag">
+          <form class="inline-form tag-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/set-tag">
             <input type="hidden" name="source_path" value="{{ row.source_path }}" />
             <select class="tag-select {{ row_tag_class }}" data-submit-on-change="1" name="expected_behavior" aria-label="Expected behavior for {{ row.source_path }}">
               {% for option in expected_behavior_options %}
@@ -57,12 +57,12 @@
           </form>
         </td>
         <td class="solutions-actions-cell">
-          <form class="inline-form solutions-rename-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/rename">
+          <form class="inline-form solutions-rename-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/rename">
             <input type="hidden" name="old_path" value="{{ row.source_path }}" />
             <input name="new_path" value="{{ row.file_name }}" aria-label="Rename {{ row.source_path }}" />
             <a href="#" class="linkish" data-submit-form="1">Rename</a>
           </form>
-          <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}? This cannot be undone; uncommitted changes will be lost.">
+          <form class="inline-form solutions-delete-form" method="post" action="/problems/{{ ctx.problem.slug }}/solutions/delete" data-confirm-message="Delete {{ row.source_path }}? This cannot be undone; uncommitted changes will be lost.">
             <input type="hidden" name="source_path" value="{{ row.source_path }}" />
             <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
           </form>

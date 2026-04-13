@@ -108,7 +108,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         denied = workspace_delete(
             request=_request_with_cookie(
-                f"/problems/alice/sample/{username}/workspace/delete",
+                f"/problems/alice/sample/workspace/delete",
                 auth_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -119,7 +119,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(denied.status_code, 303)
         self.assertIn("/sudo?next=", denied.headers.get("location", ""))
 
-        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path=f"/problems/alice/sample/{username}/workspace")
+        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path="/problems/alice/sample/workspace")
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
         self.assertTrue(sudo_token)
@@ -127,7 +127,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         deleted = workspace_delete(
             request=_request_with_cookie(
-                f"/problems/alice/sample/{username}/workspace/delete",
+                f"/problems/alice/sample/workspace/delete",
                 both_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -166,7 +166,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         denied = problem_delete(
             request=_request_with_cookie(
-                f"/problems/{problem}/{username}/problem/delete",
+                f"/problems/{problem}/problem/delete",
                 auth_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -178,7 +178,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(denied.status_code, 303)
         self.assertIn("/sudo?next=", denied.headers.get("location", ""))
 
-        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path=f"/problems/{problem}/{username}/workspace")
+        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path=f"/problems/{problem}/workspace")
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
         self.assertTrue(sudo_token)
@@ -186,7 +186,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         mismatch = problem_delete(
             request=_request_with_cookie(
-                f"/problems/{problem}/{username}/problem/delete",
+                f"/problems/{problem}/problem/delete",
                 both_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -196,14 +196,14 @@ class TestUIWorkspace(UIBaseSuite):
             confirm_problem="wrong-slug",
         )
         self.assertEqual(mismatch.status_code, 303)
-        self.assertIn(f"/problems/{problem}/{username}/workspace", mismatch.headers.get("location", ""))
+        self.assertIn(f"/problems/{problem}/workspace", mismatch.headers.get("location", ""))
         mismatch_messages = _flash_messages_from_response(mismatch)
         self.assertTrue(any("confirmation mismatch" in item for item in mismatch_messages))
         self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
 
         deleted = problem_delete(
             request=_request_with_cookie(
-                f"/problems/{problem}/{username}/problem/delete",
+                f"/problems/{problem}/problem/delete",
                 both_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -298,7 +298,7 @@ class TestUIWorkspace(UIBaseSuite):
         sudo_resp = _sudo_with_password_proof(
             auth_cookie,
             password,
-            next_path=f"/problems/{problem}/{username}/workspace",
+            next_path=f"/problems/{problem}/workspace",
         )
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
@@ -309,7 +309,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         with TestClient(app) as client:
             deleted = client.post(
-                f"/problems/{problem}/{username}/problem/delete",
+                f"/problems/{problem}/problem/delete",
                 data={"confirm_problem": problem},
                 headers={"cookie": both_cookie, "origin": "http://testserver"},
                 follow_redirects=False,
@@ -332,7 +332,7 @@ class TestUIWorkspace(UIBaseSuite):
         sudo_resp = _sudo_with_password_proof(
             auth_cookie,
             password,
-            next_path=f"/problems/{problem}/{username}/workspace",
+            next_path=f"/problems/{problem}/workspace",
         )
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
@@ -342,7 +342,7 @@ class TestUIWorkspace(UIBaseSuite):
         with patch.object(workspace_service, "delete_problem", side_effect=Exception("boom")):
             resp = problem_delete(
                 request=_request_with_cookie(
-                    f"/problems/{problem}/{username}/problem/delete",
+                    f"/problems/{problem}/problem/delete",
                     both_cookie,
                     method="POST",
                     extra_headers=[(b"origin", b"http://testserver")],
@@ -352,7 +352,7 @@ class TestUIWorkspace(UIBaseSuite):
                 confirm_problem=problem,
             )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{problem}/{username}/workspace", resp.headers.get("location", ""))
+        self.assertIn(f"/problems/{problem}/workspace", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(any("problem delete failed" in item for item in messages))
 
@@ -369,7 +369,7 @@ class TestUIWorkspace(UIBaseSuite):
         sudo_resp = _sudo_with_password_proof(
             auth_cookie,
             password,
-            next_path=f"/problems/{problem}/{username}/workspace",
+            next_path=f"/problems/{problem}/workspace",
         )
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
@@ -378,7 +378,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         resp = problem_delete(
             request=_request_with_cookie(
-                f"/problems/{problem}/{username}/problem/delete",
+                f"/problems/{problem}/problem/delete",
                 both_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -388,7 +388,7 @@ class TestUIWorkspace(UIBaseSuite):
             confirm_problem=problem,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{problem}/{username}/workspace", resp.headers.get("location", ""))
+        self.assertIn(f"/problems/{problem}/workspace", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(any("unsafe" in item.lower() for item in messages))
         self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
@@ -403,7 +403,7 @@ class TestUIWorkspace(UIBaseSuite):
             mode="interactive",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("/problems/alice/sample/alice/statement", resp.headers.get("location", ""))
+        self.assertIn("/problems/alice/sample/statement", resp.headers.get("location", ""))
 
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         cfg_path = ws / "config" / "problem.json"
@@ -427,7 +427,7 @@ class TestUIWorkspace(UIBaseSuite):
             mode="pass-fail",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("/problems/alice/sample/alice/statement", resp.headers.get("location", ""))
+        self.assertIn("/problems/alice/sample/statement", resp.headers.get("location", ""))
 
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         payload = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
@@ -451,13 +451,13 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn("interactive", payload)
 
     def test_workspace_page_main_only_controls(self) -> None:
-        resp = workspace_page(_request("/problems/alice/sample/alice/workspace"), "alice/sample", "alice")
+        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Working Copy", html)
         self.assertIn("Main Working Copy", html)
         self.assertIn("Based on <strong>", html)
-        self.assertNotIn("/problems/alice/sample/alice/git/pull", html)
+        self.assertNotIn("/problems/alice/sample/git/pull", html)
         self.assertIn("Commit and Publish", html)
         self.assertNotIn("Problem Access", html)
         self.assertNotIn("<h2>Access</h2>", html)
@@ -481,7 +481,7 @@ class TestUIWorkspace(UIBaseSuite):
         before = db_fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
         self.assertIsNotNone(before)
 
-        resp = workspace_page(_request(f"/problems/alice/sample/{username}/workspace"), "alice/sample", username)
+        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", username)
         self.assertEqual(resp.status_code, 200)
 
         after = db_fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
@@ -541,7 +541,7 @@ class TestUIWorkspace(UIBaseSuite):
         hidden_nested.parent.mkdir(parents=True, exist_ok=True)
         hidden_nested.write_text("nested\n", encoding="utf-8")
 
-        resp = files_page(_request("/problems/alice/sample/alice/files"), "alice/sample", "alice")
+        resp = files_page(_request("/problems/alice/sample/files"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn(visible.name, html)
@@ -549,7 +549,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn(".cache", html)
 
     def test_workspace_page_danger_zone_is_collapsed_and_sudo_gated(self) -> None:
-        resp = workspace_page(_request("/problems/alice/sample/alice/workspace"), "alice/sample", "alice")
+        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("<summary>Danger Zone</summary>", html)
@@ -567,14 +567,14 @@ class TestUIWorkspace(UIBaseSuite):
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
         workspace_service.ensure_workspace("alice/sample", username)
-        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path=f"/problems/alice/sample/{username}/workspace")
+        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path="/problems/alice/sample/workspace")
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
         self.assertTrue(sudo_token)
         both_cookie = f"{auth_cookie}; {SUDO_COOKIE_NAME}={sudo_token}"
 
         resp = workspace_page(
-            _request_with_cookie(f"/problems/alice/sample/{username}/workspace", both_cookie),
+            _request_with_cookie("/problems/alice/sample/workspace", both_cookie),
             "alice/sample",
             username,
         )
@@ -626,7 +626,7 @@ class TestUIWorkspace(UIBaseSuite):
         )
         write_preview_summary(preview_id, {})
 
-        resp = workspace_page(_request("/problems/alice/sample/alice/workspace"), "alice/sample", "alice")
+        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertRegex(
@@ -652,7 +652,7 @@ class TestUIWorkspace(UIBaseSuite):
         git_service.commit(ws, f"workspace-diff-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
         target.write_text("base\nchanged\n", encoding="utf-8")
 
-        resp = workspace_page(_request("/problems/alice/sample/alice/workspace", f"path={rel}"), "alice/sample", "alice")
+        resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn(f"Selected: <code>{rel}</code>", html)
@@ -673,7 +673,7 @@ class TestUIWorkspace(UIBaseSuite):
             resp = git_commit(problem="alice/sample", user="alice", message=f"ui-atomic-{uuid.uuid4().hex[:6]}")
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/alice/workspace", loc)
+        self.assertIn("/problems/alice/sample/workspace", loc)
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("commit rolled back", messages[0])
@@ -685,10 +685,10 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_update_working_copy_shows_only_when_upstream_is_newer(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
-        initial = general_page(_request("/problems/alice/sample/alice/general"), "alice/sample", "alice")
+        initial = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(initial.status_code, 200)
         initial_html = initial.body.decode("utf-8", errors="replace")
-        self.assertNotIn("/problems/alice/sample/alice/git/pull", initial_html)
+        self.assertNotIn("/problems/alice/sample/git/pull", initial_html)
 
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         bob_ws = Path(workspace_service.ensure_workspace("alice/sample", "bob"))
@@ -702,10 +702,10 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(run_git(["git", "commit", "-m", "upstream update"], cwd=bob_ws).returncode, 0)
         self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
 
-        refreshed = general_page(_request("/problems/alice/sample/alice/general"), "alice/sample", "alice")
+        refreshed = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(refreshed.status_code, 200)
         refreshed_html = refreshed.body.decode("utf-8", errors="replace")
-        self.assertIn("/problems/alice/sample/alice/git/pull", refreshed_html)
+        self.assertIn("/problems/alice/sample/git/pull", refreshed_html)
 
     def test_problem_page_denies_user_without_acl(self) -> None:
         private_problem = f"alice/ui-private-{uuid.uuid4().hex[:8]}"
@@ -733,7 +733,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIsNotNone(member)
         self.assertEqual(str(member["role"]), "write")
 
-        page = access_page(_request("/problems/alice/sample/alice/access"), "alice/sample", "alice")
+        page = access_page(_request("/problems/alice/sample/access"), "alice/sample", "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Problem Access", html)
         self.assertIn("Grant / Update", html)
@@ -761,7 +761,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         with TestClient(app) as client:
             resp = client.get(
-                f"/problems/alice/sample/{username}/access",
+                "/problems/alice/sample/access",
                 headers={"cookie": auth_cookie},
             )
         self.assertEqual(resp.status_code, 200)
@@ -781,7 +781,7 @@ class TestUIWorkspace(UIBaseSuite):
         )
         self.assertEqual(grant_resp.status_code, 303)
         loc = grant_resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/alice/access", loc)
+        self.assertIn("/problems/alice/sample/access", loc)
         grant_messages = _flash_messages_from_response(grant_resp)
         self.assertTrue(grant_messages)
         self.assertIn("register first", grant_messages[0])
@@ -816,19 +816,21 @@ class TestUIWorkspace(UIBaseSuite):
         resp = workspace_access_revoke(problem="alice/sample", user="alice", target_user="alice")
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/alice/access", loc)
+        self.assertIn("/problems/alice/sample/access", loc)
         revoke_messages = _flash_messages_from_response(resp)
         self.assertTrue(revoke_messages)
         self.assertIn("owner access is fixed and cannot be transferred", revoke_messages[0])
 
     def test_switch_workspace_denies_existing_problem_without_acl(self) -> None:
+        username = f"switchdeny-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
         private_problem = f"alice/ui-switch-private-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(private_problem, "Private Problem")
         workspace_service.grant_repo_access(private_problem, "bob", "owner")
         resp = switch_workspace(
-            _request("/switch-workspace"),
+            _request_with_cookie("/switch-workspace", auth_cookie),
             problem=private_problem,
-            user="alice",
             page="general",
         )
         self.assertEqual(resp.status_code, 303)
@@ -839,18 +841,20 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("do not have access to this problem", messages[0])
 
     def test_switch_workspace_creates_problem_with_requested_name(self) -> None:
+        username = f"switchcreate-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
         slug = f"ui-switch-create-{uuid.uuid4().hex[:8]}"
         requested_name = f"Custom Created Name {uuid.uuid4().hex[:6]}"
         resp = switch_workspace(
-            _request("/switch-workspace"),
+            _request_with_cookie("/switch-workspace", auth_cookie),
             problem=slug,
             problem_name=requested_name,
-            user="alice",
             page="statement",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/alice/{slug}/alice/statement", str(resp.headers.get("location", "")))
-        row = db_fetch_one("SELECT name FROM problems WHERE slug=?", [f"alice/{slug}"])
+        self.assertIn(f"/problems/{username}/{slug}/statement", str(resp.headers.get("location", "")))
+        row = db_fetch_one("SELECT name FROM problems WHERE slug=?", [f"{username}/{slug}"])
         self.assertIsNotNone(row)
         self.assertEqual(str(row["name"] or ""), requested_name)
 
@@ -883,8 +887,8 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(owner_problem, html)
         self.assertIn(read_problem, html)
         self.assertNotIn(other_problem, html)
-        self.assertNotIn(f"/problems/{other_problem}/alice/statement", html)
-        self.assertIn("/problems/alice/sample/alice/statement", html)
+        self.assertNotIn(f"/problems/{other_problem}/statement", html)
+        self.assertIn("/problems/alice/sample/statement", html)
         self.assertIn("v0 / upstream v0", html)
         self.assertIn("none / upstream missing", html)
         self.assertIn("revision-alert", html)
@@ -931,7 +935,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn('id="polygon-import-form"', html)
         self.assertIn('id="polygon-import-slug-hint"', html)
         self.assertIn('/problems/import/slug-hint', html)
-        self.assertNotIn('/problems/alice/sample/alice/export/import/slug-hint', html)
+        self.assertNotIn('/problems/alice/sample/export/import/slug-hint', html)
 
     def test_problems_root_page_exposes_title_action_links_with_popups(self) -> None:
         resp = problems_root_page(_request("/problems"), "alice")
@@ -989,7 +993,7 @@ class TestUIWorkspace(UIBaseSuite):
             problem_slug=target_slug,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/alice/{target_slug}/alice/statement", str(resp.headers.get("location", "")))
+        self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn(f"polygon package imported as alice/{target_slug}", messages[0])
@@ -1021,7 +1025,7 @@ class TestUIWorkspace(UIBaseSuite):
             problem_slug=target_slug,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/alice/{target_slug}/alice/statement", str(resp.headers.get("location", "")))
+        self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn(f"polygon package imported as alice/{target_slug}", messages[0])
@@ -1061,7 +1065,7 @@ class TestUIWorkspace(UIBaseSuite):
             problem_slug=target_slug,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/alice/{target_slug}/alice/statement", str(resp.headers.get("location", "")))
+        self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn(f"icpc package imported as alice/{target_slug}", messages[0])
@@ -1111,7 +1115,7 @@ class TestUIWorkspace(UIBaseSuite):
             problem_slug=target_slug,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/alice/{target_slug}/alice/statement", str(resp.headers.get("location", "")))
+        self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("warning:", messages[0])
@@ -1128,17 +1132,17 @@ class TestUIWorkspace(UIBaseSuite):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"%PDF-1.4\n% test\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
 
-        resp = files_page(_request("/problems/alice/sample/alice/files", f"path={rel}"), "alice/sample", "alice")
+        resp = files_page(_request("/problems/alice/sample/files", f"path={rel}"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Binary file is read-only in text editor.", html)
         self.assertIn("PDF preview:", html)
-        self.assertIn(f"/problems/alice/sample/alice/files/download?path={rel}", html)
+        self.assertIn(f"/problems/alice/sample/files/download?path={rel}", html)
         self.assertIn("files-pdf-preview", html)
         self.assertNotIn('data-code-editor="1"', html)
 
     def test_files_page_uses_two_column_panel_layout_classes(self) -> None:
-        resp = files_page(_request("/problems/alice/sample/alice/files"), "alice/sample", "alice")
+        resp = files_page(_request("/problems/alice/sample/files"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('class="files-panel files-panel-browser"', html)
@@ -1275,7 +1279,7 @@ class TestUIWorkspace(UIBaseSuite):
             )
         )
         self.assertEqual(confirm_resp.status_code, 303)
-        self.assertIn(f"/contests/{target_slug}/alice/overview", str(confirm_resp.headers.get("location", "")))
+        self.assertIn(f"/contests/{target_slug}/overview", str(confirm_resp.headers.get("location", "")))
         confirm_messages = _flash_messages_from_response(confirm_resp)
         self.assertTrue(confirm_messages)
         self.assertIn(f"contest {target_slug} imported (4 problems)", confirm_messages[0])
@@ -1426,7 +1430,7 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_revision_history_page_v0_does_not_show_head_error_notification(self) -> None:
         # Fresh test workspace starts at v0 (no commits).
-        resp = history_page(_request("/problems/alice/sample/alice/history"), "alice/sample", "alice")
+        resp = history_page(_request("/problems/alice/sample/history"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Revision History", html)
@@ -1444,7 +1448,7 @@ class TestUIWorkspace(UIBaseSuite):
         marker = f"ui-history-{uuid.uuid4().hex[:6]}"
         git_service.commit(ws, marker, "alice", "alice@polygonlike.local")
 
-        resp = history_page(_request("/problems/alice/sample/alice/history"), "alice/sample", "alice")
+        resp = history_page(_request("/problems/alice/sample/history"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Revision History", html)
@@ -1503,7 +1507,7 @@ class TestUIWorkspace(UIBaseSuite):
         selected = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertTrue(selected)
 
-        resp = history_page(_request("/problems/alice/sample/alice/history", f"revision={selected}"), "alice/sample", "alice")
+        resp = history_page(_request("/problems/alice/sample/history", f"revision={selected}"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Revision Diff", html)
@@ -1533,7 +1537,7 @@ class TestUIWorkspace(UIBaseSuite):
         resp = git_restore_revision(problem="alice/sample", user="alice", revision=old_commit, page="history")
         self.assertEqual(resp.status_code, 303)
         location = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/alice/history", location)
+        self.assertIn("/problems/alice/sample/history", location)
         restore_messages = _flash_messages_from_response(resp)
         self.assertTrue(restore_messages)
         self.assertIn("restored files from", restore_messages[0])
@@ -1589,7 +1593,7 @@ class TestUIWorkspace(UIBaseSuite):
         with self.assertRaises(RuntimeError):
             git_service.pull(bob, "main")
 
-        ws_page = workspace_page(_request("/problems/alice/sample/bob/workspace"), "alice/sample", "bob")
+        ws_page = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "bob")
         self.assertEqual(ws_page.status_code, 200)
         html = ws_page.body.decode("utf-8", errors="replace")
         self.assertIn("Rebase In Progress", html)
@@ -1600,8 +1604,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         abort = git_rebase_abort("alice/sample", "bob")
         self.assertEqual(abort.status_code, 303)
-        self.assertIn("/problems/alice/sample/bob/workspace", abort.headers.get("location", ""))
+        self.assertIn("/problems/alice/sample/workspace", abort.headers.get("location", ""))
 
         status_after = git_service.status(bob)
         self.assertFalse(bool(status_after.get("rebase_active")))
-

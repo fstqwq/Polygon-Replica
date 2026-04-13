@@ -9,7 +9,7 @@
     <p><strong>User:</strong> <code>{{ user.username }}</code></p>
     <p><a href="/agent/sessions">Connected Agents</a></p>
     <h3>Change Password</h3>
-    <form id="settings-password-form" class="form-stack" method="post" action="/problems/{{ user.username }}/settings/password">
+    <form id="settings-password-form" class="form-stack" method="post" action="/settings/password">
       <label for="current_password">Current Password</label>
       <input id="current_password" name="current_password" type="password" autocomplete="current-password" />
       <label for="new_password">New Password</label>
@@ -31,8 +31,8 @@
   <section class="settings-admin-panel">
     <h2>System Admin Panel</h2>
     <p class="muted">Edit runtime config with defaults from <code>app/main_constant.py</code>. Runtime keys apply immediately; restart-marked keys apply after service restart.</p>
-    <p class="muted">Worker queue snapshot JSON: <a href="/problems/{{ user.username }}/settings/worker-queue" target="_blank" rel="noopener">open endpoint</a></p>
-    <p class="muted">Judgehost snapshot JSON: <a href="/problems/{{ user.username }}/settings/judgehost" target="_blank" rel="noopener">open endpoint</a></p>
+    <p class="muted">Worker queue snapshot JSON: <a href="/settings/worker-queue" target="_blank" rel="noopener">open endpoint</a></p>
+    <p class="muted">Judgehost snapshot JSON: <a href="/settings/judgehost" target="_blank" rel="noopener">open endpoint</a></p>
     {% set jh = judgehost_status if judgehost_status else {} %}
     {% set jh_queue = jh.get('queue', {}) %}
     {% set jh_hosts = jh.get('hosts', []) %}
@@ -48,7 +48,7 @@
         judgehost online={{ jh.get('hosts_online', 0) }}/{{ jh.get('hosts_total', 0) }},
         queue q={{ jh_queue.get('queued', 0) }} l={{ jh_queue.get('leased', 0) }} c={{ jh_queue.get('completed', 0) }} f={{ jh_queue.get('failed', 0) }}
       </p>
-      <form class="form-stack" method="post" action="/problems/{{ user.username }}/settings/judgehost/runtime">
+      <form class="form-stack" method="post" action="/settings/judgehost/runtime">
         <div class="form-row settings-judgehost-enable-row">
           <label for="judgehost_enable_toggle">JUDGEHOST_ENABLE</label>
           <div class="settings-inline-toggle">
@@ -186,7 +186,7 @@
             <form
               class="inline-form settings-judgehost-toggle-form"
               method="post"
-              action="/problems/{{ user.username }}/settings/judgehost/host-action"
+              action="/settings/judgehost/host-action"
               data-judgehost-toggle-form="1"
               data-confirm-message="Disable judgehost {{ row.get('hostname', '') }}? Uncommitted in-flight judging state on this host will be requeued."
             >
@@ -227,12 +227,12 @@
       </tbody>
     </table>
     {% if admin_default_category_slug %}
-    <p class="muted">Quick entry: <a href="/problems/{{ user.username }}/settings/config/{{ admin_default_category_slug }}">open first category</a></p>
+    <p class="muted">Quick entry: <a href="/settings/config/{{ admin_default_category_slug }}">open first category</a></p>
     {% endif %}
     {% else %}
     <p class="muted">No editable system config keys were found.</p>
     {% endif %}
-    <form method="post" action="/problems/{{ user.username }}/settings/system-config/reset">
+    <form method="post" action="/settings/system-config/reset">
       <button class="btn" type="submit">Reset To Defaults</button>
     </form>
   </section>

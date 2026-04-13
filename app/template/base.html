@@ -20,7 +20,7 @@
   {% set flash_presenter = 'topbar' %}
   <header class="topbar">
     {% set top_user = ctx.user %}
-    {% set top_settings_href = '/problems/' ~ ctx.user.username ~ '/settings' %}
+    {% set top_settings_href = '/settings' %}
     {% set top_active_main = 'problems' %}
     {% include "_topbar_common.html" %}
   </header>
@@ -67,7 +67,7 @@
     </div>
     <nav class="problem-submenu" aria-label="Problem sections">
       <div class="problem-submenu-item">
-        <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/statement">
+        <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/statement">
           <span class="submenu-head-line">
               <strong class="submenu-status-heading">Statement</strong>
           </span>
@@ -77,7 +77,7 @@
       {% set checker_nav = nav_status.get('checker', {}) %}
       {% if problem_mode != "interactive" %}
       <div class="problem-submenu-item">
-        <a data-page="checker" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker">
+        <a data-page="checker" href="/problems/{{ ctx.problem.slug }}/checker">
           <span class="submenu-head-line">
             <span class="submenu-title">Checker</span>
           </span>
@@ -90,7 +90,7 @@
       {% endif %}
       {% if problem_mode == "interactive" %}
       <div class="problem-submenu-item">
-        <a data-page="interactor" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/interactor">
+        <a data-page="interactor" href="/problems/{{ ctx.problem.slug }}/interactor">
           <span class="submenu-head-line">
             <span class="submenu-title">Interactor</span>
           </span>
@@ -99,7 +99,7 @@
       </div>
       {% endif %}
       <div class="problem-submenu-item">
-        <a data-page="validator" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/validator">
+        <a data-page="validator" href="/problems/{{ ctx.problem.slug }}/validator">
           <span class="submenu-head-line">
             <span class="submenu-title">Validator</span>
           </span>
@@ -107,7 +107,7 @@
         </a>
       </div>
       <div class="problem-submenu-item">
-        <a data-page="generators" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/generators">
+        <a data-page="generators" href="/problems/{{ ctx.problem.slug }}/generators">
           <span class="submenu-head-line">
             <span class="submenu-title">Generators</span>
           </span>
@@ -115,7 +115,7 @@
         </a>
       </div>
       <div class="problem-submenu-item">
-        <a data-page="solutions" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/solutions">
+        <a data-page="solutions" href="/problems/{{ ctx.problem.slug }}/solutions">
           <span class="submenu-head-line">
             <span class="submenu-title">Solutions</span>
           </span>
@@ -125,7 +125,7 @@
         </a>
       </div>
       <div class="problem-submenu-item">
-        <a data-page="tests" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/tests">
+        <a data-page="tests" href="/problems/{{ ctx.problem.slug }}/tests">
           <span class="submenu-head-line">
             <span class="submenu-title">Tests</span>
           </span>
@@ -141,7 +141,7 @@
       <div class="problem-submenu-item problem-submenu-item-run">
         <div class="problem-submenu-run-block">
           <span class="submenu-head-line {{ 'submenu-status-warn' if verification_mode == 'stale' else '' }}">
-            <a data-page="run" class="submenu-head-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">
+            <a data-page="run" class="submenu-head-link" href="/problems/{{ ctx.problem.slug }}/run">
               <span hidden>Verification</span><strong hidden>{{ verification_status }}</strong>
               <strong class="submenu-status-heading">Verification</strong>
               <span
@@ -151,7 +151,7 @@
             </a>
           </span>
           <span class="submenu-detail-line verification-start-line">
-            <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/verification/start">
+            <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/verification/start">
               <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
               <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start verification)</a>
             </form>
@@ -159,7 +159,7 @@
         </div>
       </div>
       <div class="problem-submenu-item">
-        <a data-page="export" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/export">
+        <a data-page="export" href="/problems/{{ ctx.problem.slug }}/export">
           <span class="submenu-head-line">
             <span class="submenu-title">Packages</span>
           </span>
@@ -167,7 +167,7 @@
         </a>
       </div>
       <div class="problem-submenu-item">
-        <a data-page="access" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/access">
+        <a data-page="access" href="/problems/{{ ctx.problem.slug }}/access">
           <span class="submenu-head-line">
             <span class="submenu-title">Manage access</span>
           </span>
@@ -197,18 +197,18 @@
           </div>
           {% if ctx.workspace_needs_update %}
           <div class="workspace-update-row">
-            <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/pull">
+            <form class="inline-form action-link-form" method="post" action="/problems/{{ ctx.problem.slug }}/git/pull">
               <button class="button-link workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Update working copy</button>
             </form>
           </div>
           {% endif %}
           <div class="workspace-links">
-            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/history">View Revision History</a>
+            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/history">View Revision History</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
-            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files">Browse Files</a>
+            <a class="workspace-side-link" href="/problems/{{ ctx.problem.slug }}/files">Browse Files</a>
           </div>
           <div class="workspace-actions">
-            <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace">Commit Changes</a>
+            <a class="button-link primary-action workspace-side-button" href="/problems/{{ ctx.problem.slug }}/workspace">Commit Changes</a>
           </div>
           {% if ctx.workspace_changes.total > 0 %}
           {{ change_badges(ctx.workspace_changes.counts) }}
@@ -216,7 +216,7 @@
             {% for row in ctx.workspace_changes.rows %}
             <li class="change-item change-{{ row.kind }}">
               <code class="change-code">{{ row.code }}</code>
-              <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/workspace?path={{ row.link_path }}&src=workspace">{{ row.path }}</a>
+              <a href="/problems/{{ ctx.problem.slug }}/workspace?path={{ row.link_path }}&src=workspace">{{ row.path }}</a>
             </li>
             {% endfor %}
           </ul>

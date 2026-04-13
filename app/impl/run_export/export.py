@@ -1,12 +1,13 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 import json
 import uuid
 import zipfile
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict, cast, Annotated, Annotated
 
-from fastapi import Form, Request
+from fastapi import Form, Request, Depends
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
@@ -269,7 +270,7 @@ def _resolve_export_archive_path(problem: str, export_id: str, filename: str) ->
         archive_name,
     )
 
-def export_page(request: Request, problem: str, user: str):
+def export_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace_id = ctx['workspace']['id']
     problem_id = int(ctx['problem']['id'])
@@ -386,7 +387,7 @@ def export_page(request: Request, problem: str, user: str):
                     "source_display": export_row["source_display"],
                     "status": "ok",
                     "detail": export_row["activity_detail"],
-                    "open_href": f"/problems/{ctx['problem']['slug']}/{ctx['user']['username']}/exports/{export_row['id']}/{export_row['filename']}",
+                    "open_href": f"/problems/{ctx['problem']['slug']}/exports/{export_row['id']}/{export_row['filename']}",
                     "open_label": "zip",
                 }
             )
@@ -413,7 +414,7 @@ def export_page(request: Request, problem: str, user: str):
         },
     )
 
-def export_create(problem: str, user: str, verification_id: str=Form(''), export_type: str=Form('icpc')):
+def export_create(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: str=Form(''), export_type: str=Form('icpc')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     require_write_access(ctx)
     requested_export_type = export_type.lower()
@@ -463,4 +464,4 @@ def export_create(problem: str, user: str, verification_id: str=Form(''), export
         initial_details['error'] = str(exc)
         audit(ctx['user']['id'], ctx['problem']['id'], 'export.create', initial_details)
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{user}/export', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/export', status_code=303, message=msg)

@@ -2,7 +2,7 @@
 {% block content %}
 <h1 class="page-title">System Configuration</h1>
 {% include "_flash_message.html" %}
-<p class="muted"><a href="/problems/{{ user.username }}/settings">Back to Settings</a></p>
+<p class="muted"><a href="/settings">Back to Settings</a></p>
 <div class="grid settings-grid">
   <section>
     <h2>Categories</h2>
@@ -35,7 +35,7 @@
     {% if selected_section %}
     <h2>{{ selected_section.category }}</h2>
     <p class="muted">Overrides: {{ selected_changed_count }} / {{ selected_count }}</p>
-    <form class="form-stack" method="post" action="/problems/{{ user.username }}/settings/config/{{ selected_slug }}">
+    <form class="form-stack" method="post" action="/settings/config/{{ selected_slug }}">
       <table class="table-base">
         <thead>
           <tr>

@@ -1,6 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from fastapi import Form
+from typing import Annotated
+
+from app.impl.auth.session import require_session_user
+
+from fastapi import Form, Depends
 
 from app.impl.auth.shared import normalize_username_required, redirect_response
 from app.impl.runtime.config import config
@@ -9,7 +13,7 @@ from app.impl.workspace.access import normalize_transferable_repo_role, require_
 from app.impl.workspace.context_ui import page_ctx
 
 
-def workspace_access_grant(problem: str, user: str, target_user: str = Form(...), role: str = Form("read")):
+def workspace_access_grant(problem: str, user: Annotated[str, Depends(require_session_user)], target_user: str = Form(...), role: str = Form("read")):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_manage_access(ctx)
     msg = "access updated"
@@ -22,10 +26,10 @@ def workspace_access_grant(problem: str, user: str, target_user: str = Form(...)
         msg = f"access updated: {safe_target} -> {safe_role}"
     except ValueError as exc:
         msg = str(exc)
-    return redirect_response(f"/problems/{problem}/{user}/access", status_code=303, message=msg)
+    return redirect_response(f"/problems/{problem}/access", status_code=303, message=msg)
 
 
-def workspace_access_revoke(problem: str, user: str, target_user: str = Form(...)):
+def workspace_access_revoke(problem: str, user: Annotated[str, Depends(require_session_user)], target_user: str = Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_manage_access(ctx)
     msg = "access removed"
@@ -41,5 +45,5 @@ def workspace_access_revoke(problem: str, user: str, target_user: str = Form(...
         msg = str(exc)
     if redirect_to_problems:
         return redirect_response("/problems", status_code=303, message=msg)
-    return redirect_response(f"/problems/{problem}/{user}/access", status_code=303, message=msg)
+    return redirect_response(f"/problems/{problem}/access", status_code=303, message=msg)
 

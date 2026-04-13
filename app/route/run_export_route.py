@@ -11,67 +11,67 @@ from app.impl.run_export.run import run_cancel, run_details_page, run_details_te
 router = APIRouter()
 
 router.add_api_route(
-    "/problems/{problem:path}/{user}/run",
+    "/problems/{problem:path}/run",
     run_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/run/new",
+    "/problems/{problem:path}/run/new",
     run_new_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/run/details",
+    "/problems/{problem:path}/run/details",
     run_details_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/run/details/test-fragment",
+    "/problems/{problem:path}/run/details/test-fragment",
     run_details_test_fragment,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/run/execute",
+    "/problems/{problem:path}/run/execute",
     run_execute,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/run/cancel",
+    "/problems/{problem:path}/run/cancel",
     run_cancel,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/export",
+    "/problems/{problem:path}/export",
     export_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/export/create",
+    "/problems/{problem:path}/export/create",
     export_create,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/export/import",
+    "/problems/{problem:path}/export/import",
     export_import,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/export/import/slug-hint",
+    "/problems/{problem:path}/export/import/slug-hint",
     export_import_slug_hint,
     methods=["GET"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/artifacts/{verification_id}/{rel_path:path}",
+    "/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}",
     artifact_file,
     methods=["GET"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/exports/{export_id}/{filename}",
+    "/problems/{problem:path}/exports/{export_id}/{filename}",
     export_file,
     methods=["GET"],
 )

@@ -517,7 +517,7 @@ class TestSecurity(SmokeBase):
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(
             resp.headers.get("location", ""),
-            "/problems/alice/sample/alice/files?dir=notes",
+            "/problems/alice/sample/files?dir=notes",
         )
 
     def test_files_rename_rejects_destination_path_traversal(self) -> None:
@@ -661,7 +661,7 @@ class TestSecurity(SmokeBase):
         marker = suite_root() / f"solution-save-escape-{uuid.uuid4().hex[:8]}.py"
         marker.unlink(missing_ok=True)
         resp = solutions_save_source(
-            request=_post_request("/problems/alice/sample/alice/solutions/editor"),
+            request=_post_request("/problems/alice/sample/solutions/editor"),
             problem="alice/sample",
             user="alice",
             source_path="../../" + marker.name,
@@ -745,7 +745,7 @@ class TestSecurity(SmokeBase):
             )
         self.assertEqual(resp.status_code, 303)
         location = str(resp.headers.get("location", "") or "")
-        self.assertIn("/problems/alice/sample/alice/run/details?verification_id=", location)
+        self.assertIn("/problems/alice/sample/run/details?verification_id=", location)
         targets = captured.get("targets")
         self.assertIsInstance(targets, list)
         self.assertTrue(targets)

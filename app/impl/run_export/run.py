@@ -1,9 +1,10 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
 
-from fastapi import File, Form, HTTPException, Request, UploadFile
+from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 
 from app.db import now_iso
 from app.impl.auth.shared import redirect_response, template_response
@@ -76,7 +77,7 @@ def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
 
     return affected
 
-def run_page(request: Request, problem: str, user: str):
+def run_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
@@ -101,7 +102,7 @@ def run_page(request: Request, problem: str, user: str):
     runs = run_list_rows(int(ctx['problem']['id']), workspace_id, workspace, limit=10, actor_user_id=int(ctx['user']['id']))
     return template_response(request, 'run.html', {'ctx': ctx, 'runs': runs})
 
-def run_new_page(request: Request, problem: str, user: str):
+def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
     workspace = Path(ctx['workspace']['path'])
     workspace_id = int(ctx['workspace']['id'])
@@ -152,7 +153,7 @@ def run_new_page(request: Request, problem: str, user: str):
         },
     )
 
-def run_details_page(request: Request, problem: str, user: str):
+def run_details_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
@@ -173,7 +174,7 @@ def run_details_page(request: Request, problem: str, user: str):
     detail_page_ctx['topbar_max_1400'] = detail_table_compact
     return template_response(request, 'run_details.html', {'ctx': detail_page_ctx, **detail_ctx})
 
-def run_details_test_fragment(request: Request, problem: str, user: str):
+def run_details_test_fragment(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=True, include_workspace_changes=True)
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
@@ -208,13 +209,13 @@ def run_details_test_fragment(request: Request, problem: str, user: str):
     )
     return response
 
-def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] = ""):
+def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: Annotated[str, Form()] = ""):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
     require_write_access(ctx)
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return redirect_response(
-            f"/problems/{problem}/{user}/run",
+            f"/problems/{problem}/run",
             status_code=303,
             message="verification id is required",
         )
@@ -226,7 +227,7 @@ def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] 
         workspace_id,
         safe_verification_id,
     )
-    details_url = f"/problems/{problem}/{user}/run/details?verification_id={quote_plus(safe_verification_id)}"
+    details_url = f"/problems/{problem}/run/details?verification_id={quote_plus(safe_verification_id)}"
     if verification_run_ids is None:
         return redirect_response(details_url, status_code=303, message="verification not found")
     normalized_run_ids: list[str] = []
@@ -267,7 +268,7 @@ def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] 
 
 def run_execute(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     artifact_verification_id: Annotated[str, Form()] = "",
     solution_paths: Annotated[list[str], Form()] = [],
     test_names: Annotated[list[str], Form()] = [],
@@ -309,7 +310,7 @@ def run_execute(
             execution_targets.append((None, True))
         if not execution_targets:
             msg = 'select at least one solution or upload source file'
-            return redirect_response(f'/problems/{problem}/{user}/run/new', status_code=303, message=msg)
+            return redirect_response(f'/problems/{problem}/run/new', status_code=303, message=msg)
         deduped_targets: list[tuple[str | None, bool]] = []
         seen_targets: set[tuple[str, bool]] = set()
         for target_submission_path, target_is_upload in execution_targets:
@@ -401,20 +402,20 @@ def run_execute(
             failed_details["status"] = Status.FAILED.value
             failed_details["error"] = str(exc)
             audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", failed_details)
-            return redirect_response(f"/problems/{problem}/{user}/run", status_code=303, message=str(exc))
+            return redirect_response(f"/problems/{problem}/run", status_code=303, message=str(exc))
         if not started:
             failed_details = dict(run_execute_details)
             failed_details["status"] = Status.FAILED.value
             failed_details["error"] = "verification already running"
             audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", failed_details)
-            return redirect_response(f"/problems/{problem}/{user}/run", status_code=303, message="verification already running")
+            return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification already running")
         message_parts: list[str] = []
         if selected_test_names:
             message_parts.append(f'tests selected ({len(selected_test_names)})')
         message_parts.append(f'verification running ({len(run_ids)} programs)')
         message_text = '; '.join(message_parts)
         return redirect_response(
-            f'/problems/{problem}/{user}/run/details?verification_id={quote_plus(verification_id)}',
+            f'/problems/{problem}/run/details?verification_id={quote_plus(verification_id)}',
             status_code=303,
             message=message_text,
         )

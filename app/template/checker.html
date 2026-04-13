@@ -4,7 +4,7 @@
 <section>
   <h2 class="checker-section-title">Standard Checker{% if active %}<span class="checker-mode-chip checker-mode-chip-active">active</span>{% endif %}</h2>
   {% if standard_checker_options %}
-  <form class="form-row form-row-inline-controls" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/set-standard">
+  <form class="form-row form-row-inline-controls" method="post" action="/problems/{{ ctx.problem.slug }}/checker/set-standard">
     <label for="standard-checker-name">Checker</label>
     <select id="standard-checker-name" name="checker_name">
       {% for checker in standard_checker_options %}
@@ -13,7 +13,7 @@
     </select>
     <div class="form-row-actions">
       <button class="btn" type="submit">Set Checker</button>
-      <button class="btn" type="submit" formaction="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/checker/view-standard" formmethod="get">View Checker</button>
+      <button class="btn" type="submit" formaction="/problems/{{ ctx.problem.slug }}/checker/view-standard" formmethod="get">View Checker</button>
     </div>
   </form>
   {% else %}
@@ -31,19 +31,19 @@
   {% endif %}
   {% if checker_status.repo_source_exists or inline_error %}
   {{ source_editor_form(
-    "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/checker/save-source",
+    "/problems/" ~ ctx.problem.slug ~ "/checker/save-source",
     repo_source,
     repo_content,
     repo_content_truncated,
     content_char_limit,
     "Save Checker Source",
-    "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/checker/create-template",
+    "/problems/" ~ ctx.problem.slug ~ "/checker/create-template",
     "Create checker.cpp template",
     inline_error
   ) }}
   {% else %}
   {{ create_template_form(
-    "/problems/" ~ ctx.problem.slug ~ "/" ~ ctx.user.username ~ "/checker/create-template",
+    "/problems/" ~ ctx.problem.slug ~ "/checker/create-template",
     "Create checker.cpp template"
   ) }}
   {% endif %}

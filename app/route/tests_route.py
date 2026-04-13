@@ -20,58 +20,58 @@ from app.impl.tests_spec.verification import verification_start
 router = APIRouter()
 
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests",
+    "/problems/{problem:path}/tests",
     render_tests_page,
     methods=["GET"],
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/add-manual",
+    "/problems/{problem:path}/tests/spec/add-manual",
     add_manual_test,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/add-manual-upload",
+    "/problems/{problem:path}/tests/spec/add-manual-upload",
     upload_manual_test,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/add-gen",
+    "/problems/{problem:path}/tests/spec/add-gen",
     add_generator_test,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/edit",
+    "/problems/{problem:path}/tests/spec/edit",
     edit_spec_test,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/delete",
+    "/problems/{problem:path}/tests/spec/delete",
     delete_spec_test,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/reindex",
+    "/problems/{problem:path}/tests/spec/reindex",
     reindex_spec_test,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/gen-script",
+    "/problems/{problem:path}/tests/spec/gen-script",
     save_gen_script,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/payload/download",
+    "/problems/{problem:path}/tests/spec/payload/download",
     download_test_payload,
     methods=["GET"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/tests/spec/payload/upload",
+    "/problems/{problem:path}/tests/spec/payload/upload",
     upload_test_payload,
     methods=["POST"],
 )
 router.add_api_route(
-    "/problems/{problem:path}/{user}/verification/start",
+    "/problems/{problem:path}/verification/start",
     verification_start,
     methods=["POST"],
 )

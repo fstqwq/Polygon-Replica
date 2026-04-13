@@ -19,9 +19,9 @@
         {% endif %}
       </td>
       <td>
-        <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/history?revision={{ c.commit }}">View Diff</a>
+        <a href="/problems/{{ ctx.problem.slug }}/history?revision={{ c.commit }}">View Diff</a>
         <span class="muted">|</span>
-        <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/git/restore-revision">
+        <form method="post" action="/problems/{{ ctx.problem.slug }}/git/restore-revision">
           <input type="hidden" name="revision" value="{{ c.commit }}" />
           <input type="hidden" name="page" value="history" />
           <a

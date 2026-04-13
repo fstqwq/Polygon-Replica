@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
@@ -17,7 +19,7 @@ from app.service.platform.workspace_path import normalize_component_source_path,
 _C = config.constants
 
 
-def interactor_page(request: Request, problem: str, user: str):
+def interactor_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
     interactor_status = interactor_status_context(workspace)
@@ -35,7 +37,7 @@ def interactor_page(request: Request, problem: str, user: str):
         repo_content = template_for_kind('interactor')
     return template_response(request, 'interactor.html', {'ctx': ctx, 'interactor_status': interactor_status, 'repo_source': repo_source, 'repo_content': repo_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
-def interactor_create_template(problem: str, user: str, path: str=Form('interactors/interactor.cpp')):
+def interactor_create_template(problem: str, user: Annotated[str, Depends(require_session_user)], path: str=Form('interactors/interactor.cpp')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -56,11 +58,11 @@ def interactor_create_template(problem: str, user: str, path: str=Form('interact
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    return redirect_response(f'/problems/{problem}/{user}/interactor', status_code=303, message=msg)
+    return redirect_response(f'/problems/{problem}/interactor', status_code=303, message=msg)
 
 def interactor_save_source(
     problem: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     path: str = Form('interactors/interactor.cpp'),
     content: str = Form(''),
     response_mode: str = Form(''),
@@ -109,7 +111,7 @@ def interactor_save_source(
         msg = str(exc)
     except HTTPException as exc:
         msg = str(exc.detail)
-    redirect_url = f'/problems/{problem}/{user}/interactor'
+    redirect_url = f'/problems/{problem}/interactor'
     if json_requested:
         if save_ok:
             return json_redirect_response(redirect_url, msg)

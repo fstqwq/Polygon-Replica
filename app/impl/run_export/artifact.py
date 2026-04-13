@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
+from app.impl.auth.session import require_session_user
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Depends
 from fastapi.responses import FileResponse, Response
 
 from app.impl.runtime.config import config
@@ -30,7 +32,7 @@ def _browser_blob_response(blob: bytes, filename: str) -> Response:
     return Response(content=blob, media_type="application/octet-stream", headers=headers)
 
 
-def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
+def artifact_file(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: str, rel_path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     assert_workspace_artifact_access(ctx, verification_id)
     rel_norm = rel_path.lstrip('/')
@@ -62,7 +64,7 @@ def artifact_file(problem: str, user: str, verification_id: str, rel_path: str):
     return browser_file_response(file_path)
 
 
-def export_file(problem: str, user: str, export_id: str, filename: str):
+def export_file(problem: str, user: Annotated[str, Depends(require_session_user)], export_id: str, filename: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])

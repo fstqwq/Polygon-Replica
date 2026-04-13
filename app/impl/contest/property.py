@@ -1,6 +1,8 @@
 from __future__ import annotations
+from app.impl.auth.session import require_session_user
+from typing import Annotated
 
-from fastapi import Form, HTTPException, Request
+from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
@@ -14,7 +16,7 @@ from .shared import (
 )
 
 
-def contest_properties_page(request: Request, contest: str, user: str):
+def contest_properties_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = _contest_ctx(contest, user, "properties")
     contest_id = int(ctx["contest"]["id"])
     props = config.contest_service.properties_map(contest_id)
@@ -32,7 +34,7 @@ def contest_properties_page(request: Request, contest: str, user: str):
 
 def contest_properties_save(
     contest: str,
-    user: str,
+    user: Annotated[str, Depends(require_session_user)],
     title: str = Form(""),
     location: str = Form(""),
     date_text: str = Form(""),
@@ -64,4 +66,4 @@ def contest_properties_save(
             "date": safe_date,
         },
     )
-    return _contest_redirect(ctx["contest"]["slug"], user, "properties", message="contest properties saved")
+    return _contest_redirect(ctx["contest"]["slug"], "properties", message="contest properties saved")

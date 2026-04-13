@@ -135,7 +135,7 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(len(after_remove), 1)
 
         overview = contest_overview_page(
-            _request(f"/contests/{contest_slug}/alice/overview"),
+            _request(f"/contests/{contest_slug}/overview"),
             contest_slug,
             "alice",
         )
@@ -145,7 +145,7 @@ class TestUIContests(UIBaseSuite):
         self.assertIn("Contest Problems", overview_html)
 
         problems_page = contest_problems_page(
-            _request(f"/contests/{contest_slug}/alice/problems"),
+            _request(f"/contests/{contest_slug}/problems"),
             contest_slug,
             "alice",
         )
@@ -183,7 +183,7 @@ class TestUIContests(UIBaseSuite):
             retry_job_id="",
         )
         self.assertEqual(update_resp.status_code, 303)
-        self.assertIn(f"/contests/{contest_slug}/alice/problems", update_resp.headers.get("location", ""))
+        self.assertIn(f"/contests/{contest_slug}/problems", update_resp.headers.get("location", ""))
 
         job_row = db_fetch_one(
             "SELECT id,status FROM contest_jobs WHERE contest_id=? ORDER BY created_at DESC LIMIT 1",
@@ -233,7 +233,7 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(str(contest_row["title"]), "Props Contest Updated")
 
         props_page = contest_properties_page(
-            _request(f"/contests/{contest_slug}/alice/properties"),
+            _request(f"/contests/{contest_slug}/properties"),
             contest_slug,
             "alice",
         )
@@ -253,7 +253,7 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(str(membership["role"]), "write")
 
         access_page_resp = contest_access_page(
-            _request(f"/contests/{contest_slug}/alice/access"),
+            _request(f"/contests/{contest_slug}/access"),
             contest_slug,
             "alice",
         )
@@ -275,7 +275,7 @@ class TestUIContests(UIBaseSuite):
         self.assertIsNone(removed)
 
         packages_page = contest_packages_page(
-            _request(f"/contests/{contest_slug}/alice/packages"),
+            _request(f"/contests/{contest_slug}/packages"),
             contest_slug,
             "alice",
         )
@@ -312,7 +312,7 @@ class TestUIContests(UIBaseSuite):
         config.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
 
         overview = contest_overview_page(
-            _request(f"/contests/{contest_slug}/alice/overview"),
+            _request(f"/contests/{contest_slug}/overview"),
             contest_slug,
             "alice",
         )
@@ -385,7 +385,7 @@ class TestUIContests(UIBaseSuite):
                 {
                     "key": "statements/english/statements.tex",
                     "language": "english",
-                    "package_bytes": b"\\\\documentclass{article}\n\\\\usepackage{olymp}\n\\\\begin{document}\n\\\\import{../../problems/src-problem/statements/english/}{./problem.tex}\n\\\\end{document}\n",
+                    "package_bytes": b"\\\\documentclass{article}\n\\\\usepackage{olymp}\n\\\\begin{document}\n\\\\import{../../problems/src-problem/statements/}{./problem.tex}\n\\\\end{document}\n",
                 },
                 {
                     "key": "statements/english/olymp.sty",
@@ -647,7 +647,7 @@ class TestUIContests(UIBaseSuite):
         write_contest_job_summary(contest_id, running_job_id, {"job_type": "pdf", "results": [], "language": "english"})
 
         overview = contest_overview_page(
-            _request(f"/contests/{contest_slug}/alice/overview"),
+            _request(f"/contests/{contest_slug}/overview"),
             contest_slug,
             "alice",
         )
@@ -658,7 +658,7 @@ class TestUIContests(UIBaseSuite):
         self.assertIn("RUNNING", overview_html)
 
         packages_page = contest_packages_page(
-            _request(f"/contests/{contest_slug}/alice/packages"),
+            _request(f"/contests/{contest_slug}/packages"),
             contest_slug,
             "alice",
         )
@@ -699,7 +699,7 @@ class TestUIContests(UIBaseSuite):
         )
 
         problems_page = contest_problems_page(
-            _request(f"/contests/{contest_slug}/alice/problems?job_id={change_job_id}"),
+            _request(f"/contests/{contest_slug}/problems?job_id={change_job_id}"),
             contest_slug,
             "alice",
             job_id=change_job_id,

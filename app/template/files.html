@@ -39,12 +39,12 @@
     <h2>Editor</h2>
     <div class="inline-meta-row">
       <p><strong>File:</strong> <code>{{ selected }}</code></p>
-      <a class="button-link" href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}">Download file</a>
+      <a class="button-link" href="/problems/{{ ctx.problem.slug }}/files/download?path={{ selected }}">Download file</a>
     </div>
     {% if selected_missing %}
     <p class="flash">Selected file does not exist yet.</p>
     {% if selected_template_kind %}
-    <form class="form-row files-template-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/create-template">
+    <form class="form-row files-template-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/create-template">
       <input type="hidden" name="path" value="{{ selected }}" />
       <input type="hidden" name="kind" value="{{ selected_template_kind }}" />
       <input type="hidden" name="dir" value="{{ browse_dir }}" />
@@ -58,7 +58,7 @@
     <p class="flash">Binary file is read-only in text editor.</p>
     {% if selected_is_pdf %}
     <p class="muted">PDF preview:</p>
-    <iframe class="pdf-preview files-pdf-preview" src="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/download?path={{ selected }}"></iframe>
+    <iframe class="pdf-preview files-pdf-preview" src="/problems/{{ ctx.problem.slug }}/files/download?path={{ selected }}"></iframe>
     {% else %}
     <p class="muted">This file is binary{% if selected_media_type %} ({{ selected_media_type }}){% endif %}. Use download/upload actions to manage it.</p>
     {% endif %}
@@ -72,7 +72,7 @@
       {% if content_truncated %}
       <p><em>Showing first {{ content_char_limit }} characters; Save is disabled for truncated file views.</em></p>
       {% endif %}
-      <form method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/save">
+      <form method="post" action="/problems/{{ ctx.problem.slug }}/files/save">
         <input type="hidden" name="path" value="{{ selected }}" />
         <input type="hidden" name="dir" value="{{ browse_dir }}" />
         <textarea
@@ -92,7 +92,7 @@
     <div class="form-stack selected-path-actions-list">
       <div class="form-block">
         <h3>Create File</h3>
-        <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/new">
+        <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/new">
           <div class="form-row">
             <label for="create-file-path">Path</label>
             <input id="create-file-path" name="path" value="{{ (browse_dir ~ '/' if browse_dir else (selected_parent ~ '/' if selected_parent else '')) ~ 'new-file.txt' }}" />
@@ -103,7 +103,7 @@
       </div>
       <div class="form-block">
         <h3>Upload File</h3>
-        <form class="form-stack selected-path-form" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/upload">
+        <form class="form-stack selected-path-form" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/files/upload">
           <div class="form-row">
             <label for="upload-target-path">Target path</label>
             <input id="upload-target-path" name="path" value="{{ selected }}" />
@@ -121,7 +121,7 @@
         <div class="form-stack selected-path-actions-list">
           <div class="form-block">
             <h3>Rename Path</h3>
-            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/rename">
+            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/rename">
               <div class="form-row">
                 <label for="rename-old-path">Current path</label>
                 <input id="rename-old-path" name="old_path" value="{{ selected }}" />
@@ -136,7 +136,7 @@
           </div>
           <div class="form-block">
             <h3>Delete Path</h3>
-            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/files/delete" data-confirm-message="Delete path {{ selected }}? This cannot be undone; uncommitted changes will be lost.">
+            <form class="form-stack selected-path-form" method="post" action="/problems/{{ ctx.problem.slug }}/files/delete" data-confirm-message="Delete path {{ selected }}? This cannot be undone; uncommitted changes will be lost.">
               <div class="form-row">
                 <label for="delete-path">Target path</label>
                 <input id="delete-path" name="path" value="{{ selected }}" />

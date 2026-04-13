@@ -11,13 +11,13 @@
     {% endif %}
     <div class="verification-detail-actions">
       {% if cancel_available %}
-      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/cancel">
+      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/cancel">
         <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
         <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
       </form>
       {% endif %}
       {% if rerun_solution_paths and not detail_running %}
-      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/execute">
+      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/execute">
         {% for p in rerun_solution_paths %}
         <input type="hidden" name="solution_paths" value="{{ p }}" />
         {% endfor %}
@@ -91,7 +91,7 @@
   <div class="verification-detail-wrap{% if not detail_table_compact %} verification-detail-wrap-regular{% endif %}">
     <table
       class="verification-detail-table{% if detail_table_compact %} verification-detail-table-compact{% else %} verification-detail-table-regular{% endif %}"
-      data-run-details-fragment="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run/details/test-fragment"
+      data-run-details-fragment="/problems/{{ ctx.problem.slug }}/run/details/test-fragment"
       data-verification-id="{{ cancel_verification_id or '' }}"
     >
       <colgroup>
@@ -260,7 +260,7 @@
   {% elif verification_id or detail_task_counts %}
   <p class="muted">Per-test details will appear once verification runs report testcase results.</p>
   {% else %}
-  <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/{{ ctx.user.username }}/run">Verification</a> and choose one.</p>
+  <p class="muted">No verification selected. Open <a href="/problems/{{ ctx.problem.slug }}/run">Verification</a> and choose one.</p>
   {% endif %}
 </section>
 <section>
