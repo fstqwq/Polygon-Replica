@@ -114,6 +114,8 @@ VERIFICATION_EXEC_MEMORY_MB = 1024
 VERIFICATION_EXEC_PROCESS_LIMIT = 64
 RUN_EXEC_MEMORY_MB = 1024
 RUN_EXEC_PROCESS_LIMIT = 64
+# Judgehost uses this KiB value for run output and script filesize caps. Shared
+# DOMjudge config converts it to bytes for output_storage_limit.
 RUN_EXEC_OUTPUT_KB = 65536
 RUN_WALL_TIME_SLACK_PASS_FAIL_SEC = 1
 RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC = 15
@@ -293,7 +295,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "VERIFICATION_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Verification-stage sandbox process limit.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "Run-time sandbox memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Run-time sandbox process limit.", "restart_required": False, "impact": "runtime"},
-    "RUN_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Unified judgehost output and file-size cap in KB for run output, stored output, and compile/compare sandbox file limits.", "restart_required": False, "impact": "runtime"},
+    "RUN_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Unified judgehost size cap in KiB for run output and compile/compare sandbox file limits; output_storage_limit derives from this value but is written to DOMjudge in bytes.", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_PASS_FAIL_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for pass-fail runs (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for pass-limit runs with pass_limit > 1 (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_INTERACTIVE_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for interactive runs (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},

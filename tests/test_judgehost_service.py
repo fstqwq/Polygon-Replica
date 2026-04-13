@@ -2076,7 +2076,7 @@ class TestJudgehostService(SmokeBase):
                 verification_source="run.execute",
             )
 
-    def test_domjudge_config_uses_unified_run_output_limit_for_storage_and_script_filesize(self) -> None:
+    def test_domjudge_config_uses_kib_for_script_filesize_and_bytes_for_output_storage(self) -> None:
         service = config.judgehost_task_service
         cfg = service.domjudge_config()
         run_output_kb = int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536)
@@ -2084,11 +2084,15 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(str(cfg.get("timelimit_overshoot") or ""), "1s|100%")
         self.assertEqual(
             int(cfg.get("output_storage_limit") or 0),
-            run_output_kb,
+            run_output_kb * 1024,
         )
         self.assertEqual(
             int(cfg.get("script_filesize_limit") or 0),
             run_output_kb,
+        )
+        self.assertNotEqual(
+            int(cfg.get("output_storage_limit") or 0),
+            int(cfg.get("script_filesize_limit") or 0),
         )
         self.assertNotEqual(
             int(cfg.get("script_filesize_limit") or 0),

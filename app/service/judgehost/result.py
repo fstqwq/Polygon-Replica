@@ -19,6 +19,7 @@ from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domj
 from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_feedback_text_and_files,
+    domjudge_feedback_text_from_text,
     domjudge_parse_float,
     domjudge_parse_int,
     domjudge_parse_meta_text,

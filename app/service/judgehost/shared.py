@@ -71,7 +71,9 @@ def domjudge_config_from_constants(constants: object) -> dict[str, object]:
     run_output_kb = max(64, int(getattr(constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536))
     return {
         "diskspace_error": 1048576,
-        "output_storage_limit": int(run_output_kb),
+        # DOMjudge interprets output_storage_limit in bytes, unlike output_limit and
+        # script_filesize_limit, which are configured in KiB.
+        "output_storage_limit": int(run_output_kb * 1024),
         "script_timelimit": compile_timeout,
         "script_memory_limit": int(compile_mem_mb * 1024),
         "script_filesize_limit": int(run_output_kb),
