@@ -6076,7 +6076,7 @@ class TestJudgehostService(SmokeBase):
             username=self.user,
             artifact_verification_id=verification_id,
             mode="pass-fail",
-            submission_path="solutions/std.cpp",
+            submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
             run_id=run_id,
@@ -6188,24 +6188,34 @@ class TestJudgehostService(SmokeBase):
         verification_id = f"ver-jh-case-order-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-case-order-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/std.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            task_kind="main-correct",
-            persist_verification_run=False,
-        )
+        task_id = f"jt-case-order-{uuid.uuid4().hex[:8]}"
+        now_text = "2026-04-14T00:00:00+00:00"
+        with service._state.state_lock:
+            service._state.tasks_by_id[task_id] = {
+                "id": task_id,
+                "run_id": run_id,
+                "problem_slug": self.problem,
+                "username": self.user,
+                "artifact_verification_id": verification_id,
+                "verification_id": verification_id,
+                "mode": "pass-fail",
+                "status": service.STATUS_LEASED,
+                "lease_owner": "judgehost-order",
+                "lease_expires_at": "",
+                "updated_at": now_text,
+                "created_at": now_text,
+                "completed_at": "",
+                "attempt_count": 1,
+                "run_status": "",
+                "error_text": "",
+                "payload": {
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/ac.cpp",
+                },
+                "summary": {},
+                "result": {},
+            }
+            service._state.task_id_by_run[run_id] = task_id
 
         task_store = VerificationTaskStore(config.db)
         task_store.replace_graph(
@@ -6214,7 +6224,7 @@ class TestJudgehostService(SmokeBase):
                 {
                     "id": "vt-case-order",
                     "task_kind": "main-correct",
-                    "source_path": "solutions/std.cpp",
+                    "source_path": "solutions/ac.cpp",
                     "logical_run_id": run_id,
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
@@ -6232,7 +6242,7 @@ class TestJudgehostService(SmokeBase):
             "run_id": run_id,
             "status": "failed",
             "summary": {
-                "source": "solutions/std.cpp",
+                "source": "solutions/ac.cpp",
                 "error": "Unexpected character #10, but ' ' expected (testdata.in)",
                 "tests": [],
             },
@@ -6252,7 +6262,7 @@ class TestJudgehostService(SmokeBase):
             error_text="Unexpected character #10, but ' ' expected (testdata.in)",
             feedback_text="Unexpected character #10, but ' ' expected (testdata.in)",
             output_ref="",
-            fail_flag_reason="main-correct / solutions/std.cpp / 001.in: Unexpected character #10, but ' ' expected (testdata.in)",
+            fail_flag_reason="main-correct / solutions/ac.cpp / 001.in: Unexpected character #10, but ' ' expected (testdata.in)",
         )
         notifications: list[tuple[str, str]] = []
 
