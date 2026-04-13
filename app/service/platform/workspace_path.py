@@ -48,6 +48,10 @@ def contains_symlink_component(root: Path, candidate: Path) -> bool:
     return False
 
 
+def is_hidden_workspace_path(rel_parts: tuple[str, ...]) -> bool:
+    return any(part.startswith(".") for part in rel_parts)
+
+
 def safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool = False) -> Path:
     ws_root = workspace.resolve()
     candidate = workspace / rel
@@ -62,8 +66,8 @@ def safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool = 
         rel_parts = path.relative_to(ws_root).parts
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid path") from exc
-    if ".git" in rel_parts or ".polygonlike.lock" in rel_parts:
-        raise HTTPException(status_code=400, detail="reserved path")
+    if is_hidden_workspace_path(rel_parts):
+        raise HTTPException(status_code=400, detail="hidden path is not allowed")
     return path
 
 

@@ -7,10 +7,22 @@ import uuid
 from pathlib import Path
 
 from app.service.platform.git_process import run_git
+from app.service.platform.workspace_path import is_hidden_workspace_path
 
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _copytree_ignore(_src: str, names: list[str]) -> set[str]:
+    ignored: set[str] = set()
+    for name in names:
+        if is_hidden_workspace_path((name,)):
+            ignored.add(name)
+            continue
+        if name == "__pycache__" or name.endswith(".pyc"):
+            ignored.add(name)
+    return ignored
 
 
 def copytree(src: Path, dst: Path) -> None:
@@ -19,7 +31,7 @@ def copytree(src: Path, dst: Path) -> None:
     shutil.copytree(
         src,
         dst,
-        ignore=shutil.ignore_patterns(".git", ".polygonlike.lock", "__pycache__", "*.pyc"),
+        ignore=_copytree_ignore,
         symlinks=True,
     )
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.service.platform.git_process import run_git
+from app.service.platform.workspace_path import contains_symlink_component, is_hidden_workspace_path
 
 
 class GitService:
@@ -13,60 +14,41 @@ class GitService:
     DIFF_MAX_CHARS = 131072
     HISTORY_MAX_ITEMS = 300
 
-    def _contains_symlink_component(self, root: Path, candidate: Path) -> bool:
-        try:
-            if root.is_symlink():
-                return True
-        except OSError:
-            return True
-        try:
-            rel = candidate.relative_to(root)
-        except ValueError:
-            return True
-        cur = root
-        for part in rel.parts:
-            cur = cur / part
-            try:
-                if cur.is_symlink():
-                    return True
-            except OSError:
-                return True
-            if not cur.exists():
-                break
-        return False
-
     def _resolve_user_path(self, workspace: Path, rel_path: str, allow_workspace_root: bool = False) -> Path:
         ws_root = workspace.resolve()
         candidate = workspace / rel_path
         p = candidate.resolve()
         if ws_root not in p.parents and p != ws_root:
             raise ValueError("invalid path")
-        if self._contains_symlink_component(ws_root, candidate):
+        if contains_symlink_component(ws_root, candidate):
             raise ValueError("invalid path")
         if not allow_workspace_root and p == ws_root:
             raise ValueError("invalid path")
         rel = p.relative_to(ws_root)
-        if ".git" in rel.parts or ".polygonlike.lock" in rel.parts:
-            raise ValueError("reserved path")
+        if is_hidden_workspace_path(rel.parts):
+            raise ValueError("hidden path is not allowed")
         return p
 
-    def _is_reserved_status_path(self, path: str) -> bool:
+    def _is_hidden_status_path(self, path: str) -> bool:
         normalized = str(path or "").strip().strip('"')
-        return normalized == ".polygonlike.lock" or normalized.endswith("/.polygonlike.lock")
+        if not normalized:
+            return False
+        parts = tuple(part for part in PurePosixPath(normalized.replace("\\", "/")).parts if part not in {"", "."})
+        return is_hidden_workspace_path(parts)
 
-    def _is_reserved_status_line(self, line: str) -> bool:
+    def _is_hidden_status_line(self, line: str) -> bool:
         raw = line.rstrip("\n")
         if not raw or raw.startswith("## "):
             return False
         payload = raw[3:].strip() if len(raw) >= 4 else raw.strip()
         if " -> " in payload:
             for part in payload.split(" -> "):
-                if self._is_reserved_status_path(part):
+                if self._is_hidden_status_path(part):
                     return True
             return False
-        return self._is_reserved_status_path(payload)
+        return self._is_hidden_status_path(payload)
 
-    def _is_reserved_diff_header(self, line: str) -> bool:
+    def _is_hidden_diff_header(self, line: str) -> bool:
         prefix = "diff --git a/"
         raw = line.rstrip("\n")
         if not raw.startswith(prefix):
@@ -75,9 +57,9 @@ class GitService:
         if " b/" not in rest:
             return False
         lhs, rhs = rest.split(" b/", 1)
-        return self._is_reserved_status_path(lhs) or self._is_reserved_status_path(rhs)
+        return self._is_hidden_status_path(lhs) or self._is_hidden_status_path(rhs)
 
-    def _filter_reserved_diff(self, diff_text: str) -> str:
+    def _filter_hidden_diff(self, diff_text: str) -> str:
         if not diff_text:
             return ""
         lines = diff_text.splitlines(keepends=True)
@@ -91,7 +73,7 @@ class GitService:
                     out.extend(chunk)
                 in_chunk = True
                 chunk = [line]
-                dropping = self._is_reserved_diff_header(line)
+                dropping = self._is_hidden_diff_header(line)
                 continue
             if in_chunk:
                 chunk.append(line)
@@ -136,7 +118,7 @@ class GitService:
             keep_line = True
             if line.startswith("## "):
                 keep_line = True
-            elif self._is_reserved_status_line(line):
+            elif self._is_hidden_status_line(line):
                 keep_line = False
             if keep_line:
                 if len(filtered_lines) < status_limit:
@@ -170,8 +152,8 @@ class GitService:
                         "diff",
                         "--",
                         ".",
-                        ":(exclude).polygonlike.lock",
-                        ":(exclude)**/.polygonlike.lock",
+                        ":(exclude).*",
+                        ":(exclude)**/.*",
                     ],
                     stdout_path=tmp_path,
                 )
@@ -181,7 +163,7 @@ class GitService:
                         diff_text = self._append_truncation_marker(diff_text, diff_limit)
                 else:
                     raw_diff = run_git(["git", "-C", str(workspace), "diff", "--", "."]).stdout
-                    filtered_diff = self._filter_reserved_diff(raw_diff)
+                    filtered_diff = self._filter_hidden_diff(raw_diff)
                     diff_text, diff_truncated = self._truncate_text(filtered_diff, diff_limit)
             finally:
                 if tmp_path is not None:
@@ -251,7 +233,7 @@ class GitService:
         total = 0
         for raw in proc.stdout.splitlines():
             line = raw.rstrip("\n")
-            if not line or self._is_reserved_status_line(line):
+            if not line or self._is_hidden_status_line(line):
                 continue
             if len(line) < 3:
                 continue
@@ -355,8 +337,8 @@ class GitService:
                 "reset",
                 "--quiet",
                 "--",
-                ".polygonlike.lock",
-                ":(glob)**/.polygonlike.lock",
+                ":(glob).*",
+                ":(glob)**/.*",
             ]
         )
         proc = run_git(["git", "-C", str(workspace), "commit", "-m", message])
@@ -447,8 +429,8 @@ class GitService:
                 "reset",
                 "--quiet",
                 "--",
-                ".polygonlike.lock",
-                ":(glob)**/.polygonlike.lock",
+                ":(glob).*",
+                ":(glob)**/.*",
             ]
         )
         return commit
@@ -505,7 +487,6 @@ class GitService:
         paths: list[str] = []
         truncated = False
         capped = max(1, int(limit)) if limit is not None else None
-        reserved_names = {".git", ".polygonlike.lock"}
         stop_scan = False
         for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
             dir_root = Path(dirpath)
@@ -526,7 +507,7 @@ class GitService:
             candidate_dirs: list[str] = []
             for name in dirnames:
                 d = dir_root / name
-                if name in reserved_names or d.is_symlink():
+                if name.startswith(".") or d.is_symlink():
                     continue
                 candidate_dirs.append(name)
 
@@ -549,7 +530,7 @@ class GitService:
             safe_files: list[str] = []
             for name in filenames:
                 p = dir_root / name
-                if name in reserved_names or p.is_symlink():
+                if name.startswith(".") or p.is_symlink():
                     continue
                 if not p.is_file():
                     continue
@@ -651,7 +632,7 @@ class GitService:
             text, truncated = self._read_text_prefix(target, body_cap)
             pieces.append(self._synthetic_added_diff(normalized, text, truncated=truncated))
 
-        combined = self._filter_reserved_diff("".join(pieces))
+        combined = self._filter_hidden_diff("".join(pieces))
         cap = self.DIFF_MAX_CHARS if max_chars is None else max(1, int(max_chars))
         return self._truncate_text(combined, cap)
 
@@ -676,12 +657,12 @@ class GitService:
                 commit,
                 "--",
                 ".",
-                ":(exclude).polygonlike.lock",
-                ":(exclude)**/.polygonlike.lock",
+                ":(exclude).*",
+                ":(exclude)**/.*",
             ]
         )
         if show.returncode != 0:
             raise RuntimeError(show.stderr or show.stdout or "failed to read revision diff")
-        filtered = self._filter_reserved_diff(show.stdout or "")
+        filtered = self._filter_hidden_diff(show.stdout or "")
         cap = self.DIFF_MAX_CHARS if max_chars is None else max(1, int(max_chars))
         return self._truncate_text(filtered, cap)

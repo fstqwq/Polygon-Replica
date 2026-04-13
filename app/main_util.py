@@ -5,9 +5,13 @@ from pathlib import Path
 from typing import BinaryIO
 
 from fastapi import UploadFile
-from fastapi import HTTPException
 
 from app.runtime_value import RuntimeValues, build_runtime_values
+from app.service.platform.workspace_path import (
+    contains_symlink_component,
+    normalize_workspace_rel_path,
+    safe_workspace_path,
+)
 
 
 CPP_SOURCE_EXTENSIONS: set[str] = set()
@@ -44,66 +48,6 @@ _LOG_BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
     r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
 )
-
-
-def contains_symlink_component(root: Path, candidate: Path) -> bool:
-    try:
-        if root.is_symlink():
-            return True
-    except OSError:
-        return True
-    try:
-        rel = candidate.relative_to(root)
-    except ValueError:
-        return True
-    cur = root
-    for part in rel.parts:
-        cur = cur / part
-        try:
-            if cur.is_symlink():
-                return True
-        except OSError:
-            return True
-        if not cur.exists():
-            break
-    return False
-
-
-def safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool = False) -> Path:
-    ws_root = workspace.resolve()
-    candidate = workspace / rel
-    path = candidate.resolve()
-    if ws_root not in path.parents and ws_root != path:
-        raise HTTPException(status_code=400, detail="invalid path")
-    if contains_symlink_component(ws_root, candidate):
-        raise HTTPException(status_code=400, detail="invalid path")
-    if not allow_workspace_root and path == ws_root:
-        raise HTTPException(status_code=400, detail="invalid path")
-    try:
-        rel_parts = path.relative_to(ws_root).parts
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid path") from exc
-    if ".git" in rel_parts or ".polygonlike.lock" in rel_parts:
-        raise HTTPException(status_code=400, detail="reserved path")
-    return path
-
-
-def normalize_workspace_rel_path(raw: str | None) -> str:
-    value = str(raw or "").strip().replace("\\", "/")
-    if not value or value.startswith("/"):
-        return ""
-    parts: list[str] = []
-    for part in value.split("/"):
-        item = part.strip()
-        if not item or item == ".":
-            continue
-        if item == "..":
-            return ""
-        parts.append(item)
-    if not parts:
-        return ""
-    return "/".join(parts)
-
 
 def normalize_component_source_path(raw: str | None, folder: str, default_filename: str) -> str:
     normalized = normalize_workspace_rel_path(raw)

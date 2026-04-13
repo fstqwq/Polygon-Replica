@@ -260,6 +260,43 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(upload.status_code, 200, upload.text)
             self.assertTrue((workspace / "notes/agent.txt").exists())
 
+            hidden_root = workspace / ".env"
+            hidden_nested = workspace / "notes" / ".cache" / "secret.txt"
+            hidden_root.write_text("token=secret\n", encoding="utf-8")
+            hidden_nested.parent.mkdir(parents=True, exist_ok=True)
+            hidden_nested.write_text("nested\n", encoding="utf-8")
+
+            hidden_read = client.get(
+                "/agent/v1/workspace/file",
+                headers=self._bearer(workspace_token),
+                params={"path": ".env"},
+            )
+            self.assertEqual(hidden_read.status_code, 400, hidden_read.text)
+
+            hidden_list = client.get(
+                "/agent/v1/workspace/files",
+                headers=self._bearer(workspace_token),
+            )
+            self.assertEqual(hidden_list.status_code, 200, hidden_list.text)
+            listed_paths = {str(item.get("path") or "") for item in hidden_list.json().get("entries") or []}
+            self.assertNotIn(".env", listed_paths)
+            self.assertNotIn("notes/.cache", listed_paths)
+            self.assertNotIn("notes/.cache/secret.txt", listed_paths)
+
+            hidden_upload = client.post(
+                "/agent/v1/workspace/upload",
+                headers=self._bearer(workspace_token),
+                data={"path": ".env"},
+                files={"file": ("env.txt", b"blocked")},
+            )
+            self.assertEqual(hidden_upload.status_code, 400, hidden_upload.text)
+
+            hidden_delete = client.delete(
+                "/agent/v1/workspace/files/.env",
+                headers=self._bearer(workspace_token),
+            )
+            self.assertEqual(hidden_delete.status_code, 400, hidden_delete.text)
+
             read_back = client.get(
                 "/agent/v1/workspace/file",
                 headers=self._bearer(workspace_token),

@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from app.main_util import UPLOAD_MAX_BYTES
+from app.service.platform.workspace_path import is_hidden_workspace_path
 from app.service.problem.test_spec import load_tests_spec
 
 
@@ -71,7 +72,7 @@ def _validated_native_entries(
         target_rel = Path(rel)
         if not target_rel.parts:
             continue
-        if _is_forbidden_workspace_path(target_rel):
+        if is_hidden_workspace_path(target_rel.parts):
             raise ValueError(f"native package contains forbidden hidden path: {rel}")
         info = entry_map[rel]
         entry_size = int(info.file_size)
@@ -111,7 +112,7 @@ def _extract_zip_entry_to_path(
 
 def _clear_workspace_tree(workspace: Path) -> None:
     for child in workspace.iterdir():
-        if child.name in {".git", ".polygonlike.lock"}:
+        if child.name.startswith("."):
             continue
         if child.is_symlink():
             child.unlink(missing_ok=True)
@@ -120,11 +121,6 @@ def _clear_workspace_tree(workspace: Path) -> None:
             shutil.rmtree(child, ignore_errors=False)
             continue
         child.unlink(missing_ok=True)
-
-
-def _is_forbidden_workspace_path(path: Path) -> bool:
-    return any(str(part or "").startswith(".") for part in path.parts)
-
 
 def _read_title_from_problem_config(workspace: Path) -> str:
     cfg_path = workspace / "config" / "problem.json"

@@ -17,6 +17,7 @@ from app.service.statement.render import render_statement_main
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.platform.git_process import run_git
 from app.service.platform.latex_process import detect_latex_engine, run_latex
+from app.service.platform.workspace_path import is_hidden_workspace_path
 
 
 class ExportService:
@@ -350,16 +351,12 @@ class ExportService:
 
         raise ValueError("export source snapshot requires non-empty source commit")
 
-    @staticmethod
-    def _is_forbidden_native_working_tree_path(path: Path) -> bool:
-        return any(str(part or "").startswith(".") for part in path.parts)
-
     def _copy_native_working_tree(self, src_dir: Path, dst_dir: Path, *, root_dir: Path) -> None:
         for child in src_dir.iterdir():
             rel = child.relative_to(root_dir)
             if rel.parts and rel.parts[0] in {"temp", "draft"}:
                 continue
-            if self._is_forbidden_native_working_tree_path(rel):
+            if is_hidden_workspace_path(rel.parts):
                 continue
             if child.is_symlink():
                 continue

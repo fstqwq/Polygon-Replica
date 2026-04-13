@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 
 from app.db import DB
@@ -16,6 +16,7 @@ from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.disk.workspace_store import WorkspaceDiskStore
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
 from app.service.platform.testlib_source import maintained_testlib_header
+from app.service.platform.workspace_path import is_hidden_workspace_path
 from app.setting import Settings
 from app.service.statement.render import seed_statement_sources
 from app.service.platform.git_process import run_git
@@ -508,7 +509,7 @@ class WorkspaceService:
             else:
                 path = line
 
-            if path == ".polygonlike.lock" or path.endswith("/.polygonlike.lock"):
+            if self._status_path_is_hidden(path):
                 continue
             dirty = 1
             break
@@ -721,12 +722,24 @@ class WorkspaceService:
             if line.startswith("## "):
                 continue
             path = line[3:].strip() if len(line) >= 4 else line
-            if path == ".polygonlike.lock":
-                continue
-            if path.endswith("/.polygonlike.lock"):
+            if self._status_path_is_hidden(path):
                 continue
             return True
         return False
+
+    @staticmethod
+    def _status_path_is_hidden(raw: str) -> bool:
+        payload = str(raw or "").strip().strip('"')
+        if not payload:
+            return False
+        if " -> " in payload:
+            return any(WorkspaceService._status_path_is_hidden(part) for part in payload.split(" -> "))
+        parts = tuple(
+            part
+            for part in PurePosixPath(payload.replace("\\", "/")).parts
+            if part not in {"", "."}
+        )
+        return is_hidden_workspace_path(parts)
 
     def create_snapshot(
         self,

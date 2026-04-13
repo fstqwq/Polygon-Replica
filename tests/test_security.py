@@ -39,6 +39,7 @@ from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.main_util import TEXTAREA_MAX_BYTES
+from app.service.platform.workspace_path import is_hidden_workspace_path, safe_workspace_path
 from app.service.problem.test_spec import parse_gen_command_tokens
 from app.service.verification.task_store import VerificationTaskStore
 from .ui_support import _register_with_password_proof
@@ -228,6 +229,23 @@ class TestSecurity(SmokeBase):
             artifact_file("alice/sample", "bob", verification_id, "logs/compile.log")
         self.assertEqual(denied.exception.status_code, 404)
         self.assertIn("workspace", str(denied.exception.detail))
+
+    def test_hidden_workspace_path_helper_and_safe_path_reject_dot_segments(self) -> None:
+        self.assertTrue(is_hidden_workspace_path((".env",)))
+        self.assertTrue(is_hidden_workspace_path(("notes", ".cache", "secret.txt")))
+        self.assertTrue(is_hidden_workspace_path((".gitignore",)))
+        self.assertFalse(is_hidden_workspace_path(("notes", "readme.txt")))
+
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        with self.assertRaises(HTTPException) as denied:
+            safe_workspace_path(ws, ".env")
+        self.assertEqual(denied.exception.status_code, 400)
+        self.assertEqual(str(denied.exception.detail), "hidden path is not allowed")
+
+        with self.assertRaises(HTTPException) as nested_denied:
+            safe_workspace_path(ws, "notes/.cache/secret.txt")
+        self.assertEqual(nested_denied.exception.status_code, 400)
+        self.assertEqual(str(nested_denied.exception.detail), "hidden path is not allowed")
 
     def test_artifact_download_rejects_path_traversal(self) -> None:
         alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -523,6 +541,26 @@ class TestSecurity(SmokeBase):
         self.assertIn("invalid path", messages[0].lower())
         self.assertTrue(old_abs.exists())
         self.assertFalse(marker.exists())
+
+    def test_files_rename_rejects_hidden_destination_path(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        old_rel = f"notes/security-hidden-rename-{uuid.uuid4().hex[:8]}.txt"
+        old_abs = ws / old_rel
+        old_abs.parent.mkdir(parents=True, exist_ok=True)
+        old_abs.write_text("keep\n", encoding="utf-8")
+
+        resp = files_rename(
+            problem="alice/sample",
+            user="alice",
+            old_path=old_rel,
+            new_path="notes/.env",
+        )
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("hidden path is not allowed", messages[0].lower())
+        self.assertTrue(old_abs.exists())
+        self.assertFalse((ws / "notes/.env").exists())
 
     def test_files_download_rejects_path_traversal_escape(self) -> None:
         with self.assertRaises(HTTPException) as denied:

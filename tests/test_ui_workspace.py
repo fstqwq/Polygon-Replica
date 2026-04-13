@@ -491,6 +491,63 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(int(after["dirty"] or 0), int(before["dirty"] or 0))
         self.assertEqual(str(after["updated_at"] or ""), str(before["updated_at"] or ""))
 
+    def test_git_status_and_workspace_status_ignore_hidden_paths(self) -> None:
+        username = f"wshidden-{uuid.uuid4().hex[:8]}"
+        workspace_service.grant_repo_access("alice/sample", username, "owner")
+        self._ensure_committed_head("alice/sample", username)
+        ws = Path(workspace_service.ensure_workspace("alice/sample", username))
+        hidden_root = ws / ".env"
+        hidden_nested = ws / "notes" / ".cache" / "secret.txt"
+        hidden_root.write_text("hidden\n", encoding="utf-8")
+        hidden_nested.parent.mkdir(parents=True, exist_ok=True)
+        hidden_nested.write_text("nested\n", encoding="utf-8")
+
+        status = git_service.status(ws)
+        self.assertNotIn(".env", str(status.get("status") or ""))
+        self.assertNotIn(".cache", str(status.get("status") or ""))
+        self.assertNotIn(".env", str(status.get("diff") or ""))
+        self.assertNotIn(".cache", str(status.get("diff") or ""))
+
+        summary = git_service.status_change_summary(ws, limit=32)
+        self.assertEqual(int(summary.get("total") or 0), 0)
+
+        workspace_status = workspace_service.read_workspace_status(ws)
+        self.assertEqual(int(workspace_status.get("dirty") or 0), 0)
+
+    def test_workspace_snapshot_copy_excludes_hidden_paths(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        visible = ws / f"notes/snapshot-visible-{uuid.uuid4().hex[:8]}.txt"
+        hidden_root = ws / ".env"
+        hidden_nested = ws / "notes" / ".cache" / "secret.txt"
+        visible.parent.mkdir(parents=True, exist_ok=True)
+        visible.write_text("visible\n", encoding="utf-8")
+        hidden_root.write_text("hidden\n", encoding="utf-8")
+        hidden_nested.parent.mkdir(parents=True, exist_ok=True)
+        hidden_nested.write_text("nested\n", encoding="utf-8")
+
+        snapshot = workspace_service.create_snapshot(ws, commit=None, workspace_dirty=True)
+        self.assertTrue((snapshot / visible.relative_to(ws)).is_file())
+        self.assertFalse((snapshot / ".env").exists())
+        self.assertFalse((snapshot / "notes" / ".cache" / "secret.txt").exists())
+
+    def test_files_page_hides_hidden_paths(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        visible = ws / f"notes/files-visible-{uuid.uuid4().hex[:8]}.txt"
+        hidden_root = ws / ".env"
+        hidden_nested = ws / "notes" / ".cache" / "secret.txt"
+        visible.parent.mkdir(parents=True, exist_ok=True)
+        visible.write_text("visible\n", encoding="utf-8")
+        hidden_root.write_text("hidden\n", encoding="utf-8")
+        hidden_nested.parent.mkdir(parents=True, exist_ok=True)
+        hidden_nested.write_text("nested\n", encoding="utf-8")
+
+        resp = files_page(_request("/problems/alice/sample/alice/files"), "alice/sample", "alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn(visible.name, html)
+        self.assertNotIn(".env", html)
+        self.assertNotIn(".cache", html)
+
     def test_workspace_page_danger_zone_is_collapsed_and_sudo_gated(self) -> None:
         resp = workspace_page(_request("/problems/alice/sample/alice/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
@@ -1395,6 +1452,42 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("View Diff", html)
         self.assertIn("Restore To Working Copy", html)
         self.assertIn('class="linkish danger-link"', html)
+
+    def test_git_commit_does_not_stage_hidden_paths(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        visible_rel = f"notes/ui-visible-{uuid.uuid4().hex[:8]}.txt"
+        visible = ws / visible_rel
+        hidden = ws / ".env"
+        visible.parent.mkdir(parents=True, exist_ok=True)
+        visible.write_text("visible\n", encoding="utf-8")
+        hidden.write_text("hidden\n", encoding="utf-8")
+
+        head = git_service.commit(ws, f"ui-hidden-commit-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
+        shown = run_git(["git", "-C", str(ws), "show", "--name-only", "--pretty=format:", head])
+        self.assertEqual(shown.returncode, 0, shown.stderr or shown.stdout)
+        names = {line.strip() for line in shown.stdout.splitlines() if line.strip()}
+        self.assertIn(visible_rel, names)
+        self.assertNotIn(".env", names)
+
+    def test_git_diff_for_revision_filters_hidden_paths(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertEqual(run_git(["git", "-C", str(ws), "config", "user.name", "alice"]).returncode, 0)
+        self.assertEqual(run_git(["git", "-C", str(ws), "config", "user.email", "alice@polygonlike.local"]).returncode, 0)
+        hidden = ws / ".env"
+        hidden.write_text("hidden\n", encoding="utf-8")
+        add = run_git(["git", "-C", str(ws), "add", ".env"])
+        self.assertEqual(add.returncode, 0, add.stderr or add.stdout)
+        commit = run_git(["git", "-C", str(ws), "commit", "-m", f"ui-hidden-revision-{uuid.uuid4().hex[:6]}"])
+        self.assertEqual(commit.returncode, 0, commit.stderr or commit.stdout)
+        head = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
+        self.assertTrue(head)
+
+        diff_text, truncated = git_service.diff_for_revision(ws, head)
+        self.assertFalse(truncated)
+        self.assertNotIn(".env", diff_text)
+        self.assertNotIn("hidden", diff_text)
 
     def test_revision_history_page_can_view_selected_revision_diff(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
