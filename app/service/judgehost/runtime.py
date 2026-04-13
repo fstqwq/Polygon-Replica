@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from app.service.platform.error_text import bounded_display_text
 
@@ -103,6 +104,50 @@ def domjudge_feedback_text_from_bytes(blob: bytes) -> str:
     return domjudge_feedback_text_from_text(
         bytes(blob or b"").decode("utf-8", errors="replace"),
     )
+
+
+def domjudge_feedback_token_order(
+    *,
+    runresult: str,
+    output_error_rel: str,
+    output_diff_rel: str,
+    team_message_rel: str,
+) -> list[str]:
+    runresult_token = str(runresult or "").strip().lower()
+    if runresult_token in {"run-error", "internal-error"}:
+        ordered = [output_error_rel, output_diff_rel, team_message_rel]
+    else:
+        ordered = [output_diff_rel, team_message_rel, output_error_rel]
+    feedback_tokens: list[str] = []
+    for token in ordered:
+        feedback_token = str(token or "").strip()
+        if feedback_token:
+            feedback_tokens.append(feedback_token)
+    return feedback_tokens
+
+
+def domjudge_feedback_text_and_files(
+    *,
+    read_blob: Callable[[str], bytes | None],
+    runresult: str,
+    output_error_rel: str,
+    output_diff_rel: str,
+    team_message_rel: str,
+) -> tuple[str, list[str]]:
+    feedback_files = domjudge_feedback_token_order(
+        runresult=runresult,
+        output_error_rel=output_error_rel,
+        output_diff_rel=output_diff_rel,
+        team_message_rel=team_message_rel,
+    )
+    feedback_text = ""
+    for token in feedback_files:
+        if feedback_text:
+            break
+        blob = read_blob(token)
+        if blob is not None:
+            feedback_text = domjudge_feedback_text_from_bytes(blob)
+    return feedback_text, feedback_files
 
 
 def domjudge_verdict_from_runresult(runresult: str) -> str:

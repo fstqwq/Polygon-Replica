@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.db import now_iso
-from app.service.judgehost.runtime import domjudge_verdict_from_runresult, now_iso_after, parse_iso_utc
+from app.service.judgehost.runtime import (
+    domjudge_feedback_text_and_files,
+    domjudge_verdict_from_runresult,
+    now_iso_after,
+    parse_iso_utc,
+)
 from app.service.verification.task_scheduler import notify_verification_task_terminal
 from app.service.verification.test_rows import build_verification_test_pass_row, build_verification_test_row
 
@@ -277,7 +283,29 @@ class TaskQueue:
                 return message
         return summary.get("error") or ""
 
-    def report_result(self, *, task_id: str, hostname: str, payload: dict[str, object]) -> dict[str, object]:
+    def _case_feedback_text_and_files(self, case_row: dict[str, object]) -> tuple[str, list[str]]:
+        work_root_token = str(case_row.get("work_root") or "")
+        work_root = Path(work_root_token).resolve() if work_root_token else None
+        return domjudge_feedback_text_and_files(
+            read_blob=(
+                (lambda token: self._toolkit.read_artifact_blob(work_root, token))
+                if work_root is not None
+                else (lambda _token: None)
+            ),
+            runresult=str(case_row.get("runresult") or ""),
+            output_error_rel=str(case_row.get("output_error_rel") or ""),
+            output_diff_rel=str(case_row.get("output_diff_rel") or ""),
+            team_message_rel=str(case_row.get("team_message_rel") or ""),
+        )
+
+    def report_result(
+        self,
+        *,
+        task_id: str,
+        hostname: str,
+        payload: dict[str, object],
+        notify_terminal: bool = True,
+    ) -> dict[str, object]:
         if not task_id:
             raise RuntimeError("task_id is required")
         hostname = self._core.normalize_hostname(hostname)
@@ -364,7 +392,7 @@ class TaskQueue:
             task_id=task_id,
             run_id=run_id,
         )
-        if verification_id:
+        if verification_id and notify_terminal:
             notify_verification_task_terminal(verification_id, task_id)
         return {
             "task_id": task_id,
@@ -453,6 +481,7 @@ class TaskQueue:
                 cpu_ms = max(0, int(round(float(case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
                 wall_ms = max(0, int(round(float(case_row["wall_sec"] or case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
                 memory_kb = max(0, int(case_row["memory_kb"] or 0))
+                feedback_text, feedback_files = self._case_feedback_text_and_files(case_row)
                 selected_test_row = build_verification_test_row(
                     test_name=test_name,
                     verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
@@ -460,9 +489,9 @@ class TaskQueue:
                     time_user_ms=cpu_ms,
                     time_wall_ms=wall_ms,
                     memory_kb=memory_kb,
-                    message="",
+                    message=feedback_text,
                     output_ref=str(case_row["output_run_rel"] or ""),
-                    feedback_files=[],
+                    feedback_files=feedback_files,
                     passes=[
                         build_verification_test_pass_row(
                             verdict=domjudge_verdict_from_runresult(str(case_row["runresult"] or "")),
@@ -470,17 +499,27 @@ class TaskQueue:
                             time_user_ms=cpu_ms,
                             time_wall_ms=wall_ms,
                             memory_kb=memory_kb,
-                            feedback="",
+                            feedback=feedback_text,
                             output_ref=str(case_row["output_run_rel"] or ""),
                             runresult=str(case_row["runresult"] or ""),
                         )
                     ],
                     runresult=str(case_row["runresult"] or ""),
                 )
+                recovered_error = feedback_text
+            else:
+                recovered_error = str(selected_test_row.get("message") or "")
+            summary_error = str(summary.get("error") or "")
+            if (not summary_error) and recovered_error and str(case_row["runresult"] or "") in {
+                "checker-fail",
+                "compare-error",
+                "internal-error",
+            }:
+                summary_error = recovered_error
             case_summary = {
                 "source": summary.get("source") or "",
                 "compile_diagnostics": list(summary.get("compile_diagnostics") or []),
-                "error": str(summary.get("error") or ""),
+                "error": summary_error,
                 "tests": [selected_test_row],
             }
             task_kind = str((row.get("payload") or {}).get("task_kind") or "")

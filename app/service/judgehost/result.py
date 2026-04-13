@@ -18,8 +18,7 @@ from app.service.judgehost.domjudge.cache import domjudge_json_hash, domjudge_so
 from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domjudge_script_hash_field, domjudge_script_id
 from app.service.judgehost.runtime import (
     domjudge_bool,
-    domjudge_feedback_text_from_bytes,
-    domjudge_feedback_text_from_text,
+    domjudge_feedback_text_and_files,
     domjudge_parse_float,
     domjudge_parse_int,
     domjudge_parse_meta_text,
@@ -32,7 +31,7 @@ from app.service.verification.test_rows import (
     upsert_verification_test_row,
 )
 from app.service.verification.task_result_finalize import finalize_verification_task_result
-from app.service.verification.task_scheduler import notify_verification_case_reported
+from app.service.verification.task_scheduler import notify_verification_case_reported, notify_verification_task_terminal
 from app.service.verification.task_store import VerificationTaskStore
 
 from .core import JudgehostCore
@@ -71,26 +70,6 @@ class ResultProcessor:
             self.STATUS_REPORTING,
         }
 
-    @staticmethod
-    def _domjudge_feedback_token_order(
-        *,
-        runresult: str,
-        output_error_rel: str,
-        output_diff_rel: str,
-        team_message_rel: str,
-    ) -> list[str]:
-        runresult_token = domjudge_lower_text(runresult)
-        if runresult_token in {"run-error", "internal-error"}:
-            ordered = [output_error_rel, output_diff_rel, team_message_rel]
-        else:
-            ordered = [output_diff_rel, team_message_rel, output_error_rel]
-        feedback_tokens: list[str] = []
-        for token in ordered:
-            feedback_token = domjudge_text(token)
-            if feedback_token:
-                feedback_tokens.append(feedback_token)
-        return feedback_tokens
-
     def _domjudge_feedback_text_and_files(
         self,
         *,
@@ -100,20 +79,13 @@ class ResultProcessor:
         output_diff_rel: str,
         team_message_rel: str,
     ) -> tuple[str, list[str]]:
-        feedback_files = self._domjudge_feedback_token_order(
+        return domjudge_feedback_text_and_files(
+            read_blob=lambda token: self._toolkit.read_artifact_blob(work_root, token),
             runresult=runresult,
             output_error_rel=output_error_rel,
             output_diff_rel=output_diff_rel,
             team_message_rel=team_message_rel,
         )
-        feedback_text = ""
-        for token in feedback_files:
-            if feedback_text:
-                break
-            blob = self._toolkit.read_artifact_blob(work_root, token)
-            if blob is not None:
-                feedback_text = domjudge_feedback_text_from_bytes(blob)
-        return feedback_text, feedback_files
 
     def _domjudge_update_verification_run_case_progress(
         self,
@@ -347,6 +319,7 @@ class ResultProcessor:
                 "error": str(case_result.get("error") or ""),
                 "summary": dict(case_result.get("summary") or {}),
             },
+            notify_terminal=False,
         )
         verification_task_store = VerificationTaskStore(self._s.db)
         verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
@@ -354,14 +327,19 @@ class ResultProcessor:
             safe_test_name,
         )
         if verification_task_row is None:
+            verification_id = str(case_result.get("verification_id") or task_row.get("verification_id") or "")
+            if verification_id:
+                notify_verification_task_terminal(verification_id, safe_task_id)
             return
         final_result = finalize_verification_task_result(verification_task_row, result=case_result)
+        verification_id = str(verification_task_row["verification_id"] or "")
         notify_verification_case_reported(
-            str(verification_task_row["verification_id"] or ""),
+            verification_id,
             safe_task_id,
             safe_test_name,
             final_result,
         )
+        notify_verification_task_terminal(verification_id, safe_task_id)
 
     def _domjudge_finalize_if_ready(self, job_id: int, *, force_failed: bool = False, error_text: str = "") -> None:
         job_row = self._s.judgehost_state_store.job_finalize_row(int(job_id))
