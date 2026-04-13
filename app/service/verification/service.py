@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import cast
 
 from app.db import DB, now_iso
-from app.runtime_value import RuntimeValues, build_runtime_values
+from app.runtime_value import RuntimeValues
 from app.service.platform.artifact import ArtifactService
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
@@ -78,7 +78,6 @@ class VerificationService:
         self._applied_aux_display_text_limit_bytes: int | None = None
         self.fs_manager = FsManager(self.workspace_service.settings.cache_root, self.workspace_service.settings.artifacts_root)
         self._verification_store = VerificationStore(db, self.fs_manager)
-        self.apply_runtime_values(constants or build_runtime_values())
 
     def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
         row = self.verification_record(verification_id)

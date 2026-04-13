@@ -201,6 +201,7 @@ def _startup_reset_runtime_state() -> None:
 
 def startup() -> None:
     config.runtime_state_service.initialize_metadata()
+    config.verification_service.apply_runtime_values(config.constants)
     _startup_reset_runtime_state()
     config.worker_queue_service.start()
 
