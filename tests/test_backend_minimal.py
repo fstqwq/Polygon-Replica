@@ -19,6 +19,7 @@ from .ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import (
     preview_page,
     preview_run,
+    preview_save,
     preview_status,
     statement_compile_asset_upload,
     statement_attachment_delete,
@@ -31,6 +32,7 @@ from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job import _run_export_create_worker
+from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.render import ensure_statement_language_sources
 from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
@@ -585,6 +587,23 @@ class TestBackendMinimal(SmokeBase):
             (ws / "attachments" / "tools" / "guess_number_testing_tool.py").read_text(encoding="utf-8"),
             "print('ok')\n",
         )
+
+    def test_preview_save_rejects_statement_textarea_over_shared_limit(self) -> None:
+        oversized = ("L" * (TEXTAREA_MAX_BYTES + 32)) + "\n"
+        resp = preview_save(
+            self.problem,
+            self.user,
+            legend_tex=oversized,
+            input_tex="",
+            output_tex="",
+            interaction_tex="",
+            notes_tex="",
+            page="statement",
+            language="english",
+            preview_id="",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("statement legend is too long", _flash_messages_from_response(resp)[0])
 
     def test_statement_attachment_delete_removes_file_under_attachments_root(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])

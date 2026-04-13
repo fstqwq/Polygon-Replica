@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 from fastapi import HTTPException
 
 from app.service.importing.contest import PolygonContestImportService
-from app.service.problem.test_spec import TESTS_SPEC_MANUAL_MAX_CHARS, normalize_imported_manual_input, normalize_manual_input
+from app.main_util import TEXTAREA_MAX_BYTES
+from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import run_git
 from app.impl.run_export.import_source import import_package_as_new_problem
 
@@ -1302,12 +1303,12 @@ class TestUIWorkspace(UIBaseSuite):
                 continue
             self.assertNotIn(b"\r\n", answers_files[0].read_bytes())
 
-    def test_imported_manual_input_allows_package_payloads_larger_than_ui_limit(self) -> None:
-        oversized = ("1" * (TESTS_SPEC_MANUAL_MAX_CHARS + 32)) + "\n"
+    def test_file_manual_input_allows_payloads_larger_than_ui_limit(self) -> None:
+        oversized = ("1" * (TEXTAREA_MAX_BYTES + 32)) + "\n"
         with self.assertRaisesRegex(ValueError, "manual test input is too long"):
             normalize_manual_input(oversized)
-        normalized = normalize_imported_manual_input(oversized)
-        self.assertGreater(len(normalized), TESTS_SPEC_MANUAL_MAX_CHARS)
+        normalized = normalize_file_manual_input(oversized)
+        self.assertGreater(len(normalized.encode("utf-8")), TEXTAREA_MAX_BYTES)
         self.assertTrue(normalized.endswith("\n"))
 
     def test_contest_import_confirm_rolls_back_partial_contest_on_problem_import_failure(self) -> None:

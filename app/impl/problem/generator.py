@@ -13,6 +13,7 @@ from app.impl.workspace.context_operation import audit, generator_sources_from_b
 from app.impl.workspace.context_component_status import generator_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
+from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
 
 _C = config.constants
@@ -107,6 +108,7 @@ def generator_save_source(
     json_requested = str(response_mode or '').strip().lower() == 'json'
     try:
         target = normalize_component_source_path(path, 'generators', 'generator.cpp')
+        safe_content = enforce_textarea_max_bytes(content, label='generator source')
         with config.workspace_service.workspace_lock(workspace):
             target_abs = safe_workspace_path(workspace, target)
             target_existed_before = bool(target_abs.exists() and target_abs.is_file() and (not target_abs.is_symlink()))
@@ -119,13 +121,13 @@ def generator_save_source(
                 generator_sources.append(target)
             build_cfg['generator_sources'] = generator_sources
             write_build_config(cfg_path, build_cfg)
-            config.git_service.write_file(workspace, target, content)
+            config.git_service.write_file(workspace, target, safe_content)
             compile_check_error = judgehost_compile_check_error(
                 problem=problem,
                 user=user,
                 workspace=workspace,
                 source_path=target,
-                source_content=content,
+                source_content=safe_content,
                 verification_source='problem.generator.save_source',
             )
             if compile_check_error:
@@ -139,7 +141,7 @@ def generator_save_source(
                     cfg_path.unlink(missing_ok=True)
                 raise ValueError(f'compile check failed: {compile_check_error}')
         save_ok = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'generators.save_source', {'path': target, 'bytes': len(content.encode('utf-8'))})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'generators.save_source', {'path': target, 'bytes': len(safe_content.encode('utf-8'))})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

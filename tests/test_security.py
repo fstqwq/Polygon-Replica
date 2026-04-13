@@ -38,6 +38,7 @@ from app.impl.problem.validator import validator_create_template, validator_save
 from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
+from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.problem.test_spec import parse_gen_command_tokens
 from .ui_support import _register_with_password_proof
 
@@ -305,6 +306,32 @@ class TestSecurity(SmokeBase):
         self.assertEqual(denied.exception.status_code, 400)
         self.assertIn("invalid path", str(denied.exception.detail).lower())
         self.assertFalse(marker.exists())
+
+    def test_files_save_rejects_textarea_content_over_shared_limit(self) -> None:
+        oversized = ("x" * (TEXTAREA_MAX_BYTES + 32)) + "\n"
+        resp = files_save(
+            problem="alice/sample",
+            user="alice",
+            path="notes/oversized.txt",
+            content=oversized,
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("file content is too long", self._first_flash_message(resp).lower())
+
+    def test_files_upload_rejects_payload_over_shared_upload_limit(self) -> None:
+        upload = self._FakeUpload(b"123456789")
+        with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
+            with self.assertRaises(HTTPException) as denied:
+                asyncio.run(
+                    files_upload(
+                        problem="alice/sample",
+                        user="alice",
+                        path="notes/upload-too-large.txt",
+                        upload=upload,
+                    )
+                )
+        self.assertEqual(denied.exception.status_code, 400)
+        self.assertIn("uploaded file is too large", str(denied.exception.detail).lower())
 
     def test_files_new_rejects_path_traversal_escape(self) -> None:
         marker = suite_root() / f"files-new-escape-{uuid.uuid4().hex[:8]}.txt"

@@ -27,7 +27,7 @@ from app.impl.workspace.context_verification import latest_workspace_verificatio
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.impl.workspace.run_view_list import run_list_rows
-from app.main_util import normalize_optional_component_source_path, normalize_optional_component_source_path_safe
+from app.main_util import normalize_optional_component_source_path, normalize_optional_component_source_path_safe, read_fileobj_bytes_limited
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
 from app.impl.run_export.query import (
     _rerun_solution_paths_from_verification,
@@ -298,7 +298,7 @@ def run_execute(
             normalized_name = (submission_upload.filename or '').strip()
             if normalized_name:
                 upload_filename = normalized_name
-                upload_content = submission_upload.file.read()
+                upload_content = read_fileobj_bytes_limited(submission_upload.file, label='submission upload')
                 uploaded = True
         selected_solution_paths = dedupe_preserve_order(
             [

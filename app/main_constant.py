@@ -5,6 +5,8 @@ from pathlib import Path
 
 WORKSPACE_FILE_LIST_LIMIT = 1024
 WORKSPACE_FILE_VIEW_CHAR_LIMIT = 262144
+TEXTAREA_MAX_BYTES = 262144
+UPLOAD_MAX_BYTES = 256 * 1024 * 1024
 UI_LOG_TEXT_CHAR_LIMIT = 131072
 RUN_DETAIL_TEST_LIST_LIMIT = 200
 RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT = 200
@@ -12,7 +14,6 @@ RUN_TEST_FEEDBACK_FILE_LIST_LIMIT = 32
 RUN_DETAIL_PREVIEW_MAX_BYTES = 256
 RUN_TEST_SELECTOR_LIMIT = 600
 PREVIEW_LOG_REF_LIST_LIMIT = 200
-STATEMENT_EDITOR_CHAR_LIMIT = 262144
 API_PROBLEMS_LIST_LIMIT = 200
 DIAGNOSTIC_MESSAGE_CHAR_LIMIT = 4096
 UI_JSON_CHAR_LIMIT = 1048576
@@ -84,7 +85,6 @@ TESTS_SPEC_PREVIEW_LINES = 4
 TESTS_SPEC_MANUAL_INLINE_EDIT_MAX_BYTES = 16384
 TESTS_SPEC_MANUAL_PREVIEW_BYTES = 256
 TESTS_SPEC_MAX_ITEMS = 4096
-TESTS_SPEC_MANUAL_MAX_CHARS = 262144
 TESTS_SPEC_GEN_COMMAND_MAX_CHARS = 1024
 TESTS_SPEC_ID_RE = re.compile(r"^[0-9]{3,12}$")
 RUN_PLACEHOLDER_VERIFICATION_ID = "pending"
@@ -238,6 +238,8 @@ STANDARD_CHECKER_DESCRIPTIONS = {
 ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "WORKSPACE_FILE_LIST_LIMIT": {"type": "int", "min": 16, "max": 10000, "description": "Max files listed in file browser."},
     "WORKSPACE_FILE_VIEW_CHAR_LIMIT": {"type": "int", "min": 1024, "max": 2097152, "description": "Max characters loaded in file editor preview."},
+    "TEXTAREA_MAX_BYTES": {"type": "int", "min": 1024, "max": 16777216, "description": "Shared UTF-8 byte limit for textarea form submissions."},
+    "UPLOAD_MAX_BYTES": {"type": "int", "min": 1024, "max": 1073741824, "description": "Shared raw-byte limit for uploaded files."},
     "UI_LOG_TEXT_CHAR_LIMIT": {"type": "int", "min": 1024, "max": 2097152, "description": "Max log text rendered in UI."},
     "RUN_DETAIL_TEST_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max tests shown in run details."},
     "RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max diagnostics shown in run details."},
@@ -245,7 +247,6 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "RUN_DETAIL_PREVIEW_MAX_BYTES": {"type": "int", "min": 32, "max": 65536, "description": "Max preview bytes for artifact snippets."},
     "RUN_TEST_SELECTOR_LIMIT": {"type": "int", "min": 1, "max": 10000, "description": "Max test options shown in run form."},
     "PREVIEW_LOG_REF_LIST_LIMIT": {"type": "int", "min": 1, "max": 5000, "description": "Max statement log references parsed."},
-    "STATEMENT_EDITOR_CHAR_LIMIT": {"type": "int", "min": 2048, "max": 4194304, "description": "Statement editor content limit."},
     "API_PROBLEMS_LIST_LIMIT": {"type": "int", "min": 1, "max": 10000, "description": "Max problems/contests returned per list API."},
     "DIAGNOSTIC_MESSAGE_CHAR_LIMIT": {"type": "int", "min": 256, "max": 65536, "description": "Diagnostic message truncation limit."},
     "UI_JSON_CHAR_LIMIT": {"type": "int", "min": 1024, "max": 16777216, "description": "json parse limit in UI."},
@@ -346,4 +347,3 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
 ADMIN_CONFIG_DEFAULTS: dict[str, object] = {
     key: globals()[key] for key in ADMIN_CONFIG_SPECS
 }
-

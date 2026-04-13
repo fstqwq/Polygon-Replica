@@ -17,6 +17,7 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import audit, user_participating_problems
 from app.impl.root.shared import _active_root_user, _count_label
+from app.main_util import read_fileobj_bytes_limited
 
 _C = config.constants
 
@@ -47,7 +48,7 @@ def problems_root_import(request: Request, user: str = "", package_upload: Uploa
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        package_content = package_upload.file.read()
+        package_content = read_fileobj_bytes_limited(package_upload.file, label="package file")
         imported = import_package_as_new_problem(
             actor_user_id=int(gctx["user"]["id"]),
             actor_user=str(gctx["user"]["username"]),

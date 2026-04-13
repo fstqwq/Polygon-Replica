@@ -8,11 +8,12 @@ from pathlib import Path, PurePosixPath
 from typing import TypedDict
 from urllib.parse import unquote, urlparse
 
+from app.main_util import UPLOAD_MAX_BYTES
 from app.service.contest.statement_meta import infer_contest_header_fields
 
-ZIP_MAX_BYTES = 512 * 1024 * 1024
-ZIP_MAX_FILE_BYTES = 128 * 1024 * 1024
-ZIP_TEXT_MAX_BYTES = 8 * 1024 * 1024
+ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
+ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
+ZIP_TEXT_MAX_BYTES = UPLOAD_MAX_BYTES
 
 
 ContestName = TypedDict(

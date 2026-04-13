@@ -14,7 +14,7 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_job import start_export_job, start_verification_job
 from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
 from app.impl.workspace.context_operation import audit, run_solution_options_context, workspace_rel_file_exists
-from app.main_util import normalize_workspace_rel_path, safe_workspace_path
+from app.main_util import normalize_workspace_rel_path, safe_workspace_path, write_upload_file_limited
 from app.service.platform.git_process import run_git
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
@@ -447,12 +447,7 @@ async def agent_workspace_upload(request: Request, file: UploadFile = File(...))
                 return json_error_response("upload target must be a file path", status_code=400)
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("wb") as handle:
-                while True:
-                    chunk = await file.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    handle.write(chunk)
-                    total_bytes += len(chunk)
+                total_bytes = await write_upload_file_limited(file, handle)
         audit(int(identity.user_id), int(identity.problem_id), "agent.workspace.upload", {"path": normalized, "bytes": total_bytes})
         return _json_body({"ok": True, "path": normalized, "bytes": total_bytes})
     except HTTPException as exc:

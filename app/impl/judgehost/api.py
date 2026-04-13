@@ -13,6 +13,7 @@ from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartParser
 
 from app.impl.runtime.config import config
+from app.main_util import UPLOAD_MAX_BYTES, read_upload_bytes_limited
 
 
 JudgehostPayload = dict[str, str | bytes]
@@ -119,9 +120,10 @@ def _judgehost_form_part_limit_bytes() -> int:
         _read_kb("TOOLCHAIN_COMPILE_OUTPUT_KB"),
     )
     if output_kb <= 0:
-        return _JUDGEHOST_FORM_PART_LIMIT_BYTES
+        return max(_JUDGEHOST_FORM_PART_LIMIT_BYTES, UPLOAD_MAX_BYTES)
     return max(
         _JUDGEHOST_FORM_PART_LIMIT_BYTES,
+        UPLOAD_MAX_BYTES,
         int(output_kb * 1024) + _JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES,
     )
 
@@ -129,7 +131,7 @@ def _judgehost_form_part_limit_bytes() -> int:
 async def _coerce_form_value(key: str, value: str | UploadFile) -> str | bytes:
     if isinstance(value, UploadFile):
         try:
-            raw = await value.read()  # type: ignore[union-attr]
+            raw = await read_upload_bytes_limited(value, label=f"multipart field {key}")
         finally:
             try:
                 await value.close()  # type: ignore[union-attr]

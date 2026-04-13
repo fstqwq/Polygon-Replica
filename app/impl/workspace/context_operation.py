@@ -160,7 +160,7 @@ def read_workspace_source_with_default(workspace: Path, rel: Path, default_text:
         return (default_text, False)
     if not file_path.exists() or not file_path.is_file() or file_path.is_symlink():
         return (default_text, False)
-    return read_text_safe_limited(file_path, _C.STATEMENT_EDITOR_CHAR_LIMIT)
+    return read_text_safe_limited(file_path, _C.TEXTAREA_MAX_BYTES)
 
 def parse_line_param(raw: str | None, default: int=1) -> int:
     if raw is None:

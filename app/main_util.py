@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import BinaryIO
 
+from fastapi import UploadFile
 from fastapi import HTTPException
 
 from app.runtime_value import RuntimeValues, build_runtime_values
@@ -11,17 +13,23 @@ from app.runtime_value import RuntimeValues, build_runtime_values
 CPP_SOURCE_EXTENSIONS: set[str] = set()
 SOLUTION_SOURCE_EXTENSIONS: set[str] = set()
 GENERATOR_SOURCE_EXTENSIONS: set[str] = set()
+TEXTAREA_MAX_BYTES = 256 * 1024
+UPLOAD_MAX_BYTES = 256 * 1024 * 1024
 
 
 def _apply_runtime_values(values: RuntimeValues) -> None:
     global CPP_SOURCE_EXTENSIONS
     global SOLUTION_SOURCE_EXTENSIONS
     global GENERATOR_SOURCE_EXTENSIONS
+    global TEXTAREA_MAX_BYTES
+    global UPLOAD_MAX_BYTES
     CPP_SOURCE_EXTENSIONS = {str(item).strip().lower() for item in values.CPP_SOURCE_EXTENSIONS}
     SOLUTION_SOURCE_EXTENSIONS = {
         str(item).strip().lower() for item in values.SOLUTION_SOURCE_EXTENSIONS
     }
     GENERATOR_SOURCE_EXTENSIONS = set(SOLUTION_SOURCE_EXTENSIONS)
+    TEXTAREA_MAX_BYTES = int(values.TEXTAREA_MAX_BYTES)
+    UPLOAD_MAX_BYTES = int(values.UPLOAD_MAX_BYTES)
 
 
 def configure_runtime_values(values: RuntimeValues) -> None:
@@ -199,6 +207,82 @@ def form_text(value: str | object) -> str:
     if default is None:
         return ""
     return str(default)
+
+
+def enforce_textarea_max_bytes(
+    value: str,
+    *,
+    label: str,
+    max_bytes: int | None = None,
+) -> str:
+    safe_value = str(value)
+    cap = TEXTAREA_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    if len(safe_value.encode("utf-8")) > cap:
+        raise ValueError(f"{label} is too long")
+    return safe_value
+
+
+async def read_upload_bytes_limited(
+    upload: UploadFile,
+    *,
+    max_bytes: int | None = None,
+    label: str = "uploaded file",
+    chunk_size: int = 1024 * 1024,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    while True:
+        chunk = await upload.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            raise ValueError(f"{label} is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def write_upload_file_limited(
+    upload: UploadFile,
+    handle: BinaryIO,
+    *,
+    max_bytes: int | None = None,
+    label: str = "uploaded file",
+    chunk_size: int = 1024 * 1024,
+) -> int:
+    total = 0
+    cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    while True:
+        chunk = await upload.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            raise ValueError(f"{label} is too large")
+        handle.write(chunk)
+    return total
+
+
+def read_fileobj_bytes_limited(
+    fileobj: BinaryIO,
+    *,
+    max_bytes: int | None = None,
+    label: str = "uploaded file",
+    chunk_size: int = 1024 * 1024,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
+    while True:
+        chunk = fileobj.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > cap:
+            raise ValueError(f"{label} is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:

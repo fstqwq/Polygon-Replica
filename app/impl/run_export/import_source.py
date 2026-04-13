@@ -20,6 +20,7 @@ from app.impl.run_export.query import (
     _bare_repo_head_commit,
     _count_label,
 )
+from app.main_util import read_fileobj_bytes_limited
 from app.service.importing.icpc import ICPCPackageImportService
 from app.service.importing.native import NATIVE_PACKAGE_ANCHOR, NativePackageImportService
 from app.service.importing.polygon import PolygonPackageImportService
@@ -431,7 +432,7 @@ def export_import(problem: str, user: str, package_upload: UploadFile | None=Fil
         package_name = package_name.strip()
         if not package_name:
             raise ValueError('package filename is required')
-        package_content = package_upload.file.read()
+        package_content = read_fileobj_bytes_limited(package_upload.file, label='package file')
         actor_user = ctx["user"]["username"]
         imported = import_package_into_workspace(
             actor_user_id=int(ctx['user']['id']),

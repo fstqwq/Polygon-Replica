@@ -133,6 +133,34 @@ class TestPolygonPackageImport(SmokeBase):
         tests = spec.get("tests") if isinstance(spec, dict) else []
         self.assertEqual(str(tests[0].get("sample_output") or ""), "5\n6\n")
 
+    def test_import_rejects_non_utf8_manual_test_payload(self) -> None:
+        ws = self._workspace_path()
+        payload = io.BytesIO()
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<problem short-name="bad-utf8">
+  <names>
+    <name language="english" value="Bad UTF-8 Import"/>
+  </names>
+  <judging run-count="1">
+    <testset>
+      <time-limit>1000</time-limit>
+      <memory-limit>268435456</memory-limit>
+      <input-path-pattern>tests/%02d</input-path-pattern>
+      <tests>
+        <test method="manual" sample="true"/>
+      </tests>
+    </testset>
+  </judging>
+</problem>
+"""
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.xml", xml)
+            zf.writestr("tests/01", b"\xff\xfe\xfd")
+
+        service = PolygonPackageImportService()
+        with self.assertRaisesRegex(ValueError, "manual test input must be utf-8 text: tests/01"):
+            service.import_package(ws, "bad-utf8.zip", payload.getvalue())
+
     def test_import_accepts_root_level_statement_resources(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()

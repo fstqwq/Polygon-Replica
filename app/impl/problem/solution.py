@@ -18,6 +18,7 @@ from app.impl.workspace.context_operation import audit, list_solution_entries, n
 from app.impl.workspace.solution import ensure_solution_metadata_for_source, normalize_solution_source_path_required, solution_behavior_options
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
+from app.main_util import enforce_textarea_max_bytes
 from app.service.problem.solution_metadata import (
     desc_rel_path_for_source,
     normalize_expected_behavior,
@@ -133,6 +134,7 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
     try:
         selected = normalize_solution_source_path_required(source_path)
         normalized_expected = normalize_expected_behavior(expected_behavior)
+        safe_content = enforce_textarea_max_bytes(content, label='solution source')
         selected_for_redirect = selected
         with config.workspace_service.workspace_lock(workspace):
             selected_abs = safe_workspace_path(workspace, selected)
@@ -148,13 +150,13 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
                 note = parsed_desc.get('note')
                 if isinstance(note, str):
                     desc_note = note
-            config.git_service.write_file(workspace, selected, content)
+            config.git_service.write_file(workspace, selected, safe_content)
             compile_check_error = judgehost_compile_check_error(
                 problem=problem,
                 user=user,
                 workspace=workspace,
                 source_path=selected,
-                source_content=content,
+                source_content=safe_content,
                 verification_source='problem.solution.save_source',
             )
             if compile_check_error:
@@ -168,7 +170,7 @@ def solutions_save_source(request: Request, problem: str, user: str, source_path
         if metadata_created:
             msg = 'solution source and metadata saved'
         save_ok = True
-        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.save_source', {'path': selected, 'bytes': len(content.encode('utf-8')), 'metadata_created': metadata_created, 'expected_behavior': normalized_expected})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'solutions.save_source', {'path': selected, 'bytes': len(safe_content.encode('utf-8')), 'metadata_created': metadata_created, 'expected_behavior': normalized_expected})
     except (ValueError, OSError) as exc:
         msg = str(exc)
     except HTTPException as exc:

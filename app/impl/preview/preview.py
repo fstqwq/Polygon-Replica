@@ -19,7 +19,13 @@ from app.impl.workspace.context_operation import (
     read_text_safe_limited,
     read_workspace_source_with_default,
 )
-from app.main_util import normalize_workspace_rel_path, safe_workspace_path, sanitize_log_text_for_ui
+from app.main_util import (
+    enforce_textarea_max_bytes,
+    normalize_workspace_rel_path,
+    safe_workspace_path,
+    sanitize_log_text_for_ui,
+    write_upload_file_limited,
+)
 from app.service.statement.constant import (
     STATEMENT_PROBLEM_REL,
     STATEMENT_STYLE_REL,
@@ -440,7 +446,7 @@ def preview_page(request: Request, problem: str, user: str):
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
             'statement_compile_assets': statement_compile_assets,
             'contestant_attachments': contestant_attachments,
-            'editor_char_limit': _C.STATEMENT_EDITOR_CHAR_LIMIT,
+            'editor_char_limit': _C.TEXTAREA_MAX_BYTES,
             'log': log,
             'log_truncated': log_truncated,
             'log_char_limit': _C.UI_LOG_TEXT_CHAR_LIMIT,
@@ -616,39 +622,48 @@ def preview_save(
             message=str(exc),
         )
     statement_mode = statement_mode_from_ctx(ctx)
-    with config.workspace_service.workspace_lock(workspace):
-        section_paths = statement_editor_section_paths(current_language)
-        write_plan = {
-            'legend': legend_tex,
-            'input': input_tex,
-            'output': output_tex,
-            'notes': notes_tex,
-        }
-        if statement_mode != 'pass-fail':
-            write_plan['interaction'] = interaction_tex
-        for key, content in write_plan.items():
-            rel = section_paths[key]
-            section_path = safe_workspace_path(workspace, rel.as_posix())
-            section_path.parent.mkdir(parents=True, exist_ok=True)
-            section_path.write_text(content, encoding='utf-8')
-    audit(
-        ctx['user']['id'],
-        ctx['problem']['id'],
-        'preview.save_sources',
-        {
-            'mode': statement_mode,
-            'legend_bytes': len(legend_tex.encode('utf-8')),
-            'input_bytes': len(input_tex.encode('utf-8')),
-            'output_bytes': len(output_tex.encode('utf-8')),
-            'notes_bytes': len(notes_tex.encode('utf-8')),
-            'interaction_bytes': len(interaction_tex.encode('utf-8')) if statement_mode != 'pass-fail' else 0,
-            'language': current_language,
-        },
-    )
+    msg = 'statement saved'
+    try:
+        safe_legend_tex = enforce_textarea_max_bytes(legend_tex, label="statement legend")
+        safe_input_tex = enforce_textarea_max_bytes(input_tex, label="statement input")
+        safe_output_tex = enforce_textarea_max_bytes(output_tex, label="statement output")
+        safe_notes_tex = enforce_textarea_max_bytes(notes_tex, label="statement notes")
+        safe_interaction_tex = enforce_textarea_max_bytes(interaction_tex, label="statement interaction")
+        with config.workspace_service.workspace_lock(workspace):
+            section_paths = statement_editor_section_paths(current_language)
+            write_plan = {
+                'legend': safe_legend_tex,
+                'input': safe_input_tex,
+                'output': safe_output_tex,
+                'notes': safe_notes_tex,
+            }
+            if statement_mode != 'pass-fail':
+                write_plan['interaction'] = safe_interaction_tex
+            for key, content in write_plan.items():
+                rel = section_paths[key]
+                section_path = safe_workspace_path(workspace, rel.as_posix())
+                section_path.parent.mkdir(parents=True, exist_ok=True)
+                section_path.write_text(content, encoding='utf-8')
+        audit(
+            ctx['user']['id'],
+            ctx['problem']['id'],
+            'preview.save_sources',
+            {
+                'mode': statement_mode,
+                'legend_bytes': len(safe_legend_tex.encode('utf-8')),
+                'input_bytes': len(safe_input_tex.encode('utf-8')),
+                'output_bytes': len(safe_output_tex.encode('utf-8')),
+                'notes_bytes': len(safe_notes_tex.encode('utf-8')),
+                'interaction_bytes': len(safe_interaction_tex.encode('utf-8')) if statement_mode != 'pass-fail' else 0,
+                'language': current_language,
+            },
+        )
+    except (ValueError, OSError, HTTPException) as exc:
+        msg = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
     return redirect_response(
         statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
         status_code=303,
-        message='statement saved',
+        message=msg,
     )
 
 def statement_compile_asset_delete(
@@ -737,12 +752,7 @@ async def statement_compile_asset_upload(
             tmp_path = Path(tmp_name)
             try:
                 with os.fdopen(fd, 'wb') as out:
-                    while True:
-                        chunk = await upload.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        out.write(chunk)
-                        total_bytes += len(chunk)
+                    total_bytes = await write_upload_file_limited(upload, out, label='statement asset')
                 os.replace(tmp_path, asset_abs)
                 tmp_path = None
             except Exception:
@@ -801,12 +811,7 @@ async def statement_attachment_upload(
             tmp_path = Path(tmp_name)
             try:
                 with os.fdopen(fd, 'wb') as out:
-                    while True:
-                        chunk = await upload.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        out.write(chunk)
-                        total_bytes += len(chunk)
+                    total_bytes = await write_upload_file_limited(upload, out, label='attachment')
                 os.replace(tmp_path, attachment_abs)
                 tmp_path = None
             except Exception:

@@ -17,7 +17,7 @@ from app.impl.workspace.context_operation import audit, build_line_focus_context
 from app.impl.workspace.solution import ensure_solution_metadata_for_source
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import normalize_workspace_rel_path, safe_workspace_path
+from app.main_util import enforce_textarea_max_bytes, normalize_workspace_rel_path, safe_workspace_path, write_upload_file_limited
 
 _C = config.constants
 
@@ -100,8 +100,9 @@ def files_save(
     workspace = Path(ctx['workspace']['path'])
     msg = 'saved'
     try:
+        safe_content = enforce_textarea_max_bytes(content, label='file content')
         with config.workspace_service.workspace_lock(workspace):
-            config.git_service.write_file(workspace, path, content)
+            config.git_service.write_file(workspace, path, safe_content)
         audit(ctx['user']['id'], ctx['problem']['id'], 'files.save', {'path': path})
     except ValueError as exc:
         msg = str(exc)
@@ -192,12 +193,7 @@ async def files_upload(
             tmp_path = Path(tmp_name)
             try:
                 with os.fdopen(fd, 'wb') as out:
-                    while True:
-                        chunk = await upload.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        out.write(chunk)
-                        total_bytes += len(chunk)
+                    total_bytes = await write_upload_file_limited(upload, out)
                 os.replace(tmp_path, abs_path)
                 tmp_path = None
             except Exception:

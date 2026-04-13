@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
+from app.main_util import UPLOAD_MAX_BYTES
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
@@ -24,9 +25,9 @@ from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import dumps_tests_spec
 
 
-ZIP_MAX_BYTES = 256 * 1024 * 1024
-ZIP_MAX_FILE_BYTES = 64 * 1024 * 1024
-ZIP_TEXT_MAX_BYTES = 8 * 1024 * 1024
+ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
+ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
+ZIP_TEXT_MAX_BYTES = UPLOAD_MAX_BYTES
 SOURCE_SUFFIX_ALLOW = {
     ".cpp",
     ".cc",

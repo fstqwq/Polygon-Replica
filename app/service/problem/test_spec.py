@@ -4,28 +4,20 @@ import json
 import shlex
 from pathlib import Path
 
+from app.main_util import enforce_textarea_max_bytes
 from app.runtime_value import RuntimeValues, build_runtime_values
 
 TESTS_SPEC_MAX_ITEMS: int = 4096
-TESTS_SPEC_MANUAL_MAX_CHARS: int = 262144
 TESTS_SPEC_GEN_COMMAND_MAX_CHARS: int = 1024
-TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS: int = 262144
-TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS: int = 262144
 TESTS_SPEC_ID_RE = None
 
 
 def apply_runtime_values(values: RuntimeValues) -> None:
     global TESTS_SPEC_MAX_ITEMS
-    global TESTS_SPEC_MANUAL_MAX_CHARS
     global TESTS_SPEC_GEN_COMMAND_MAX_CHARS
-    global TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS
-    global TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS
     global TESTS_SPEC_ID_RE
     TESTS_SPEC_MAX_ITEMS = int(values.TESTS_SPEC_MAX_ITEMS)
-    TESTS_SPEC_MANUAL_MAX_CHARS = int(values.TESTS_SPEC_MANUAL_MAX_CHARS)
     TESTS_SPEC_GEN_COMMAND_MAX_CHARS = int(values.TESTS_SPEC_GEN_COMMAND_MAX_CHARS)
-    TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS = int(values.get("TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS", 262144))
-    TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS = int(values.get("TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS", 262144))
     TESTS_SPEC_ID_RE = values.TESTS_SPEC_ID_RE
 
 apply_runtime_values(build_runtime_values())
@@ -85,15 +77,13 @@ def payload_rel_path_for_test(test_id: str, kind: str) -> str:
     return f"{payload_dir_rel_for_kind(kind).as_posix()}/{spec_data_filename(test_id)}"
 
 
-def normalize_manual_input(raw: object) -> str:
-    normalized = _normalize_manual_input_text(raw)
-    if len(normalized) > TESTS_SPEC_MANUAL_MAX_CHARS:
-        raise ValueError("manual test input is too long")
-    return normalized
-
-
-def normalize_imported_manual_input(raw: object) -> str:
+def normalize_file_manual_input(raw: object) -> str:
     return _normalize_manual_input_text(raw)
+
+
+def normalize_manual_input(raw: object) -> str:
+    normalized = normalize_file_manual_input(raw)
+    return enforce_textarea_max_bytes(normalized, label="manual test input")
 
 
 def _normalize_manual_input_text(raw: object) -> str:
@@ -148,16 +138,12 @@ def _normalize_sample_output_validate_flag(raw: object) -> bool:
 
 def normalize_sample_input(raw: object) -> str:
     value = _normalize_newlines(str(raw or ""))
-    if len(value) > TESTS_SPEC_SAMPLE_INPUT_MAX_CHARS:
-        raise ValueError("sample input is too long")
-    return value
+    return enforce_textarea_max_bytes(value, label="sample input")
 
 
 def normalize_sample_output(raw: object) -> str:
     value = _normalize_newlines(str(raw or ""))
-    if len(value) > TESTS_SPEC_SAMPLE_OUTPUT_MAX_CHARS:
-        raise ValueError("sample output is too long")
-    return value
+    return enforce_textarea_max_bytes(value, label="sample output")
 
 
 def normalize_tests_spec_entry(raw: object, *, index: int = 0) -> dict:

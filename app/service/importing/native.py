@@ -7,13 +7,14 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from app.main_util import UPLOAD_MAX_BYTES
 from app.service.problem.test_spec import load_tests_spec
 
 
 NATIVE_PACKAGE_ANCHOR = "config/problem.json"
-ZIP_MAX_BYTES = 256 * 1024 * 1024
-ZIP_MAX_FILE_BYTES = 64 * 1024 * 1024
-ZIP_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
+ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
+ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
+ZIP_MAX_EXTRACTED_BYTES = UPLOAD_MAX_BYTES
 
 
 def _normalize_zip_path(raw: str) -> str:

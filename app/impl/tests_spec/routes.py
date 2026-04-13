@@ -34,16 +34,19 @@ from app.impl.workspace.test_spec import (
     tests_spec_write_payload,
     write_tests_spec,
 )
+from app.main_util import enforce_textarea_max_bytes, read_upload_bytes_limited
 from app.service.problem.test_spec import (
-    TESTS_SPEC_MANUAL_MAX_CHARS,
     TESTS_SPEC_REL,
     next_test_id,
+    normalize_file_manual_input,
     normalize_gen_command,
     normalize_manual_input,
     normalize_test_id,
     normalize_test_kind,
     normalize_tests_spec_entry,
 )
+
+
 def render_tests_page(request: Request, problem: str, user: str):
     ctx = page_ctx(problem, user)
     workspace = Path(ctx['workspace']['path'])
@@ -134,23 +137,12 @@ async def upload_manual_test(
     msg = 'manual test added'
     redirect_query = ''
     try:
-        max_raw_bytes = max(4096, int(TESTS_SPEC_MANUAL_MAX_CHARS) * 4)
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = await manual_upload.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_raw_bytes:
-                raise ValueError('uploaded payload is too large')
-            chunks.append(chunk)
-        raw_payload = b''.join(chunks)
+        raw_payload = await read_upload_bytes_limited(manual_upload, label='uploaded payload')
         try:
             uploaded_text = raw_payload.decode('utf-8')
         except UnicodeDecodeError as exc:
             raise ValueError('uploaded payload must be utf-8 text') from exc
-        safe_input = normalize_manual_input(uploaded_text)
+        safe_input = normalize_file_manual_input(uploaded_text)
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))
         requested_id = tests_spec_form_text(test_id).strip()
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
@@ -178,7 +170,7 @@ async def upload_manual_test(
                 'index': added_index,
                 'id': safe_test_id,
                 'sample': safe_sample,
-                'bytes': len(safe_input.encode('utf-8', errors='replace')),
+                'bytes': len(safe_input.encode('utf-8')),
                 'custom_sample_input': bool(safe_sample_input),
                 'custom_sample_output': bool(safe_sample_output),
                 'custom_sample_output_validate': bool(safe_sample_output_validate),
@@ -408,7 +400,11 @@ def save_gen_script(problem: str, user: str, gen_script_text: Annotated[str, For
     workspace = Path(ctx['workspace']['path'])
     msg = 'gen script updated'
     try:
-        desired_commands = parse_gen_script_lines(tests_spec_form_text(gen_script_text))
+        safe_script_text = enforce_textarea_max_bytes(
+            tests_spec_form_text(gen_script_text),
+            label='generator script',
+        )
+        desired_commands = parse_gen_script_lines(safe_script_text)
         with config.workspace_service.workspace_lock(workspace):
             entries, spec_path = read_tests_spec(workspace)
             existing_gen_rows: list[dict[str, object]] = []
@@ -550,23 +546,12 @@ async def upload_test_payload(
     workspace = Path(ctx['workspace']['path'])
     msg = 'test payload uploaded'
     try:
-        max_raw_bytes = max(4096, int(TESTS_SPEC_MANUAL_MAX_CHARS) * 4)
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = await payload_upload.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_raw_bytes:
-                raise ValueError('uploaded payload is too large')
-            chunks.append(chunk)
-        raw_payload = b''.join(chunks)
+        raw_payload = await read_upload_bytes_limited(payload_upload, label='uploaded payload')
         try:
             uploaded_text = raw_payload.decode('utf-8')
         except UnicodeDecodeError as exc:
             raise ValueError('uploaded payload must be utf-8 text') from exc
-        safe_payload = normalize_manual_input(uploaded_text)
+        safe_payload = normalize_file_manual_input(uploaded_text)
         with config.workspace_service.workspace_lock(workspace):
             entries, _spec_path = read_tests_spec(workspace)
             idx = tests_spec_resolve_index(index, len(entries))
@@ -576,7 +561,7 @@ async def upload_test_payload(
             if kind != 'manual':
                 raise ValueError('payload upload is only available for manual tests')
             tests_spec_write_payload(workspace, test_id, 'manual', safe_payload)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.payload.upload', {'index': idx, 'id': test_id, 'bytes': len(safe_payload.encode('utf-8', errors='replace'))})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'tests.spec.payload.upload', {'index': idx, 'id': test_id, 'bytes': len(safe_payload.encode('utf-8'))})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     finally:

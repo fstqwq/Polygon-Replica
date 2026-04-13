@@ -34,7 +34,7 @@ from app.impl.workspace.context_operation import (
     user_contests_overview,
 )
 from app.impl.root.shared import _active_root_user, _count_label
-from app.main_util import form_text
+from app.main_util import form_text, read_fileobj_bytes_limited
 from app.service.importing.contest import PolygonContestImportService
 
 _C = config.constants
@@ -160,7 +160,7 @@ def contests_root_import(
         package_name = str(package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("package filename is required")
-        payload = package_upload.file.read()
+        payload = read_fileobj_bytes_limited(package_upload.file, label="package file")
         parsed = _POLYGON_CONTEST_IMPORT_SERVICE.parse_package(package_name, payload)
         rows = parsed.get("problems")
         if not isinstance(rows, list) or not rows:

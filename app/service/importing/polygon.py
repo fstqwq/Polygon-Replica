@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import TypedDict, cast
 
+from app.main_util import UPLOAD_MAX_BYTES
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.verification.standard_checker import copy_standard_checker
@@ -27,15 +28,15 @@ from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import (
     dumps_tests_spec,
     normalize_gen_command,
-    normalize_imported_manual_input,
+    normalize_file_manual_input,
     parse_gen_command_tokens,
     payload_rel_path_for_test,
 )
 
 
-ZIP_MAX_BYTES = 256 * 1024 * 1024
-ZIP_MAX_FILE_BYTES = 64 * 1024 * 1024
-ZIP_TEXT_MAX_BYTES = 8 * 1024 * 1024
+ZIP_MAX_BYTES = UPLOAD_MAX_BYTES
+ZIP_MAX_FILE_BYTES = UPLOAD_MAX_BYTES
+ZIP_TEXT_MAX_BYTES = UPLOAD_MAX_BYTES
 SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".py", ".java"}
 GENERATOR_SOURCE_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}
 STATEMENT_SECTION_SAMPLE_FILE_RE = re.compile(r"^example\.(\d+)(?:\.a)?$", re.IGNORECASE)
@@ -666,7 +667,10 @@ class PolygonPackageImportService:
                     gen_count += 1
                     continue
                 raise ValueError(f"missing test input file in package: {input_rel}")
-            payload_text = normalize_imported_manual_input(_read_bytes_from_zip(zf, info).decode("utf-8", errors="replace"))
+            try:
+                payload_text = normalize_file_manual_input(_read_bytes_from_zip(zf, info).decode("utf-8"))
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"manual test input must be utf-8 text: {input_rel}") from exc
             spec_entries.append({**spec_row, "kind": "manual"})
             self._write_text(workspace, Path(payload_rel_path_for_test(test_id, "manual")), payload_text)
             manual_count += 1

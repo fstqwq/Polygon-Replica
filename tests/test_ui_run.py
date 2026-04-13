@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from fastapi import HTTPException
 
+from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.signature import statement_sources_signature
 
 from .ui_support import (
@@ -53,6 +54,16 @@ from app.service.verification.types import Kind
 
 
 class TestUIRun(UIBaseSuite):
+    class _FakeUpload:
+        def __init__(self, data: bytes):
+            self._buf = io.BytesIO(data)
+
+        async def read(self, size: int = -1) -> bytes:
+            return self._buf.read(size)
+
+        async def close(self) -> None:
+            return None
+
     @staticmethod
     def _verification_id_for_run(run_id: str) -> str:
         return f"ver-{str(run_id or '').strip()}"
@@ -525,16 +536,6 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("A" * 512, html)
 
     def test_tests_spec_manual_payload_upload_and_download_routes(self) -> None:
-        class _FakeUpload:
-            def __init__(self, data: bytes):
-                self._buf = io.BytesIO(data)
-
-            async def read(self, size: int = -1) -> bytes:
-                return self._buf.read(size)
-
-            async def close(self) -> None:
-                return None
-
         ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
@@ -556,7 +557,7 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(add_manual.status_code, 303)
 
-        upload_payload = _FakeUpload(b"7 8 9  \r\n10 11\t \r\n")
+        upload_payload = self._FakeUpload(b"7 8 9  \r\n10 11\t \r\n")
         uploaded = asyncio.run(
             upload_payload_call(
                 problem="alice/sample",
@@ -573,17 +574,8 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(downloaded.status_code, 200)
         self.assertIn("001.in", str(downloaded.headers.get("content-disposition", "")))
 
-    def test_tests_spec_add_manual_upload_route(self) -> None:
-        class _FakeUpload:
-            def __init__(self, data: bytes):
-                self._buf = io.BytesIO(data)
-
-            async def read(self, size: int = -1) -> bytes:
-                return self._buf.read(size)
-
-            async def close(self) -> None:
-                return None
-
+    def test_tests_spec_manual_payload_upload_accepts_payloads_larger_than_textarea_limit(self) -> None:
+        oversized = (b"8" * (TEXTAREA_MAX_BYTES + 32)) + b"\r\n"
         ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
@@ -597,7 +589,113 @@ class TestUIRun(UIBaseSuite):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        upload = _FakeUpload(b"11 22  \r\n33 44\t \r\n")
+        add_manual = add_manual_call(
+            problem="alice/sample",
+            user="alice",
+            test_id="001",
+            manual_input="seed\n",
+        )
+        self.assertEqual(add_manual.status_code, 303)
+
+        uploaded = asyncio.run(
+            upload_payload_call(
+                problem="alice/sample",
+                user="alice",
+                index="1",
+                payload_upload=self._FakeUpload(oversized),
+            )
+        )
+        self.assertEqual(uploaded.status_code, 303)
+
+        payload = (manual_dir / "001.in").read_text(encoding="utf-8")
+        self.assertGreater(len(payload.encode("utf-8")), TEXTAREA_MAX_BYTES)
+        self.assertTrue(payload.endswith("\n"))
+        self.assertNotIn("\r", payload)
+
+    def test_tests_spec_manual_payload_upload_rejects_non_utf8_payload(self) -> None:
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace = Path(str(ws_ctx["workspace"]["path"]))
+        spec_path = workspace / "tests" / "spec.json"
+        manual_dir = workspace / "tests" / "manual"
+        generator_dir = workspace / "tests" / "generator"
+        spec_path.unlink(missing_ok=True)
+        if manual_dir.exists():
+            for p in manual_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+        if generator_dir.exists():
+            for p in generator_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+
+        add_manual = add_manual_call(
+            problem="alice/sample",
+            user="alice",
+            test_id="001",
+            manual_input="seed\n",
+        )
+        self.assertEqual(add_manual.status_code, 303)
+
+        uploaded = asyncio.run(
+            upload_payload_call(
+                problem="alice/sample",
+                user="alice",
+                index="1",
+                payload_upload=self._FakeUpload(b"\xff\xfe\xfd"),
+            )
+        )
+        self.assertEqual(uploaded.status_code, 303)
+        self.assertIn("uploaded payload must be utf-8 text.", _flash_messages_from_response(uploaded))
+        self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "seed\n")
+
+    def test_tests_spec_manual_payload_upload_uses_file_size_limit_not_textarea_limit(self) -> None:
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace = Path(str(ws_ctx["workspace"]["path"]))
+        spec_path = workspace / "tests" / "spec.json"
+        manual_dir = workspace / "tests" / "manual"
+        generator_dir = workspace / "tests" / "generator"
+        spec_path.unlink(missing_ok=True)
+        if manual_dir.exists():
+            for p in manual_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+        if generator_dir.exists():
+            for p in generator_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+
+        add_manual = add_manual_call(
+            problem="alice/sample",
+            user="alice",
+            test_id="001",
+            manual_input="seed\n",
+        )
+        self.assertEqual(add_manual.status_code, 303)
+
+        with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
+            uploaded = asyncio.run(
+                upload_payload_call(
+                    problem="alice/sample",
+                    user="alice",
+                    index="1",
+                    payload_upload=self._FakeUpload(b"123456789"),
+                )
+            )
+        self.assertEqual(uploaded.status_code, 303)
+        self.assertIn("uploaded payload is too large.", _flash_messages_from_response(uploaded))
+        self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "seed\n")
+
+    def test_tests_spec_add_manual_upload_route(self) -> None:
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace = Path(str(ws_ctx["workspace"]["path"]))
+        spec_path = workspace / "tests" / "spec.json"
+        manual_dir = workspace / "tests" / "manual"
+        generator_dir = workspace / "tests" / "generator"
+        spec_path.unlink(missing_ok=True)
+        if manual_dir.exists():
+            for p in manual_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+        if generator_dir.exists():
+            for p in generator_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+
+        upload = self._FakeUpload(b"11 22  \r\n33 44\t \r\n")
         created = asyncio.run(
             add_manual_upload_call(
                 problem="alice/sample",
@@ -621,6 +719,97 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(str(tests[0].get("kind")), "manual")
         self.assertTrue(bool(tests[0].get("sample")))
         self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "11 22\n33 44\n")
+
+    def test_tests_spec_add_manual_upload_accepts_payloads_larger_than_textarea_limit(self) -> None:
+        oversized = (b"9" * (TEXTAREA_MAX_BYTES + 32)) + b"\r\n"
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace = Path(str(ws_ctx["workspace"]["path"]))
+        spec_path = workspace / "tests" / "spec.json"
+        manual_dir = workspace / "tests" / "manual"
+        generator_dir = workspace / "tests" / "generator"
+        spec_path.unlink(missing_ok=True)
+        if manual_dir.exists():
+            for p in manual_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+        if generator_dir.exists():
+            for p in generator_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+
+        created = asyncio.run(
+            add_manual_upload_call(
+                problem="alice/sample",
+                user="alice",
+                test_id="",
+                sample="0",
+                manual_upload=self._FakeUpload(oversized),
+            )
+        )
+        self.assertEqual(created.status_code, 303)
+
+        payload = json.loads(spec_path.read_text(encoding="utf-8"))
+        tests = payload.get("tests") or []
+        self.assertEqual(len(tests), 1)
+        self.assertEqual(str(tests[0].get("kind")), "manual")
+
+        manual_text = (manual_dir / "001.in").read_text(encoding="utf-8")
+        self.assertGreater(len(manual_text.encode("utf-8")), TEXTAREA_MAX_BYTES)
+        self.assertTrue(manual_text.endswith("\n"))
+        self.assertNotIn("\r", manual_text)
+
+    def test_tests_spec_add_manual_upload_rejects_non_utf8_payload(self) -> None:
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace = Path(str(ws_ctx["workspace"]["path"]))
+        spec_path = workspace / "tests" / "spec.json"
+        manual_dir = workspace / "tests" / "manual"
+        generator_dir = workspace / "tests" / "generator"
+        spec_path.unlink(missing_ok=True)
+        if manual_dir.exists():
+            for p in manual_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+        if generator_dir.exists():
+            for p in generator_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+
+        created = asyncio.run(
+            add_manual_upload_call(
+                problem="alice/sample",
+                user="alice",
+                test_id="",
+                sample="0",
+                manual_upload=self._FakeUpload(b"\xff\xfe\xfd"),
+            )
+        )
+        self.assertEqual(created.status_code, 303)
+        self.assertIn("uploaded payload must be utf-8 text.", _flash_messages_from_response(created))
+        self.assertFalse((manual_dir / "001.in").exists())
+
+    def test_tests_spec_add_manual_upload_uses_file_size_limit_not_textarea_limit(self) -> None:
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace = Path(str(ws_ctx["workspace"]["path"]))
+        spec_path = workspace / "tests" / "spec.json"
+        manual_dir = workspace / "tests" / "manual"
+        generator_dir = workspace / "tests" / "generator"
+        spec_path.unlink(missing_ok=True)
+        if manual_dir.exists():
+            for p in manual_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+        if generator_dir.exists():
+            for p in generator_dir.glob("*.in"):
+                p.unlink(missing_ok=True)
+
+        with patch("app.main_util.UPLOAD_MAX_BYTES", 8):
+            created = asyncio.run(
+                add_manual_upload_call(
+                    problem="alice/sample",
+                    user="alice",
+                    test_id="",
+                    sample="0",
+                    manual_upload=self._FakeUpload(b"123456789"),
+                )
+            )
+        self.assertEqual(created.status_code, 303)
+        self.assertIn("uploaded payload is too large.", _flash_messages_from_response(created))
+        self.assertFalse((manual_dir / "001.in").exists())
 
     def test_tests_page_includes_templates_examples_and_mode_controls(self) -> None:
         add_manual_call(problem="alice/sample", user="alice", test_id="001", manual_input="1\n")
