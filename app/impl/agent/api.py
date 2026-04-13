@@ -116,6 +116,19 @@ async def agent_poll_access(request: Request, request_id: str):
         return json_error_response(str(exc), status_code=404)
 
 
+async def agent_auth_status(request: Request):
+    session_id = str(request.query_params.get("agent_session_id") or "")
+    identity_hash = str(request.query_params.get("identity_hash") or "")
+    try:
+        result = config.agent_service.session_status(
+            agent_session_id=session_id,
+            identity_hash=identity_hash,
+        )
+        return _json_body(result)
+    except PermissionError as exc:
+        return json_error_response(str(exc), status_code=401)
+
+
 async def agent_verification_start(request: Request):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)

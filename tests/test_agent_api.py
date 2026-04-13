@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import urlparse
@@ -163,6 +163,160 @@ class TestAgentAPI(SmokeBase):
                 },
             )
             self.assertEqual(reused_attempt.status_code, 410)
+
+    def test_agent_auth_status_reports_authorized_problems_and_updates_last_seen(self) -> None:
+        username = self.random_id("agent-status")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        self._grant_problem_owner(username)
+        stale_seen = "2000-01-01T00:00:00+00:00"
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]))
+            session_id = str(register["agent_session_id"])
+            identity_hash = str(register["identity_hash"])
+
+            config.agent_service._store.touch_session(session_id, last_seen_at=stale_seen)
+            empty_status = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(empty_status.status_code, 200, empty_status.text)
+            empty_payload = empty_status.json()
+            self.assertEqual(str(empty_payload.get("status") or ""), "ok")
+            self.assertEqual(str(empty_payload.get("agent_session_id") or ""), session_id)
+            self.assertEqual(str(empty_payload.get("user") or ""), username)
+            self.assertEqual(list(empty_payload.get("authorized_problems") or []), [])
+            touched_after_status = str(config.agent_service._store.session_by_id(session_id)["last_seen_at"])
+            self.assertNotEqual(touched_after_status, stale_seen)
+            self.assertEqual(touched_after_status, str(empty_payload.get("last_seen_at") or ""))
+
+            config.agent_service._store.touch_session(session_id, last_seen_at=stale_seen)
+            request_resp = client.post(
+                "/agent/v1/auth/request-access",
+                json={
+                    "agent_session_id": session_id,
+                    "identity_hash": identity_hash,
+                    "problem": self.problem,
+                },
+            )
+            self.assertEqual(request_resp.status_code, 200, request_resp.text)
+            request_id = str(request_resp.json().get("request_id") or "")
+            self.assertRegex(request_id, r"^ar-[0-9a-f]{16}$")
+            self.assertNotEqual(str(config.agent_service._store.session_by_id(session_id)["last_seen_at"]), stale_seen)
+
+            config.agent_service._store.touch_session(session_id, last_seen_at=stale_seen)
+            pending_poll = client.get(
+                f"/agent/v1/auth/poll/{request_id}",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(pending_poll.status_code, 200, pending_poll.text)
+            self.assertEqual(str(pending_poll.json().get("status") or ""), "pending")
+            self.assertNotEqual(str(config.agent_service._store.session_by_id(session_id)["last_seen_at"]), stale_seen)
+
+            approve = client.post(
+                f"/agent/approve/{request_id}",
+                data={"decision": "approve", "scope": "readonly", "ttl": "86400"},
+                headers={"cookie": auth_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
+            self.assertEqual(approve.status_code, 303, approve.text)
+            readonly_poll = client.get(
+                f"/agent/v1/auth/poll/{request_id}",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(readonly_poll.status_code, 200, readonly_poll.text)
+            readonly_token = str(readonly_poll.json().get("token") or "")
+            self.assertRegex(readonly_token, r"^poly_")
+
+            readonly_status = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(readonly_status.status_code, 200, readonly_status.text)
+            readonly_items = list(readonly_status.json().get("authorized_problems") or [])
+            self.assertEqual(len(readonly_items), 1)
+            self.assertEqual(str(readonly_items[0].get("problem") or ""), self.problem)
+            self.assertEqual(str(readonly_items[0].get("scope") or ""), "readonly")
+            self.assertTrue(str(readonly_items[0].get("expires_at") or ""))
+
+            _workspace_request_id, workspace_token = self._approve_token(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="workspace",
+            )
+            workspace_status = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(workspace_status.status_code, 200, workspace_status.text)
+            workspace_items = list(workspace_status.json().get("authorized_problems") or [])
+            self.assertEqual(len(workspace_items), 1)
+            self.assertEqual(str(workspace_items[0].get("problem") or ""), self.problem)
+            self.assertEqual(str(workspace_items[0].get("scope") or ""), "workspace")
+
+            workspace_service.grant_repo_access(self.problem, username, "read")
+            downgraded_status = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(downgraded_status.status_code, 200, downgraded_status.text)
+            downgraded_items = list(downgraded_status.json().get("authorized_problems") or [])
+            self.assertEqual(len(downgraded_items), 1)
+            self.assertEqual(str(downgraded_items[0].get("problem") or ""), self.problem)
+            self.assertEqual(str(downgraded_items[0].get("scope") or ""), "readonly")
+
+            workspace_service.grant_repo_access(self.problem, username, "owner")
+            readonly_identity = config.agent_service.token_identity(readonly_token)
+            workspace_identity = config.agent_service.token_identity(workspace_token)
+            self.assertIsNotNone(readonly_identity)
+            self.assertIsNotNone(workspace_identity)
+
+            revoke_readonly = client.post(
+                f"/agent/revoke/{readonly_identity.token_id}",
+                headers={"cookie": auth_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
+            self.assertEqual(revoke_readonly.status_code, 303)
+            revoke_workspace = client.post(
+                f"/agent/revoke/{workspace_identity.token_id}",
+                headers={"cookie": auth_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
+            self.assertEqual(revoke_workspace.status_code, 303)
+
+            revoked_status = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(revoked_status.status_code, 200, revoked_status.text)
+            self.assertEqual(list(revoked_status.json().get("authorized_problems") or []), [])
+
+            bad_identity = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": session_id, "identity_hash": "bad"},
+            )
+            self.assertEqual(bad_identity.status_code, 401)
+
+            bad_session = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": "as-missing", "identity_hash": identity_hash},
+            )
+            self.assertEqual(bad_session.status_code, 401)
+
+            disconnect = client.post(
+                f"/agent/disconnect/{session_id}",
+                headers={"cookie": auth_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
+            self.assertEqual(disconnect.status_code, 303)
+            disconnected_status = client.get(
+                "/agent/v1/auth/status",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(disconnected_status.status_code, 401)
 
     def test_agent_token_revocation_and_disconnect_invalidate_access(self) -> None:
         username = self.random_id("agent-revoke")

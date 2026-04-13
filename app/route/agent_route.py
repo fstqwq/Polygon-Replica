@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from app.impl.agent.api import (
+    agent_auth_status,
     agent_commit,
     agent_commit_status,
     agent_export_download,
@@ -41,6 +42,7 @@ router.add_api_route("/agent/revoke/{token_id}", agent_revoke_token, methods=["P
 router.add_api_route("/agent/disconnect/{session_id}", agent_disconnect_session, methods=["POST"])
 
 router.add_api_route("/agent/v1/register/{code}", agent_register, methods=["POST"])
+router.add_api_route("/agent/v1/auth/status", agent_auth_status, methods=["GET"])
 router.add_api_route("/agent/v1/auth/request-access", agent_request_access, methods=["POST"])
 router.add_api_route("/agent/v1/auth/poll/{request_id}", agent_poll_access, methods=["GET"])
 router.add_api_route("/agent/v1/verification/start", agent_verification_start, methods=["POST"])
