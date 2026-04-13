@@ -5995,6 +5995,60 @@ class TestJudgehostService(SmokeBase):
         tests = list(summary.get("tests") or [])
         self.assertEqual(tests, [])
 
+    def test_poll_task_case_result_falls_back_to_row_summary_when_run_summary_lookup_misses(self) -> None:
+        service = config.judgehost_task_service
+        self._reset_task_queue_state(service)
+        verification_id = f"ver-jh-row-summary-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-row-summary-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id=verification_id,
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            persist_verification_run=False,
+        )
+        detailed_error = (
+            "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
+            "Please submit a full bug report."
+        )
+        with service._state.state_lock:
+            row = service._state.tasks_by_id.get(task_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            row["status"] = service.STATUS_FAILED
+            row["run_status"] = "failed"
+            row["error_text"] = ""
+            row["summary"] = {
+                "mode": "pass-fail",
+                "source": "solutions/std.cpp",
+                "tests": [],
+                "compile_diagnostics": [{"level": "error", "message": detailed_error}],
+                "error": detailed_error,
+            }
+            service._state.task_id_by_run.pop(run_id, None)
+
+        result = service.poll_task_case_result(task_id, "001.in")
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(str(result.get("status") or ""), "failed")
+        self.assertTrue(bool(result.get("missing_case_result")))
+        self.assertEqual(str(result.get("error") or ""), detailed_error)
+        summary = dict(result.get("summary") or {})
+        self.assertEqual(str(summary.get("error") or ""), detailed_error)
+        diagnostics = list(summary.get("compile_diagnostics") or [])
+        self.assertEqual(diagnostics[0]["message"], detailed_error)
+
     def test_domjudge_cache_only_completed_job_reactivates_when_appending_new_tests(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service._state.enabled

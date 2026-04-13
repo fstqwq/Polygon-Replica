@@ -249,6 +249,25 @@ class TaskQueue:
             return cached_summary
         return {}
 
+    def _task_summary_for_row(
+        self,
+        row: dict[str, object],
+        *,
+        run_id: str,
+        verification_id: str,
+    ) -> dict[str, object]:
+        summary = self.load_run_summary(run_id, verification_id)
+        if summary:
+            return summary
+        row_summary = dict(row.get("summary") or {})
+        if row_summary:
+            return row_summary
+        row_result = dict(row.get("result") or {})
+        result_summary = dict(row_result.get("summary") or {})
+        if result_summary:
+            return result_summary
+        return {}
+
     @staticmethod
     def _summary_error_text(summary: dict[str, object]) -> str:
         diagnostics = summary.get("compile_diagnostics") or []
@@ -418,7 +437,11 @@ class TaskQueue:
         if case_row is not None and str(case_row["status"] or "") == "reported":
             verification_id = str(row["verification_id"] or "")
             run_id = str(row["run_id"] or "")
-            summary = self.load_run_summary(run_id, verification_id)
+            summary = self._task_summary_for_row(
+                row,
+                run_id=run_id,
+                verification_id=verification_id,
+            )
             tests = summary.get("tests")
             selected_test_row = None
             if isinstance(tests, list):
@@ -483,7 +506,11 @@ class TaskQueue:
         if task_status in {self.STATUS_FAILED, self.STATUS_COMPLETED}:
             verification_id = str(row["verification_id"] or "")
             run_id = str(row["run_id"] or "")
-            task_summary = self.load_run_summary(run_id, verification_id)
+            task_summary = self._task_summary_for_row(
+                row,
+                run_id=run_id,
+                verification_id=verification_id,
+            )
             source_label = str(task_summary.get("source") or "")
             compile_diagnostics = list(task_summary.get("compile_diagnostics") or [])
             detail = str(task_summary.get("error") or row.get("error_text") or "")

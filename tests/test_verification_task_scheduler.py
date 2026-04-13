@@ -471,6 +471,61 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(final_result.feedback_text, "validator rejected generated input\nline 2 detail")
         self.assertEqual(final_result.output_ref, "cache://case/output/001.out")
 
+    def test_finalize_main_correct_prefers_detailed_summary_error_over_generic_result_error(self) -> None:
+        from app.service.verification.task_result_finalize import finalize_verification_task_result
+
+        task_row = {
+            "id": "vt-main-correct",
+            "verification_id": "ver-main-correct",
+            "task_kind": "main-correct",
+            "source_path": "solutions/std.cpp",
+            "test_name": "001.in",
+            "judgehost_task_id": "jt-main-correct",
+            "run_id": "r-main-correct",
+            "logical_run_id": "r-main-correct",
+        }
+        detailed_error = (
+            "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
+            "Please submit a full bug report."
+        )
+        result = {
+            "status": "failed",
+            "error": "compile error",
+            "summary": {
+                "error": detailed_error,
+                "compile_diagnostics": [
+                    {
+                        "level": "error",
+                        "message": detailed_error,
+                    }
+                ],
+                "tests": [
+                    {
+                        "verdict": "CE",
+                        "message": "",
+                        "output_ref": "",
+                        "time_ms": 0,
+                        "time_user_ms": 0,
+                        "time_wall_ms": 0,
+                        "memory_kb": 0,
+                    }
+                ],
+            },
+        }
+
+        final_result = finalize_verification_task_result(task_row, result=result)
+
+        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.verdict, "CE")
+        self.assertEqual(final_result.error_text, detailed_error)
+        self.assertEqual(final_result.compile_log, detailed_error)
+        diagnostics_rows = json.loads(final_result.diagnostics_json)
+        self.assertEqual(diagnostics_rows[0]["message"], detailed_error)
+        self.assertEqual(
+            final_result.fail_flag_reason,
+            f"main-correct / solutions/std.cpp / 001.in: {detailed_error}",
+        )
+
     def test_runtime_coordinator_cancels_successors_after_generate_input_validator_rejection(self) -> None:
         store = _InMemoryTaskStore(
             rows=[

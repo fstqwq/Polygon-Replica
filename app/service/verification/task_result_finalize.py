@@ -237,7 +237,9 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
     artifact_run_id = str(task_row["logical_run_id"] or run_id)
     result_summary = dict(result.get("summary") or {})
     result_status = str(result.get("status") or "")
-    error_text = str(result.get("error") or result_summary.get("error") or "")
+    summary_error_text = str(result_summary.get("error") or "")
+    result_error_text = str(result.get("error") or "")
+    error_text = summary_error_text or result_error_text
     missing_case_result = bool(result.get("missing_case_result"))
     parts = _summary_parts(result_summary, run_status=result_status, error_text=error_text)
     materialized_output_ref, materialized_output_blob = _materialize_run_output(

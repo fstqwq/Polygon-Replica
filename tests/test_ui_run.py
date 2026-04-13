@@ -4127,7 +4127,10 @@ class TestUIRun(UIBaseSuite):
         page = run_details_page(_request("/problems/alice/sample/run/details", f"verification_id={verification_id}"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         page_html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('data-test-name="001.in"', page_html)
+        self.assertRegex(
+            page_html,
+            r'(?s)<td class="vcell tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in">001\.in</a>',
+        )
 
         detail = run_details_test_fragment(
             _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
@@ -4206,6 +4209,79 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("manual_validate.cpp", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
         self.assertNotIn("<th>Source</th>", detail_html)
+
+    def test_run_details_page_shows_main_correct_compile_diagnostics_text(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        workspace_id = int(ctx["workspace"]["id"])
+        problem_id = int(ctx["problem"]["id"])
+        workspace = Path(str(ctx["workspace"]["path"]))
+        (workspace / "solutions").mkdir(parents=True, exist_ok=True)
+        (workspace / "solutions" / "std.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+
+        verification_id = f"ver-main-correct-diag-{uuid.uuid4().hex[:8]}"
+        detailed_error = (
+            "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
+            "Please submit a full bug report."
+        )
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature="",
+            kind=Kind.ALL,
+            status="failed",
+            detail={
+                "status": "failed",
+                "tests_meta_rows": [
+                    {
+                        "index": 1,
+                        "test_name": "001.in",
+                        "source": "manual_validate.cpp",
+                    }
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-main-correct-diag-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/std.cpp",
+                    "logical_run_id": "r-main-correct-diag",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_FAILED,
+                    "verdict": "CE",
+                    "runtime_sec": None,
+                    "cpu_sec": None,
+                    "wall_sec": None,
+                    "memory_kb": None,
+                    "compile_log": detailed_error,
+                    "diagnostics_json": json.dumps(
+                        [{"level": "error", "message": detailed_error}],
+                        separators=(",", ":"),
+                    ),
+                    "error_text": detailed_error,
+                    "feedback_text": "",
+                    "output_ref": "",
+                }
+            ],
+            edges=[],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("<h2>Diagnostics</h2>", html)
+        self.assertIn("File size limit exceeded", html)
+        self.assertIn("Please submit a full bug report.", html)
+        self.assertNotIn(">CE</pre>", html)
 
     def test_async_run_failure_shows_fl_reason_in_test_details(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

@@ -1171,7 +1171,7 @@ def build_run_detail_context(
                 fallback_name=display_name,
                 is_placeholder=bool(is_placeholder),
                 note=generate_note,
-                has_detail=bool(has_detail),
+                has_detail=bool(has_detail or has_generate_detail),
             )
             detail_rows.append(
                 {
@@ -1339,7 +1339,7 @@ def build_run_detail_context(
                 fallback_name=test_name,
                 is_placeholder=False,
                 note=generate_note,
-                has_detail=any((cell.get('detail') is not None for cell in cells)),
+                has_detail=bool(generate_detail is not None or any((cell.get('detail') is not None for cell in cells))),
             )
             detail_rows.append(
                 {
