@@ -2075,16 +2075,21 @@ class TestJudgehostService(SmokeBase):
                 verification_source="run.execute",
             )
 
-    def test_domjudge_config_and_task_output_limits_use_kb_units(self) -> None:
+    def test_domjudge_config_uses_unified_run_output_limit_for_storage_and_script_filesize(self) -> None:
         service = config.judgehost_task_service
         cfg = service.domjudge_config()
+        run_output_kb = int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536)
         aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(str(cfg.get("timelimit_overshoot") or ""), "1s|100%")
         self.assertEqual(
             int(cfg.get("output_storage_limit") or 0),
-            aux_limit_bytes,
+            run_output_kb,
         )
         self.assertEqual(
+            int(cfg.get("script_filesize_limit") or 0),
+            run_output_kb,
+        )
+        self.assertNotEqual(
             int(cfg.get("script_filesize_limit") or 0),
             (aux_limit_bytes + 1023) // 1024,
         )
@@ -3971,16 +3976,25 @@ class TestJudgehostService(SmokeBase):
             int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
         )
         self.assertEqual(int(run_config.get("pass_limit") or 0), 1)
+        run_output_kb = int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536)
         aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(
             int(compare_config.get("script_filesize_limit") or 0),
-            (aux_limit_bytes + 1023) // 1024,
+            run_output_kb,
         )
         self.assertEqual(
             int(compare_config.get("script_memory_limit") or 0),
             int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048) * 1024,
         )
         self.assertEqual(
+            int(compile_config.get("script_filesize_limit") or 0),
+            run_output_kb,
+        )
+        self.assertNotEqual(
+            int(compare_config.get("script_filesize_limit") or 0),
+            (aux_limit_bytes + 1023) // 1024,
+        )
+        self.assertNotEqual(
             int(compile_config.get("script_filesize_limit") or 0),
             (aux_limit_bytes + 1023) // 1024,
         )
