@@ -79,6 +79,8 @@ def verification_artifact_blob(verification_id: str, rel: str) -> tuple[bytes, s
             return None
         if not token:
             return None
+        if not config.verification_service.verification_has_artifact_token(safe_verification_id, token):
+            return None
         blob = config.verification_service.resolve_artifact_blob(token)
         if blob is None:
             return None

@@ -512,6 +512,49 @@ class VerificationService:
             return None
         return (str(row["test_name"] or ""), str(row["output_ref"] or ""))
 
+    def workspace_verification_run_ids(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        verification_id: str,
+    ) -> list[str] | None:
+        safe_verification_id = str(verification_id or "").strip()
+        if not safe_verification_id:
+            return None
+        if not self.workspace_verification_exists(int(problem_id), int(workspace_id), safe_verification_id):
+            return None
+        values: list[str] = []
+        for row in VerificationTaskStore(self.db).list_rows(safe_verification_id):
+            run_id = str(row["run_id"] or "")
+            if run_id and run_id not in values:
+                values.append(run_id)
+        return values
+
+    def verification_artifact_tokens(self, verification_id: str) -> set[str]:
+        safe_verification_id = str(verification_id or "").strip()
+        if not safe_verification_id:
+            return set()
+        tokens: set[str] = set()
+        for refs in self.verification_artifact_refs(safe_verification_id).values():
+            input_ref = str(refs.get("input_ref") or "")
+            answer_ref = str(refs.get("answer_ref") or "")
+            if input_ref:
+                tokens.add(input_ref)
+            if answer_ref:
+                tokens.add(answer_ref)
+        for row in VerificationTaskStore(self.db).list_rows(safe_verification_id):
+            output_ref = str(row["output_ref"] or "")
+            if output_ref:
+                tokens.add(output_ref)
+        return tokens
+
+    def verification_has_artifact_token(self, verification_id: str, token: str) -> bool:
+        safe_verification_id = str(verification_id or "").strip()
+        safe_token = str(token or "").strip()
+        if (not safe_verification_id) or (not safe_token):
+            return False
+        return safe_token in self.verification_artifact_tokens(safe_verification_id)
+
     def resolve_artifact_blob(self, token: str) -> bytes | None:
         return self.judgehost_task_service.resolve_artifact_blob(token)
 

@@ -50,16 +50,6 @@ def _upload_filename_token(raw: str) -> str:
 def _uploaded_target_path(run_id: str, upload_filename: str) -> str:
     return f"uploads/{run_id}/{_upload_filename_token(upload_filename)}"
 
-
-def _verification_record_run_ids(verification_id: str) -> list[str]:
-    values: list[str] = []
-    task_store = VerificationTaskStore(config.db)
-    for row in task_store.list_rows(verification_id):
-        run_id = normalize_run_id_token(row.get("run_id"))
-        if run_id and run_id not in values:
-            values.append(run_id)
-    return values
-
 def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
     safe_ids: list[str] = []
     for item in run_ids:
@@ -229,16 +219,22 @@ def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] 
             message="verification id is required",
         )
     actor_user_id = int(ctx["user"]["id"])
-    verification_run_ids = _verification_record_run_ids(safe_verification_id)
+    problem_id = int(ctx["problem"]["id"])
+    workspace_id = int(ctx["workspace"]["id"])
+    verification_run_ids = config.verification_service.workspace_verification_run_ids(
+        problem_id,
+        workspace_id,
+        safe_verification_id,
+    )
+    details_url = f"/problems/{problem}/{user}/run/details?verification_id={quote_plus(safe_verification_id)}"
+    if verification_run_ids is None:
+        return redirect_response(details_url, status_code=303, message="verification not found")
     normalized_run_ids: list[str] = []
     for item in verification_run_ids:
         token = normalize_run_id_token(item)
         if token:
             normalized_run_ids.append(token)
     verification_run_ids = dedupe_preserve_order(normalized_run_ids)
-    details_url = f"/problems/{problem}/{user}/run/details?verification_id={quote_plus(safe_verification_id)}"
-    if not verification_run_ids:
-        return redirect_response(details_url, status_code=303, message="verification not found")
     reason = "verification cancelled by user"
     task_store = VerificationTaskStore(config.db)
     config.verification_service.cancel_verification_if_active(
@@ -262,7 +258,6 @@ def run_cancel(problem: str, user: str, verification_id: Annotated[str, Form()] 
         "cancelled_tasks": cancelled_tasks,
         "reason": reason,
     }
-    problem_id = int(ctx["problem"]["id"])
     audit(actor_user_id, problem_id, "run.cancel", cancel_details)
     if cancelled_tasks > 0:
         msg = f"cancel requested ({cancelled_tasks} active tasks)"

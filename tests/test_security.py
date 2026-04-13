@@ -36,10 +36,11 @@ from app.impl.problem.solution import (
 )
 from app.impl.problem.validator import validator_create_template, validator_save_source
 from app.impl.run_export.artifact import artifact_file
-from app.impl.run_export.run import run_execute
+from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.problem.test_spec import parse_gen_command_tokens
+from app.service.verification.task_store import VerificationTaskStore
 from .ui_support import _register_with_password_proof
 
 db = config.db
@@ -264,6 +265,124 @@ class TestSecurity(SmokeBase):
             artifact_file("alice/sample", "alice", verification_id, "../outside.txt")
         self.assertEqual(denied.exception.status_code, 400)
         self.assertIn("invalid artifact path", str(denied.exception.detail))
+
+    def test_run_cancel_rejects_foreign_workspace_verification_id(self) -> None:
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        workspace_service.ensure_workspace("alice/sample", "bob")
+
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(alice_ctx["problem"]["id"])
+        alice_workspace_id = int(alice_ctx["workspace"]["id"])
+
+        verification_id = f"ver-sec-cancel-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-sec-cancel-{uuid.uuid4().hex[:8]}"
+        db_execute(
+            """
+            INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                verification_id,
+                problem_id,
+                alice_workspace_id,
+                "",
+                "all",
+                "running",
+                "",
+                "2026-04-13T00:00:00Z",
+                None,
+            ],
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-sec-cancel-1",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_QUEUED,
+                    "run_id": run_id,
+                    "judgehost_task_id": "jt-sec-cancel-1",
+                }
+            ],
+            edges=[],
+        )
+
+        with (
+            patch.object(config.judgehost_task_service, "cancel_tasks_for_runs", return_value=1) as cancel_runs,
+            patch.object(config.judgehost_task_service, "cancel_domjudge_jobs_for_runs", return_value=1) as cancel_jobs,
+        ):
+            resp = run_cancel("alice/sample", "bob", verification_id=verification_id)
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("verification not found", self._first_flash_message(resp).lower())
+        cancel_runs.assert_not_called()
+        cancel_jobs.assert_not_called()
+        verification_row = db_fetch_one("SELECT status,finished_at FROM verifications WHERE id=?", [verification_id])
+        self.assertIsNotNone(verification_row)
+        self.assertEqual(str(verification_row["status"] or "").lower(), "running")
+        self.assertFalse(str(verification_row["finished_at"] or "").strip())
+        task_rows = VerificationTaskStore(config.db).list_rows(verification_id)
+        self.assertEqual(len(task_rows), 1)
+        self.assertEqual(str(task_rows[0]["status"] or ""), VerificationTaskStore.TASK_QUEUED)
+
+    def test_artifact_blob_download_rejects_foreign_cache_token(self) -> None:
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        workspace_service.ensure_workspace("alice/sample", "bob")
+
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        bob_ctx = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+        problem_id = int(alice_ctx["problem"]["id"])
+        alice_workspace_id = int(alice_ctx["workspace"]["id"])
+        bob_workspace_id = int(bob_ctx["workspace"]["id"])
+
+        foreign_verification_id = f"ver-sec-blob-a-{uuid.uuid4().hex[:8]}"
+        local_verification_id = f"ver-sec-blob-b-{uuid.uuid4().hex[:8]}"
+        for verification_id, workspace_id in [
+            (foreign_verification_id, alice_workspace_id),
+            (local_verification_id, bob_workspace_id),
+        ]:
+            db_execute(
+                """
+                INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    verification_id,
+                    problem_id,
+                    workspace_id,
+                    "",
+                    "all",
+                    "ok",
+                    "",
+                    "2026-04-13T00:00:00Z",
+                    "2026-04-13T00:00:01Z",
+                ],
+            )
+
+        token = config.verification_service.store_verification_blob(
+            verification_id=foreign_verification_id,
+            test_name="001.in",
+            role="output",
+            file_name="program.out",
+            payload=b"secret-output\n",
+        )
+        encoded = base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii").rstrip("=")
+
+        with self.assertRaises(HTTPException) as denied:
+            artifact_file(
+                "alice/sample",
+                "bob",
+                local_verification_id,
+                f"blob/{encoded}/program.out",
+            )
+        self.assertEqual(denied.exception.status_code, 404)
+        self.assertIn("artifact", str(denied.exception.detail).lower())
+        self.assertIn("not found", str(denied.exception.detail).lower())
 
     def test_tests_spec_gen_command_shell_tokens_do_not_escape(self) -> None:
         marker = suite_root() / f"compile-escape-{uuid.uuid4().hex[:8]}.txt"
