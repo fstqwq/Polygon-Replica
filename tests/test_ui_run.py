@@ -49,6 +49,7 @@ from .ui_support import (
 )
 import app.impl.workspace.context_job as workspace_context_job
 import app.impl.workspace.context_verification as workspace_verification_module
+import app.impl.workspace.run_view_detail as run_view_detail_module
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
 
@@ -4049,7 +4050,7 @@ class TestUIRun(UIBaseSuite):
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("<strong>Generation of 001.in: random_tree 10 20</strong>", detail_html)
         self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics generation-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
-        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-ok\">.*?<span class=\"vcode\">AC</span>")
+        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-ok\">.*?<span class=\"vcode\">OK</span>")
         self.assertRegex(detail_html, r"(?s)<td class=\"fb-cell\">tree is valid</td>")
         self.assertNotIn("<th>Source</th>", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
@@ -4057,6 +4058,19 @@ class TestUIRun(UIBaseSuite):
         self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
         self.assertIn('<span class="vmeta">2ms (3ms wall)</span>', detail_html)
         self.assertIn('<span class="vmeta">1MB</span>', detail_html)
+
+    def test_generation_status_text_uses_generation_specific_labels(self) -> None:
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_DONE, "AC"), "OK")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_DONE, "OK"), "OK")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "WA"), "validation failed")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "TL"), "generator TL")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "TLX"), "generator TL")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "RE"), "generator RE")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "CE"), "generator CE")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "FL"), "validator failed")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_PENDING, "WA"), "pending")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_LEASED, "WA"), "running")
+        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_CANCELLED, "WA"), "cancelled")
 
     def test_run_details_page_keeps_test_popup_available_for_generate_stage_failure(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -4141,7 +4155,7 @@ class TestUIRun(UIBaseSuite):
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("<strong>Generation of 001.in: random_tree 10 20</strong>", detail_html)
         self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics generation-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
-        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-fail\">.*?<span class=\"vcode\">FL</span>")
+        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-fail\">.*?<span class=\"vcode\">validator failed</span>")
         self.assertRegex(detail_html, r"(?s)<td class=\"fb-cell\">-</td>")
         self.assertIn("Error", detail_html)
         self.assertIn("validator rejected generated test", detail_html)

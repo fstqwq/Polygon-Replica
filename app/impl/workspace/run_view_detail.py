@@ -115,6 +115,34 @@ def _prefer_source_aware_failure_reason(current_reason: str, columns: list[dict[
     return current_reason
 
 
+def _generation_status_text(status: str, verdict: str) -> str:
+    status_token = str(status or "")
+    verdict_token = str(verdict or "").upper()
+    if status_token == VerificationTaskStore.TASK_LEASED:
+        return "running"
+    if status_token in {VerificationTaskStore.TASK_QUEUED, VerificationTaskStore.TASK_PENDING}:
+        return "pending"
+    if status_token == VerificationTaskStore.TASK_CANCELLED:
+        return "cancelled"
+    if verdict_token in {"OK", "AC"}:
+        return "OK"
+    if verdict_token == "WA":
+        return "validation failed"
+    if verdict_token.startswith("TL"):
+        return "generator TL"
+    if verdict_token == "RE":
+        return "generator RE"
+    if verdict_token in {"CE", "COMPILE_ERROR", "COMPILE ERROR"}:
+        return "generator CE"
+    if verdict_token in {"FL", "FAIL", "FAILED"}:
+        return "validator failed"
+    if status_token == VerificationTaskStore.TASK_DONE:
+        return "OK"
+    if status_token == VerificationTaskStore.TASK_FAILED:
+        return verdict_token or "FL"
+    return status_token or "-"
+
+
 def _generate_detail_from_task_row(
     row: VerificationTaskRow,
     *,
@@ -123,22 +151,22 @@ def _generate_detail_from_task_row(
     status = str(row['status'] or '')
     verdict = str(row['verdict'] or '')
     if status == VerificationTaskStore.TASK_DONE:
-        status_text = verdict or 'AC'
+        status_text = _generation_status_text(status, verdict)
         tone = 'ok'
     elif status == VerificationTaskStore.TASK_FAILED:
-        status_text = verdict or 'FL'
+        status_text = _generation_status_text(status, verdict)
         tone = 'fail'
     elif status == VerificationTaskStore.TASK_LEASED:
-        status_text = 'running'
+        status_text = _generation_status_text(status, verdict)
         tone = 'running'
     elif status in {VerificationTaskStore.TASK_QUEUED, VerificationTaskStore.TASK_PENDING}:
-        status_text = 'pending'
+        status_text = _generation_status_text(status, verdict)
         tone = 'neutral'
     elif status == VerificationTaskStore.TASK_CANCELLED:
-        status_text = 'cancelled'
+        status_text = _generation_status_text(status, verdict)
         tone = 'neutral'
     else:
-        status_text = status or '-'
+        status_text = _generation_status_text(status, verdict)
         tone = 'neutral'
     runtime_ms = 0 if row['runtime_sec'] is None else max(0, int(round(float(row['runtime_sec']) * 1000.0)))
     memory_kb = 0 if row['memory_kb'] is None else max(0, int(row['memory_kb']))
