@@ -6182,6 +6182,262 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(str(tests[0].get("message") or ""), feedback_text)
         self.assertEqual(list(tests[0].get("feedback_files") or []), ["feedback/judgemessage.txt"])
 
+    def test_poll_task_case_result_recovers_feedback_from_case_debug_text_when_artifacts_are_empty(self) -> None:
+        service = config.judgehost_task_service
+        self._reset_task_queue_state(service)
+        verification_id = f"ver-jh-case-debug-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-case-debug-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["016.in"],
+            verification_id=verification_id,
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            task_kind="main-correct",
+            persist_verification_run=False,
+        )
+
+        with service._state.state_lock:
+            row = service._state.tasks_by_id.get(task_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            row["summary"] = {
+                "mode": "pass-fail",
+                "source": "solutions/std.cpp",
+                "tests": [],
+                "compile_diagnostics": [],
+                "error": "",
+            }
+
+        work_root = Path(tempfile.mkdtemp(prefix="polygon-case-debug-")).resolve()
+        self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
+
+        job_id = service._state.judgehost_state_store.create_job_with_cases(
+            task_id=task_id,
+            run_id=run_id,
+            group_key="group-case-debug",
+            submit_id="sub-case-debug",
+            contest_id="",
+            mode="pass-fail",
+            source_name="std.cpp",
+            source_path="solutions/std.cpp",
+            work_root=str(work_root),
+            compile_hash="a" * 64,
+            run_hash="b" * 64,
+            compare_hash="c" * 64,
+            source_hash="d" * 64,
+            compile_config_json="{}",
+            run_config_json="{}",
+            compare_config_json="{}",
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            force_recompile=0,
+            lease_owner="judgehost-debug",
+            status="leased",
+            created_at="2026-04-14T00:00:00+00:00",
+            case_rows=[
+                {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "test_name": "016.in",
+                    "ordinal": 1,
+                    "testcase_id": 16,
+                    "testcase_hash": "e" * 64,
+                    "testcase_input_hash": "f" * 64,
+                    "testcase_answer_hash": "0" * 64,
+                    "input_ref": "",
+                    "answer_ref": "",
+                    "status": "leased",
+                }
+            ],
+        )
+        self.assertGreater(job_id, 0)
+        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        self.assertEqual(len(case_rows), 1)
+        case_id = int(case_rows[0]["id"])
+        updated = service._state.judgehost_state_store.report_case_result(
+            case_id,
+            lease_owner="judgehost-debug",
+            runresult="checker-fail",
+            runtime_sec=0.012,
+            cpu_sec=0.011,
+            wall_sec=0.025,
+            memory_kb=1404,
+            output_run_rel="",
+            output_error_rel="",
+            output_system_rel="",
+            output_diff_rel="",
+            metadata_rel="",
+            compare_metadata_rel="",
+            team_message_rel="",
+            score_text="",
+            updated_at="2026-04-14T00:00:01+00:00",
+        )
+        self.assertTrue(updated)
+        feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
+        service._state.judgehost_state_store.append_debug_text(
+            case_id=case_id,
+            job_id=job_id,
+            debug_text=feedback_text,
+            now_text="2026-04-14T00:00:02+00:00",
+        )
+
+        result = service.poll_task_case_result(task_id, "016.in")
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(str(result.get("status") or ""), "failed")
+        self.assertEqual(str(result.get("error") or ""), feedback_text)
+        summary = dict(result.get("summary") or {})
+        self.assertEqual(str(summary.get("error") or ""), feedback_text)
+        tests = list(summary.get("tests") or [])
+        self.assertEqual(len(tests), 1)
+        self.assertEqual(str(tests[0].get("message") or ""), feedback_text)
+        self.assertEqual(list(tests[0].get("feedback_files") or []), [])
+
+    def test_domjudge_add_debug_info_overwrites_terminal_verification_task_detail(self) -> None:
+        service = config.judgehost_task_service
+        self._reset_task_queue_state(service)
+        verification_id = f"ver-jh-late-debug-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-late-debug-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["016.in"],
+            verification_id=verification_id,
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            task_kind="main-correct",
+            persist_verification_run=False,
+        )
+        with service._state.state_lock:
+            row = service._state.tasks_by_id.get(task_id)
+            self.assertIsNotNone(row)
+            assert row is not None
+            row["summary"] = {
+                "mode": "pass-fail",
+                "source": "solutions/std.cpp",
+                "tests": [],
+                "compile_diagnostics": [],
+                "error": "",
+            }
+
+        work_root = Path(tempfile.mkdtemp(prefix="polygon-late-debug-")).resolve()
+        self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
+        job_id = service._state.judgehost_state_store.create_job_with_cases(
+            task_id=task_id,
+            run_id=run_id,
+            group_key="group-late-debug",
+            submit_id="sub-late-debug",
+            contest_id="",
+            mode="pass-fail",
+            source_name="std.cpp",
+            source_path="solutions/std.cpp",
+            work_root=str(work_root),
+            compile_hash="a" * 64,
+            run_hash="b" * 64,
+            compare_hash="c" * 64,
+            source_hash="d" * 64,
+            compile_config_json="{}",
+            run_config_json="{}",
+            compare_config_json="{}",
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            force_recompile=0,
+            lease_owner="judgehost-late-debug",
+            status="leased",
+            created_at="2026-04-14T00:00:00+00:00",
+            case_rows=[
+                {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "test_name": "016.in",
+                    "ordinal": 1,
+                    "testcase_id": 16,
+                    "testcase_hash": "e" * 64,
+                    "testcase_input_hash": "f" * 64,
+                    "testcase_answer_hash": "0" * 64,
+                    "input_ref": "",
+                    "answer_ref": "",
+                    "status": "leased",
+                }
+            ],
+        )
+        self.assertGreater(job_id, 0)
+        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        self.assertEqual(len(case_rows), 1)
+        case_id = int(case_rows[0]["id"])
+        updated = service._state.judgehost_state_store.report_case_result(
+            case_id,
+            lease_owner="judgehost-late-debug",
+            runresult="checker-fail",
+            runtime_sec=0.012,
+            cpu_sec=0.011,
+            wall_sec=0.025,
+            memory_kb=1404,
+            output_run_rel="",
+            output_error_rel="",
+            output_system_rel="",
+            output_diff_rel="",
+            metadata_rel="",
+            compare_metadata_rel="",
+            team_message_rel="",
+            score_text="",
+            updated_at="2026-04-14T00:00:01+00:00",
+        )
+        self.assertTrue(updated)
+
+        service._result._domjudge_finalize_case_task(
+            task_id=task_id,
+            test_name="016.in",
+            hostname="judgehost-late-debug",
+        )
+        task_store = VerificationTaskStore(config.db)
+        before = next(
+            row for row in task_store.list_rows(verification_id)
+            if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"
+        )
+        self.assertEqual(str(before["error_text"] or ""), "main correct failed on 016.in")
+
+        feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
+        service.domjudge_add_debug_info(
+            hostname="judgehost-late-debug",
+            judgetask_id=case_id,
+            payload={"message": feedback_text},
+        )
+
+        after = next(
+            row for row in task_store.list_rows(verification_id)
+            if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"
+        )
+        self.assertEqual(str(after["error_text"] or ""), feedback_text)
+        self.assertEqual(str(after["feedback_text"] or ""), feedback_text)
+        verification_row = config.db.fetch_one(
+            "SELECT fail_reason FROM verifications WHERE id=?",
+            [verification_id],
+        )
+        self.assertIsNotNone(verification_row)
+        assert verification_row is not None
+        self.assertIn(feedback_text, str(verification_row["fail_reason"] or ""))
+
     def test_domjudge_finalize_case_task_notifies_case_before_task_terminal(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)

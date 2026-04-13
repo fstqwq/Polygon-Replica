@@ -7,6 +7,7 @@ from pathlib import Path
 from app.db import now_iso
 from app.service.judgehost.runtime import (
     domjudge_feedback_text_and_files,
+    domjudge_feedback_text_from_text,
     domjudge_verdict_from_runresult,
     now_iso_after,
     parse_iso_utc,
@@ -286,7 +287,7 @@ class TaskQueue:
     def _case_feedback_text_and_files(self, case_row: dict[str, object]) -> tuple[str, list[str]]:
         work_root_token = str(case_row.get("work_root") or "")
         work_root = Path(work_root_token).resolve() if work_root_token else None
-        return domjudge_feedback_text_and_files(
+        feedback_text, feedback_files = domjudge_feedback_text_and_files(
             read_blob=(
                 (lambda token: self._toolkit.read_artifact_blob(work_root, token))
                 if work_root is not None
@@ -297,6 +298,12 @@ class TaskQueue:
             output_diff_rel=str(case_row.get("output_diff_rel") or ""),
             team_message_rel=str(case_row.get("team_message_rel") or ""),
         )
+        if feedback_text:
+            return feedback_text, feedback_files
+        debug_text = domjudge_feedback_text_from_text(str(case_row.get("debug_text") or ""))
+        if debug_text:
+            return debug_text, feedback_files
+        return "", feedback_files
 
     def report_result(
         self,
@@ -465,6 +472,9 @@ class TaskQueue:
         if case_row is not None and str(case_row["status"] or "") == "reported":
             verification_id = str(row["verification_id"] or "")
             run_id = str(row["run_id"] or "")
+            task_kind = str((row.get("payload") or {}).get("task_kind") or "")
+            runresult = str(case_row["runresult"] or "")
+            verdict = domjudge_verdict_from_runresult(runresult)
             summary = self._task_summary_for_row(
                 row,
                 run_id=run_id,
@@ -509,6 +519,15 @@ class TaskQueue:
                 recovered_error = feedback_text
             else:
                 recovered_error = str(selected_test_row.get("message") or "")
+                if not recovered_error:
+                    feedback_text, feedback_files = self._case_feedback_text_and_files(case_row)
+                    if feedback_text:
+                        selected_test_row["message"] = feedback_text
+                        recovered_error = feedback_text
+                    if feedback_files and not list(selected_test_row.get("feedback_files") or []):
+                        selected_test_row["feedback_files"] = feedback_files
+                    if (not str(selected_test_row.get("output_ref") or "")) and str(case_row.get("output_run_rel") or ""):
+                        selected_test_row["output_ref"] = str(case_row.get("output_run_rel") or "")
             summary_error = str(summary.get("error") or "")
             if (not summary_error) and recovered_error and str(case_row["runresult"] or "") in {
                 "checker-fail",
@@ -516,15 +535,14 @@ class TaskQueue:
                 "internal-error",
             }:
                 summary_error = recovered_error
+            if (not summary_error) and recovered_error and task_kind == self._TASK_KIND_MAIN_CORRECT and verdict != "OK":
+                summary_error = recovered_error
             case_summary = {
                 "source": summary.get("source") or "",
                 "compile_diagnostics": list(summary.get("compile_diagnostics") or []),
                 "error": summary_error,
                 "tests": [selected_test_row],
             }
-            task_kind = str((row.get("payload") or {}).get("task_kind") or "")
-            runresult = str(case_row["runresult"] or "")
-            verdict = domjudge_verdict_from_runresult(runresult)
             if task_kind == self._TASK_KIND_MAIN_CORRECT:
                 run_status = "ok" if verdict == "OK" else "failed"
             elif runresult in {"compiler-error", "checker-fail", "compare-error", "internal-error"}:

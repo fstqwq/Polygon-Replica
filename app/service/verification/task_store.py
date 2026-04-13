@@ -424,6 +424,70 @@ class VerificationTaskStore:
         )
         self._runtime_by_task_id.pop(task_id, None)
 
+    def overwrite_task_result(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        verdict: str,
+        run_id: str,
+        judgehost_task_id: str,
+        runtime_sec: float | None,
+        cpu_sec: float | None,
+        wall_sec: float | None,
+        memory_kb: int | None,
+        compile_log: str,
+        diagnostics_json: str,
+        error_text: str,
+        feedback_text: str,
+        output_ref: str,
+    ) -> None:
+        logical_run_id = self._logical_run_id_by_task_id.get(task_id, run_id)
+        finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
+        limit_bytes = self._limit_bytes()
+        safe_compile_log = bounded_display_text(compile_log, limit_bytes=limit_bytes)
+        safe_error_text = bounded_display_text(error_text, limit_bytes=limit_bytes)
+        safe_feedback_text = bounded_display_text(feedback_text, limit_bytes=limit_bytes)
+        safe_diagnostics_json = normalize_diagnostics_json_text(
+            diagnostics_json,
+            message_limit=limit_bytes,
+        )
+        self.db.execute(
+            """
+            UPDATE verification_tasks
+            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=COALESCE(?, finished_at)
+            WHERE id=?
+            """,
+            [
+                status,
+                verdict,
+                runtime_sec,
+                cpu_sec,
+                wall_sec,
+                memory_kb,
+                logical_run_id,
+                safe_compile_log,
+                safe_diagnostics_json,
+                safe_error_text,
+                safe_feedback_text,
+                output_ref,
+                finished_at,
+                task_id,
+            ],
+        )
+        self._runtime_by_task_id.pop(task_id, None)
+
+    def overwrite_fail_reason(self, verification_id: str, *, reason: str) -> None:
+        safe_reason = self._normalize_display_text(reason)
+        self.db.execute(
+            "UPDATE verifications SET fail_reason=? WHERE id=?",
+            [safe_reason, verification_id],
+        )
+        if safe_reason:
+            self._fail_reason_by_verification_id[verification_id] = safe_reason
+        else:
+            self._fail_reason_by_verification_id.pop(verification_id, None)
+
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
         finished_at = now_iso()
         safe_reason = self._normalize_display_text(reason)

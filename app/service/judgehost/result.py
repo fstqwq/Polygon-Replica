@@ -321,25 +321,37 @@ class ResultProcessor:
             },
             notify_terminal=False,
         )
+        self._publish_verification_case_result(
+            task_id=safe_task_id,
+            test_name=safe_test_name,
+            case_result=case_result,
+        )
+
+    def _publish_verification_case_result(
+        self,
+        *,
+        task_id: str,
+        test_name: str,
+        case_result: dict[str, object],
+    ) -> None:
         verification_task_store = VerificationTaskStore(self._s.db)
         verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
-            safe_task_id,
-            safe_test_name,
+            task_id,
+            test_name,
         )
         if verification_task_row is None:
-            verification_id = str(case_result.get("verification_id") or task_row.get("verification_id") or "")
+            task_row = self._core.task_by_id(task_id)
+            verification_id = str(case_result.get("verification_id") or (task_row or {}).get("verification_id") or "")
             if verification_id:
-                notify_verification_task_terminal(verification_id, safe_task_id)
+                notify_verification_task_terminal(verification_id, task_id)
             return
         final_result = finalize_verification_task_result(verification_task_row, result=case_result)
-        verification_id = str(verification_task_row["verification_id"] or "")
         notify_verification_case_reported(
-            verification_id,
-            safe_task_id,
-            safe_test_name,
+            str(verification_task_row["verification_id"] or ""),
+            task_id,
+            test_name,
             final_result,
         )
-        notify_verification_task_terminal(verification_id, safe_task_id)
 
     def _domjudge_finalize_if_ready(self, job_id: int, *, force_failed: bool = False, error_text: str = "") -> None:
         job_row = self._s.judgehost_state_store.job_finalize_row(int(job_id))
@@ -911,6 +923,7 @@ class ResultProcessor:
         if judgetask_id is None:
             return 0
         case_id = int(judgetask_id)
+        target_case_id: int | None = None
         row = self._s.judgehost_state_store.case_debug_context(case_id)
         if row is not None:
             job_id = int(row["job_id"])
@@ -920,6 +933,7 @@ class ResultProcessor:
             if job_debug and job_debug not in debug_text:
                 debug_text = job_debug if not debug_text else f"{debug_text}\n{job_debug}"
             result_id = case_id
+            target_case_id = case_id
         else:
             job_row = self._s.judgehost_state_store.job_debug_context(case_id)
             if job_row is None:
@@ -932,6 +946,14 @@ class ResultProcessor:
             debug_text = payload_text if not debug_text else f"{debug_text}\n{payload_text}"
             if len(debug_text) > 4000:
                 debug_text = debug_text[-4000:]
+        persisted_debug_text = debug_text or safe_desc
+        if persisted_debug_text:
+            self._s.judgehost_state_store.append_debug_text(
+                case_id=target_case_id,
+                job_id=job_id,
+                debug_text=persisted_debug_text,
+                now_text=now_iso(),
+            )
         if debug_text:
             if debug_text.lower() not in safe_desc.lower():
                 safe_desc = f"{safe_desc}\n\n{debug_text}"
@@ -1131,6 +1153,40 @@ class ResultProcessor:
                 debug_text=debug_text,
                 now_text=now_iso(),
             )
+            if case_row is not None:
+                safe_test_name = domjudge_text(case_row["test_name"])
+                if safe_task_id and safe_test_name and str(case_row["status"] or "") == "reported":
+                    case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
+                    if case_result is not None:
+                        verification_task_store = VerificationTaskStore(self._s.db)
+                        verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
+                            safe_task_id,
+                            safe_test_name,
+                        )
+                        if verification_task_row is not None:
+                            final_result = finalize_verification_task_result(verification_task_row, result=case_result)
+                            verification_task_store.overwrite_task_result(
+                                final_result.task_id,
+                                status=final_result.status,
+                                verdict=final_result.verdict,
+                                run_id=final_result.run_id,
+                                judgehost_task_id=final_result.judgehost_task_id,
+                                runtime_sec=final_result.runtime_sec,
+                                cpu_sec=final_result.cpu_sec,
+                                wall_sec=final_result.wall_sec,
+                                memory_kb=final_result.memory_kb,
+                                compile_log=final_result.compile_log,
+                                diagnostics_json=final_result.diagnostics_json,
+                                error_text=final_result.error_text,
+                                feedback_text=final_result.feedback_text,
+                                output_ref=final_result.output_ref,
+                            )
+                            verification_id = str(verification_task_row["verification_id"] or "")
+                            if verification_id and final_result.fail_flag_reason:
+                                verification_task_store.overwrite_fail_reason(
+                                    verification_id,
+                                    reason=final_result.fail_flag_reason,
+                                )
         self._queue._record_host_event_conn(
             hostname=safe_host,
             action="debug",
