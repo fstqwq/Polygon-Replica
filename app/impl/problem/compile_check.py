@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 from app.impl.runtime.config import config
-from app.service.platform.error_text import compact_error_text, preserve_error_text
+from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.platform.testlib_source import workspace_testlib_header
 
 _C = config.constants
@@ -65,18 +65,18 @@ def _compile_error_text(summary: dict[str, object]) -> str:
             prefix = f"{file_token}:{line_no}: "
         elif file_token:
             prefix = f"{file_token}: "
-        text = preserve_error_text(prefix + message, max_chars=1200, max_lines=16)
+        text = normalize_display_text(prefix + message)
         if text:
             lines.append(text)
     if lines:
-        return preserve_error_text("\n".join(lines), max_chars=1200, max_lines=16)
+        return bounded_display_text("\n".join(lines))
     fallback = summary.get("error")
     if isinstance(fallback, str):
         fallback = fallback.strip()
     else:
         fallback = ""
     if fallback:
-        return preserve_error_text(fallback, max_chars=1200, max_lines=16)
+        return bounded_display_text(fallback)
     return ""
 
 
@@ -218,6 +218,6 @@ def judgehost_compile_check_error(
         message = _compile_error_text(summary) or _first_compile_message(summary) or f"judge backend compile failed ({verdict})"
         return _with_path(message or "compile check failed")
     if backend_error:
-        return _with_path(compact_error_text(backend_error, max_chars=320) or "compile check failed")
+        return _with_path(bounded_display_text(backend_error) or "compile check failed")
     return ""
 

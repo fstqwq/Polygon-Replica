@@ -7,6 +7,8 @@ import re
 from typing import TypedDict, cast
 
 from app.db import DB, now_iso
+from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
+from app.service.verification.task_metadata import normalize_diagnostics_json_text
 
 
 class VerificationTaskRow(TypedDict):
@@ -106,6 +108,14 @@ class VerificationTaskStore:
         self._logical_run_id_by_task_id = self._shared_logical_run_id_by_task_id
         self._fail_reason_by_verification_id = self._shared_fail_reason_by_verification_id
 
+    @staticmethod
+    def _limit_bytes() -> int:
+        return aux_display_text_limit_bytes()
+
+    @classmethod
+    def _normalize_display_text(cls, value: str) -> str:
+        return bounded_display_text(value, limit_bytes=cls._limit_bytes())
+
     def allocate_id(self) -> str:
         for _ in range(8):
             candidate = f"vt-{secrets.token_hex(6)}"
@@ -170,10 +180,13 @@ class VerificationTaskStore:
                         cpu_sec,
                         wall_sec,
                         memory_kb,
-                        str(item.get("compile_log") or ""),
-                        str(item.get("diagnostics_json") or "[]"),
-                        str(item.get("error_text") or ""),
-                        str(item.get("feedback_text") or ""),
+                        self._normalize_display_text(str(item.get("compile_log") or "")),
+                        normalize_diagnostics_json_text(
+                            str(item.get("diagnostics_json") or "[]"),
+                            message_limit=self._limit_bytes(),
+                        ),
+                        self._normalize_display_text(str(item.get("error_text") or "")),
+                        self._normalize_display_text(str(item.get("feedback_text") or "")),
                         str(item.get("output_ref") or ""),
                         finished_at,
                         now_text,
@@ -378,6 +391,14 @@ class VerificationTaskStore:
     ) -> None:
         logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
         finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
+        limit_bytes = self._limit_bytes()
+        safe_compile_log = bounded_display_text(compile_log, limit_bytes=limit_bytes)
+        safe_error_text = bounded_display_text(error_text, limit_bytes=limit_bytes)
+        safe_feedback_text = bounded_display_text(feedback_text, limit_bytes=limit_bytes)
+        safe_diagnostics_json = normalize_diagnostics_json_text(
+            diagnostics_json,
+            message_limit=limit_bytes,
+        )
         self.db.execute(
             """
             UPDATE verification_tasks
@@ -392,10 +413,10 @@ class VerificationTaskStore:
                 wall_sec,
                 memory_kb,
                 logical_run_id,
-                compile_log,
-                diagnostics_json,
-                error_text,
-                feedback_text,
+                safe_compile_log,
+                safe_diagnostics_json,
+                safe_error_text,
+                safe_feedback_text,
                 output_ref,
                 finished_at,
                 task_id,
@@ -405,6 +426,7 @@ class VerificationTaskStore:
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
         finished_at = now_iso()
+        safe_reason = self._normalize_display_text(reason)
         for row in self.list_rows(verification_id):
             if str(row["status"] or "") in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED}:
                 continue
@@ -420,13 +442,13 @@ class VerificationTaskStore:
                 memory_kb=None,
                 compile_log="",
                 diagnostics_json="[]",
-                error_text=reason,
+                error_text=safe_reason,
                 feedback_text="",
                 output_ref="",
             )
         self.db.execute(
             "UPDATE verifications SET finished_at=COALESCE(finished_at, ?), fail_reason=CASE WHEN fail_reason='' THEN ? ELSE fail_reason END WHERE id=?",
-            [finished_at, reason, verification_id],
+            [finished_at, safe_reason, verification_id],
         )
 
     def cancel_not_started_tasks(
@@ -436,6 +458,7 @@ class VerificationTaskStore:
         reason: str,
         protected_run_ids: set[str] | None = None,
     ) -> None:
+        safe_reason = self._normalize_display_text(reason)
         safe_protected_run_ids = protected_run_ids or set()
         for row in self.list_rows(verification_id):
             if str(row["status"] or "") not in {self.TASK_PENDING, self.TASK_QUEUED}:
@@ -455,7 +478,7 @@ class VerificationTaskStore:
                 memory_kb=None,
                 compile_log="",
                 diagnostics_json="[]",
-                error_text=reason,
+                error_text=safe_reason,
                 feedback_text="",
                 output_ref="",
             )
@@ -463,7 +486,7 @@ class VerificationTaskStore:
     def set_fail_flag(self, verification_id: str, *, reason: str) -> None:
         if verification_id in self._fail_reason_by_verification_id:
             return
-        self._fail_reason_by_verification_id[verification_id] = reason
+        self._fail_reason_by_verification_id[verification_id] = self._normalize_display_text(reason)
 
     def fail_state(self, verification_id: str) -> tuple[bool, str]:
         fail_reason = self._fail_reason_by_verification_id.get(verification_id, "")

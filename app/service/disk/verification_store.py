@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from app.db import DB, now_iso
+from app.service.platform.error_text import bounded_display_text
 from app.service.platform.fs.layout import FsManager
 from app.service.verification.types import ACTIVE, Kind, Status
 from app.setting import load_settings
@@ -150,7 +151,7 @@ class VerificationStore:
         return str(root)
 
     def cancel_active_verification(self, verification_id: str, *, reason: str, now_text: str) -> bool:
-        cancel_reason = reason or "verification cancelled by user"
+        cancel_reason = bounded_display_text(reason or "verification cancelled by user")
 
         def _tx(conn) -> int:
             verification_row = conn.execute(
@@ -348,13 +349,14 @@ class VerificationStore:
         fail_reason: str,
         finished: bool,
     ) -> None:
+        safe_fail_reason = bounded_display_text(fail_reason)
         if finished:
             self.db.execute(
                 "UPDATE verifications SET status=?, fail_reason=?, finished_at=? WHERE id=?",
-                [status, fail_reason, now_iso(), verification_id],
+                [status, safe_fail_reason, now_iso(), verification_id],
             )
             return
         self.db.execute(
             "UPDATE verifications SET status=?, fail_reason=?, finished_at=NULL WHERE id=?",
-            [status, fail_reason, verification_id],
+            [status, safe_fail_reason, verification_id],
         )

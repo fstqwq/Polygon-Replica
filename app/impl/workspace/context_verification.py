@@ -2,7 +2,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from app.impl.runtime.config import config
-from app.main_util import preserve_error_text
+from app.service.platform.error_text import bounded_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.signature import verification_signature
 from .run_display import run_actual_failed_codes, run_actual_short
@@ -174,7 +174,7 @@ def _verification_solution_failure_hint(source_path: str, reason: str, error_tex
     source_label = _source_basename_label(source_path)
     if not source_label:
         source_label = 'solution'
-    rich_error = preserve_error_text(error_text, max_chars=1600, max_lines=24)
+    rich_error = bounded_display_text(error_text)
     if reason and rich_error:
         detail = f'{reason}: {rich_error}'
     elif reason:
@@ -183,7 +183,7 @@ def _verification_solution_failure_hint(source_path: str, reason: str, error_tex
         detail = rich_error
     else:
         detail = 'verification mismatch'
-    return f'{source_label}: {detail}'
+    return bounded_display_text(f'{source_label}: {detail}')
 
 def _verification_stale_reason() -> str:
     return "changed: verification inputs"

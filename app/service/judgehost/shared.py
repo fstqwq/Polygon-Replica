@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import cast
 
+from app.service.platform.error_text import aux_display_text_limit_bytes
+
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _VERIFICATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
@@ -68,14 +70,14 @@ def domjudge_hosts_payload(hosts_state: dict[str, dict[str, object]]) -> list[di
 def domjudge_config_from_constants(constants: object) -> dict[str, object]:
     compile_timeout = max(1, int(getattr(constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
     compile_mem_mb = max(64, int(getattr(constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
-    compile_output_kb = max(64, int(getattr(constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536))
-    output_kb = max(64, int(getattr(constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536))
+    aux_limit_bytes = aux_display_text_limit_bytes(constants)
+    aux_limit_kb = max(1, (aux_limit_bytes + 1023) // 1024)
     return {
         "diskspace_error": 1048576,
-        "output_storage_limit": int(output_kb * 1024),
+        "output_storage_limit": int(aux_limit_bytes),
         "script_timelimit": compile_timeout,
         "script_memory_limit": int(compile_mem_mb * 1024),
-        "script_filesize_limit": int(compile_output_kb),
+        "script_filesize_limit": int(aux_limit_kb),
         "timelimit_overshoot": "1s|100%",
     }
 

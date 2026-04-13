@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from app.db import DB
+from app.service.platform.error_text import bounded_display_text
 
 
 class RuntimeStateStore:
@@ -41,6 +42,7 @@ class RuntimeStateStore:
         return warnings
 
     def _cancel_inflight_previews(self, reason: str, *, now_text: str) -> list[str]:
+        safe_reason = bounded_display_text(reason)
         rows = self.db.fetch_all(
             """
             SELECT id
@@ -64,10 +66,10 @@ class RuntimeStateStore:
                         json.dumps(
                             {
                                 "cancelled": True,
-                                "cancel_reason": reason,
+                                "cancel_reason": safe_reason,
                                 "status": "failed",
                                 "finished_at": now_text,
-                                "error": reason,
+                                "error": safe_reason,
                             },
                             ensure_ascii=True,
                             separators=(",", ":"),
@@ -81,6 +83,7 @@ class RuntimeStateStore:
         return warnings
 
     def _cancel_inflight_verifications(self, reason: str, *, now_text: str) -> list[str]:
+        safe_reason = bounded_display_text(reason)
         rows = self.db.fetch_all(
             """
             SELECT id,status
@@ -100,7 +103,7 @@ class RuntimeStateStore:
                     SET status='failed', fail_reason=?, finished_at=COALESCE(finished_at, ?)
                     WHERE id=?
                     """,
-                    [reason, now_text, verification_id],
+                    [safe_reason, now_text, verification_id],
                 )
             except Exception as exc:
                 warnings.append(f"startup verifications inflight cancel failed for {verification_id}: {exc}")

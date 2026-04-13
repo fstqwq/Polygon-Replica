@@ -98,52 +98,6 @@ def normalize_optional_component_source_path_safe(raw: str | None, folder: str, 
         return ""
 
 
-def compact_error_text(raw: str | None, *, max_chars: int = 240) -> str:
-    text = " ".join(str(raw or "").split())
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "..."
-
-
-def preserve_error_text(raw: str | None, *, max_chars: int = 1600, max_lines: int = 20) -> str:
-    text = sanitize_log_text_for_ui(str(raw or ""))
-    if not text:
-        return ""
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    normalized_lines = [str(line or "").rstrip() for line in lines]
-    while normalized_lines and (not normalized_lines[0].strip()):
-        normalized_lines.pop(0)
-    while normalized_lines and (not normalized_lines[-1].strip()):
-        normalized_lines.pop()
-    if not normalized_lines:
-        return ""
-    folded: list[str] = []
-    prev_blank = False
-    for line in normalized_lines:
-        if line.strip():
-            folded.append(line)
-            prev_blank = False
-            continue
-        if prev_blank:
-            continue
-        folded.append("")
-        prev_blank = True
-    truncated = False
-    line_cap = max(1, int(max_lines))
-    if len(folded) > line_cap:
-        folded = folded[:line_cap]
-        truncated = True
-    result = "\n".join(folded).strip()
-    char_cap = max(1, int(max_chars))
-    if len(result) > char_cap:
-        result = result[:char_cap].rstrip()
-        truncated = True
-    if truncated and result:
-        if not result.endswith("..."):
-            result = f"{result}\n..."
-    return result
-
-
 def form_text(value: str | object) -> str:
     default = getattr(value, "default", value)
     if default is Ellipsis:
@@ -253,6 +207,5 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] |
     for prefix_token, marker_token in pairs:
         normalized = normalized.replace(prefix_token, marker_token)
     return normalized
-
 
 

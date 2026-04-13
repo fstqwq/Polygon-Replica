@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from app.service.platform.error_text import sanitize_log_text_for_ui
+from app.service.platform.error_text import bounded_display_text
 
 
 def now_iso_after(seconds: float) -> str:
@@ -96,16 +96,7 @@ def domjudge_bool(raw: object, default: bool = False) -> bool:
 
 
 def domjudge_feedback_text_from_text(text: str) -> str:
-    normalized = sanitize_log_text_for_ui(str(text or ""))
-    lines = normalized.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    trimmed_lines = [str(line or "").rstrip() for line in lines]
-    while trimmed_lines and (not trimmed_lines[0].strip()):
-        trimmed_lines.pop(0)
-    while trimmed_lines and (not trimmed_lines[-1].strip()):
-        trimmed_lines.pop()
-    if not trimmed_lines:
-        return ""
-    return "\n".join(trimmed_lines)
+    return bounded_display_text(str(text or ""))
 
 
 def domjudge_feedback_text_from_bytes(blob: bytes) -> str:
@@ -129,4 +120,3 @@ def domjudge_verdict_from_runresult(runresult: str) -> str:
         "internal-error": "FL",
     }
     return mapping.get(token, "FL")
-

@@ -12,6 +12,7 @@ from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_source_hash
 from app.service.judgehost.shared import _RUN_ID_RE, _VERIFICATION_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
+from app.service.platform.error_text import aux_display_text_limit_bytes
 from app.service.platform.hashing import domjudge_executable_hash
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
@@ -779,7 +780,8 @@ class TaskEnqueue:
         pass_limit = configured_pass_limit
         compile_timeout = max(1, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_TIMEOUT_SEC", 120) or 120))
         compile_mem_mb = max(64, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
-        compile_output_kb = max(64, int(getattr(self._s.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536))
+        aux_limit_bytes = aux_display_text_limit_bytes(self._s.constants)
+        aux_limit_kb = max(1, (aux_limit_bytes + 1023) // 1024)
         run_output_kb = max(64, int(getattr(self._s.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536))
         run_process_limit = max(1, int(getattr(self._s.constants, "RUN_EXEC_PROCESS_LIMIT", 64) or 64))
         default_cfg = getattr(self._s.constants, "GENERAL_CONFIG_DEFAULTS", {}) or {}
@@ -926,7 +928,7 @@ class TaskEnqueue:
             "language_extensions": list(self._toolkit.language_extensions(source_name)[1]),
             "script_timelimit": compile_timeout,
             "script_memory_limit": int(compile_mem_mb * 1024),
-            "script_filesize_limit": int(compile_output_kb),
+            "script_filesize_limit": int(aux_limit_kb),
         }
         run_config = {
             "hash": run_hash,
@@ -949,7 +951,7 @@ class TaskEnqueue:
             ),
             "script_timelimit": int(compare_script_timelimit),
             "script_memory_limit": max(run_mem_kb, int(compile_mem_mb * 1024)),
-            "script_filesize_limit": int(run_output_kb),
+            "script_filesize_limit": int(aux_limit_kb),
         }
         return {
             "source_hash": source_hash,

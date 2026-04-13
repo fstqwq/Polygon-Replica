@@ -841,6 +841,60 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(str(summary["status"]), "failed")
         self.assertEqual(int(counts["cancelled"]), 1)
 
+    def test_task_store_caps_frontend_display_fields(self) -> None:
+        verification_id = f"ver-display-cap-{self.test_id}"
+        self._insert_verification_row(verification_id)
+        task_store = VerificationTaskStore(config.db)
+        task_store.replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-cap",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/a.cpp",
+                    "logical_run_id": "r-cap",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                }
+            ],
+            edges=[],
+        )
+        oversized = "x" * 5000
+        diagnostics_json = json.dumps([{"level": "error", "message": "y" * 5000}], separators=(",", ":"))
+        task_store.save_task_result(
+            "vt-cap",
+            status=VerificationTaskStore.TASK_FAILED,
+            verdict="CE",
+            run_id="r-cap",
+            judgehost_task_id="jt-cap",
+            runtime_sec=None,
+            cpu_sec=None,
+            wall_sec=None,
+            memory_kb=None,
+            compile_log=oversized,
+            diagnostics_json=diagnostics_json,
+            error_text=oversized,
+            feedback_text=oversized,
+            output_ref="",
+        )
+        row = task_store.list_rows(verification_id)[0]
+        limit = int(getattr(config.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
+        for key in ("compile_log", "error_text", "feedback_text"):
+            value = str(row[key] or "")
+            self.assertLessEqual(len(value.encode("utf-8")), limit)
+            self.assertTrue(value.endswith("..."))
+        diagnostics_rows = json.loads(str(row["diagnostics_json"] or "[]"))
+        self.assertEqual(len(diagnostics_rows), 1)
+        self.assertTrue(bool(diagnostics_rows[0].get("message_truncated")))
+        self.assertLessEqual(len(str(diagnostics_rows[0].get("message") or "").encode("utf-8")), limit)
+        task_store.set_fail_flag(verification_id, reason=oversized)
+        fail_flag, fail_reason = task_store.fail_state(verification_id)
+        self.assertTrue(fail_flag)
+        self.assertLessEqual(len(fail_reason.encode("utf-8")), limit)
+        self.assertTrue(fail_reason.endswith("..."))
+
     def test_startup_cancel_task_graph_verifications_reconciles_stale_rows(self) -> None:
         from app.impl.auth.internal.runtime import _startup_cancel_task_graph_verifications
 
@@ -986,7 +1040,7 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(summary.get("source_paths"), ["solutions/wa.cpp"])
 
     def test_summary_parts_uses_canonical_metadata_shapes(self) -> None:
-        from app.impl.workspace.verification_dag import _summary_parts
+        from app.service.verification.task_result_finalize import _summary_parts
 
         parts = _summary_parts(
             {
@@ -1063,11 +1117,12 @@ class TestVerificationTaskScheduler(SmokeBase):
             message_limit=10,
         )
         diagnostics_json = diagnostics_json_text(diagnostics_meta["rows"])
-        self.assertTrue(str(compile_meta["text"]).startswith("xxxxxxxx"))
+        self.assertLessEqual(len(str(compile_meta["text"]).encode("utf-8")), 8)
+        self.assertTrue(str(compile_meta["text"]).endswith("..."))
         self.assertTrue(bool(compile_meta["truncated"]))
         self.assertEqual(int(diagnostics_meta["total"]), 1)
         self.assertTrue(bool(diagnostics_meta["rows"][0].get("message_truncated")))
-        self.assertIn('"message":"aaaaaaaaaa... [truncated; showing first 10 characters]"', diagnostics_json)
+        self.assertIn('"message":"aaaaaaa..."', diagnostics_json)
 
     def test_task_store_persists_fail_flag(self) -> None:
         verification_id = f"ver-task-store-{self.test_id}"

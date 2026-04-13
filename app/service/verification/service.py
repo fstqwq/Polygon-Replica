@@ -13,6 +13,7 @@ from app.service.disk.verification_store import VerificationStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_hex_bytes, sha256_hex_json
 from app.service.platform.judge_fs_index import JudgeFsIndexService
+from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
 from app.service.judgehost.domjudge.cache import domjudge_cache_blob_ref
 from app.service.problem.test_spec import (
     parse_gen_command_tokens,
@@ -29,6 +30,7 @@ from app.service.verification.read_model import (
 from app.service.verification.runtime import load_problem_runtime_config
 from app.service.verification.signature import verification_signature
 from app.service.verification.source import select_source
+from app.service.verification.task_metadata import normalize_diagnostics_json_text
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.test_spec import load_tests_spec_entries, manual_test_sources, prepare_tests_spec_runtime
 
@@ -73,6 +75,7 @@ class VerificationService:
         self.judgehost_task_service = judgehost_task_service
         self.judge_fs_index_service = judge_fs_index_service
         self._verification_inflight_lock = threading.RLock()
+        self._applied_aux_display_text_limit_bytes: int | None = None
         self.fs_manager = FsManager(self.workspace_service.settings.cache_root, self.workspace_service.settings.artifacts_root)
         self._verification_store = VerificationStore(db, self.fs_manager)
         self.apply_runtime_values(constants or build_runtime_values())
@@ -682,8 +685,67 @@ class VerificationService:
             finished=finished,
         )
 
+    def _normalize_stored_display_text(self, *, limit_bytes: int) -> None:
+        task_rows = self.db.fetch_all(
+            """
+            SELECT id,compile_log,diagnostics_json,error_text,feedback_text
+            FROM verification_tasks
+            WHERE compile_log<>'' OR diagnostics_json<>'[]' OR error_text<>'' OR feedback_text<>''
+            """
+        )
+        verification_rows = self.db.fetch_all(
+            "SELECT id,fail_reason FROM verifications WHERE fail_reason<>''"
+        )
+        changed = False
+        with self.db.conn() as conn:
+            for row in task_rows:
+                safe_compile_log = bounded_display_text(str(row["compile_log"] or ""), limit_bytes=limit_bytes)
+                safe_error_text = bounded_display_text(str(row["error_text"] or ""), limit_bytes=limit_bytes)
+                safe_feedback_text = bounded_display_text(str(row["feedback_text"] or ""), limit_bytes=limit_bytes)
+                safe_diagnostics_json = normalize_diagnostics_json_text(
+                    str(row["diagnostics_json"] or "[]"),
+                    message_limit=limit_bytes,
+                )
+                if (
+                    safe_compile_log == str(row["compile_log"] or "")
+                    and safe_error_text == str(row["error_text"] or "")
+                    and safe_feedback_text == str(row["feedback_text"] or "")
+                    and safe_diagnostics_json == str(row["diagnostics_json"] or "[]")
+                ):
+                    continue
+                conn.execute(
+                    """
+                    UPDATE verification_tasks
+                    SET compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?
+                    WHERE id=?
+                    """,
+                    [
+                        safe_compile_log,
+                        safe_diagnostics_json,
+                        safe_error_text,
+                        safe_feedback_text,
+                        str(row["id"] or ""),
+                    ],
+                )
+                changed = True
+            for row in verification_rows:
+                safe_fail_reason = bounded_display_text(str(row["fail_reason"] or ""), limit_bytes=limit_bytes)
+                if safe_fail_reason == str(row["fail_reason"] or ""):
+                    continue
+                conn.execute(
+                    "UPDATE verifications SET fail_reason=? WHERE id=?",
+                    [safe_fail_reason, str(row["id"] or "")],
+                )
+                changed = True
+            if changed:
+                conn.commit()
+
     def apply_runtime_values(self, values: RuntimeValues) -> None:
-        _ = values
+        limit_bytes = aux_display_text_limit_bytes(values)
+        if self._applied_aux_display_text_limit_bytes == limit_bytes:
+            return
+        self._applied_aux_display_text_limit_bytes = limit_bytes
+        self._normalize_stored_display_text(limit_bytes=limit_bytes)
 
     def _select_checker_source(
         self,

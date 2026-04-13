@@ -2078,14 +2078,15 @@ class TestJudgehostService(SmokeBase):
     def test_domjudge_config_and_task_output_limits_use_kb_units(self) -> None:
         service = config.judgehost_task_service
         cfg = service.domjudge_config()
+        aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(str(cfg.get("timelimit_overshoot") or ""), "1s|100%")
         self.assertEqual(
             int(cfg.get("output_storage_limit") or 0),
-            int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536) * 1024,
+            aux_limit_bytes,
         )
         self.assertEqual(
             int(cfg.get("script_filesize_limit") or 0),
-            int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536),
+            (aux_limit_bytes + 1023) // 1024,
         )
 
     def test_domjudge_python_compile_script_works_without_entry_point_env(self) -> None:
@@ -3970,9 +3971,10 @@ class TestJudgehostService(SmokeBase):
             int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
         )
         self.assertEqual(int(run_config.get("pass_limit") or 0), 1)
+        aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(
             int(compare_config.get("script_filesize_limit") or 0),
-            int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
+            (aux_limit_bytes + 1023) // 1024,
         )
         self.assertEqual(
             int(compare_config.get("script_memory_limit") or 0),
@@ -3980,7 +3982,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(
             int(compile_config.get("script_filesize_limit") or 0),
-            int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 65536) or 65536),
+            (aux_limit_bytes + 1023) // 1024,
         )
 
     def test_domjudge_compare_config_uses_compile_memory_when_checker_source_compiles_during_compare(self) -> None:

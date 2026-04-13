@@ -26,7 +26,7 @@ from .context_run_detail import (
     _run_source_from_summary,
 )
 from app.service.platform.error_text import (
-    preserve_error_text,
+    bounded_display_text,
 )
 from app.service.platform.workspace_path import (
     normalize_optional_component_source_path_safe,
@@ -159,11 +159,11 @@ def _generate_detail_from_task_row(
         'verdict': verdict,
         'runtime_ms': runtime_ms,
         'memory_kb': memory_kb,
-        'error_text': preserve_error_text(str(row['error_text'] or ''), max_chars=1600, max_lines=24),
-        'feedback_text': preserve_error_text(str(row['feedback_text'] or ''), max_chars=1600, max_lines=24),
+        'error_text': bounded_display_text(str(row['error_text'] or '')),
+        'feedback_text': bounded_display_text(str(row['feedback_text'] or '')),
         'tone': tone,
         'status_text': status_text,
-        'feedback_display': preserve_error_text(str(row['feedback_text'] or ''), max_chars=1600, max_lines=24) or '-',
+        'feedback_display': bounded_display_text(str(row['feedback_text'] or '')) or '-',
     }
 
 def build_run_detail_context(
@@ -621,7 +621,7 @@ def build_run_detail_context(
                 text = 'ready'
             else:
                 text = ''
-            detail = preserve_error_text(str(row['error_text'] or '')) or preserve_error_text(str(row['feedback_text'] or ''))
+            detail = bounded_display_text(str(row['error_text'] or '')) or bounded_display_text(str(row['feedback_text'] or ''))
             target[test_name] = {
                 'tone': tone,
                 'status_label': status_label,
@@ -735,11 +735,7 @@ def build_run_detail_context(
             normalized_diags = _normalize_diagnostics(compile_diags, _C.DIAGNOSTIC_MESSAGE_CHAR_LIMIT)
             summary['compile_diagnostics'] = _decorate_compile_diagnostics(normalized_diags)
         detail_compile_diagnostics = list(cast(list[dict[str, object]], summary.get('compile_diagnostics') or []))
-        detail_compile_error = preserve_error_text(
-            (summary.get('error') or ''),
-            max_chars=1600,
-            max_lines=24,
-        )
+        detail_compile_error = bounded_display_text(summary.get('error') or '')
         if (not detail_compile_error) and detail_compile_diagnostics:
             first_diag = detail_compile_diagnostics[0]
             diag_location = str(first_diag.get('location_display') or '').strip()
@@ -832,11 +828,7 @@ def build_run_detail_context(
                     passes_raw = item.get('passes')
                     test_stem = Path(test_name).stem
                     feedback_display = '-'
-                    inline_feedback = preserve_error_text(
-                        (item.get('message') or item.get('error') or ''),
-                        max_chars=1600,
-                        max_lines=24,
-                    )
+                    inline_feedback = bounded_display_text(item.get('message') or item.get('error') or '')
                     feedback_files = item.get('feedback_files') or []
                     feedback_items: list[str] = []
                     for feedback_entry in feedback_files:
@@ -877,11 +869,7 @@ def build_run_detail_context(
                                 pass_memory_kb = int(pass_item.get('memory_kb') or 0)
                             except Exception:
                                 pass_memory_kb = 0
-                            pass_feedback = preserve_error_text(
-                                (pass_item.get('feedback') or pass_item.get('message') or ''),
-                                max_chars=1600,
-                                max_lines=24,
-                            )
+                            pass_feedback = bounded_display_text(pass_item.get('feedback') or pass_item.get('message') or '')
                             row_feedback_display = pass_feedback or feedback_display
                             output_rel = (pass_item.get('output_ref') or '')
                             output_task_id = str(pass_item.get('task_id') or '')
@@ -932,10 +920,8 @@ def build_run_detail_context(
                     'detail_available': True,
                 }
         execution_skipped = bool(execution_skipped_from_summary and (not has_materialized_tests))
-        execution_skipped_reason = preserve_error_text(
-            (summary.get('execution_skipped_reason') or summary.get('error') or ''),
-            max_chars=1600,
-            max_lines=24,
+        execution_skipped_reason = bounded_display_text(
+            (summary.get('execution_skipped_reason') or summary.get('error') or '')
         )
         if (not has_task_graph) and (not execution_skipped):
             case_cells = domjudge_case_cells_by_run.get(run_id) or {}

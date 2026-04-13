@@ -3,7 +3,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from app.service.platform.error_text import sanitize_log_text_for_ui
+from app.service.platform.error_text import (
+    aux_display_text_limit_bytes,
+    bounded_display_text,
+    normalize_display_text,
+)
 from app.service.verification.task_metadata import canonical_diagnostics, diagnostics_json_text
 from app.service.verification.task_scheduler import TaskExecutionResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
@@ -32,16 +36,7 @@ class _TaskSummaryParts:
 
 
 def _normalized_error_text(value: str) -> str:
-    normalized = sanitize_log_text_for_ui(str(value or ""))
-    lines = normalized.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    trimmed_lines = [str(line or "").rstrip() for line in lines]
-    while trimmed_lines and (not trimmed_lines[0].strip()):
-        trimmed_lines.pop(0)
-    while trimmed_lines and (not trimmed_lines[-1].strip()):
-        trimmed_lines.pop()
-    if not trimmed_lines:
-        return ""
-    return "\n".join(trimmed_lines)
+    return normalize_display_text(str(value or ""))
 
 
 def verification_task_fail_reason(
@@ -58,10 +53,10 @@ def verification_task_fail_reason(
     ]
     origin_text = " / ".join(token for token in origin_tokens if token)
     if origin_text and detail_text:
-        return f"{origin_text}: {detail_text}"
+        return bounded_display_text(f"{origin_text}: {detail_text}")
     if origin_text:
-        return origin_text
-    return detail_text
+        return bounded_display_text(origin_text)
+    return bounded_display_text(detail_text)
 
 
 def _answer_name(test_name: str) -> str:
@@ -156,10 +151,11 @@ def _verdict_from_summary(summary: dict[str, object], run_status: str) -> str:
 
 def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: str) -> _TaskSummaryParts:
     verdict = _verdict_from_summary(summary, run_status)
+    aux_limit = aux_display_text_limit_bytes()
     diagnostics_meta = canonical_diagnostics(
         cast(list[dict[str, object]] | list[object] | None, summary.get("compile_diagnostics") or []),
         list_limit=_COMPILE_DIAGNOSTICS_LIMIT,
-        message_limit=4096,
+        message_limit=aux_limit,
     )
     diagnostics_json = diagnostics_json_text(diagnostics_meta["rows"])
     tests = cast(list[dict[str, object]], summary.get("tests") or [])

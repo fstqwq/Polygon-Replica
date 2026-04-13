@@ -106,25 +106,24 @@ def _judgehost_form_part_limit_bytes() -> int:
     state = getattr(service, "state", None)
     constants = getattr(state, "constants", None)
 
-    def _read_kb(name: str, fallback: int = 0) -> int:
-        if constants is None:
-            return fallback
+    output_limit_bytes = 0
+    aux_limit_bytes = 2048
+    if constants is not None:
         try:
-            return max(0, int(getattr(constants, name, fallback) or fallback))
+            output_limit_bytes = max(0, int(getattr(constants, "RUN_EXEC_OUTPUT_KB", 0) or 0)) * 1024
         except Exception:
-            return fallback
-
-    output_kb = max(
-        _read_kb("RUN_EXEC_OUTPUT_KB"),
-        _read_kb("VERIFICATION_EXEC_OUTPUT_KB"),
-        _read_kb("TOOLCHAIN_COMPILE_OUTPUT_KB"),
-    )
-    if output_kb <= 0:
+            output_limit_bytes = 0
+        try:
+            aux_limit_bytes = max(0, int(getattr(constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048))
+        except Exception:
+            aux_limit_bytes = 2048
+    payload_limit_bytes = max(output_limit_bytes, aux_limit_bytes)
+    if payload_limit_bytes <= 0:
         return max(_JUDGEHOST_FORM_PART_LIMIT_BYTES, UPLOAD_MAX_BYTES)
     return max(
         _JUDGEHOST_FORM_PART_LIMIT_BYTES,
         UPLOAD_MAX_BYTES,
-        int(output_kb * 1024) + _JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES,
+        int(payload_limit_bytes) + _JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES,
     )
 
 

@@ -11,7 +11,6 @@ from app.db import now_iso
 from app.impl.runtime.config import config
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.source import resolve_source
-from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text
 from app.service.verification.task_scheduler import (
     TaskExecutionResult,
     TaskPublishResult,
@@ -50,9 +49,6 @@ TASK_GENERATE_INPUT = "generate-input"
 TASK_MAIN_CORRECT = "main-correct"
 TASK_SOLUTION_RUN = "solution-run"
 
-_COMPILE_LOG_CHAR_LIMIT = 16384
-_ERROR_TEXT_CHAR_LIMIT = 4096
-_FEEDBACK_TEXT_CHAR_LIMIT = 4096
 _COMPILE_DIAGNOSTICS_LIMIT = 64
 
 
@@ -86,20 +82,6 @@ class TaskExecutionContext:
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
-
-
-@dataclass(frozen=True)
-class _TaskSummaryParts:
-    verdict: str
-    runtime_sec: float | None
-    cpu_sec: float | None
-    wall_sec: float | None
-    memory_kb: int | None
-    compile_log: str
-    diagnostics_json: str
-    error_text: str
-    feedback_text: str
-    output_ref: str
 
 
 def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
@@ -595,63 +577,6 @@ def _source_bytes_for_path(execution: TaskExecutionContext, source_path: str) ->
     return (source_file.name, source_file.read_bytes())
 
 
-def _verdict_from_summary(summary: dict[str, object], run_status: str) -> str:
-    tests = cast(list[dict[str, object]], summary.get("tests") or [])
-    if tests:
-        verdict = str(tests[-1].get("verdict") or "").upper()
-        if verdict:
-            return verdict
-    diagnostics = cast(list[dict[str, object]], summary.get("compile_diagnostics") or [])
-    if diagnostics:
-        return "CE"
-    return "AC" if run_status == Status.OK.value else "FL"
-
-
-def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: str) -> _TaskSummaryParts:
-    verdict = _verdict_from_summary(summary, run_status)
-    compile_log_source = str(summary.get("error") or error_text or "")
-    compile_log_meta = canonical_truncated_text(compile_log_source, limit=_COMPILE_LOG_CHAR_LIMIT)
-    diagnostics_meta = canonical_diagnostics(
-        cast(list[dict[str, object]] | list[object] | None, summary.get("compile_diagnostics") or []),
-        list_limit=_COMPILE_DIAGNOSTICS_LIMIT,
-        message_limit=_ERROR_TEXT_CHAR_LIMIT,
-    )
-    diagnostics_json = diagnostics_json_text(diagnostics_meta["rows"])
-    error_value = str(error_text or summary.get("error") or "")
-    error_text_meta = canonical_truncated_text(error_value, limit=_ERROR_TEXT_CHAR_LIMIT)
-    tests = cast(list[dict[str, object]], summary.get("tests") or [])
-    feedback_source = ""
-    output_ref = ""
-    runtime_sec: float | None = None
-    cpu_sec: float | None = None
-    wall_sec: float | None = None
-    memory_kb: int | None = None
-    if tests:
-        test_row = dict(tests[-1])
-        feedback_source = str(test_row.get("message") or "")
-        output_ref = str(test_row.get("output_ref") or "")
-        cpu_ms = int(test_row.get("time_user_ms") or test_row.get("time_ms") or 0)
-        wall_ms = int(test_row.get("time_wall_ms") or cpu_ms)
-        runtime_ms = int(test_row.get("time_ms") or cpu_ms)
-        memory_kb = int(test_row.get("memory_kb") or 0)
-        runtime_sec = float(runtime_ms) / 1000.0
-        cpu_sec = float(cpu_ms) / 1000.0
-        wall_sec = float(wall_ms) / 1000.0
-    feedback_meta = canonical_truncated_text(feedback_source, limit=_FEEDBACK_TEXT_CHAR_LIMIT)
-    return _TaskSummaryParts(
-        verdict=verdict,
-        runtime_sec=runtime_sec,
-        cpu_sec=cpu_sec,
-        wall_sec=wall_sec,
-        memory_kb=memory_kb,
-        compile_log=compile_log_meta["text"],
-        diagnostics_json=diagnostics_json,
-        error_text=error_text_meta["text"],
-        feedback_text=feedback_meta["text"],
-        output_ref=output_ref,
-    )
-
-
 def _empty_task_result(
     *,
     task_id: str,
@@ -662,7 +587,6 @@ def _empty_task_result(
     error_text: str,
     fail_flag_reason: str = "",
 ) -> TaskExecutionResult:
-    error_meta = canonical_truncated_text(error_text, limit=_ERROR_TEXT_CHAR_LIMIT)
     return TaskExecutionResult(
         task_id=task_id,
         status=status,
@@ -675,7 +599,7 @@ def _empty_task_result(
         memory_kb=None,
         compile_log="",
         diagnostics_json="[]",
-        error_text=error_meta["text"],
+        error_text=error_text,
         feedback_text="",
         output_ref="",
         fail_flag_reason=fail_flag_reason,

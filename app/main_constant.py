@@ -109,13 +109,12 @@ JUDGEHOST_MAX_BINARY_PAYLOAD_BYTES = 8388608
 TOOLCHAIN_COMPILE_TIMEOUT_SEC = 120
 TOOLCHAIN_COMPILE_MEMORY_MB = 2048
 TOOLCHAIN_COMPILE_PROCESS_LIMIT = 0
-TOOLCHAIN_COMPILE_OUTPUT_KB = 262144
+AUX_DISPLAY_TEXT_LIMIT_BYTES = 2048
 TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC = 600
 TOOLCHAIN_CACHE_MAX_BYTES = 2147483648
 TOOLCHAIN_CACHE_MAX_ENTRIES = 0
 VERIFICATION_EXEC_MEMORY_MB = 1024
 VERIFICATION_EXEC_PROCESS_LIMIT = 64
-VERIFICATION_EXEC_OUTPUT_KB = 65536
 RUN_EXEC_MEMORY_MB = 1024
 RUN_EXEC_PROCESS_LIMIT = 64
 RUN_EXEC_OUTPUT_KB = 65536
@@ -289,13 +288,12 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "TOOLCHAIN_COMPILE_TIMEOUT_SEC": {"type": "int", "min": 5, "max": 1800, "description": "Compilation timeout in seconds.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_COMPILE_MEMORY_MB": {"type": "int", "min": 64, "max": 262144, "description": "Compilation memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_COMPILE_PROCESS_LIMIT": {"type": "int", "min": 0, "max": 4096, "description": "Compilation process count limit (0 disables RLIMIT_NPROC).", "restart_required": False, "impact": "runtime"},
-    "TOOLCHAIN_COMPILE_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Compilation output cap in KB.", "restart_required": False, "impact": "runtime"},
+    "AUX_DISPLAY_TEXT_LIMIT_BYTES": {"type": "int", "min": 256, "max": 1048576, "description": "Unified byte cap for front-end-facing auxiliary text such as compile, error, feedback, and diagnostic messages.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC": {"type": "int", "min": 0, "max": 86400, "description": "Compile cache cleanup interval in seconds.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_MAX_BYTES": {"type": "int", "min": 0, "max": 1125899906842624, "description": "Compile cache size cap in bytes.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_MAX_ENTRIES": {"type": "int", "min": 0, "max": 10000000, "description": "Compile cache entry cap (0 disables entry-count eviction).", "restart_required": False, "impact": "runtime"},
     "VERIFICATION_EXEC_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "Verification-stage sandbox memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "VERIFICATION_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Verification-stage sandbox process limit.", "restart_required": False, "impact": "runtime"},
-    "VERIFICATION_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Verification-stage sandbox output cap in KB.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "Run-time sandbox memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Run-time sandbox process limit.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Run-time sandbox output cap in KB.", "restart_required": False, "impact": "runtime"},
@@ -332,12 +330,12 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     PASSWORD_MIN_LEN,
     PASSWORD_MAX_LEN,
     TOOLCHAIN_COMPILE_PROCESS_LIMIT,
+    AUX_DISPLAY_TEXT_LIMIT_BYTES,
     TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC,
     TOOLCHAIN_CACHE_MAX_BYTES,
     TOOLCHAIN_CACHE_MAX_ENTRIES,
     VERIFICATION_EXEC_MEMORY_MB,
     VERIFICATION_EXEC_PROCESS_LIMIT,
-    VERIFICATION_EXEC_OUTPUT_KB,
     PREVIEW_TEX_TIMEOUT_SEC,
     PREVIEW_TEX_MEMORY_MB,
     PREVIEW_TEX_PROCESS_LIMIT,

@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import re
 
+from app.main_constant import AUX_DISPLAY_TEXT_LIMIT_BYTES as DEFAULT_AUX_DISPLAY_TEXT_LIMIT_BYTES
+
 _LOG_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _LOG_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 _LOG_BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
     r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
 )
-
-
-def compact_error_text(raw: str | None, *, max_chars: int = 240) -> str:
-    text = " ".join(str(raw or "").split())
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "..."
+_TRUNCATION_MARKER = "..."
 
 
 def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
@@ -43,8 +39,26 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] |
     return normalized
 
 
-def preserve_error_text(raw: str | None, *, max_chars: int = 1600, max_lines: int = 20) -> str:
-    text = sanitize_log_text_for_ui(str(raw or ""))
+def aux_display_text_limit_bytes(constants: object | None = None) -> int:
+    default = max(1, int(DEFAULT_AUX_DISPLAY_TEXT_LIMIT_BYTES))
+    source = constants
+    if source is None:
+        try:
+            from app.impl.runtime.config import config
+
+            source = getattr(config, "constants", None)
+        except Exception:
+            source = None
+    if source is None:
+        return default
+    try:
+        return max(1, int(getattr(source, "AUX_DISPLAY_TEXT_LIMIT_BYTES", default) or default))
+    except Exception:
+        return default
+
+
+def normalize_display_text(raw: str | None, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
+    text = sanitize_log_text_for_ui(str(raw or ""), path_prefixes=path_prefixes)
     if not text:
         return ""
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -55,30 +69,52 @@ def preserve_error_text(raw: str | None, *, max_chars: int = 1600, max_lines: in
         normalized_lines.pop()
     if not normalized_lines:
         return ""
-    folded: list[str] = []
-    prev_blank = False
-    for line in normalized_lines:
-        if line.strip():
-            folded.append(line)
-            prev_blank = False
-            continue
-        if prev_blank:
-            continue
-        folded.append("")
-        prev_blank = True
-    truncated = False
-    line_cap = max(1, int(max_lines))
-    if len(folded) > line_cap:
-        folded = folded[:line_cap]
-        truncated = True
-    result = "\n".join(folded).strip()
-    char_cap = max(1, int(max_chars))
-    if len(result) > char_cap:
-        result = result[:char_cap].rstrip()
-        truncated = True
-    if truncated:
-        if result:
-            result = f"{result}\n..."
-        else:
-            result = "..."
-    return result
+    return "\n".join(normalized_lines)
+
+
+def truncate_utf8_text_bytes(
+    text: str,
+    *,
+    max_bytes: int,
+    marker: str = _TRUNCATION_MARKER,
+) -> tuple[str, bool]:
+    cap = max(1, int(max_bytes))
+    value = str(text or "")
+    raw = value.encode("utf-8")
+    if len(raw) <= cap:
+        return (value, False)
+    marker_raw = str(marker or "").encode("utf-8")
+    if len(marker_raw) >= cap:
+        return (marker_raw[:cap].decode("utf-8", errors="ignore"), True)
+    keep = max(0, cap - len(marker_raw))
+    prefix = raw[:keep].decode("utf-8", errors="ignore").rstrip()
+    if not prefix:
+        return (marker_raw[:cap].decode("utf-8", errors="ignore"), True)
+    return (prefix + marker, True)
+
+
+def truncate_display_text(
+    raw: str | None,
+    *,
+    limit_bytes: int | None = None,
+    path_prefixes: list[tuple[str, str]] | None = None,
+) -> tuple[str, bool]:
+    normalized = normalize_display_text(raw, path_prefixes=path_prefixes)
+    if not normalized:
+        return ("", False)
+    limit = aux_display_text_limit_bytes() if limit_bytes is None else max(1, int(limit_bytes))
+    return truncate_utf8_text_bytes(normalized, max_bytes=limit)
+
+
+def bounded_display_text(
+    raw: str | None,
+    *,
+    limit_bytes: int | None = None,
+    path_prefixes: list[tuple[str, str]] | None = None,
+) -> str:
+    text, _truncated = truncate_display_text(
+        raw,
+        limit_bytes=limit_bytes,
+        path_prefixes=path_prefixes,
+    )
+    return text
