@@ -1,4 +1,4 @@
-﻿# Database Schema and Data Patterns
+# Database Schema and Data Patterns
 
 ## Overview
 

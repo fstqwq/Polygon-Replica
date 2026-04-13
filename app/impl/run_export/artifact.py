@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 from app.impl.auth.session import require_session_user
 
 from pathlib import Path

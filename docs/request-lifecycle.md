@@ -1,4 +1,4 @@
-﻿# Request Lifecycle and Auth
+# Request Lifecycle and Auth
 
 ## Entry Point
 

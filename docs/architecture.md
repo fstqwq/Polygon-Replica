@@ -1,4 +1,4 @@
-﻿# System Architecture
+# System Architecture
 
 Polygon-Replica is a self-hosted problem authoring system.
 

@@ -1,4 +1,4 @@
-﻿# Problem Editing and Workspace Model
+# Problem Editing and Workspace Model
 
 ## Problem Lifecycle
 

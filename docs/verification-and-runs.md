@@ -1,4 +1,4 @@
-﻿# Verification, Runs, and Judgehost Integration
+# Verification, Runs, and Judgehost Integration
 
 ## Two User-Facing Execution Modes
 

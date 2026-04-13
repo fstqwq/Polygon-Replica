@@ -1,4 +1,4 @@
-﻿# Refactoring Plan
+# Refactoring Plan
 
 This file is a proposal document. It does not describe the current implementation.
 

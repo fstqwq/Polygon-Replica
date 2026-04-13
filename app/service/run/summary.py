@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 def truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
     cap = max(1, int(max_chars))
