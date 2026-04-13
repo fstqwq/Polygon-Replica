@@ -450,8 +450,16 @@ class AgentService:
 
     def list_user_sessions(self, *, user_id: int) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
+        now_dt = datetime.now(timezone.utc)
         for session in self._store.list_user_sessions(int(user_id)):
-            tokens = self._store.list_session_tokens(session["id"])
+            tokens = []
+            for token in self._store.list_session_tokens(session["id"]):
+                if str(token.get("revoked_at") or ""):
+                    continue
+                expires_at = self._parse_iso_utc(str(token.get("expires_at") or ""))
+                if expires_at is not None and expires_at <= now_dt:
+                    continue
+                tokens.append(token)
             items.append(
                 {
                     "id": session["id"],
@@ -461,7 +469,6 @@ class AgentService:
                     "init_ts": session["init_ts"],
                     "created_at": session["created_at"],
                     "last_seen_at": session["last_seen_at"],
-                    "revoked_at": session["revoked_at"],
                     "tokens": list(tokens),
                 }
             )
@@ -494,16 +501,20 @@ class AgentService:
         row = self._store.session_by_id(session_id)
         if row is None or int(row["user_id"]) != int(actor_user_id):
             raise LookupError("agent session not found")
-        revoked_at = now_iso()
-        updated = self._store.revoke_session(session_id=str(session_id or ""), user_id=int(actor_user_id), revoked_at=revoked_at)
-        if updated <= 0:
+        deleted = self._store.delete_session_state(session_id=str(session_id or ""), user_id=int(actor_user_id))
+        if int(deleted["session_count"]) <= 0:
             raise LookupError("agent session not found")
-        revoked_tokens = self._store.revoke_tokens_for_session(session_id=str(session_id or ""), user_id=int(actor_user_id), revoked_at=revoked_at)
         self.workspace_service.record_audit_event(
             actor_user_id=int(actor_user_id),
             problem_id=None,
             action="agent.session.disconnect",
-            details={"agent_session_id": str(session_id or ""), "revoked_token_count": revoked_tokens},
+            details={
+                "agent_session_id": str(session_id or ""),
+                "agent_name": str(row["agent_name"] or ""),
+                "desktop_id": str(row["desktop_id"] or ""),
+                "deleted_token_count": int(deleted["token_count"]),
+                "deleted_access_request_count": int(deleted["access_request_count"]),
+            },
         )
 
     def token_identity(self, raw_token: str) -> AgentTokenIdentity | None:

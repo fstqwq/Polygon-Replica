@@ -1,78 +1,97 @@
 {% extends "root_base.html" %}
 {% block content %}
-<h1 class="page-title">Connected Agents</h1>
-{% include "_flash_message.html" %}
-<p><a href="/settings">Back to Settings</a></p>
-<section class="info-card">
-  <div class="form-row form-row-actions" style="justify-content: space-between; align-items: center;">
+<div class="agent-page">
+  <div class="agent-page-head">
     <div>
-      <strong>Connect to Agent</strong>
-      <p class="muted">Create a one-time registration URL and pass it to your skill.</p>
+      <h1 class="page-title">Connected Agents</h1>
     </div>
-    <button class="btn" type="button" data-agent-connect-button="1">Connect to Agent</button>
+    <p><a href="/settings">Back to Settings</a></p>
   </div>
-  <div data-agent-connect-result="1" hidden>
-    <label for="agent-register-url">Registration URL</label>
-    <div class="form-input-with-action">
-      <input id="agent-register-url" type="text" readonly spellcheck="false" data-agent-register-url="1" />
-      <button class="btn" type="button" data-agent-copy-url="1">Copy</button>
-    </div>
-    <p class="muted" data-agent-register-meta="1"></p>
-  </div>
-</section>
 
-{% if sessions %}
-  {% for session in sessions %}
-  <section class="info-card">
-    <div class="form-row form-row-actions" style="justify-content: space-between; align-items: center;">
+  {% include "_flash_message.html" %}
+
+  <section class="info-card agent-connect-card">
+    <div class="agent-connect-head">
       <div>
-        <h2>{{ session.agent_name }}</h2>
-        <p class="muted">Desktop: <code>{{ session.desktop_id }}</code> | Connected: {{ session.created_at | local_time }} | Last seen: {{ session.last_seen_at | local_time }}</p>
+        <h2 class="agent-card-title">Connect to Agent</h2>
+        <p class="muted">Create a one-time registration URL and pass it to your agent implementation.</p>
       </div>
-      <form method="post" action="/agent/disconnect/{{ session.id }}" class="inline-form">
-        <button class="btn" type="submit">Disconnect Agent</button>
-      </form>
+      <button class="btn" type="button" data-agent-connect-button="1">Connect to Agent</button>
     </div>
-    {% if session.revoked_at %}
-    <p class="danger">Disconnected at {{ session.revoked_at | local_time }}</p>
-    {% endif %}
-    <p class="muted">Identity: <code>{{ session.identity_hash }}</code></p>
-    <h3>Authorized Problems</h3>
-    {% if session.tokens %}
-    <table class="table-base">
-      <thead>
-        <tr>
-          <th>Problem</th>
-          <th>Scope</th>
-          <th>Expires</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for token in session.tokens %}
-        <tr>
-          <td><code>{{ token.problem_slug }}</code></td>
-          <td><code>{{ token.scope }}</code></td>
-          <td>{% if token.revoked_at %}<span class="danger">revoked</span>{% elif token.expires_at %}{{ token.expires_at | local_time }}{% else %}<span class="muted">forever</span>{% endif %}</td>
-          <td>
-            {% if not token.revoked_at %}
-            <form method="post" action="/agent/revoke/{{ token.id }}" class="inline-form">
-              <button class="btn" type="submit">Revoke</button>
-            </form>
-            {% else %}
-            <span class="muted">-</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="muted">No authorized problems.</p>
-    {% endif %}
+    <div class="agent-connect-result" data-agent-connect-result="1" hidden>
+      <label for="agent-register-url">Registration URL</label>
+      <div class="form-input-with-action">
+        <input id="agent-register-url" type="text" readonly spellcheck="false" data-agent-register-url="1" />
+        <button class="btn" type="button" data-agent-copy-url="1">Copy</button>
+      </div>
+      <p class="muted agent-connect-meta" data-agent-register-meta="1"></p>
+    </div>
   </section>
-  {% endfor %}
-{% else %}
-  <p class="muted">No connected agents.</p>
-{% endif %}
+
+  {% if sessions %}
+  <div class="agent-session-list">
+    {% for session in sessions %}
+    <section class="info-card agent-session-card">
+      <div class="agent-session-head">
+        <div>
+          <h2 class="agent-card-title">{{ session.agent_name }}</h2>
+          <p class="agent-session-desktop"><code>{{ session.desktop_id }}</code></p>
+        </div>
+        <form method="post" action="/agent/disconnect/{{ session.id }}" class="inline-form">
+          <button class="btn danger-link" type="submit">Disconnect Agent</button>
+        </form>
+      </div>
+
+      <div class="agent-session-meta-grid">
+        <div class="agent-session-meta-item">
+          <div class="agent-session-meta-label">Connected</div>
+          <div class="agent-session-meta-value">{{ session.created_at | local_time }}</div>
+        </div>
+        <div class="agent-session-meta-item">
+          <div class="agent-session-meta-label">Last seen</div>
+          <div class="agent-session-meta-value">{{ session.last_seen_at | local_time }}</div>
+        </div>
+      </div>
+      <div class="agent-session-section">
+        <div class="agent-session-section-head">
+          <h3>Authorized Problems</h3>
+        </div>
+        {% if session.tokens %}
+        <table class="table-base agent-session-table">
+          <thead>
+            <tr>
+              <th>Problem</th>
+              <th>Scope</th>
+              <th>Expires</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for token in session.tokens %}
+            <tr>
+              <td><code>{{ token.problem_slug }}</code></td>
+              <td><code>{{ token.scope }}</code></td>
+              <td>{% if token.expires_at %}{{ token.expires_at | local_time }}{% else %}<span class="muted">forever</span>{% endif %}</td>
+              <td>
+                <form method="post" action="/agent/revoke/{{ token.id }}" class="inline-form">
+                  <a href="#" class="linkish danger-link" data-submit-form="1">Revoke</a>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="muted">No authorized problems.</p>
+        {% endif %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+  {% else %}
+  <section class="info-card agent-empty-card">
+    <p class="muted">No connected agents.</p>
+  </section>
+  {% endif %}
+</div>
 {% endblock %}

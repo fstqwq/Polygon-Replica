@@ -70,7 +70,12 @@ class AgentSessionListRow(TypedDict):
     init_ts: str
     created_at: str
     last_seen_at: str
-    revoked_at: str
+
+
+class AgentSessionDeleteResult(TypedDict):
+    access_request_count: int
+    token_count: int
+    session_count: int
 
 
 class AgentSessionTokenListRow(TypedDict):
@@ -403,33 +408,58 @@ class AgentStore:
 
         return int(self.db.write_transaction(_tx))
 
-    def revoke_session(self, *, session_id: str, user_id: int, revoked_at: str) -> int:
-        def _tx(conn: sqlite3.Connection) -> int:
-            cursor = conn.execute(
-                "UPDATE agent_sessions SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL",
-                [revoked_at, str(session_id or ""), int(user_id)],
+    def delete_session_state(self, *, session_id: str, user_id: int) -> AgentSessionDeleteResult:
+        def _tx(conn: sqlite3.Connection) -> AgentSessionDeleteResult:
+            owned = conn.execute(
+                "SELECT 1 FROM agent_sessions WHERE id=? AND user_id=? LIMIT 1",
+                [str(session_id or ""), int(user_id)],
+            ).fetchone()
+            if owned is None:
+                return {"access_request_count": 0, "token_count": 0, "session_count": 0}
+            access_request_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM agent_access_requests WHERE agent_session_id=?",
+                    [str(session_id or "")],
+                ).fetchone()[0]
+                or 0
             )
-            return int(cursor.rowcount or 0)
-
-        return int(self.db.write_transaction(_tx))
-
-    def revoke_tokens_for_session(self, *, session_id: str, user_id: int, revoked_at: str) -> int:
-        def _tx(conn: sqlite3.Connection) -> int:
-            cursor = conn.execute(
-                "UPDATE agent_tokens SET revoked_at=? WHERE agent_session_id=? AND user_id=? AND revoked_at IS NULL",
-                [revoked_at, str(session_id or ""), int(user_id)],
+            token_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM agent_tokens WHERE agent_session_id=? AND user_id=?",
+                    [str(session_id or ""), int(user_id)],
+                ).fetchone()[0]
+                or 0
             )
-            return int(cursor.rowcount or 0)
+            conn.execute(
+                "DELETE FROM agent_access_requests WHERE agent_session_id=?",
+                [str(session_id or "")],
+            )
+            conn.execute(
+                "DELETE FROM agent_tokens WHERE agent_session_id=? AND user_id=?",
+                [str(session_id or ""), int(user_id)],
+            )
+            session_count = int(
+                conn.execute(
+                    "DELETE FROM agent_sessions WHERE id=? AND user_id=?",
+                    [str(session_id or ""), int(user_id)],
+                ).rowcount
+                or 0
+            )
+            return {
+                "access_request_count": access_request_count,
+                "token_count": token_count,
+                "session_count": session_count,
+            }
 
-        return int(self.db.write_transaction(_tx))
+        return self.db.write_transaction(_tx)
 
     def list_user_sessions(self, user_id: int) -> list[AgentSessionListRow]:
         rows = self.db.fetch_all(
             """
-            SELECT id,user_id,identity_hash,agent_name,desktop_id,init_ts,created_at,last_seen_at,revoked_at
+            SELECT id,user_id,identity_hash,agent_name,desktop_id,init_ts,created_at,last_seen_at
             FROM agent_sessions
             WHERE user_id=?
-            ORDER BY revoked_at IS NOT NULL ASC, last_seen_at DESC, created_at DESC
+            ORDER BY last_seen_at DESC, created_at DESC
             """,
             [int(user_id)],
         )
@@ -445,7 +475,6 @@ class AgentStore:
                     "init_ts": str(row["init_ts"] or ""),
                     "created_at": str(row["created_at"] or ""),
                     "last_seen_at": str(row["last_seen_at"] or ""),
-                    "revoked_at": str(row["revoked_at"] or ""),
                 }
             )
         return result

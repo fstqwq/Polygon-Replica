@@ -123,11 +123,68 @@
     if (!button || !result || !urlInput || !meta || !copyButton) return;
 
     var baseLabel = String(button.textContent || "Connect to Agent").trim() || "Connect to Agent";
+    var copyBaseLabel = String(copyButton.textContent || "Copy").trim() || "Copy";
+    var copyResetTimer = 0;
+
+    function padTimePart(value) {
+      return String(Math.max(0, Number(value) || 0)).padStart(2, "0");
+    }
+
+    function formatLocalDateTime(raw) {
+      var text = String(raw || "").trim();
+      if (!text) return "-";
+      var value = new Date(text);
+      if (!Number.isFinite(value.getTime())) return text;
+      return (
+        String(value.getFullYear()) +
+        "-" +
+        padTimePart(value.getMonth() + 1) +
+        "-" +
+        padTimePart(value.getDate()) +
+        " " +
+        padTimePart(value.getHours()) +
+        ":" +
+        padTimePart(value.getMinutes()) +
+        ":" +
+        padTimePart(value.getSeconds())
+      );
+    }
+
+    function formatRelativeExpiry(rawSeconds) {
+      var seconds = Math.max(0, Math.ceil(Number(rawSeconds) || 0));
+      if (!seconds) return "";
+      if (seconds < 90) return "in 1 minute";
+      if (seconds < 3600) {
+        var minutes = Math.ceil(seconds / 60);
+        return "in " + String(minutes) + (minutes === 1 ? " minute" : " minutes");
+      }
+      if (seconds < 86400) {
+        var hours = Math.ceil(seconds / 3600);
+        return "in " + String(hours) + (hours === 1 ? " hour" : " hours");
+      }
+      var days = Math.ceil(seconds / 86400);
+      return "in " + String(days) + (days === 1 ? " day" : " days");
+    }
+
+    function setCopyState(text) {
+      if (copyResetTimer) {
+        window.clearTimeout(copyResetTimer);
+        copyResetTimer = 0;
+      }
+      copyButton.textContent = String(text || copyBaseLabel);
+      if (text && text !== copyBaseLabel) {
+        copyResetTimer = window.setTimeout(function () {
+          copyResetTimer = 0;
+          copyButton.textContent = copyBaseLabel;
+        }, 1200);
+      }
+    }
 
     function showResult(text, url) {
       urlInput.value = String(url || "");
       meta.textContent = String(text || "").trim();
       result.hidden = false;
+      setCopyState(copyBaseLabel);
     }
 
     async function copyToClipboard(text) {
@@ -166,14 +223,13 @@
           showResult((payload && payload.error) || "request failed", "");
           return;
         }
-        showResult(
-          "Expires at " +
-            String((payload && payload.expires_at) || "-") +
-            " (" +
-            String((payload && payload.expires_in) || "-") +
-            "s)",
-          String((payload && payload.register_url) || "")
-        );
+        var expiresAt = formatLocalDateTime(payload && payload.expires_at);
+        var relative = formatRelativeExpiry(payload && payload.expires_in);
+        var metaText = "Expires at " + expiresAt;
+        if (relative) {
+          metaText += " (" + relative + ")";
+        }
+        showResult(metaText, String((payload && payload.register_url) || ""));
       } catch (_err) {
         showResult("request failed: network error", "");
       } finally {
@@ -188,9 +244,10 @@
         await copyToClipboard(text);
       } catch (_err) {
         showResult("copy failed; select the URL manually", text);
+        setCopyState(copyBaseLabel);
         return;
       }
-      showResult(String(meta.textContent || "").trim() || "Registration URL copied.", text);
+      setCopyState("Copied");
     });
   }
 

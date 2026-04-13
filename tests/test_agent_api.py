@@ -139,6 +139,7 @@ class TestAgentAPI(SmokeBase):
             ok = client.get("/agent/sessions", headers={"cookie": auth_cookie}, follow_redirects=False)
             self.assertEqual(ok.status_code, 200)
             self.assertIn("Connected Agents", ok.text)
+            self.assertNotIn("Disconnected at", ok.text)
 
     def test_agent_register_code_is_one_time_and_reuses_session_identity(self) -> None:
         username = self.random_id("agent-reg")
@@ -312,11 +313,40 @@ class TestAgentAPI(SmokeBase):
                 follow_redirects=False,
             )
             self.assertEqual(disconnect.status_code, 303)
+            self.assertIsNone(config.agent_service._store.session_by_id(session_id))
+            token_count_row = config.agent_service._store.db.fetch_one(
+                "SELECT COUNT(*) AS n FROM agent_tokens WHERE agent_session_id=?",
+                [session_id],
+            )
+            self.assertEqual(int(token_count_row["n"]), 0)
+            request_count_row = config.agent_service._store.db.fetch_one(
+                "SELECT COUNT(*) AS n FROM agent_access_requests WHERE agent_session_id=?",
+                [session_id],
+            )
+            self.assertEqual(int(request_count_row["n"]), 0)
             disconnected_status = client.get(
                 "/agent/v1/auth/status",
                 params={"agent_session_id": session_id, "identity_hash": identity_hash},
             )
             self.assertEqual(disconnected_status.status_code, 401)
+            disconnected_request = client.post(
+                "/agent/v1/auth/request-access",
+                json={
+                    "agent_session_id": session_id,
+                    "identity_hash": identity_hash,
+                    "problem": self.problem,
+                },
+            )
+            self.assertEqual(disconnected_request.status_code, 401)
+            disconnected_poll = client.get(
+                f"/agent/v1/auth/poll/{request_id}",
+                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+            )
+            self.assertEqual(disconnected_poll.status_code, 401)
+            sessions_page = client.get("/agent/sessions", headers={"cookie": auth_cookie}, follow_redirects=False)
+            self.assertEqual(sessions_page.status_code, 200)
+            self.assertIn("No connected agents.", sessions_page.text)
+            self.assertNotIn("Disconnected at", sessions_page.text)
 
     def test_agent_token_revocation_and_disconnect_invalidate_access(self) -> None:
         username = self.random_id("agent-revoke")
@@ -367,6 +397,7 @@ class TestAgentAPI(SmokeBase):
                 follow_redirects=False,
             )
             self.assertEqual(disconnect.status_code, 303)
+            self.assertIsNone(config.agent_service._store.session_by_id(session_id))
 
             after_disconnect = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token2))
             self.assertEqual(after_disconnect.status_code, 401)
