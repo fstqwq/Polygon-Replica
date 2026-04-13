@@ -511,7 +511,7 @@ class TestPolygonPackageImport(SmokeBase):
         render_statement_main(ws / "statement", problem_title=str(result.get("title") or ""), language="english")
         with (
             patch.object(config.preview_service, "_sample_verification_rows_from_spec", return_value=[]),
-            patch.object(config.preview_service.sandbox, "run", side_effect=FileNotFoundError("pdflatex missing")),
+            patch.object(config.tex_compile_service.sandbox, "run", side_effect=FileNotFoundError("pdflatex missing")),
         ):
             preview_id = config.preview_service.compile_preview(problem, user, language="english")
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])

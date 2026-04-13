@@ -484,7 +484,7 @@ class TestUIContests(UIBaseSuite):
             return {"sample_count": 1, "copied": 1, "verification_id": "ver-sample-sync"}
 
         with (
-            patch.object(config.preview_service.sandbox, "run", side_effect=_fake_sandbox_run),
+            patch.object(config.tex_compile_service.sandbox, "run", side_effect=_fake_sandbox_run),
             patch.object(config.preview_service, "sync_sample_payloads_for_snapshot", side_effect=_fake_sync_sample_payloads),
             patch.object(config.verification_service, "run_verification", side_effect=_fake_run_build),
             patch.object(config.export_service, "create_export", side_effect=_fake_create_export),

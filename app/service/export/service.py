@@ -14,9 +14,9 @@ from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
+from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.platform.git_process import run_git
-from app.service.platform.latex_process import detect_latex_engine, run_latex
 from app.service.platform.workspace_path import is_hidden_workspace_path
 
 
@@ -33,13 +33,12 @@ class ExportService:
         "run_time_error",
         "rejected",
     )
-    STATEMENT_PDF_TIMEOUT_SEC = 60
-
-    def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path):
+    def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path, tex_compile_service: TexCompileService):
         self.db = db
         self._store = ExportStore(db)
         self.artifacts_root = artifacts_root
         self.workspace_root = workspace_root
+        self.tex_compile_service = tex_compile_service
 
     def latest_workspace_source_commit(self, problem_id: int, workspace_id: int) -> str:
         return self._store.latest_workspace_source_commit(problem_id, workspace_id)
@@ -538,12 +537,11 @@ class ExportService:
                 rendered = render_statement_main(snapshot / "statement", problem_title=problem_name, language=language)
             except Exception:
                 continue
-            workdir = rendered.parent
-            engine = detect_latex_engine(rendered)
-            proc = run_latex(rendered.name, cwd=workdir, timeout_sec=self.STATEMENT_PDF_TIMEOUT_SEC, engine=engine)
+            compile_result = self.tex_compile_service.compile_pdf(rendered)
+            proc = compile_result.proc
             if proc.returncode != 0:
                 continue
-            pdf_path = rendered.with_suffix(".pdf")
+            pdf_path = compile_result.pdf_path
             if not pdf_path.exists() or not pdf_path.is_file():
                 continue
             suffix = self._statement_export_suffix(language)

@@ -20,6 +20,7 @@ from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.judgehost.api import Judgehost
 from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
+from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.preview import PreviewService
 from app.service.platform.system_config import SystemConfigService
 from app.service.disk.auth_store import AuthStore
@@ -45,7 +46,8 @@ class RuntimeConfig:
     git_service: GitService = field(init=False)
     fs_manager: FsManager = field(init=False)
     artifact_service: ArtifactService = field(init=False)
-    preview_sandbox_backend: SandboxBackend = field(init=False)
+    tex_sandbox_backend: SandboxBackend = field(init=False)
+    tex_compile_service: TexCompileService = field(init=False)
     verification_service: VerificationService = field(init=False)
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
@@ -92,7 +94,7 @@ class RuntimeConfig:
         self.auth_service.apply_runtime_values(self.constants)
         self.agent_service.apply_runtime_values(self.constants)
         self.verification_service.apply_runtime_values(self.constants)
-        self.preview_service.apply_runtime_values(self.constants)
+        self.tex_compile_service.apply_runtime_values(self.constants)
         self.judgehost_task_service.apply_runtime_values(self.constants)
         self.password_form_csrf_secret = self._resolve_password_form_csrf_secret()
         return runtime_overrides
@@ -118,7 +120,11 @@ class RuntimeConfig:
         self.git_service = GitService()
         self.fs_manager = FsManager(self.settings.cache_root, self.settings.artifacts_root)
         self.artifact_service = ArtifactService(self.settings.artifacts_root)
-        self.preview_sandbox_backend = TexSandboxBackend()
+        self.tex_sandbox_backend = TexSandboxBackend()
+        self.tex_compile_service = TexCompileService(
+            sandbox_backend=self.tex_sandbox_backend,
+            constants=self.constants,
+        )
         self.judgehost_task_service = Judgehost(
             self.db,
             self.workspace_service,
@@ -139,12 +145,16 @@ class RuntimeConfig:
             self.db,
             self.workspace_service,
             self.artifact_service,
+            self.tex_compile_service,
             verification_service=self.verification_service,
-            sandbox_backend=self.preview_sandbox_backend,
-            constants=self.constants,
             async_task_cache_service=self.async_task_cache_service,
         )
-        self.export_service = ExportService(self.db, self.settings.artifacts_root, self.settings.workspace_root)
+        self.export_service = ExportService(
+            self.db,
+            self.settings.artifacts_root,
+            self.settings.workspace_root,
+            self.tex_compile_service,
+        )
         durable_log_raw = str(self.constants.WORKER_QUEUE_DURABLE_LOG or "").strip()
         durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"
         if durable_log_raw:

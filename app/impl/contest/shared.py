@@ -16,7 +16,7 @@ from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_verification import latest_workspace_signature_verification
 from app.impl.workspace.access import workspace_access_context
 from app.impl.workspace.revision import workspace_revision_info
-from app.service.sandbox.base import ExecSpec, ExecResult
+from app.service.sandbox.base import ExecResult
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.platform.git_process import run_git
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
@@ -201,17 +201,11 @@ def _run_contest_tex_command(
     merged_env = dict(os.environ)
     if env is not None:
         merged_env.update(env)
-    proc = config.preview_service.sandbox.run(
-        ExecSpec(
-            command=command,
-            cwd=cwd,
-            extra_mounts=extra_mounts,
-            env=merged_env,
-            timeout_sec=config.preview_service.tex_timeout_sec,
-            output_kb=config.preview_service.tex_output_kb,
-            memory_mb=config.preview_service.tex_memory_mb,
-            process_limit=config.preview_service.tex_process_limit,
-        )
+    proc = config.tex_compile_service.run(
+        command=command,
+        cwd=cwd,
+        extra_mounts=extra_mounts,
+        env=merged_env,
     )
     _append_contest_job_log(log_path, title=title, result=proc)
     return proc

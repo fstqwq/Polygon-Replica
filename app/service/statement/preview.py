@@ -7,15 +7,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 from app.db import DB
-from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.artifact import ArtifactService
 from app.service.disk.preview_store import PreviewArtifactRow, PreviewRow, PreviewStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.hashing import sha256_hex_json
-from app.service.sandbox.base import ExecSpec, SandboxBackend
-from app.service.sandbox.tex_backend import TexSandboxBackend
-from app.service.platform.latex_process import detect_latex_engine
+from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
@@ -59,9 +56,8 @@ class PreviewService:
         db: DB,
         workspace_service: WorkspaceService,
         artifacts: ArtifactService,
+        pdf_compiler: TexCompileService,
         verification_service: VerificationService | None = None,
-        sandbox_backend: SandboxBackend | None = None,
-        constants: RuntimeValues | None = None,
         async_task_cache_service: AsyncTaskCacheService | None = None,
     ):
         self.db = db
@@ -75,13 +71,7 @@ class PreviewService:
             self.workspace_service.settings.cache_root,
             self.workspace_service.settings.artifacts_root,
         )
-        self.sandbox = sandbox_backend or TexSandboxBackend()
-        self.tex_timeout_sec = 120
-        self.tex_memory_mb = 1024
-        self.tex_process_limit = 64
-        self.tex_output_kb = 131072
-        self.tex_passes = 2
-        self.apply_runtime_values(constants or build_runtime_values())
+        self.pdf_compiler = pdf_compiler
 
     def list_workspace_previews(self, problem_id: int, workspace_id: int) -> list[PreviewRow]:
         return self._store.list_workspace_previews(problem_id, workspace_id)
@@ -222,45 +212,6 @@ class PreviewService:
 
     def sync_sample_payloads_for_snapshot(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
         return self._copy_sample_payloads_from_verification(problem, username, snapshot)
-
-    def _coerce_int(self, raw: object, default: int, min_value: int, max_value: int) -> int:
-        try:
-            value = int(raw)
-        except Exception:
-            return default
-        return max(min_value, min(max_value, value))
-
-    def apply_runtime_values(self, values: RuntimeValues) -> None:
-        self.tex_timeout_sec = self._coerce_int(
-            values.get("PREVIEW_TEX_TIMEOUT_SEC", 120),
-            default=120,
-            min_value=5,
-            max_value=1800,
-        )
-        self.tex_memory_mb = self._coerce_int(
-            values.get("PREVIEW_TEX_MEMORY_MB", 1024),
-            default=1024,
-            min_value=16,
-            max_value=262144,
-        )
-        self.tex_process_limit = self._coerce_int(
-            values.get("PREVIEW_TEX_PROCESS_LIMIT", 64),
-            default=64,
-            min_value=1,
-            max_value=4096,
-        )
-        self.tex_output_kb = self._coerce_int(
-            values.get("PREVIEW_TEX_OUTPUT_KB", 131072),
-            default=131072,
-            min_value=64,
-            max_value=1048576,
-        )
-        self.tex_passes = self._coerce_int(
-            values.get("PREVIEW_TEX_PASSES", 2),
-            default=2,
-            min_value=1,
-            max_value=4,
-        )
 
     def _latex_compile_error_detail(self, output_text: str, returncode: int | None) -> str:
         text = str(output_text or "")
@@ -679,52 +630,15 @@ class PreviewService:
                     sample_verification_id = sample_verification_id_text if sample_verification_id_text else None
                 summary["sample_sync"] = sample_sync
             tex = render_statement_main(snapshot / "statement", problem_title=problem_title, language=safe_language)
-            engine = detect_latex_engine(tex)
 
             try:
-                final_proc = None
-                final_log_text = ""
-                for _ in range(max(1, int(self.tex_passes))):
-                    proc = self.sandbox.run(
-                        ExecSpec(
-                            command=[
-                                engine,
-                                "-interaction=nonstopmode",
-                                "-halt-on-error",
-                                str(tex.name),
-                            ],
-                            cwd=tex.parent,
-                            timeout_sec=self.tex_timeout_sec,
-                            output_kb=self.tex_output_kb,
-                            memory_mb=self.tex_memory_mb,
-                            process_limit=self.tex_process_limit,
-                        )
-                    )
-                    final_proc = proc
-                    output_text = (proc.stdout or "") + "\n" + (proc.stderr or "")
-                    log_text = output_text
-                    generated_log = tex.parent / f"{tex.stem}.log"
-                    if generated_log.exists():
-                        try:
-                            log_text = generated_log.read_text(encoding="utf-8", errors="replace")
-                        except Exception:
-                            log_text = output_text
-                    final_log_text = log_text
-                    if proc.timed_out or int(proc.returncode or 0) != 0:
-                        break
+                compile_result = self.pdf_compiler.compile_pdf(tex)
+                final_proc = compile_result.proc
+                final_log_text = compile_result.log_text
                 log.write_text(final_log_text, encoding="utf-8")
-                generated = tex.parent / f"{tex.stem}.pdf"
+                generated = compile_result.pdf_path
                 target = preview_layout.statement_preview / "statement.pdf"
-                if final_proc is None:
-                    status = "failed"
-                    summary = _summary_with_sample(
-                        {
-                            "error": "latex compile failed",
-                            "statement_signature": statement_signature,
-                            "failed_stage": "latex_compile",
-                        }
-                    )
-                elif final_proc.timed_out:
+                if final_proc.timed_out:
                     status = "failed"
                     summary = _summary_with_sample(
                         {

@@ -20,6 +20,8 @@ from app.impl.runtime.config import config
 from app.service.importing import native as native_import_module
 from app.service.platform.git_process import run_git
 from app.service.importing.native import NativePackageImportService
+from app.service.sandbox.base import ExecResult
+from app.service.statement.tex_compile import TexCompileResult
 
 db = config.db
 export_service = config.export_service
@@ -1054,6 +1056,61 @@ class TestExport(SmokeBase):
             )
 
         compile_mock.assert_called_once()
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+        package_root = ""
+        for name in names:
+            if name.endswith("/problem.yaml"):
+                package_root = name.split("/", 1)[0]
+                break
+        self.assertTrue(package_root)
+        self.assertIn(f"{package_root}/statement/problem.en.pdf", names)
+
+    def test_export_statement_pdf_compilation_uses_shared_tex_compile_service(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_pdf_service_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export statement pdf shared compiler {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        calls: list[Path] = []
+
+        def _fake_compile(tex_path: Path) -> TexCompileResult:
+            calls.append(tex_path)
+            pdf_path = tex_path.with_suffix(".pdf")
+            pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            (tex_path.parent / f"{tex_path.stem}.log").write_text("ok\n", encoding="utf-8")
+            return TexCompileResult(
+                engine="pdflatex",
+                proc=ExecResult(
+                    backend="fake",
+                    status="ok",
+                    returncode=0,
+                    elapsed_ms=1,
+                    timed_out=False,
+                    stdout="",
+                    stderr="",
+                ),
+                log_text="ok\n",
+                pdf_path=pdf_path,
+            )
+
+        with patch.object(export_service.tex_compile_service, "compile_pdf", side_effect=_fake_compile) as compile_mock:
+            archive = export_service.create_export(
+                self.problem,
+                "",
+                "icpc",
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+            )
+
+        compile_mock.assert_called()
+        self.assertTrue(calls)
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
         package_root = ""

@@ -551,7 +551,7 @@ class TestPreview(SmokeBase):
             preview_service,
             "_copy_sample_payloads_from_verification",
             side_effect=_fake_sync,
-        ), patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        ), patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         self.assertEqual(int(calls["find_cached"]), 0)
@@ -725,7 +725,7 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        with patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         cmd = [str(token) for token in (captured.get("command") or [])]
@@ -755,7 +755,7 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service, "tex_passes", 2), patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        with patch.object(preview_service.pdf_compiler, "passes", 2), patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         self.assertEqual(int(calls["count"]), 2)
@@ -779,7 +779,7 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        with patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT verification_id FROM previews WHERE id=?", [preview_id])
@@ -802,7 +802,7 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        with patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
@@ -832,7 +832,7 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        with patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
@@ -882,7 +882,7 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        with patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
@@ -915,7 +915,7 @@ class TestPreview(SmokeBase):
                 stderr="",
             )
 
-        with patch.object(preview_service.sandbox, "run", side_effect=_fake_run):
+        with patch.object(preview_service.pdf_compiler.sandbox, "run", side_effect=_fake_run):
             preview_id = preview_service.compile_preview("alice/sample", "alice", language="english")
 
         row = db_fetch_one("SELECT status FROM previews WHERE id=?", [preview_id])
