@@ -611,7 +611,7 @@ class VerificationService:
             "source_paths": solution_source_paths(rows),
             "logical_run_ids": logical_run_ids(rows, include_main_correct=True),
             "has_running": bool(int(counts["pending"]) or int(counts["queued"]) or int(counts["running"])),
-            "test_names": [str(row["test_name"] or "") for row in rows if str(row["test_name"] or "")],
+            "test_names": list(dict.fromkeys(str(row["test_name"] or "") for row in rows if str(row["test_name"] or ""))),
         }
 
     def verification_run_ids(self, verification_id: str) -> list[str]:

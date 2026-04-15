@@ -9,6 +9,7 @@ from .common import SmokeBase
 from .ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_proof
 from app.impl.runtime.config import config
 from app.main import app
+from app.service.verification.task_store import VerificationTaskStore
 
 workspace_service = config.workspace_service
 
@@ -616,5 +617,130 @@ class TestAgentAPI(SmokeBase):
             commit_status = client.get(f"/agent/v1/commit/{head}/status", headers=self._bearer(commit_token))
             self.assertEqual(commit_status.status_code, 200, commit_status.text)
             self.assertEqual(str(commit_status.json().get("status") or ""), "published")
+
+    def test_agent_verification_detail_returns_yaml_table_and_zoom(self) -> None:
+        username = self.random_id("agent-detail")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        workspace = self._grant_problem_owner(username)
+        source = workspace / "solutions" / "ac_python.py"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("print('ok')\n", encoding="utf-8")
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-detail")
+            session_id = str(register["agent_session_id"])
+            identity_hash = str(register["identity_hash"])
+            _readonly_request, readonly_token = self._approve_token(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="readonly",
+            )
+
+            ctx = workspace_service.workspace_context(self.problem, username, include_recent=False)
+            problem_id = int(ctx["problem"]["id"])
+            workspace_id = int(ctx["workspace"]["id"])
+            verification_id = config.verification_service.allocate_verification_id()
+            config.verification_service.begin_verification_record(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                signature="",
+                kind="all",
+                status="failed",
+                detail={
+                    "mode": "pass-fail",
+                    "selected_test_names": ["001.in"],
+                    "source_paths": ["solutions/ac_python.py"],
+                },
+            )
+            task_store = VerificationTaskStore(config.db)
+            task_store.replace_graph(
+                verification_id,
+                tasks=[
+                    {
+                        "id": task_store.allocate_id(),
+                        "task_kind": "solution-run",
+                        "source_path": "solutions/ac_python.py",
+                        "logical_run_id": "run-ac-python",
+                        "test_name": "001.in",
+                        "expected_behavior": "accepted",
+                        "status": VerificationTaskStore.TASK_DONE,
+                        "verdict": "TL",
+                        "runtime_sec": 1.5,
+                        "cpu_sec": 1.4,
+                        "wall_sec": 1.6,
+                        "memory_kb": 65536,
+                        "compile_log": "",
+                        "diagnostics_json": '[{"kind":"runtime","message":"time limit exceeded"}]',
+                        "error_text": "required=[AC], allowed=[AC], got=[TL]",
+                        "feedback_text": "time limit exceeded",
+                        "output_ref": "blob-output",
+                    }
+                ],
+                edges=[],
+            )
+            config.verification_service.update_verification_record_status(
+                verification_id,
+                status="failed",
+                fail_reason="required=[AC], allowed=[AC], got=[TL]",
+                finished=True,
+            )
+
+            detail_resp = client.get(
+                f"/agent/v1/verification/{verification_id}/detail",
+                headers=self._bearer(readonly_token),
+            )
+            self.assertEqual(detail_resp.status_code, 200, detail_resp.text)
+            self.assertIn("text/plain", detail_resp.headers.get("content-type", ""))
+            self.assertIn(f"verification: {verification_id}", detail_resp.text)
+            self.assertIn("status: failed", detail_resp.text)
+            self.assertIn("tasks:", detail_resp.text)
+            self.assertIn("columns:", detail_resp.text)
+            self.assertIn("ac_python.py:", detail_resp.text)
+            self.assertIn("source: solutions/ac_python.py", detail_resp.text)
+            self.assertIn("result: TL 1500ms 64MB", detail_resp.text)
+            self.assertIn("001.in: TL 1500ms 64MB", detail_resp.text)
+            self.assertNotIn("runtime_summary", detail_resp.text)
+            self.assertNotIn("task_rows", detail_resp.text)
+            self.assertNotIn("runs:", detail_resp.text)
+
+            zoom_resp = client.get(
+                f"/agent/v1/verification/{verification_id}/detail",
+                headers=self._bearer(readonly_token),
+                params={"test_name": "001.in"},
+            )
+            self.assertEqual(zoom_resp.status_code, 200, zoom_resp.text)
+            self.assertIn("test: 001.in", zoom_resp.text)
+            self.assertIn("ac_python.py:", zoom_resp.text)
+            self.assertIn("result: TL 1400ms (1600ms wall) 64MB", zoom_resp.text)
+            self.assertIn("feedback: time limit exceeded", zoom_resp.text)
+            self.assertIn("diagnostics:", zoom_resp.text)
+
+            source_zoom_resp = client.get(
+                f"/agent/v1/verification/{verification_id}/detail",
+                headers=self._bearer(readonly_token),
+                params={"test_name": "001.in", "source": "solutions/ac_python.py"},
+            )
+            self.assertEqual(source_zoom_resp.status_code, 200, source_zoom_resp.text)
+            self.assertIn("cell:", source_zoom_resp.text)
+            self.assertIn("title: ac_python.py", source_zoom_resp.text)
+            self.assertIn("result: TL 1400ms (1600ms wall) 64MB", source_zoom_resp.text)
+
+            missing_source_resp = client.get(
+                f"/agent/v1/verification/{verification_id}/detail",
+                headers=self._bearer(readonly_token),
+                params={"test_name": "001.in", "source": "solutions/missing.cpp"},
+            )
+            self.assertEqual(missing_source_resp.status_code, 404, missing_source_resp.text)
+            self.assertEqual(missing_source_resp.text, "source detail not found\n")
+
+            removed_text_resp = client.get(
+                f"/agent/v1/verification/{verification_id}/detail/text",
+                headers=self._bearer(readonly_token),
+            )
+            self.assertEqual(removed_text_resp.status_code, 404)
 
 

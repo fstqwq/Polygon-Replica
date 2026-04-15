@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +15,9 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_job import start_export_job, start_verification_job
 from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
 from app.impl.workspace.context_operation import audit, run_solution_options_context, workspace_rel_file_exists
+from app.impl.workspace.context_run_detail import normalize_run_test_name_token
+from app.impl.workspace.problem_config import read_problem_config
+from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.main_util import normalize_workspace_rel_path, safe_workspace_path, write_upload_file_limited
 from app.service.platform.git_process import run_git
 from app.service.problem.solution_metadata import normalize_expected_behavior
@@ -191,6 +195,293 @@ async def agent_verification_status(request: Request, verification_id: str):
     )
 
 
+_YAML_SIMPLE_RE = re.compile(r"^[A-Za-z0-9_./@+=,\-() ]+$")
+
+
+def _plain_text(text: str, *, status_code: int = 200) -> PlainTextResponse:
+    return PlainTextResponse(text, status_code=status_code, media_type="text/plain; charset=utf-8")
+
+
+def _yaml_scalar(value: object) -> str:
+    text = "" if value is None else str(value)
+    if text == "":
+        return '""'
+    if (
+        _YAML_SIMPLE_RE.fullmatch(text)
+        and text == text.strip()
+        and text.lower() not in {"null", "true", "false", "yes", "no", "on", "off"}
+    ):
+        return text
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+    return f'"{escaped}"'
+
+
+def _yaml_key(value: object) -> str:
+    return _yaml_scalar(value)
+
+
+def _compact_memory(text: str) -> str:
+    return str(text or "").replace(" ", "")
+
+
+def _compact_metric_text(metrics: str) -> str:
+    token = str(metrics or "").strip()
+    if (not token) or token == "-":
+        return ""
+    if token == "running":
+        return "running"
+    if "/" in token:
+        left, right = token.split("/", 1)
+        return " ".join(part for part in (left.strip(), _compact_memory(right.strip())) if part)
+    return token
+
+
+def _compact_result_text(result: str, metrics: str = "", memory: str = "") -> str:
+    result_token = str(result or "").strip()
+    metric_token = _compact_metric_text(metrics)
+    memory_token = _compact_memory(memory)
+    if result_token == ".." and metric_token == "running":
+        return "running"
+    return " ".join(part for part in (result_token, metric_token, memory_token) if part) or "-"
+
+
+def _role_from_task_kind(task_kind: str) -> str:
+    if task_kind == "main-correct":
+        return "main"
+    if task_kind == "solution-run":
+        return "solution"
+    return str(task_kind or "") or "-"
+
+
+def _column_keys(columns: list[dict[str, object]]) -> list[str]:
+    title_counts: dict[str, int] = {}
+    for col in columns:
+        title = str(col.get("title") or col.get("source") or col.get("id") or "column")
+        title_counts[title] = title_counts.get(title, 0) + 1
+    used: set[str] = set()
+    values: list[str] = []
+    for col in columns:
+        title = str(col.get("title") or "")
+        source = str(col.get("source") or "")
+        raw_key = title if title and title_counts.get(title, 0) == 1 else (source or title or str(col.get("id") or "column"))
+        key = raw_key
+        suffix = 2
+        while key in used:
+            key = f"{raw_key}-{suffix}"
+            suffix += 1
+        used.add(key)
+        values.append(key)
+    return values
+
+
+def _append_scalar(lines: list[str], key: str, value: object, *, indent: int = 0) -> None:
+    lines.append(f"{' ' * indent}{_yaml_key(key)}: {_yaml_scalar(value)}")
+
+
+def _append_diagnostics(lines: list[str], detail_ctx: dict[str, object], *, indent: int = 0) -> None:
+    diagnostics: list[str] = []
+    for col in cast(list[dict[str, object]], detail_ctx.get("detail_columns") or []):
+        title = str(col.get("title") or col.get("source") or "")
+        error = str(col.get("error_display") or col.get("error") or "").strip()
+        match_reason = str(col.get("match_reason") or "").strip()
+        if error:
+            diagnostics.append(f"{title}: {error}" if title else error)
+        elif match_reason:
+            diagnostics.append(f"{title}: {match_reason}" if title else match_reason)
+        for item in cast(list[dict[str, object]], col.get("compile_diagnostics") or []):
+            message = str(item.get("message") or "").strip()
+            if not message:
+                continue
+            location = str(item.get("location_display") or "").strip()
+            level = str(item.get("level_upper") or item.get("level") or "").strip()
+            body = ": ".join(part for part in (location, level, message) if part)
+            diagnostics.append(f"{title}: {body}" if title and body else body)
+    verification_logs = cast(dict[str, object], detail_ctx.get("detail_verification_logs") or {})
+    verification_error = str(verification_logs.get("error_display") or verification_logs.get("error") or "").strip()
+    if verification_error:
+        diagnostics.append(f"Verification: {verification_error}")
+    for item in cast(list[dict[str, object]], verification_logs.get("diagnostics") or []):
+        message = str(item.get("message") or "").strip()
+        if not message:
+            continue
+        location = str(item.get("location_display") or "").strip()
+        level = str(item.get("level_upper") or item.get("level") or "").strip()
+        diagnostics.append("Verification: " + ": ".join(part for part in (location, level, message) if part))
+    if not diagnostics:
+        lines.append(f"{' ' * indent}diagnostics: []")
+        return
+    lines.append(f"{' ' * indent}diagnostics:")
+    for item in diagnostics:
+        lines.append(f"{' ' * (indent + 2)}- {_yaml_scalar(item)}")
+
+
+def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, object]) -> str:
+    columns = cast(list[dict[str, object]], detail_ctx.get("detail_columns") or [])
+    rows = cast(list[dict[str, object]], detail_ctx.get("detail_rows") or [])
+    keys = _column_keys(columns)
+    lines: list[str] = []
+    _append_scalar(lines, "verification", verification_id)
+    _append_scalar(lines, "status", detail_ctx.get("detail_status") or "")
+    fail_reason = str(detail_ctx.get("detail_fail_reason") or "")
+    if fail_reason:
+        _append_scalar(lines, "reason", fail_reason)
+    lines.append("")
+    lines.append("tasks:")
+    task_counts = cast(dict[str, object], detail_ctx.get("detail_task_counts") or {})
+    for key in ("pending", "queued", "running", "done", "failed", "cancelled"):
+        _append_scalar(lines, key, int(task_counts.get(key) or 0), indent=2)
+    running_tasks = cast(list[dict[str, object]], detail_ctx.get("detail_running_tasks") or [])
+    lines.append("")
+    if running_tasks:
+        lines.append("running:")
+        for task in running_tasks:
+            lines.append(f"  - {_yaml_scalar(task.get('label') or '')}")
+    else:
+        lines.append("running: []")
+    lines.append("")
+    lines.append("columns:")
+    for index, col in enumerate(columns):
+        key = keys[index]
+        lines.append(f"  {_yaml_key(key)}:")
+        _append_scalar(lines, "source", col.get("source") or "", indent=4)
+        _append_scalar(lines, "role", _role_from_task_kind(str(col.get("task_kind") or "")), indent=4)
+        _append_scalar(lines, "expected", col.get("expected_display") or "-", indent=4)
+        result = _compact_result_text(
+            str(col.get("got_display") or col.get("got_short") or "-"),
+            str(col.get("max_time_display") or ""),
+            str(col.get("max_memory_display") or ""),
+        )
+        _append_scalar(lines, "result", result, indent=4)
+        reason = str(col.get("error_display") or col.get("error") or col.get("match_reason") or "")
+        if reason:
+            _append_scalar(lines, "reason", reason, indent=4)
+        lines.append("    tests:")
+        if rows:
+            for row in rows:
+                cells = cast(list[dict[str, object]], row.get("cells") or [])
+                test_name = str(row.get("test_name") or row.get("display_name") or "")
+                cell = cells[index] if index < len(cells) else {}
+                cell_text = _compact_result_text(str(cell.get("short") or cell.get("text") or "--"), str(cell.get("metrics") or ""))
+                _append_scalar(lines, test_name, cell_text, indent=6)
+        else:
+            lines[-1] = "    tests: {}"
+        lines.append("")
+    _append_diagnostics(lines, detail_ctx)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _cell_detail_status(cell: dict[str, object]) -> str:
+    detail = cast(dict[str, object], cell.get("detail") or {})
+    final_row = cast(dict[str, object], detail.get("final_row") or {})
+    if final_row:
+        return _compact_result_text(
+            str(final_row.get("verdict_short") or cell.get("short") or cell.get("text") or "-"),
+            str(final_row.get("time_display") or ""),
+            str(final_row.get("memory_display") or ""),
+        )
+    return _compact_result_text(str(cell.get("short") or cell.get("text") or "--"), str(cell.get("metrics") or ""))
+
+
+def _cell_feedback(cell: dict[str, object]) -> str:
+    detail = cast(dict[str, object], cell.get("detail") or {})
+    final_row = cast(dict[str, object], detail.get("final_row") or {})
+    feedback = str(final_row.get("feedback_display") or "")
+    return "" if feedback == "-" else feedback
+
+
+def _cell_error(cell: dict[str, object]) -> str:
+    detail = cast(dict[str, object], cell.get("detail") or {})
+    return str(detail.get("compile_error_display") or "")
+
+
+def _cell_diagnostics(cell: dict[str, object]) -> list[str]:
+    detail = cast(dict[str, object], cell.get("detail") or {})
+    values: list[str] = []
+    for item in cast(list[dict[str, object]], detail.get("compile_diagnostics") or []):
+        message = str(item.get("message") or "").strip()
+        if not message:
+            continue
+        location = str(item.get("location_display") or "").strip()
+        level = str(item.get("level_upper") or item.get("level") or "").strip()
+        values.append(": ".join(part for part in (location, level, message) if part))
+    return values
+
+
+def _append_cell_detail(lines: list[str], *, col: dict[str, object], cell: dict[str, object], indent: int) -> None:
+    _append_scalar(lines, "source", col.get("source") or "", indent=indent)
+    _append_scalar(lines, "role", _role_from_task_kind(str(col.get("task_kind") or "")), indent=indent)
+    _append_scalar(lines, "result", _cell_detail_status(cell), indent=indent)
+    _append_scalar(lines, "feedback", _cell_feedback(cell), indent=indent)
+    _append_scalar(lines, "error", _cell_error(cell), indent=indent)
+    diagnostics = _cell_diagnostics(cell)
+    if diagnostics:
+        lines.append(f"{' ' * indent}diagnostics:")
+        for item in diagnostics:
+            lines.append(f"{' ' * (indent + 2)}- {_yaml_scalar(item)}")
+    else:
+        lines.append(f"{' ' * indent}diagnostics: []")
+
+
+def _render_test_zoom_yaml(verification_id: str, detail_ctx: dict[str, object], *, source_filter: str = "") -> tuple[str, bool]:
+    rows = cast(list[dict[str, object]], detail_ctx.get("detail_rows") or [])
+    if not rows:
+        return ("test detail not found\n", False)
+    row = rows[0]
+    columns = cast(list[dict[str, object]], detail_ctx.get("detail_columns") or [])
+    keys = _column_keys(columns)
+    selected: list[tuple[str, dict[str, object], dict[str, object]]] = []
+    cells = cast(list[dict[str, object]], row.get("cells") or [])
+    for index, col in enumerate(columns):
+        source = str(col.get("source") or "")
+        if source_filter and source != source_filter:
+            continue
+        if index >= len(cells):
+            continue
+        selected.append((keys[index], col, cells[index]))
+    if source_filter and not selected:
+        return ("source detail not found\n", False)
+    lines: list[str] = []
+    _append_scalar(lines, "verification", verification_id)
+    _append_scalar(lines, "status", detail_ctx.get("detail_status") or "")
+    _append_scalar(lines, "test", row.get("test_name") or row.get("display_name") or "")
+    generate_detail = cast(dict[str, object], row.get("generate_detail") or {})
+    if generate_detail:
+        lines.append("")
+        lines.append("generation:")
+        _append_scalar(lines, "source", generate_detail.get("display_source") or generate_detail.get("source_path") or "", indent=2)
+        _append_scalar(lines, "result", generate_detail.get("status_text") or "", indent=2)
+        _append_scalar(lines, "feedback", generate_detail.get("feedback_display") or "", indent=2)
+        _append_scalar(lines, "error", generate_detail.get("error_text") or "", indent=2)
+    lines.append("")
+    if source_filter:
+        _key, col, cell = selected[0]
+        lines.append("cell:")
+        _append_scalar(lines, "title", col.get("title") or "", indent=2)
+        _append_cell_detail(lines, col=col, cell=cell, indent=2)
+    else:
+        for key, col, cell in selected:
+            lines.append(f"{_yaml_key(key)}:")
+            _append_cell_detail(lines, col=col, cell=cell, indent=2)
+            lines.append("")
+    return ("\n".join(lines).rstrip() + "\n", True)
+
+
+def _agent_verification_detail_yaml(ctx: dict[str, object], verification_id: str, *, test_name: str, source_filter: str) -> tuple[str, int]:
+    workspace = Path(str(ctx["workspace"]["path"])).resolve()
+    _problem_cfg, general_cfg, _statement_cfg = read_problem_config(workspace)
+    detail_ctx = build_run_detail_context(
+        ctx,
+        str(general_cfg["mode"]),
+        requested_verification_id=verification_id,
+        include_row_details=bool(test_name),
+        detail_test_name=test_name,
+    )
+    if test_name:
+        body, found = _render_test_zoom_yaml(verification_id, detail_ctx, source_filter=source_filter)
+        return (body, 200 if found else 404)
+    return (_render_full_verification_yaml(verification_id, detail_ctx), 200)
+
+
 async def agent_verification_detail(request: Request, verification_id: str):
     identity = require_agent_token(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
@@ -201,35 +492,16 @@ async def agent_verification_detail(request: Request, verification_id: str):
         verification_id,
     )
     if record is None or detail is None:
-        return json_error_response("verification not found", status_code=404)
-    runtime_summary = config.verification_service.verification_runtime_summary(verification_id)
-    return _json_body(
-        {
-            "verification": record,
-            "detail": detail["details"],
-            "runtime_summary": runtime_summary,
-        }
-    )
-
-
-async def agent_verification_detail_text(request: Request, verification_id: str):
-    identity = require_agent_token(request, min_scope="readonly")
-    ctx = _agent_problem_ctx(identity)
-    record = config.verification_service.verification_record(verification_id)
-    detail = config.verification_service.workspace_verification_detail(
-        int(identity.problem_id),
-        int(ctx["workspace"]["id"]),
+        return _plain_text("verification not found\n", status_code=404)
+    test_name = normalize_run_test_name_token(str(request.query_params.get("test_name") or ""))
+    source_filter = str(request.query_params.get("source") or "")
+    body, status_code = _agent_verification_detail_yaml(
+        ctx,
         verification_id,
+        test_name=test_name,
+        source_filter=source_filter,
     )
-    if record is None or detail is None:
-        return PlainTextResponse("verification not found", status_code=404)
-    runtime_summary = config.verification_service.verification_runtime_summary(verification_id)
-    payload = {
-        "verification": record,
-        "detail": detail["details"],
-        "runtime_summary": runtime_summary,
-    }
-    return PlainTextResponse(json.dumps(payload, ensure_ascii=False, indent=2), media_type="text/plain; charset=utf-8")
+    return _plain_text(body, status_code=status_code)
 
 
 def _find_export_event(*, problem_id: int, actor_user_id: int, export_task_id: str) -> dict[str, object] | None:

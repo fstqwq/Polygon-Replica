@@ -14,7 +14,6 @@ from app.impl.agent.api import (
     agent_register,
     agent_request_access,
     agent_verification_detail,
-    agent_verification_detail_text,
     agent_verification_start,
     agent_verification_status,
     agent_workspace_delete,
@@ -48,7 +47,6 @@ router.add_api_route("/agent/v1/auth/poll/{request_id}", agent_poll_access, meth
 router.add_api_route("/agent/v1/verification/start", agent_verification_start, methods=["POST"])
 router.add_api_route("/agent/v1/verification/{verification_id}/status", agent_verification_status, methods=["GET"])
 router.add_api_route("/agent/v1/verification/{verification_id}/detail", agent_verification_detail, methods=["GET"])
-router.add_api_route("/agent/v1/verification/{verification_id}/detail/text", agent_verification_detail_text, methods=["GET"])
 router.add_api_route("/agent/v1/export/start", agent_export_start, methods=["POST"])
 router.add_api_route("/agent/v1/export/{export_id}/status", agent_export_status, methods=["GET"])
 router.add_api_route("/agent/v1/export/{export_id}/download", agent_export_download, methods=["GET"])
