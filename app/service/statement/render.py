@@ -149,7 +149,6 @@ def _problem_context_for_language(
         "input": _statement_section_text(workspace, language, "input.tex", fallback=""),
         "output": _statement_section_text(workspace, language, "output.tex", fallback=""),
         "interaction": _statement_section_text(workspace, language, "interaction.tex", fallback=""),
-        "scoring": _statement_section_text(workspace, language, "scoring.tex", fallback=""),
         "notes": _statement_section_text(workspace, language, "notes.tex", fallback=""),
         "sampleTests": list(sample_tests or []),
     }
@@ -212,7 +211,6 @@ def _statement_language_seed_defaults() -> dict[str, str]:
         "input.tex": "",
         "output.tex": "",
         "interaction.tex": "",
-        "scoring.tex": "",
         "notes.tex": "",
     }
 

@@ -501,10 +501,10 @@ class TestBackendMinimal(SmokeBase):
             "input.tex",
             "output.tex",
             "interaction.tex",
-            "scoring.tex",
             "notes.tex",
         ):
             self.assertTrue((ws / "statement-sections" / "japanese" / rel).is_file(), rel)
+        self.assertFalse((ws / "statement-sections" / "japanese" / "scoring.tex").exists())
 
     def test_preview_page_lists_compile_assets_and_contestant_attachments_separately(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
@@ -537,6 +537,16 @@ class TestBackendMinimal(SmokeBase):
         updated_page = page_ctx(self.problem, self.user)
         updated_nav = dict(updated_page["nav_status"]["statement_languages"])
         self.assertEqual(str(updated_nav.get("text") or ""), "english, chinese")
+
+    def test_statement_nav_ignores_legacy_scoring_section_file(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        scoring_path = ws / "statement-sections" / "english" / "scoring.tex"
+        scoring_path.parent.mkdir(parents=True, exist_ok=True)
+        scoring_path.write_text("", encoding="utf-8")
+
+        page = page_ctx(self.problem, self.user)
+        statement_nav = dict(page["nav_status"]["statement_languages"])
+        self.assertEqual(str(statement_nav.get("text") or ""), "empty")
 
     def test_statement_nav_shows_none_warn_when_language_directories_are_missing(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])

@@ -26,6 +26,7 @@ from app.service.statement.constant import (
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
     is_canonical_statement_section_entry,
+    is_ignored_statement_section_entry,
 )
 from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import (
@@ -502,6 +503,8 @@ class PolygonPackageImportService:
             if len(rel.parts) < 3:
                 continue
             rel_in_section = Path(*rel.parts[2:])
+            if is_ignored_statement_section_entry(rel_in_section):
+                continue
             if is_canonical_statement_section_entry(rel_in_section):
                 self._write_bytes(workspace, rel, _read_bytes_from_zip(zf, info))
                 copied_section_files += 1

@@ -58,7 +58,6 @@ statement-sections/
     input.tex
     output.tex
     interaction.tex
-    scoring.tex
     notes.tex
 tests/
   spec.json
@@ -114,7 +113,6 @@ Current editing flow:
   - `input.tex`
   - `output.tex`
   - `interaction.tex`
-  - `scoring.tex`
   - `notes.tex`
 
 Current preview behavior:

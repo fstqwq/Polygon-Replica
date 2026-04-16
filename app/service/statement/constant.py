@@ -19,10 +19,10 @@ STATEMENT_CANONICAL_SECTION_FILES = frozenset(
         "input.tex",
         "output.tex",
         "interaction.tex",
-        "scoring.tex",
         "notes.tex",
     }
 )
+STATEMENT_IGNORED_SECTION_FILES = frozenset({"scoring.tex"})
 TESTS_ANSWERS_DIR_REL = Path("tests/answers")
 WF_STYLE_DIR = Path("third_party") / "Polygon-WF-Styles"
 WF_STYLE_STATEMENTS_REL = WF_STYLE_DIR / "statements.ftl"
@@ -48,10 +48,6 @@ ${problem.output}
 \Interaction
 ${problem.interaction}
 </#if>
-<#if problem.scoring?? && (problem.scoring?length > 0)>
-\Scoring
-${problem.scoring}
-</#if>
 <#if (problem.sampleTests?size>0)>
 \Example<#if (problem.sampleTests?size>1)>s</#if>
 \begin{example}
@@ -75,7 +71,7 @@ ${problem.notes}
 \end{problem}
 """
 
-STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-03-02-short-problem-title-tex-pass2-tests-sample-source"
+STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-04-17-drop-statement-scoring-section"
 
 
 def _read_required_text(path: Path, *, label: str, allow_empty: bool = False) -> str:
@@ -115,5 +111,10 @@ DEFAULT_OLYMP_STY = _load_repo_required_text(
 def is_canonical_statement_section_entry(rel_path: str | Path) -> bool:
     rel = Path(rel_path)
     return len(rel.parts) == 1 and rel.name in STATEMENT_CANONICAL_SECTION_FILES
+
+
+def is_ignored_statement_section_entry(rel_path: str | Path) -> bool:
+    rel = Path(rel_path)
+    return len(rel.parts) == 1 and rel.name in STATEMENT_IGNORED_SECTION_FILES
 
 

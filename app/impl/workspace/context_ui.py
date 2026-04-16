@@ -10,7 +10,11 @@ from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 
 from app.main_util import normalize_workspace_rel_path
-from app.service.statement.constant import DEFAULT_PROBLEM_TITLE, STATEMENT_SECTIONS_DIR
+from app.service.statement.constant import (
+    DEFAULT_PROBLEM_TITLE,
+    STATEMENT_SECTIONS_DIR,
+    is_ignored_statement_section_entry,
+)
 from app.service.statement.context import statement_languages
 from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
 
@@ -193,7 +197,6 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
             'input.tex': '',
             'output.tex': '',
             'interaction.tex': '',
-            'scoring.tex': '',
             'notes.tex': '',
         }
 
@@ -220,6 +223,8 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
                 if not item.is_file() or item.is_symlink():
                     continue
                 rel = item.relative_to(section_root).as_posix()
+                if is_ignored_statement_section_entry(rel):
+                    continue
                 if rel not in seed_defaults:
                     return False
         except OSError:
