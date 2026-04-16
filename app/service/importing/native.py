@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from app.main_util import UPLOAD_MAX_BYTES
 from app.service.platform.workspace_path import is_hidden_workspace_path
 from app.service.problem.test_spec import load_tests_spec
+from app.service.statement.constant import STATEMENT_SECTIONS_DIR
 
 
 NATIVE_PACKAGE_ANCHOR = "config/problem.json"
@@ -134,6 +135,23 @@ def _read_title_from_problem_config(workspace: Path) -> str:
     return ""
 
 
+def _ensure_statement_name_from_problem_config(workspace: Path, title: str) -> None:
+    safe_title = str(title or "").strip()
+    if not safe_title:
+        return
+    sections_root = workspace / STATEMENT_SECTIONS_DIR
+    existing_names = sorted(sections_root.glob("*/name.tex")) if sections_root.exists() else []
+    for path in existing_names:
+        try:
+            if path.is_file() and (not path.is_symlink()) and path.read_text(encoding="utf-8").strip():
+                return
+        except OSError:
+            continue
+    target = sections_root / "english" / "name.tex"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(safe_title + "\n", encoding="utf-8")
+
+
 class NativePackageImportService:
     def import_package(
         self,
@@ -170,6 +188,7 @@ class NativePackageImportService:
                 shutil.rmtree(staging_root, ignore_errors=True)
 
         title = _read_title_from_problem_config(workspace)
+        _ensure_statement_name_from_problem_config(workspace, title)
         tests_total = 0
         try:
             tests_total = len(load_tests_spec(workspace / "tests" / "spec.json"))

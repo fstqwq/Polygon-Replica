@@ -11,11 +11,11 @@ from app.impl.runtime.config import config
 
 from app.main_util import normalize_workspace_rel_path
 from app.service.statement.constant import (
-    DEFAULT_PROBLEM_TITLE,
     STATEMENT_SECTIONS_DIR,
     is_ignored_statement_section_entry,
 )
 from app.service.statement.context import statement_languages
+from app.service.statement.render import default_statement_title_for_workspace
 from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
 
 from .access import (
@@ -58,6 +58,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     ctx['access'] = access
+    ctx['problem']['display_name'] = str(ctx['problem'].get('name') or '')
     ctx['branches'] = ['main']
     ctx['branches_truncated'] = False
     ctx['branch_limit'] = 1
@@ -190,9 +191,9 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         gb_text = f'{_short_decimal(mb / 1024.0)}gb'
         return gb_text if len(gb_text) < len(mb_text) else mb_text
 
-    def _statement_seed_defaults() -> dict[str, str]:
+    def _statement_seed_defaults(workspace: Path) -> dict[str, str]:
         return {
-            'name.tex': DEFAULT_PROBLEM_TITLE + '\n',
+            'name.tex': default_statement_title_for_workspace(workspace) + '\n',
             'legend.tex': '',
             'input.tex': '',
             'output.tex': '',
@@ -217,7 +218,7 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         section_root = workspace / STATEMENT_SECTIONS_DIR / language
         if not section_root.exists() or (not section_root.is_dir()) or section_root.is_symlink():
             return True
-        seed_defaults = _statement_seed_defaults()
+        seed_defaults = _statement_seed_defaults(workspace)
         try:
             for item in section_root.rglob('*'):
                 if not item.is_file() or item.is_symlink():

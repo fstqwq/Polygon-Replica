@@ -13,26 +13,15 @@ from app.impl.problem.shared import _has_destructive_sudo_for_ctx, _sudo_redirec
 from app.impl.workspace.context_operation import audit, normalize_page_target
 from app.impl.workspace.access import require_manage_access, require_write_access, workspace_access_context
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import form_text
+from app.main_util import problem_slug_leaf
 
 _C = config.constants
-
-
-def _problem_slug_segment(value: str | object) -> str:
-    raw = form_text(value).strip()
-    if not raw:
-        return ""
-    parts = [segment for segment in raw.split("/") if segment]
-    if not parts:
-        return ""
-    return parts[-1]
 
 
 def switch_workspace(
     request: Request,
     problem: str = Form(...),
     page: str = Form("statement"),
-    problem_name: str = Form(""),
 ):
     active_user = session_user(request)
     if not active_user:
@@ -53,10 +42,7 @@ def switch_workspace(
             user_id = int(ensured["id"])
         problem_id = config.workspace_service.known_problem_id(safe_problem)
         if problem_id is None:
-            requested_name = form_text(problem_name).strip()
-            if not requested_name:
-                requested_name = f'{safe_problem.title()} Problem'
-            config.workspace_service.ensure_problem(safe_problem, requested_name)
+            config.workspace_service.ensure_problem(safe_problem)
             config.workspace_service.grant_repo_access(safe_problem, active_user, 'owner')
         else:
             access = workspace_access_context(problem_id, user_id)
@@ -104,8 +90,8 @@ def problem_delete(request: Request, problem: str, user: Annotated[str, Depends(
     msg = 'problem deleted'
     try:
         expected_slug = str(ctx['problem']['slug'] or "").strip()
-        expected = _problem_slug_segment(expected_slug)
-        if _problem_slug_segment(confirm_problem) != expected:
+        expected = problem_slug_leaf(expected_slug)
+        if problem_slug_leaf(confirm_problem) != expected:
             raise ValueError('problem deletion confirmation mismatch')
         result = config.workspace_service.delete_problem(problem)
         warnings = result.get('fs_warnings') if isinstance(result, dict) else []

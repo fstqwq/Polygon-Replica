@@ -145,11 +145,11 @@ class SmokeBase(unittest.TestCase):
         self.default_user = "alice"
         self.default_problem = "alice/sample"
 
-        self._seed_workspace(self.problem, self.user, "Sample Problem")
-        self._seed_workspace(self.default_problem, self.default_user, "Sample Problem")
+        self._seed_workspace(self.problem, self.user)
+        self._seed_workspace(self.default_problem, self.default_user)
 
-    def _seed_workspace(self, problem: str, user: str, problem_name: str) -> Path:
-        workspace_service.ensure_problem(problem, problem_name)
+    def _seed_workspace(self, problem: str, user: str) -> Path:
+        workspace_service.ensure_problem(problem)
         ws = Path(workspace_service.ensure_workspace(problem, user))
         workspace_service.grant_repo_access(problem, user, "owner")
         for rel in [

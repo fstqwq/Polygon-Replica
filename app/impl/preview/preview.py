@@ -41,6 +41,7 @@ from app.service.statement.context import (
     statement_languages,
 )
 from app.service.statement.render import ensure_statement_language_sources
+from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
 
 _C = config.constants
@@ -138,6 +139,7 @@ def statement_editor_section_paths(language: str) -> dict[str, Path]:
         raise ValueError("statement language is required")
     section_root = Path("statement-sections") / safe_language
     return {
+        "name": section_root / "name.tex",
         "legend": section_root / "legend.tex",
         "input": section_root / "input.tex",
         "output": section_root / "output.tex",
@@ -195,6 +197,7 @@ def statement_editor_sections(workspace: Path, mode: str, language: str) -> tupl
     section_paths = statement_editor_section_paths(language)
     interaction_enabled = mode != "pass-fail"
     specs: tuple[tuple[str, str, str, str], ...] = (
+        ("name", "name_tex", "Title", ""),
         ("legend", "legend_tex", "Legend", ""),
         ("input", "input_tex", "Input", ""),
         ("output", "output_tex", "Output", ""),
@@ -286,7 +289,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     workspace_id = ctx['workspace']['id']
     problem_id = int(ctx['problem']['id'])
     workspace = Path(ctx['workspace']['path'])
-    problem_title = ctx["problem"]["name"]
+    problem_title = str(ctx["problem"]["name"])
     current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     requested_preview_id = request.query_params.get("preview_id", "")
@@ -325,6 +328,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 preview_id = cached_id
     safe_mode = statement_mode_from_ctx(ctx)
     statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode, current_language)
+    ctx["problem"]["display_name"] = statement_title_for_language(workspace, current_language, problem_title)
     log = ''
     log_truncated = False
     pdf_exists = False
@@ -449,7 +453,6 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'preview_failure_detail': preview_failure_detail,
             'preview_failed_stage': preview_failed_stage,
             'latex_log_href': latex_log_href,
-            'problem_name_max_len': _C.PROBLEM_NAME_MAX_LEN,
             'problem_mode_values': list(_C.GENERAL_MODE_VALUES),
             'time_limit_min_ms': _C.GENERAL_TIME_LIMIT_MIN_MS,
             'time_limit_max_ms': _C.GENERAL_TIME_LIMIT_MAX_MS,
@@ -586,6 +589,7 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
 def preview_save(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
+    name_tex: Annotated[str, Form()] = '',
     legend_tex: Annotated[str, Form()] = '',
     input_tex: Annotated[str, Form()] = '',
     output_tex: Annotated[str, Form()] = '',
@@ -610,6 +614,7 @@ def preview_save(
     statement_mode = statement_mode_from_ctx(ctx)
     msg = 'statement saved'
     try:
+        safe_name_tex = enforce_textarea_max_bytes(name_tex, label="statement title")
         safe_legend_tex = enforce_textarea_max_bytes(legend_tex, label="statement legend")
         safe_input_tex = enforce_textarea_max_bytes(input_tex, label="statement input")
         safe_output_tex = enforce_textarea_max_bytes(output_tex, label="statement output")
@@ -618,6 +623,7 @@ def preview_save(
         with config.workspace_service.workspace_lock(workspace):
             section_paths = statement_editor_section_paths(current_language)
             write_plan = {
+                'name': safe_name_tex,
                 'legend': safe_legend_tex,
                 'input': safe_input_tex,
                 'output': safe_output_tex,
@@ -636,6 +642,7 @@ def preview_save(
             'preview.save_sources',
             {
                 'mode': statement_mode,
+                'name_bytes': len(safe_name_tex.encode('utf-8')),
                 'legend_bytes': len(safe_legend_tex.encode('utf-8')),
                 'input_bytes': len(safe_input_tex.encode('utf-8')),
                 'output_bytes': len(safe_output_tex.encode('utf-8')),

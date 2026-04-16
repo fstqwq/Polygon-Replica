@@ -534,6 +534,12 @@ class PolygonPackageImportService:
         preferred = "english" if "english" in languages else (languages[0] if languages else "")
         if not preferred:
             preferred = "english"
+        title_path = workspace / STATEMENT_SECTIONS_DIR / preferred / "name.tex"
+        title_text = str(meta["title"] or "").strip()
+        if title_text:
+            title_path.parent.mkdir(parents=True, exist_ok=True)
+            if (not title_path.exists()) or (not title_path.read_text(encoding="utf-8").strip()):
+                title_path.write_text(title_text + "\n", encoding="utf-8")
         language_warning = ""
         if languages and ("english" not in languages):
             language_warning = f"statement language english not found; defaulting to {preferred}"

@@ -157,9 +157,10 @@ class TestPreview(SmokeBase):
         with self.assertRaisesRegex(RuntimeError, r"statement template \(statement/statements\.ftl\) is missing"):
             render_statement_main(statement, problem_title="Rendered Title", language="english")
 
-    def test_statement_template_problem_name_comes_from_problem_title(self) -> None:
+    def test_statement_template_problem_name_prefers_name_tex(self) -> None:
         ws = self._workspace_path()
         statement = ws / "statement"
+        (ws / "statement-sections" / "english" / "name.tex").write_text("Language Title\n", encoding="utf-8")
         problem_template = (
             "\\begin{problem}{${problem.name}}{stdin}{stdout}{1 second}{1 megabyte}\n"
             "Body.\n"
@@ -169,7 +170,7 @@ class TestPreview(SmokeBase):
         out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
-        self.assertIn("\\begin{problem}{Preview Saved Title}", rendered_problem)
+        self.assertIn("\\begin{problem}{Language Title}", rendered_problem)
 
     def test_statement_render_uses_shared_assets_and_ignores_legacy_section_extras(self) -> None:
         ws = self._workspace_path()

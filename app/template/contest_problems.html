@@ -72,15 +72,14 @@
 </section>
 
 <section>
-  <h2>Change Names And TL/ML (Commit Required)</h2>
-  <p class="muted">Each selected problem applies source updates and creates one commit with message: <code>contest {{ ctx.contest.slug }}: bulk update name/TL/ML</code>.</p>
+  <h2>Change TL/ML (Commit Required)</h2>
+  <p class="muted">Each selected problem applies source updates and creates one commit with message: <code>contest {{ ctx.contest.slug }}: bulk update TL/ML</code>.</p>
   {% if problem_rows %}
   <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/change-general">
     <table class="table-base">
       <tr>
         <th>Select</th>
         <th>Problem</th>
-        <th>Title</th>
         <th>TL (ms)</th>
         <th>ML (MB)</th>
         <th>Writable</th>
@@ -92,7 +91,6 @@
           <code>{{ row.problem_slug }}</code>
           <input type="hidden" name="problem_ids" value="{{ row.problem_id }}" />
         </td>
-        <td><input name="problem_names" value="{{ row.problem_name }}" /></td>
         <td><input name="time_limit_ms_values" value="{{ row.time_limit_ms }}" inputmode="numeric" /></td>
         <td><input name="memory_limit_mb_values" value="{{ row.memory_limit_mb }}" inputmode="numeric" /></td>
         <td>{{ "yes" if row.can_problem_write else "no" }}</td>

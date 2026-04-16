@@ -4,6 +4,7 @@ import json
 import sqlite3
 from typing import TypedDict
 
+from app.main_util import problem_slug_leaf
 from app.db import DB
 
 
@@ -328,7 +329,7 @@ class ContestDiskStore:
     def contest_problem_rows(self, contest_id: int) -> list[ContestProblemRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT cp.id AS contest_problem_id,cp.idx,cp.problem_id,cp.created_at,p.slug AS problem_slug,p.name AS problem_name
+            SELECT cp.id AS contest_problem_id,cp.idx,cp.problem_id,cp.created_at,p.slug AS problem_slug
             FROM contest_problems cp
             JOIN problems p ON p.id=cp.problem_id
             WHERE cp.contest_id=?
@@ -336,12 +337,25 @@ class ContestDiskStore:
             """,
             [int(contest_id)],
         )
-        return [dict(row) for row in rows]
+        items: list[ContestProblemRecord] = []
+        for row in rows:
+            safe_slug = str(row["problem_slug"] or "")
+            items.append(
+                {
+                    "contest_problem_id": int(row["contest_problem_id"]),
+                    "idx": str(row["idx"] or ""),
+                    "problem_id": int(row["problem_id"]),
+                    "created_at": str(row["created_at"] or ""),
+                    "problem_slug": safe_slug,
+                    "problem_name": problem_slug_leaf(safe_slug),
+                }
+            )
+        return items
 
     def available_problem_rows(self, contest_id: int, user_id: int, *, limit: int) -> list[ContestAvailableProblemRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT p.id AS problem_id,p.slug AS problem_slug,p.name AS problem_name,a.role
+            SELECT p.id AS problem_id,p.slug AS problem_slug,a.role
             FROM repo_acl a
             JOIN problems p ON p.id=a.problem_id
             WHERE a.user_id=?
@@ -355,7 +369,18 @@ class ContestDiskStore:
             """,
             [int(user_id), int(contest_id), max(1, int(limit))],
         )
-        return [dict(row) for row in rows]
+        items: list[ContestAvailableProblemRecord] = []
+        for row in rows:
+            safe_slug = str(row["problem_slug"] or "")
+            items.append(
+                {
+                    "problem_id": int(row["problem_id"]),
+                    "problem_slug": safe_slug,
+                    "problem_name": problem_slug_leaf(safe_slug),
+                    "role": str(row["role"] or ""),
+                }
+            )
+        return items
 
     def problem_count(self, contest_id: int) -> int:
         row = self.db.fetch_one("SELECT COUNT(*) AS c FROM contest_problems WHERE contest_id=?", [int(contest_id)])
@@ -364,8 +389,15 @@ class ContestDiskStore:
         return max(0, int(row["c"] or 0))
 
     def problem_by_slug(self, slug: str) -> ContestProblemLookupRecord | None:
-        row = self.db.fetch_one("SELECT id,slug,name FROM problems WHERE slug=?", [slug])
-        return None if row is None else dict(row)
+        row = self.db.fetch_one("SELECT id,slug FROM problems WHERE slug=?", [slug])
+        if row is None:
+            return None
+        safe_slug = str(row["slug"] or "")
+        return {
+            "id": int(row["id"]),
+            "slug": safe_slug,
+            "name": problem_slug_leaf(safe_slug),
+        }
 
     def contest_has_problem(self, contest_id: int, problem_id: int) -> bool:
         row = self.db.fetch_one(
@@ -465,7 +497,7 @@ class ContestDiskStore:
         placeholders = ",".join(("?" for _ in safe_problem_ids))
         rows = self.db.fetch_all(
             f"""
-            SELECT cp.problem_id,cp.idx,p.slug AS problem_slug,p.name AS problem_name
+            SELECT cp.problem_id,cp.idx,p.slug AS problem_slug
             FROM contest_problems cp
             JOIN problems p ON p.id=cp.problem_id
             WHERE cp.contest_id=? AND cp.problem_id IN ({placeholders})
@@ -473,7 +505,18 @@ class ContestDiskStore:
             """,
             [int(contest_id), *safe_problem_ids],
         )
-        return [dict(row) for row in rows]
+        items: list[ContestSelectedProblemRecord] = []
+        for row in rows:
+            safe_slug = str(row["problem_slug"] or "")
+            items.append(
+                {
+                    "problem_id": int(row["problem_id"]),
+                    "idx": str(row["idx"] or ""),
+                    "problem_slug": safe_slug,
+                    "problem_name": problem_slug_leaf(safe_slug),
+                }
+            )
+        return items
 
     def insert_job(
         self,

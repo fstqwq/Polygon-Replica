@@ -96,14 +96,6 @@ def normalize_contest_title_required(value: str) -> str:
         raise ValueError(f'contest title is too long (max {_C.CONTEST_TITLE_MAX_LEN})')
     return title
 
-def normalize_problem_name_required(value: str) -> str:
-    name = value.strip()
-    if not name:
-        raise ValueError('problem name is required')
-    if len(name) > _C.PROBLEM_NAME_MAX_LEN:
-        raise ValueError(f'problem name is too long (max {_C.PROBLEM_NAME_MAX_LEN})')
-    return name
-
 def user_contests_overview(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LIMIT) -> list[dict]:
     uid = int(user_id)
     cap = max(1, int(limit))

@@ -81,7 +81,7 @@ class TestUIContests(UIBaseSuite):
         contest_id = self._create_contest(contest_slug)
 
         extra_problem = f"alice/ui-contest-prob-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(extra_problem, "Extra Contest Problem")
+        workspace_service.ensure_problem(extra_problem)
         workspace_service.grant_repo_access(extra_problem, "alice", "owner")
         workspace_service.grant_repo_access("alice/sample", "alice", "owner")
 
@@ -151,12 +151,12 @@ class TestUIContests(UIBaseSuite):
         )
         self.assertEqual(problems_page.status_code, 200)
         problems_html = problems_page.body.decode("utf-8", errors="replace")
-        self.assertIn("Change Names And TL/ML", problems_html)
+        self.assertIn("Change TL/ML", problems_html)
         self.assertIn("/problems/change-general", problems_html)
 
     def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:
         problem_slug = f"alice/ui-bulk-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem_slug, "Bulk Before Name")
+        workspace_service.ensure_problem(problem_slug)
         workspace_service.grant_repo_access(problem_slug, "alice", "owner")
         contest_slug = f"ui-contest-bulk-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Bulk Contest")
@@ -177,7 +177,6 @@ class TestUIContests(UIBaseSuite):
             user="alice",
             selected_problem_ids=[str(pid)],
             problem_ids=[str(pid)],
-            problem_names=["Bulk After Name"],
             time_limit_ms_values=["3500"],
             memory_limit_mb_values=["512"],
             retry_job_id="",
@@ -199,17 +198,13 @@ class TestUIContests(UIBaseSuite):
         commit_id = str(first.get("commit_id") or "")
         self.assertRegex(commit_id, r"^[0-9a-f]{40}$")
 
-        updated_problem = db_fetch_one("SELECT name FROM problems WHERE id=?", [pid])
-        self.assertIsNotNone(updated_problem)
-        self.assertEqual(str(updated_problem["name"]), "Bulk After Name")
-
         ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
         cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(int(cfg.get("time_limit_ms") or 0), 3500)
         self.assertEqual(int(cfg.get("memory_limit_mb") or 0), 512)
 
         last_subject = run_git(["git", "-C", str(ws), "log", "-1", "--pretty=%s"]).stdout.strip()
-        self.assertEqual(last_subject, f"contest {contest_slug}: bulk update name/TL/ML")
+        self.assertEqual(last_subject, f"contest {contest_slug}: bulk update TL/ML")
 
     def test_contest_properties_access_and_packages_pages(self) -> None:
         contest_slug = f"ui-contest-props-{uuid.uuid4().hex[:8]}"
@@ -345,7 +340,7 @@ class TestUIContests(UIBaseSuite):
 
     def test_contest_pdf_and_package_jobs_create_artifacts(self) -> None:
         problem_slug = f"alice/ui-contest-pack-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem_slug, "Contest Package Problem")
+        workspace_service.ensure_problem(problem_slug)
         workspace_service.grant_repo_access(problem_slug, "alice", "owner")
         ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
         (ws / "README.problem.md").write_text("contest package test\n", encoding="utf-8")

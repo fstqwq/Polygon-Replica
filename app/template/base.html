@@ -4,7 +4,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% if ctx.problem.name %}{{ ctx.problem.name }} - {% endif %}Polygon-Replica</title>
+  {% set problem_display_name = ctx.problem.display_name %}
+  <title>{% if problem_display_name %}{{ problem_display_name }} - {% endif %}Polygon-Replica</title>
   <link rel="stylesheet" href="/static/style.css?v=20260413-02" />
   <script src="/static/ui.js?v=20260413-02" defer></script>
   <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />
@@ -52,7 +53,7 @@
     {% endfor %}
     {% endif %}
     <div class="problem-context-bar">
-      <strong class="problem-context-name">{{ ctx.problem.name }}</strong>
+      <strong class="problem-context-name">{{ problem_display_name }}</strong>
       <span class="problem-context-slug">#{{ ctx.problem.slug }}</span>
       {% if ctx.general_cfg is defined %}
       <div class="problem-context-meta">

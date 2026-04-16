@@ -10,7 +10,7 @@ from fastapi import Form, HTTPException, Depends
 
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit, normalize_problem_name_required
+from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.context import normalize_statement_language, pick_statement_language, statement_languages
@@ -27,7 +27,6 @@ def general_save(
     memory_limit_mb: Annotated[str, Form()] = '1024',
     mode: Annotated[str, Form()] = 'pass-fail',
     pass_limit: Annotated[str, Form()] = '1',
-    problem_name: Annotated[str, Form()] = '',
     language: Annotated[str, Form()] = '',
     preview_id: Annotated[str, Form()] = '',
 ):
@@ -45,17 +44,13 @@ def general_save(
             min_value=_C.GENERAL_PASS_LIMIT_MIN,
             max_value=_C.GENERAL_PASS_LIMIT_MAX,
         )
-        requested_problem_name = problem_name.strip()
-        current_problem_name = ctx['problem']['name'].strip()
-        safe_problem_name = normalize_problem_name_required(requested_problem_name or current_problem_name)
         with config.workspace_service.workspace_lock(workspace):
             payload, _, cfg_path = read_problem_config(workspace)
             payload.pop('interactive', None)
             payload.update({'time_limit_ms': safe_time_limit, 'memory_limit_mb': safe_memory, 'mode': safe_mode, 'pass_limit': safe_pass_limit})
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             cfg_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-            config.workspace_service.set_problem_name(problem, safe_problem_name)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'general.save', {'time_limit_ms': safe_time_limit, 'memory_limit_mb': safe_memory, 'mode': safe_mode, 'pass_limit': safe_pass_limit, 'problem_name': safe_problem_name})
+        audit(ctx['user']['id'], ctx['problem']['id'], 'general.save', {'time_limit_ms': safe_time_limit, 'memory_limit_mb': safe_memory, 'mode': safe_mode, 'pass_limit': safe_pass_limit})
     except (ValueError, OSError, HTTPException) as exc:
         msg = str(exc)
     query: dict[str, str] = {}

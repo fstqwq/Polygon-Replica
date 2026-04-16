@@ -914,11 +914,11 @@ class TestUIAuth(UIBaseSuite):
         cookie_header = f"{AUTH_COOKIE_NAME}={token}"
 
         with self.assertRaises(ValueError) as bad_format:
-            workspace_service.ensure_problem("Sample_Problem", "Bad Format")
+            workspace_service.ensure_problem("Sample_Problem")
         self.assertIn("Use <owner>/<slug>", str(bad_format.exception))
 
         with self.assertRaises(ValueError) as bad_dash:
-            workspace_service.ensure_problem("sample-", "Bad Dash")
+            workspace_service.ensure_problem("sample-")
         self.assertIn("Use <owner>/<slug>", str(bad_dash.exception))
 
         invalid_open = switch_workspace(

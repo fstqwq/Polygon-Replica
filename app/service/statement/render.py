@@ -5,6 +5,7 @@ import os
 import shutil
 from pathlib import Path
 
+from app.main_util import problem_slug_leaf
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
 from app.service.statement.constant import (
     DEFAULT_OLYMP_STY,
@@ -53,6 +54,16 @@ def _safe_read_json(path: Path) -> dict:
 
 def _statement_section_text(workspace: Path, language: str, section_name: str, fallback: str = "") -> str:
     return _safe_read_text(workspace / (STATEMENT_SECTIONS_DIR / language / section_name), fallback)
+
+
+def default_statement_title_for_workspace(workspace: Path) -> str:
+    return problem_slug_leaf(workspace.name) or DEFAULT_PROBLEM_TITLE
+
+
+def statement_title_for_language(workspace: Path, language: str, fallback_title: str | None = None) -> str:
+    title_from_section = _statement_section_text(workspace, language, "name.tex", fallback="").strip()
+    fallback = str(fallback_title or "").strip() or default_statement_title_for_workspace(workspace)
+    return title_from_section or fallback
 
 
 def _safe_workspace_regular_file(workspace: Path, rel: Path) -> Path | None:
@@ -137,8 +148,7 @@ def _problem_context_for_language(
         memory_limit_mb = int(memory_limit_mb_obj)
     except Exception:
         memory_limit_mb = 1024
-    title_from_section = _statement_section_text(workspace, language, "name.tex", fallback="").strip()
-    resolved_title = str(problem_title or "").strip() or title_from_section or DEFAULT_PROBLEM_TITLE
+    resolved_title = statement_title_for_language(workspace, language, problem_title)
     return {
         "name": resolved_title,
         "inputFile": input_file,
@@ -204,9 +214,9 @@ def _prepare_statement_language_compile_tree(workspace: Path, language: str, tar
     _copy_statement_language_sources(workspace, language, target_dir)
 
 
-def _statement_language_seed_defaults() -> dict[str, str]:
+def _statement_language_seed_defaults(workspace: Path) -> dict[str, str]:
     return {
-        "name.tex": DEFAULT_PROBLEM_TITLE + "\n",
+        "name.tex": default_statement_title_for_workspace(workspace) + "\n",
         "legend.tex": "",
         "input.tex": "",
         "output.tex": "",
@@ -229,7 +239,7 @@ def ensure_statement_language_sources(workspace: Path, language: str) -> None:
         (workspace / STATEMENT_PROBLEM_REL).write_text(DEFAULT_STATEMENT_PROBLEM_TEMPLATE, encoding="utf-8")
     if not (workspace / STATEMENT_STYLE_REL).exists():
         (workspace / STATEMENT_STYLE_REL).write_text(default_olymp_sty_text(), encoding="utf-8")
-    for rel, content in _statement_language_seed_defaults().items():
+    for rel, content in _statement_language_seed_defaults(workspace).items():
         path = sections_root / rel
         if not path.exists():
             path.write_text(content, encoding="utf-8")

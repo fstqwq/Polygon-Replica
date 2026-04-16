@@ -292,11 +292,8 @@ def import_package_into_workspace(
                 normalize_test_data_newlines=bool(normalize_test_data_newlines),
             ),
         )
-        imported_title = cast(str | None, result.get("title")) or ""
         with config.workspace_service.workspace_lock(target_workspace):
             _merge_imported_tree(staging_workspace, target_workspace)
-            if imported_title:
-                config.workspace_service.set_problem_name(safe_target_problem, imported_title)
         config.workspace_service.ensure_workspace(safe_target_problem, safe_actor_user, refresh_status=True)
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
@@ -353,10 +350,9 @@ def import_package_as_new_problem(
     existing_bare_head = _bare_repo_head_commit(target_bare)
     if existing_bare_head:
         raise ValueError(f"import target already has revision history: {target_problem}")
-    target_segment = target_problem.split("/", 1)[1] if "/" in target_problem else target_problem
     created_problem = False
     try:
-        config.workspace_service.ensure_problem(target_problem, f"{target_segment.title()} Problem")
+        config.workspace_service.ensure_problem(target_problem)
         created_problem = True
         config.workspace_service.grant_repo_access(target_problem, safe_actor_user, "owner")
         target_workspace = Path(config.workspace_service.ensure_workspace(target_problem, safe_actor_user))
@@ -374,11 +370,6 @@ def import_package_as_new_problem(
                     normalize_test_data_newlines=bool(normalize_test_data_newlines),
                 ),
             )
-            imported_title = cast(str | None, result.get("title"))
-            if imported_title is None:
-                imported_title = ""
-            if imported_title:
-                config.workspace_service.set_problem_name(target_problem, imported_title)
         with config.workspace_service.workspace_lock(target_workspace):
             imported_commit = _finalize_imported_problem(target_problem, safe_actor_user, target_workspace, package_format)
         config.workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)

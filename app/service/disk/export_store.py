@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from app.main_util import problem_slug_leaf
 from app.db import DB, now_iso
 
 
@@ -195,13 +196,14 @@ class ExportStore:
         }
 
     def problem_export_row(self, slug: str) -> ProblemExportRow | None:
-        row = self.db.fetch_one("SELECT id,slug,name FROM problems WHERE slug=?", [slug])
+        row = self.db.fetch_one("SELECT id,slug FROM problems WHERE slug=?", [slug])
         if row is None:
             return None
+        safe_slug = str(row["slug"] or "")
         return {
             "id": int(row["id"]),
-            "slug": str(row["slug"] or ""),
-            "name": str(row["name"] or ""),
+            "slug": safe_slug,
+            "name": problem_slug_leaf(safe_slug),
         }
 
     def insert_export_record(

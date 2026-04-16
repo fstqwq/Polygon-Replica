@@ -27,7 +27,6 @@ PRAGMA auto_vacuum=INCREMENTAL;
 CREATE TABLE IF NOT EXISTS problems (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
     repo_name TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -429,7 +428,7 @@ CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at
 """
 
 CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
-    "problems": ("id", "slug", "name", "repo_name", "created_at"),
+    "problems": ("id", "slug", "repo_name", "created_at"),
     "users": (
         "id",
         "username",
@@ -723,9 +722,44 @@ class DB:
         with sqlite3.connect(self.path) as conn:
             self._prepare_connection(conn)
             conn.executescript(SCHEMA)
+            self._normalize_legacy_schema(conn)
             self._validate_existing_schema(conn)
             conn.executescript(SCHEMA_INDEXES)
             conn.commit()
+
+    def _normalize_legacy_schema(self, conn: sqlite3.Connection) -> None:
+        problem_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(problems)").fetchall()
+        }
+        if "name" not in problem_columns:
+            return
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            conn.execute("DROP TABLE IF EXISTS problems__new")
+            conn.execute(
+                """
+                CREATE TABLE problems__new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    slug TEXT UNIQUE NOT NULL,
+                    repo_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO problems__new(id,slug,repo_name,created_at)
+                SELECT id,slug,repo_name,created_at
+                FROM problems
+                """
+            )
+            conn.execute("DROP TABLE problems")
+            conn.execute("ALTER TABLE problems__new RENAME TO problems")
+            conn.commit()
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
 
     def _db_file_exists(self) -> bool:
         return self.path.exists() and self.path.stat().st_size > 0

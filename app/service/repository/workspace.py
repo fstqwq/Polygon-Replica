@@ -101,7 +101,7 @@ class WorkspaceService:
         ]:
             ensure_dir(p)
 
-    def ensure_problem(self, slug: str, name: str) -> None:
+    def ensure_problem(self, slug: str) -> None:
         slug = self._validate_identifier(slug, "problem")
         self.ensure_layout()
         repo_name = f"{slug}.git"
@@ -109,25 +109,8 @@ class WorkspaceService:
         if not bare.exists():
             ensure_dir(bare.parent)
             run_git(["git", "init", "--bare", str(bare)])
-        row = self._store.ensure_problem_row(slug=slug, name=name, repo_name=repo_name)
+        row = self._store.ensure_problem_row(slug=slug, repo_name=repo_name)
         self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
-
-    def set_problem_name(self, slug: str, name: str) -> dict:
-        safe_slug = self._validate_identifier(slug, "problem")
-        safe_name = str(name or "").strip()
-        if not safe_name:
-            raise ValueError("problem name is required")
-        row = self._store.problem_row_by_slug(safe_slug)
-        if row is None:
-            raise ValueError(f"Unknown problem: {safe_slug}")
-        if row["name"] != safe_name:
-            self._store.update_problem_name(int(row["id"]), safe_name)
-            refreshed = self._store.problem_row_by_slug(safe_slug)
-            if refreshed is not None:
-                row = refreshed
-        row_dict = dict(row)
-        self._cache_put(self._problem_cache, safe_slug, row_dict, self.PROBLEM_CACHE_MAX_ENTRIES)
-        return row_dict
 
     def ensure_user(self, username: str):
         username = self._validate_identifier(username, "user")

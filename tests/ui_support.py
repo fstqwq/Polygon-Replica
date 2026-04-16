@@ -539,7 +539,7 @@ class UIBaseSuite(SmokeBase):
         safe_user = str(user or "alice").strip() or "alice"
         if "/" not in safe_problem:
             safe_problem = f"{safe_user}/{safe_problem}"
-        workspace_service.ensure_problem(safe_problem, f"{safe_problem} title")
+        workspace_service.ensure_problem(safe_problem)
         ws = Path(workspace_service.ensure_workspace(safe_problem, safe_user))
         workspace_service.grant_repo_access(safe_problem, safe_user, "owner")
         for rel in ["generators", "validators", "checkers", "solutions", "tests/manual", "third_party/testlib", "config"]:

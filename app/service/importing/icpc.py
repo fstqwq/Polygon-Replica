@@ -499,6 +499,12 @@ class ICPCPackageImportService:
         fallback_header: dict[str, str] = {}
 
         selected_language = "english" if "english" in section_languages else (sorted(section_languages)[0] if section_languages else "english")
+        title_path = workspace / STATEMENT_SECTIONS_DIR / selected_language / "name.tex"
+        title_text = str(_meta["title"] or "").strip()
+        if title_text:
+            title_path.parent.mkdir(parents=True, exist_ok=True)
+            if (not title_path.exists()) or (not title_path.read_text(encoding="utf-8").strip()):
+                title_path.write_text(title_text + "\n", encoding="utf-8")
         language_warning = ""
         if section_languages and selected_language != "english":
             language_warning = f"statement language english not found; defaulting to {selected_language}"

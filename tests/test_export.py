@@ -736,9 +736,7 @@ class TestExport(SmokeBase):
         self.assertEqual((ws / overwritten_rel).read_text(encoding="utf-8"), "int main(){return 7;}\n")
         self.assertEqual((ws / kept_rel).read_text(encoding="utf-8"), "keep-local\n")
         self.assertEqual((ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "5\n")
-        problem_row = db_fetch_one("SELECT name FROM problems WHERE slug=?", [self.problem])
-        self.assertIsNotNone(problem_row)
-        self.assertEqual(str(problem_row["name"] or ""), f"Imported {token}")
+        self.assertEqual((ws / "statement-sections" / "english" / "name.tex").read_text(encoding="utf-8"), f"Imported {token}\n")
 
     def test_import_into_working_copy_route_reports_workspace_message(self) -> None:
         package_bytes = self._build_native_package_bytes(

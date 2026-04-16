@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.config import config
 from .common import _contest_problem_slug_file_token
-from app.impl.workspace.context_operation import audit, normalize_contest_slug_required, normalize_problem_name_required
+from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_verification import latest_workspace_signature_verification
 from app.impl.workspace.access import workspace_access_context
@@ -385,7 +385,6 @@ def _contest_redirect(contest_slug: str, page: str, *, query: str = "", message:
 
 def _problem_general_payload_map(
     problem_ids: list[str],
-    problem_names: list[str],
     time_limit_ms_values: list[str],
     memory_limit_mb_values: list[str],
 ) -> dict[int, dict[str, object]]:
@@ -397,10 +396,9 @@ def _problem_general_payload_map(
             continue
         if pid <= 0:
             continue
-        name_value = str(problem_names[index] if index < len(problem_names) else "").strip()
         tl_value = str(time_limit_ms_values[index] if index < len(time_limit_ms_values) else "").strip()
         ml_value = str(memory_limit_mb_values[index] if index < len(memory_limit_mb_values) else "").strip()
-        result[pid] = {"name": name_value, "time_limit_ms": tl_value, "memory_limit_mb": ml_value}
+        result[pid] = {"time_limit_ms": tl_value, "memory_limit_mb": ml_value}
     return result
 
 def _run_problem_general_update(
@@ -410,12 +408,10 @@ def _run_problem_general_update(
     actor_user_id: int,
     problem_id: int,
     problem_slug: str,
-    requested_name: str,
     requested_time_limit_ms: str,
     requested_memory_limit_mb: str,
 ) -> dict[str, object]:
     requested: dict[str, object] = {
-        "name": str(requested_name or "").strip(),
         "time_limit_ms": str(requested_time_limit_ms or "").strip(),
         "memory_limit_mb": str(requested_memory_limit_mb or "").strip(),
     }
@@ -433,8 +429,6 @@ def _run_problem_general_update(
         return result
     try:
         workspace = Path(config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True))
-        requested_name_obj = requested.get("name")
-        safe_name = normalize_problem_name_required(str(requested_name_obj) if requested_name_obj is not None else "")
         safe_tl = coerce_int(
             requested.get("time_limit_ms"),
             int(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
@@ -465,12 +459,11 @@ def _run_problem_general_update(
             )
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             cfg_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            config.workspace_service.set_problem_name(problem_slug, safe_name)
             after = config.git_service.status_change_summary(workspace, limit=1)
             if int(after.get("total", 0)) <= 0:
                 result["status"] = "skipped"
                 return result
-            commit_msg = f"contest {contest_slug}: bulk update name/TL/ML"
+            commit_msg = f"contest {contest_slug}: bulk update TL/ML"
             commit_id = config.git_service.commit(
                 workspace,
                 commit_msg,

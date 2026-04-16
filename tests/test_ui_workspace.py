@@ -155,7 +155,7 @@ class TestUIWorkspace(UIBaseSuite):
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"alice/pdel-problem-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, "Delete Problem Target")
+        workspace_service.ensure_problem(problem)
         workspace_service.grant_repo_access(problem, username, "owner")
         ws = Path(workspace_service.ensure_workspace(problem, username))
         self.assertTrue(ws.exists())
@@ -223,7 +223,7 @@ class TestUIWorkspace(UIBaseSuite):
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"{username}/route-problem-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, "Delete Problem Route Target")
+        workspace_service.ensure_problem(problem)
         workspace_service.grant_repo_access(problem, username, "owner")
         ws = Path(workspace_service.ensure_workspace(problem, username))
         row_before = db_fetch_one("SELECT id,repo_name FROM problems WHERE slug=?", [problem])
@@ -325,7 +325,7 @@ class TestUIWorkspace(UIBaseSuite):
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"alice/pdelx-problem-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, "Delete Problem Target")
+        workspace_service.ensure_problem(problem)
         workspace_service.grant_repo_access(problem, username, "owner")
         workspace_service.ensure_workspace(problem, username)
 
@@ -361,7 +361,7 @@ class TestUIWorkspace(UIBaseSuite):
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"alice/pdelu-problem-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, "Delete Problem Unsafe Repo")
+        workspace_service.ensure_problem(problem)
         workspace_service.grant_repo_access(problem, username, "owner")
         workspace_service.ensure_workspace(problem, username)
         db_execute("UPDATE problems SET repo_name='' WHERE slug=?", [problem])
@@ -397,7 +397,6 @@ class TestUIWorkspace(UIBaseSuite):
         resp = general_save(
             problem="alice/sample",
             user="alice",
-            problem_name="Workspace General Title",
             time_limit_ms="3500",
             memory_limit_mb="768",
             mode="interactive",
@@ -413,9 +412,6 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(payload.get("memory_limit_mb"), 768)
         self.assertNotIn("interactive", payload)
         self.assertEqual(payload.get("mode"), "interactive")
-        row = db_fetch_one("SELECT name FROM problems WHERE slug=?", ["alice/sample"])
-        self.assertIsNotNone(row)
-        self.assertEqual(str(row["name"]), "Workspace General Title")
         self.assertFalse((ws / "statement" / "rendered").exists())
 
     def test_general_limits_are_clamped_to_configured_bounds(self) -> None:
@@ -710,7 +706,7 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_problem_page_denies_user_without_acl(self) -> None:
         private_problem = f"alice/ui-private-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(private_problem, "Private Problem")
+        workspace_service.ensure_problem(private_problem)
         workspace_service.grant_repo_access(private_problem, "bob", "owner")
         workspace_service.ensure_workspace(private_problem, "bob")
         with self.assertRaises(HTTPException) as denied:
@@ -827,7 +823,7 @@ class TestUIWorkspace(UIBaseSuite):
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         private_problem = f"alice/ui-switch-private-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(private_problem, "Private Problem")
+        workspace_service.ensure_problem(private_problem)
         workspace_service.grant_repo_access(private_problem, "bob", "owner")
         resp = switch_workspace(
             _request_with_cookie("/switch-workspace", auth_cookie),
@@ -841,34 +837,31 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertTrue(messages)
         self.assertIn("do not have access to this problem", messages[0])
 
-    def test_switch_workspace_creates_problem_with_requested_name(self) -> None:
+    def test_switch_workspace_creates_problem_with_slug_leaf_title(self) -> None:
         username = f"switchcreate-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         slug = f"ui-switch-create-{uuid.uuid4().hex[:8]}"
-        requested_name = f"Custom Created Name {uuid.uuid4().hex[:6]}"
         resp = switch_workspace(
             _request_with_cookie("/switch-workspace", auth_cookie),
             problem=slug,
-            problem_name=requested_name,
             page="statement",
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/{username}/{slug}/statement", str(resp.headers.get("location", "")))
-        row = db_fetch_one("SELECT name FROM problems WHERE slug=?", [f"{username}/{slug}"])
-        self.assertIsNotNone(row)
-        self.assertEqual(str(row["name"] or ""), requested_name)
+        ws = Path(workspace_service.ensure_workspace(f"{username}/{slug}", username))
+        self.assertEqual((ws / "statement-sections" / "english" / "name.tex").read_text(encoding="utf-8"), f"{slug}\n")
 
     def test_problems_page_shows_only_participating_problems(self) -> None:
         owner_problem = f"alice/ui-owner-{uuid.uuid4().hex[:8]}"
         read_problem = f"alice/ui-read-{uuid.uuid4().hex[:8]}"
         other_problem = f"alice/ui-other-{uuid.uuid4().hex[:8]}"
 
-        workspace_service.ensure_problem(owner_problem, "Owner Problem")
+        workspace_service.ensure_problem(owner_problem)
         workspace_service.ensure_workspace(owner_problem, "alice")
         workspace_service.grant_repo_access(owner_problem, "alice", "owner")
 
-        workspace_service.ensure_problem(read_problem, "Read Problem")
+        workspace_service.ensure_problem(read_problem)
         alice_row = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         read_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [read_problem])
         self.assertIsNotNone(alice_row)
@@ -878,7 +871,7 @@ class TestUIWorkspace(UIBaseSuite):
             [int(read_row["id"]), int(alice_row["id"]), "read", "2026-01-01T00:00:00+00:00"],
         )
 
-        workspace_service.ensure_problem(other_problem, "Other Problem")
+        workspace_service.ensure_problem(other_problem)
         workspace_service.ensure_workspace(other_problem, "bob")
 
         resp = problems_root_page(_request("/problems"), "alice")
@@ -897,8 +890,8 @@ class TestUIWorkspace(UIBaseSuite):
     def test_problems_page_orders_by_last_updated_desc(self) -> None:
         older_slug = f"alice/ui-sort-old-{uuid.uuid4().hex[:8]}"
         newer_slug = f"alice/ui-sort-new-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(older_slug, "Sort Older Problem")
-        workspace_service.ensure_problem(newer_slug, "Sort Newer Problem")
+        workspace_service.ensure_problem(older_slug)
+        workspace_service.ensure_problem(newer_slug)
         workspace_service.grant_repo_access(older_slug, "alice", "owner")
         workspace_service.grant_repo_access(newer_slug, "alice", "owner")
         workspace_service.ensure_workspace(older_slug, "alice")
@@ -944,7 +937,7 @@ class TestUIWorkspace(UIBaseSuite):
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('data-popup-open="problem-open-popup"', html)
         self.assertIn('id="problem-open-popup"', html)
-        self.assertIn('name="problem_name"', html)
+        self.assertNotIn('name="problem_name"', html)
         self.assertIn('data-popup-open="problem-import-popup"', html)
         self.assertIn('id="problem-import-popup"', html)
         self.assertIn('id="polygon-import-form"', html)
@@ -952,7 +945,7 @@ class TestUIWorkspace(UIBaseSuite):
     def test_problems_root_import_slug_hint_uses_filename_and_avoids_duplicates(self) -> None:
         token = uuid.uuid4().hex[:8]
         base_slug = f"root-import-hint-{token}"
-        workspace_service.ensure_problem(f"alice/{base_slug}", f"{base_slug} title")
+        workspace_service.ensure_problem(f"alice/{base_slug}")
         resp = problems_root_import_slug_hint(_request("/problems/import/slug-hint"), user="alice", filename=f"{base_slug}.zip", requested_slug="")
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8", errors="replace"))
@@ -966,7 +959,7 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_problems_root_import_slug_hint_strips_polygon_linux_suffix(self) -> None:
         base_slug = f"suffix-trim-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(f"alice/{base_slug}", f"{base_slug} title")
+        workspace_service.ensure_problem(f"alice/{base_slug}")
         filename = f"{base_slug}-46$linux.zip"
         resp = problems_root_import_slug_hint(_request("/problems/import/slug-hint"), user="alice", filename=filename, requested_slug="")
         self.assertEqual(resp.status_code, 200)

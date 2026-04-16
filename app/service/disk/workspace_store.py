@@ -4,6 +4,7 @@ import json
 import sqlite3
 from typing import TypedDict
 
+from app.main_util import problem_slug_leaf
 from app.db import DB, now_iso
 from app.service.verification.task_store import VerificationTaskStore
 
@@ -91,46 +92,45 @@ class WorkspaceDiskStore:
 
     def problem_row_by_slug(self, slug: str) -> ProblemRow | None:
         row = self.db.fetch_one(
-            "SELECT id,slug,name,repo_name,created_at FROM problems WHERE slug=?",
+            "SELECT id,slug,repo_name,created_at FROM problems WHERE slug=?",
             [slug],
         )
         if row is None:
             return None
+        safe_slug = str(row["slug"] or "")
         return {
             "id": int(row["id"]),
-            "slug": str(row["slug"] or ""),
-            "name": str(row["name"] or ""),
+            "slug": safe_slug,
+            "name": problem_slug_leaf(safe_slug),
             "repo_name": str(row["repo_name"] or ""),
             "created_at": str(row["created_at"] or ""),
         }
 
     def problem_row_by_id_slug(self, problem_id: int, slug: str) -> ProblemRow | None:
         row = self.db.fetch_one(
-            "SELECT id,slug,name,repo_name,created_at FROM problems WHERE id=? AND slug=?",
+            "SELECT id,slug,repo_name,created_at FROM problems WHERE id=? AND slug=?",
             [int(problem_id), slug],
         )
         if row is None:
             return None
+        safe_slug = str(row["slug"] or "")
         return {
             "id": int(row["id"]),
-            "slug": str(row["slug"] or ""),
-            "name": str(row["name"] or ""),
+            "slug": safe_slug,
+            "name": problem_slug_leaf(safe_slug),
             "repo_name": str(row["repo_name"] or ""),
             "created_at": str(row["created_at"] or ""),
         }
 
-    def ensure_problem_row(self, *, slug: str, name: str, repo_name: str) -> ProblemRow:
+    def ensure_problem_row(self, *, slug: str, repo_name: str) -> ProblemRow:
         self.db.execute(
-            "INSERT OR IGNORE INTO problems(slug, name, repo_name, created_at) VALUES(?,?,?,?)",
-            [slug, name, repo_name, now_iso()],
+            "INSERT OR IGNORE INTO problems(slug, repo_name, created_at) VALUES(?,?,?)",
+            [slug, repo_name, now_iso()],
         )
         row = self.problem_row_by_slug(slug)
         if row is None:
             raise RuntimeError(f"unable to ensure problem row for {slug}")
         return row
-
-    def update_problem_name(self, problem_id: int, name: str) -> None:
-        self.db.execute("UPDATE problems SET name=? WHERE id=?", [name, int(problem_id)])
 
     def user_id_by_username(self, username: str) -> int | None:
         row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
@@ -269,7 +269,7 @@ class WorkspaceDiskStore:
     def user_problem_rows(self, user_id: int, *, limit: int) -> list[UserProblemRow]:
         rows = self.db.fetch_all(
             """
-            SELECT p.slug,p.name,a.role AS role,
+            SELECT p.slug,a.role AS role,
                    w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,
                    COALESCE(NULLIF(w.updated_at, ''), p.created_at) AS last_updated_at
             FROM repo_acl a
@@ -284,10 +284,11 @@ class WorkspaceDiskStore:
         items: list[UserProblemRow] = []
         for row in rows:
             workspace_id_raw = row["workspace_id"]
+            safe_slug = str(row["slug"] or "")
             items.append(
                 {
-                    "slug": str(row["slug"] or ""),
-                    "name": str(row["name"] or ""),
+                    "slug": safe_slug,
+                    "name": problem_slug_leaf(safe_slug),
                     "role": str(row["role"] or ""),
                     "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
                     "path": str(row["path"] or ""),

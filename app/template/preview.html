@@ -42,7 +42,7 @@
 <div class="grid">
   <section>
     <div class="statement-summary">
-      <h2 class="statement-summary-title">{{ ctx.problem.name }}</h2>
+      <h2 class="statement-summary-title">{{ ctx.problem.display_name }}</h2>
       <div class="statement-summary-meta">
         <a class="linkish statement-summary-edit" href="#statement-settings-popup" data-popup-open="statement-settings-popup">Edit metadata</a>
       </div>
@@ -63,7 +63,7 @@
       {% endif %}
       {% for section in statement_sections %}
       {% if section.enabled %}
-      {% set editor_height = 230 if section.key in ['input', 'output'] else 460 %}
+      {% set editor_height = 90 if section.key == 'name' else 230 if section.key in ['input', 'output'] else 460 %}
       <div class="statement-editor-field">
         <div class="statement-editor-field-head">
           <label>{{ section.label }} (<code>{{ section.path }}</code>)</label>
@@ -192,15 +192,6 @@
         {% if preview_id %}
         <input type="hidden" name="preview_id" value="{{ preview_id }}" />
         {% endif %}
-        <div class="form-row">
-          <label for="general-problem-name">Problem name</label>
-          <input
-            id="general-problem-name"
-            name="problem_name"
-            maxlength="{{ problem_name_max_len }}"
-            value="{{ ctx.problem.name }}"
-          />
-        </div>
         <div class="form-row form-row-inline-distribute">
           <div class="form-field-stack">
             <label for="time-limit">Time Limit</label>

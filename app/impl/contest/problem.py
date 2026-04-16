@@ -207,7 +207,6 @@ def contest_problems_change_general(
     user: Annotated[str, Depends(require_session_user)],
     selected_problem_ids: list[str] = Form([]),
     problem_ids: list[str] = Form([]),
-    problem_names: list[str] = Form([]),
     time_limit_ms_values: list[str] = Form([]),
     memory_limit_mb_values: list[str] = Form([]),
     retry_job_id: str = Form(""),
@@ -230,7 +229,6 @@ def contest_problems_change_general(
             selected_ids.append(value)
     requested_map = _problem_general_payload_map(
         list(problem_ids or []),
-        list(problem_names or []),
         list(time_limit_ms_values or []),
         list(memory_limit_mb_values or []),
     )
@@ -261,13 +259,11 @@ def contest_problems_change_general(
                         continue
                     req = item.get("requested")
                     if isinstance(req, dict):
-                        requested_name = req.get("name")
                         requested_time_limit_ms = req.get("time_limit_ms")
                         requested_memory_limit_mb = req.get("memory_limit_mb")
-                        if not isinstance(requested_name, str) or not isinstance(requested_time_limit_ms, str) or not isinstance(requested_memory_limit_mb, str):
+                        if not isinstance(requested_time_limit_ms, str) or not isinstance(requested_memory_limit_mb, str):
                             raise RuntimeError("invalid retry job payload: malformed requested fields")
                         requested_map[pid] = {
-                            "name": requested_name.strip(),
                             "time_limit_ms": requested_time_limit_ms.strip(),
                             "memory_limit_mb": requested_memory_limit_mb.strip(),
                         }
@@ -282,7 +278,6 @@ def contest_problems_change_general(
     for row in rows:
         pid = int(row["problem_id"])
         defaults = {
-            "name": str(row["problem_name"]),
             "time_limit_ms": str(_C.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
             "memory_limit_mb": str(_C.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
         }
@@ -293,7 +288,6 @@ def contest_problems_change_general(
             actor_user_id=actor_user_id,
             problem_id=pid,
             problem_slug=str(row["problem_slug"]),
-            requested_name=requested["name"] if isinstance(requested.get("name"), str) else "",
             requested_time_limit_ms=requested["time_limit_ms"] if isinstance(requested.get("time_limit_ms"), str) else "",
             requested_memory_limit_mb=requested["memory_limit_mb"] if isinstance(requested.get("memory_limit_mb"), str) else "",
         )
@@ -332,5 +326,5 @@ def contest_problems_change_general(
         str(ctx["contest"]["slug"]),
         "problems",
         query=f"job_id={quote_plus(job_id)}",
-        message=f"change names/TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped",
+        message=f"change TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped",
     )

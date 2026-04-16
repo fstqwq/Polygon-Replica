@@ -1288,7 +1288,7 @@ class TestUIRun(UIBaseSuite):
 
     def test_run_page_defaults_all_tests_checked_when_available(self) -> None:
         problem = f"alice/run-default-tests-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem, f"{problem} title")
+        workspace_service.ensure_problem(problem)
         ws = Path(workspace_service.ensure_workspace(problem, "alice"))
         workspace_service.grant_repo_access(problem, "alice", "owner")
         (ws / "solutions").mkdir(parents=True, exist_ok=True)

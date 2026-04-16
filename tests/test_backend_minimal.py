@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.db import DB, IncompatibleSchemaError
+from app.db import DB
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
@@ -74,7 +74,7 @@ class TestBackendMinimal(SmokeBase):
         self.assertFalse(runtime_file.exists())
         self.assertFalse(durable_log.exists())
 
-    def test_db_init_fails_fast_on_incompatible_schema(self) -> None:
+    def test_db_init_rebuilds_legacy_problem_name_column(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "legacy-schema.db"
             with sqlite3.connect(db_path) as conn:
@@ -198,8 +198,9 @@ class TestBackendMinimal(SmokeBase):
                 conn.commit()
 
             probe = DB(db_path)
-            with self.assertRaises(IncompatibleSchemaError):
-                probe.init()
+            probe.init()
+            columns = [str(row[1]) for row in probe.fetch_all("PRAGMA table_info(problems)")]
+            self.assertNotIn("name", columns)
             backup_candidates = sorted(db_path.parent.glob(f"{db_path.name}.*.backup"))
             self.assertEqual(backup_candidates, [])
 

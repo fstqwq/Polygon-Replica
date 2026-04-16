@@ -107,6 +107,16 @@ def form_text(value: str | object) -> str:
     return str(default)
 
 
+def problem_slug_leaf(value: str | object) -> str:
+    raw = form_text(value).strip().replace("\\", "/")
+    if not raw:
+        return ""
+    parts = [segment for segment in raw.split("/") if segment]
+    if not parts:
+        return ""
+    return parts[-1]
+
+
 def normalize_form_text_newlines(value: str | object) -> str:
     return str(value).replace("\r\n", "\n").replace("\r", "\n")
 
@@ -211,4 +221,3 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] |
     for prefix_token, marker_token in pairs:
         normalized = normalized.replace(prefix_token, marker_token)
     return normalized
-
