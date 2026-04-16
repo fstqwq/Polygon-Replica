@@ -2,6 +2,14 @@
   vertical-align: middle;
 }
 
+.verification-list-table .verification-list-kind-head,
+.verification-list-table .verification-list-kind-cell,
+.verification-list-table .verification-list-status-head,
+.verification-list-table .verification-list-status-cell {
+  white-space: nowrap;
+  width: 1%;
+}
+
 .verification-list-table .verification-list-reason-head,
 .verification-list-table .verification-list-reason-cell {
   width: 34rem;
