@@ -53,7 +53,6 @@
     {% endfor %}
     {% endif %}
     <div class="problem-context-bar">
-      <a class="problem-slug-link problem-context-slug-link" href="/problems/{{ ctx.problem.slug }}/statement">{{ ctx.problem.slug }}</a>
       <button
         class="linkish-button problem-copy-button problem-context-copy-button"
         type="button"
@@ -68,6 +67,7 @@
           <rect x="2" y="6" width="8" height="8" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="1.25"></rect>
         </svg>
       </button>
+      <span class="problem-slug-link problem-context-slug-link">{{ ctx.problem.slug }}</span>
       {% if ctx.general_cfg is defined %}
       <div class="problem-context-meta">
         <span class="problem-context-chip">{{ ctx.general_cfg.time_limit_ms }}ms</span>

@@ -895,8 +895,8 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn('class="problem-slug-link problem-context-slug-link"', html)
-        self.assertIn('href="/problems/alice/sample/statement"', html)
-        self.assertIn(">alice/sample</a>", html)
+        self.assertIn(">alice/sample</span>", html)
+        self.assertNotIn('href="/problems/alice/sample/statement">alice/sample</a>', html)
         self.assertIn('data-copy-text="alice/sample"', html)
         self.assertIn('aria-label="Copy problem slug"', html)
 
