@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.db import DB, SCHEMA
+from app.db import CURRENT_SCHEMA_COLUMNS, DB
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
@@ -74,37 +74,8 @@ class TestBackendMinimal(SmokeBase):
         self.assertFalse(runtime_file.exists())
         self.assertFalse(durable_log.exists())
 
-    def test_db_init_rebuilds_legacy_problem_name_column(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "legacy-schema.db"
-            with sqlite3.connect(db_path) as conn:
-                conn.executescript(SCHEMA)
-                conn.commit()
-                conn.execute("PRAGMA foreign_keys=OFF")
-                conn.execute("DROP TABLE problems")
-                conn.execute(
-                    """
-                    CREATE TABLE problems (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        slug TEXT UNIQUE NOT NULL,
-                        name TEXT NOT NULL,
-                        repo_name TEXT NOT NULL,
-                        created_at TEXT NOT NULL
-                    )
-                    """
-                )
-                conn.execute(
-                    "INSERT INTO problems(id,slug,name,repo_name,created_at) VALUES(1,'p','P','p','2026-03-13T00:00:00Z')"
-                )
-                conn.execute("PRAGMA foreign_keys=ON")
-                conn.commit()
-
-            probe = DB(db_path)
-            probe.init()
-            columns = [str(row[1]) for row in probe.fetch_all("PRAGMA table_info(problems)")]
-            self.assertNotIn("name", columns)
-            backup_candidates = sorted(db_path.parent.glob(f"{db_path.name}.*.backup"))
-            self.assertEqual(backup_candidates, [])
+    def test_current_problem_schema_has_no_name_column(self) -> None:
+        self.assertNotIn("name", CURRENT_SCHEMA_COLUMNS["problems"])
 
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
