@@ -147,7 +147,7 @@ async def agent_verification_start(request: Request):
             "workspace_dirty": bool(ctx["workspace"].get("dirty")),
             "verification_id": verification_id,
             "artifact_verification_id": verification_id,
-            "verification_source": "agent.v1.verification.start",
+            "verification_source": "agent.verification.start",
             "task_graph": True,
             "error": "",
             "submission_paths": [str(item["path"]) for item in targets],

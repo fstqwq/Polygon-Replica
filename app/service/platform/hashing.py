@@ -26,8 +26,8 @@ def sha256_hex_text(text: str, *, errors: str = "strict") -> str:
 def sha256_hex_json(payload: object, *, ensure_ascii: bool = False) -> str:
     return sha256_hex_bytes(canonical_json_bytes(payload, ensure_ascii=ensure_ascii))
 
-def quick_fp_digest(entries: list[dict[str, object]], *, schema: str = "quick-fp.v1") -> str:
-    payload = {"schema": str(schema or "quick-fp.v1"), "entries": list(entries or [])}
+def quick_fp_digest(entries: list[dict[str, object]], *, schema: str = "quick-fp") -> str:
+    payload = {"schema": str(schema or "quick-fp"), "entries": list(entries or [])}
     return sha256_hex_json(payload, ensure_ascii=False)
 
 

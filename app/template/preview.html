@@ -54,6 +54,7 @@
       data-draft-scope-problem="{{ ctx.problem.slug }}"
       data-draft-scope-user="{{ ctx.user.username }}"
       data-draft-scope-page="{{ return_page if return_page is defined else 'preview' }}"
+      data-draft-scope-language="{{ current_language }}"
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
@@ -66,6 +67,8 @@
       <div class="statement-editor-field">
         <div class="statement-editor-field-head">
           <label>{{ section.label }} (<code>{{ section.path }}</code>)</label>
+        </div>
+        <div class="statement-editor-field-body">
           <a
             href="#statement-draft-popup"
             class="linkish statement-draft-inline-trigger"
@@ -75,15 +78,15 @@
             data-draft-label="{{ section.label }}"
             aria-label="Open local draft history for {{ section.label }}"
           >Draft</a>
+          <textarea
+            name="{{ section.field_name }}"
+            rows="12"
+            data-code-editor="1"
+            data-code-path="{{ section.path }}"
+            data-code-height="{{ editor_height }}"
+            data-code-wrap="1"
+          >{{ section.content }}</textarea>
         </div>
-        <textarea
-          name="{{ section.field_name }}"
-          rows="12"
-          data-code-editor="1"
-          data-code-path="{{ section.path }}"
-          data-code-height="{{ editor_height }}"
-          data-code-wrap="1"
-        >{{ section.content }}</textarea>
       </div>
       {% if section.truncated %}
       <p><em>{{ section.label }} text is truncated in editor (showing first {{ editor_char_limit }} chars).</em></p>

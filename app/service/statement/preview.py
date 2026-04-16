@@ -249,7 +249,7 @@ class PreviewService:
         language: str = "",
     ) -> str:
         payload = {
-            "schema": "preview-ref.v1",
+            "schema": "preview-ref",
             "problem_id": int(problem_id),
             "workspace_id": int(workspace_id),
             "source_commit": str(source_commit or "").strip() or "__dirty__",
@@ -286,7 +286,7 @@ class PreviewService:
             "source_commit": source if source_commit is not None else "__dirty__",
             "statement_signature": signature,
             "language": safe_language,
-            "schema": "v3",
+            "schema": "statement-preview-cache",
         }
 
         def _cached_preview_still_valid(preview_id: str) -> bool:
@@ -730,7 +730,7 @@ class PreviewService:
                         "source_commit": source_commit if source_commit else "__dirty__",
                         "statement_signature": str(statement_signature or "").strip(),
                         "language": safe_language,
-                        "schema": "v3",
+                        "schema": "statement-preview-cache",
                     },
                     {"preview_id": preview_id},
                     tags={

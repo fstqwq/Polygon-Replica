@@ -174,7 +174,7 @@ A single verification can write to these places:
 - `artifacts/verifications/<verification_id>/tests/`, `ans/`, `logs/`, `bin/`, `uploaded-sources/`
 - `runtime/snapshots/<snapshot_id>/src`
 - `runtime/judgehost-runs/<judgehost_task_id>/...`
-- `judge-fs-index/v2/...`
+- `judge-fs-index/...`
 - `async-task-cache/...`
 - `runtime/worker-queue-events.jsonl`
 

@@ -4527,7 +4527,7 @@ class TestJudgehostService(SmokeBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        cache_root = Path(config.settings.cache_root) / "judge-fs-index" / "v2" / service.CASE_CACHE_KIND
+        cache_root = Path(config.settings.cache_root) / "judge-fs-index" / service.CASE_CACHE_KIND
         before_cache_outputs = {
             path.resolve()
             for path in cache_root.rglob("program.out")
@@ -4653,7 +4653,7 @@ class TestJudgehostService(SmokeBase):
             },
         )
 
-        cache_root = Path(config.settings.cache_root) / "judge-fs-index" / "v2" / service.CASE_CACHE_KIND
+        cache_root = Path(config.settings.cache_root) / "judge-fs-index" / service.CASE_CACHE_KIND
         blob_paths = [p for p in cache_root.rglob("program.out") if p.is_file() and (not p.is_symlink())]
         self.assertTrue(blob_paths)
         target_blob = sorted(blob_paths)[-1]
@@ -4750,7 +4750,7 @@ class TestJudgehostService(SmokeBase):
             },
         )
 
-        cache_root = Path(config.settings.cache_root) / "judge-fs-index" / "v2" / service.CASE_CACHE_KIND
+        cache_root = Path(config.settings.cache_root) / "judge-fs-index" / service.CASE_CACHE_KIND
         blob_paths = [p for p in cache_root.rglob("program.out") if p.is_file() and (not p.is_symlink())]
         self.assertTrue(blob_paths)
         target_blob = sorted(blob_paths)[-1]

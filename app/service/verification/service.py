@@ -415,7 +415,7 @@ class VerificationService:
         blob = bytes(payload)
         key_hash = sha256_hex_json(
             {
-                "schema": "verification-artifact-key.v1",
+                "schema": "verification-artifact-key",
                 "verification_id": safe_verification_id,
                 "test_name": safe_test_name,
                 "role": safe_role,
@@ -424,7 +424,7 @@ class VerificationService:
         )
         signature = JudgeFsIndexService.signature(
             {
-                "schema": "verification-artifact.v1",
+                "schema": "verification-artifact",
                 "payload_sha256": sha256_hex_bytes(blob),
                 "file_name": safe_file_name,
             }
@@ -441,7 +441,7 @@ class VerificationService:
             key_hash=key_hash,
             signature=signature,
             value={
-                "schema": "verification-artifact.v1",
+                "schema": "verification-artifact",
                 "verification_id": safe_verification_id,
                 "test_name": safe_test_name,
                 "role": safe_role,

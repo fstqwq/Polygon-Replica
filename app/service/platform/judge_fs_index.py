@@ -37,14 +37,14 @@ class JudgeFsIndexService:
     """Persistent filesystem index for judgehost testcase and verification artifacts.
 
     Layout:
-    - <cache_root>/judge-fs-index/v2/<kind>/<hh>/<key_hash>/<signature>/
+    - <cache_root>/judge-fs-index/<kind>/<hh>/<key_hash>/<signature>/
     """
 
     KIND_CASE = "case"
     KIND_VERIFICATION = "verification"
 
     def __init__(self, cache_root: Path) -> None:
-        self._root = (Path(cache_root).resolve() / "judge-fs-index" / "v2").resolve()
+        self._root = (Path(cache_root).resolve() / "judge-fs-index").resolve()
         self._root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._entries: dict[tuple[str, str, str], _JudgeFsIndexEntry] = {}
@@ -221,7 +221,7 @@ class JudgeFsIndexService:
             old = self._entries.get(key)
             created_at = now_text if old is None else old["created_at"]
             self._entries[key] = {
-                "schema": "v3",
+                "schema": "judge-fs-index-entry",
                 "kind": safe_kind,
                 "key_hash": safe_key,
                 "signature": safe_sig,

@@ -461,7 +461,7 @@ class DomjudgeToolkit:
             safe_hash,
             testcase_signature,
             {
-                "schema": "testcase-artifact.v1",
+                "schema": "testcase-artifact",
                 "testcase_hash": safe_hash,
                 "input_sha256": sha256_hex_bytes(in_bytes),
                 "answer_sha256": sha256_hex_bytes(ans_bytes),

@@ -123,7 +123,7 @@ The exact root paths come from environment settings. Relative to those roots, th
     snapshots/<snapshot_id>/src/
     judgehost-runs/<judgehost_task_id>/
     worker-queue-events.jsonl
-  judge-fs-index/v2/
+  judge-fs-index/
   async-task-cache/
 ```
 
@@ -133,7 +133,7 @@ What each area means:
 - `artifacts/previews/<id>/statement_preview/statement.pdf`: preview output
 - `runtime/snapshots/<id>/src`: snapshot created for verification/preview/export execution
 - `runtime/judgehost-runs/<task_id>`: temporary judgehost workdirs
-- `judge-fs-index/v2`: content-addressed blobs for testcase files, exact case-cache payloads, and verification artifact blobs
+- `judge-fs-index`: content-addressed blobs for testcase files, exact case-cache payloads, and verification artifact blobs
 - `async-task-cache`: startup-cleared async cache namespaces
 
 ### Artifacts root

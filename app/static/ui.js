@@ -606,7 +606,7 @@
 
   function loadTopEventSeenMap() {
     try {
-      var raw = window.sessionStorage ? window.sessionStorage.getItem("polygonlike.top_event_seen.v1") : "";
+      var raw = window.sessionStorage ? window.sessionStorage.getItem("polygonlike.top-event-seen") : "";
       if (!raw) return {};
       var parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object") return {};
@@ -633,7 +633,7 @@
         if (!item.id) return;
         trimmed[item.id] = Number.isFinite(item.ts) ? item.ts : Date.now();
       });
-      window.sessionStorage.setItem("polygonlike.top_event_seen.v1", JSON.stringify(trimmed));
+      window.sessionStorage.setItem("polygonlike.top-event-seen", JSON.stringify(trimmed));
     } catch (_err) {
       // ignore storage write failures
     }
@@ -2096,11 +2096,12 @@
     }
 
     var draftStorageKeyPrefix =
-      "polygonlike:statement-draft:v2:" +
+      "polygonlike:statement-draft:" +
       [
         scopeToken(form.getAttribute("data-draft-scope-problem") || ""),
         scopeToken(form.getAttribute("data-draft-scope-user") || ""),
         scopeToken(form.getAttribute("data-draft-scope-page") || ""),
+        scopeToken(form.getAttribute("data-draft-scope-language") || ""),
         scopeToken(form.getAttribute("action") || ""),
         scopeToken(window.location.pathname || ""),
       ].join("|");

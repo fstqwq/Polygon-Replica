@@ -38,7 +38,7 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
     ]
     if not statement_root.exists() or not statement_root.is_dir() or statement_root.is_symlink():
         entries.append({"kind": "statement-root", "state": "missing"})
-        return quick_fp_digest(entries, schema="statement-signature.v2")
+        return quick_fp_digest(entries, schema="statement-signature")
 
     files: list[tuple[str, Path]] = []
     for base in (workspace / STATEMENT_DIR, workspace / STATEMENT_SECTIONS_DIR):
@@ -133,5 +133,5 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
 
     if problem_title is not None:
         entries.append({"kind": "problem-title", "value": str(problem_title or "").strip()})
-    return quick_fp_digest(entries, schema="statement-signature.v2")
+    return quick_fp_digest(entries, schema="statement-signature")
 
