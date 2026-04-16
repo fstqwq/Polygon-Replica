@@ -348,10 +348,17 @@
 .problem-context-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-4);
   margin: 0;
   color: var(--text);
   flex-wrap: wrap;
+}
+
+.problem-context-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .problem-slug-link {
@@ -367,59 +374,58 @@
   text-underline-offset: 2px;
 }
 
-.problem-context-slug-link {
+.problem-context-title {
+  margin: 0;
   font-size: 15px;
+  font-weight: 700;
   color: var(--text);
+  text-decoration: none;
+  font-family: Consolas, "Courier New", monospace;
+  line-height: 1.2;
 }
 
 .problem-copy-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--text-secondary);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
   flex: 0 0 auto;
   cursor: pointer;
   transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
     color 120ms ease,
-    transform 120ms ease;
+    opacity 120ms ease;
 }
 
 .problem-copy-button svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   display: block;
 }
 
 .problem-copy-button:hover:not(:disabled) {
-  color: var(--link);
-  background: var(--surface-hover);
-  border-color: var(--line-strong);
+  color: var(--muted);
   text-decoration: none;
-  transform: translateY(-1px);
+  opacity: 0.75;
 }
 
 .problem-copy-button:active:not(:disabled) {
-  background: var(--surface-alt);
-  transform: translateY(0);
+  opacity: 0.55;
 }
 
 .problem-copy-button:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: 0;
 }
 
 .problem-copy-button[data-copy-state="copied"] {
-  color: var(--link);
-  border-color: var(--line-strong);
-  background: var(--surface-alt);
+  color: var(--muted);
+  opacity: 0.75;
 }
 
 .problem-context-meta {
@@ -428,19 +434,66 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   min-width: 0;
+  margin-left: var(--space-2);
 }
 
-.problem-context-chip {
+.problem-context-meta-pill {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface-alt);
   padding: 1px var(--space-3);
+}
+
+.problem-context-meta-pill-item {
   color: var(--text-secondary);
   font-size: var(--font-size-ui-xs);
   line-height: 1.25;
   white-space: nowrap;
+}
+
+.problem-context-meta-pill-item-emphasis {
+  font-weight: 700;
+  color: #4f46e5;
+  background-image: linear-gradient(
+    90deg,
+    #4f46e5 0%,
+    #3b82f6 48%,
+    #0891b2 100%
+  );
+  background-size: 100% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.problem-context-meta-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  text-decoration: none;
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.problem-context-meta-action svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.problem-context-meta-action:hover,
+.problem-context-meta-action:focus-visible {
+  color: var(--muted);
+  text-decoration: none;
+  opacity: 1;
 }
 
 .problem-page-frame {

@@ -41,12 +41,6 @@
 
 <div class="grid">
   <section>
-    <div class="statement-summary">
-      <h2 class="statement-summary-title">{{ ctx.problem.display_name }}</h2>
-      <div class="statement-summary-meta">
-        <a class="linkish statement-summary-edit" href="#statement-settings-popup" data-popup-open="statement-settings-popup">Edit metadata</a>
-      </div>
-    </div>
     <form
       method="post"
       action="/problems/{{ ctx.problem.slug }}/preview/save"
@@ -63,10 +57,24 @@
       {% endif %}
       {% for section in statement_sections %}
       {% if section.enabled %}
-      {% set editor_height = 90 if section.key == 'name' else 230 if section.key in ['input', 'output'] else 460 %}
+      {% if section.key == 'name' %}
+      <div class="statement-editor-field statement-editor-field-inline">
+        <label for="statement-title-input">{{ section.label }}</label>
+        <div class="statement-editor-inline-input">
+          <input
+            id="statement-title-input"
+            type="text"
+            name="{{ section.field_name }}"
+            value="{{ section.content }}"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+      </div>
+      {% else %}
       <div class="statement-editor-field">
         <div class="statement-editor-field-head">
-          <label>{{ section.label }} (<code>{{ section.path }}</code>)</label>
+          <label>{{ section.label }}</label>
         </div>
         <div class="statement-editor-field-body">
           <a
@@ -83,11 +91,12 @@
             rows="12"
             data-code-editor="1"
             data-code-path="{{ section.path }}"
-            data-code-height="{{ editor_height }}"
+            data-code-autosize="1"
             data-code-wrap="1"
           >{{ section.content }}</textarea>
         </div>
       </div>
+      {% endif %}
       {% if section.truncated %}
       <p><em>{{ section.label }} text is truncated in editor (showing first {{ editor_char_limit }} chars).</em></p>
       {% endif %}
@@ -184,38 +193,6 @@
       <p class="flash" data-statement-draft-error="1" hidden></p>
       <p class="muted" data-statement-draft-empty="1" hidden>No local drafts yet.</p>
       <div class="statement-draft-list" data-statement-draft-list="1"></div>
-{% endcall %}
-
-{% call ui_popup('statement-settings-popup', 'Edit Statement Settings') %}
-      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/statement/save">
-        <input type="hidden" name="language" value="{{ current_language }}" />
-        {% if preview_id %}
-        <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-        {% endif %}
-        <div class="form-row form-row-inline-distribute">
-          <div class="form-field-stack">
-            <label for="time-limit">Time Limit</label>
-            <input id="time-limit" type="text" inputmode="numeric" name="time_limit_ms" value="{{ ctx.general_cfg.time_limit_ms }}" />
-          </div>
-          <div class="form-field-stack">
-            <label for="memory-limit">Memory Limit</label>
-            <input id="memory-limit" type="text" inputmode="numeric" name="memory_limit_mb" value="{{ ctx.general_cfg.memory_limit_mb }}" />
-          </div>
-          <div class="form-field-stack">
-            <label for="problem-mode">Mode</label>
-            <select id="problem-mode" name="mode">
-              {% for mode_value in problem_mode_values %}
-              <option value="{{ mode_value }}" {% if mode_value == ctx.general_cfg.mode %}selected{% endif %}>{{ mode_value }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="form-field-stack">
-            <label for="pass-limit">Pass Limit</label>
-            <input id="pass-limit" type="text" inputmode="numeric" name="pass_limit" value="{{ ctx.general_cfg.pass_limit }}" />
-          </div>
-          <button class="btn" type="submit">Save</button>
-        </div>
-      </form>
 {% endcall %}
 
 {% call ui_popup('statement-language-popup', 'Add Statement Language') %}

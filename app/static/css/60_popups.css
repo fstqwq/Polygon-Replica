@@ -58,6 +58,27 @@ body.confirm-open {
   margin-bottom: var(--space-3);
 }
 
+.statement-editor-field-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.statement-editor-field-inline > label {
+  margin: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.statement-editor-inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.statement-editor-inline-input input {
+  width: 100%;
+}
+
 .statement-editor-field-head {
   display: flex;
   align-items: center;

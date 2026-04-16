@@ -1,4 +1,4 @@
-{% from "_component_dialogs.html" import change_badges %}
+{% from "_component_dialogs.html" import change_badges, ui_popup %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   {% set problem_display_name = ctx.problem.display_name %}
   <title>{% if problem_display_name %}{{ problem_display_name }} - {% endif %}Polygon-Replica</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260413-02" />
+  <link rel="stylesheet" href="/static/style.css?v=20260417-15" />
   <script src="/static/ui.js?v=20260413-02" defer></script>
   <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />
   <script src="/static/vendor/codemirror/lib/codemirror.min.js?v=20260410-23" defer></script>
@@ -42,6 +42,7 @@
     {% endif %}
     {% set tests_nav = nav_status.get('tests', {}) %}
     {% set verification_page_target = namespace(value='statement') %}
+    {% set current_path = '' %}
     {% if request is defined and request.url is defined %}
     {% set current_path = request.url.path | default('') %}
     {% set current_parts = current_path.split('/') %}
@@ -53,29 +54,41 @@
     {% endfor %}
     {% endif %}
     <div class="problem-context-bar">
-      <button
-        class="linkish-button problem-copy-button problem-context-copy-button"
-        type="button"
-        data-copy-text="{{ ctx.problem.slug }}"
-        data-copy-label="Copy problem slug"
-        data-copy-done-label="Copied problem slug"
-        title="Copy problem slug"
-        aria-label="Copy problem slug"
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-          <rect x="5" y="3" width="8" height="10" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="1.25"></rect>
-          <rect x="2" y="6" width="8" height="8" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="1.25"></rect>
-        </svg>
-      </button>
-      <span class="problem-slug-link problem-context-slug-link">{{ ctx.problem.slug }}</span>
+      <div class="problem-context-identity">
+        <h1 class="problem-context-title">{{ ctx.problem.slug }}</h1>
+        <button
+          class="problem-copy-button problem-context-copy-button"
+          type="button"
+          data-copy-text="{{ ctx.problem.slug }}"
+          data-copy-label="Copy problem slug"
+          data-copy-done-label="Copied problem slug"
+          aria-label="Copy problem slug"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3V15H4V3H16V1ZM19 5H8C6.9 5 6 5.9 6 7V21C6 22.1 6.9 23 8 23H19C20.1 23 21 22.1 21 21V7C21 5.9 20.1 5 19 5ZM19 21H8V7H19V21Z"></path>
+          </svg>
+        </button>
+      </div>
       {% if ctx.general_cfg is defined %}
       <div class="problem-context-meta">
-        <span class="problem-context-chip">{{ ctx.general_cfg.time_limit_ms }}ms</span>
-        <span class="problem-context-chip">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
-        {% if ctx.general_cfg.pass_limit > 1 %}
-        <span class="problem-context-chip">{{ ctx.general_cfg.pass_limit }} passes</span>
-        {% endif %}
-        <span class="problem-context-chip">{{ ctx.general_cfg.mode }}</span>
+        <div class="problem-context-meta-pill">
+          <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.time_limit_ms }}ms</span>
+          <span class="problem-context-meta-pill-item">{{ ctx.general_cfg.memory_limit_mb }}MB</span>
+          {% if ctx.general_cfg.pass_limit > 1 %}
+          <span class="problem-context-meta-pill-item problem-context-meta-pill-item-emphasis">{{ ctx.general_cfg.pass_limit }} passes</span>
+          {% endif %}
+          <span class="problem-context-meta-pill-item problem-context-meta-pill-item-emphasis">{{ ctx.general_cfg.mode }}</span>
+        </div>
+        <a
+          class="problem-context-meta-action"
+          href="#statement-settings-popup"
+          data-popup-open="statement-settings-popup"
+          aria-label="Edit metadata"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.18 7.18 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.58.22-1.13.53-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.41 1.05.72 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.8a.5.5 0 0 0 .49-.42l.36-2.54c.58-.22 1.13-.53 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"></path>
+          </svg>
+        </a>
       </div>
       {% endif %}
     </div>
@@ -244,8 +257,35 @@
       </aside>
     </div>
   </div>
+  {% call ui_popup('statement-settings-popup', 'Edit Statement Settings') %}
+      <form class="form-stack" method="post" action="/problems/{{ ctx.problem.slug }}/statement/save">
+        <input type="hidden" name="language" value="" />
+        <div class="form-row form-row-inline-distribute">
+          <div class="form-field-stack">
+            <label for="time-limit">Time Limit</label>
+            <input id="time-limit" type="text" inputmode="numeric" name="time_limit_ms" value="{{ ctx.general_cfg.time_limit_ms }}" />
+          </div>
+          <div class="form-field-stack">
+            <label for="memory-limit">Memory Limit</label>
+            <input id="memory-limit" type="text" inputmode="numeric" name="memory_limit_mb" value="{{ ctx.general_cfg.memory_limit_mb }}" />
+          </div>
+          <div class="form-field-stack">
+            <label for="problem-mode">Mode</label>
+            <select id="problem-mode" name="mode">
+              <option value="pass-fail" {% if ctx.general_cfg.mode == 'pass-fail' %}selected{% endif %}>pass-fail</option>
+              <option value="interactive" {% if ctx.general_cfg.mode == 'interactive' %}selected{% endif %}>interactive</option>
+            </select>
+          </div>
+          <div class="form-field-stack">
+            <label for="pass-limit">Pass Limit</label>
+            <input id="pass-limit" type="text" inputmode="numeric" name="pass_limit" value="{{ ctx.general_cfg.pass_limit }}" />
+          </div>
+          <button class="btn" type="submit">Save</button>
+        </div>
+      </form>
+  {% endcall %}
   {% include "_page_profile.html" %}
 
-  <script src="/static/editor_init.js?v=20260410-23" defer></script>
+  <script src="/static/editor_init.js?v=20260417-12" defer></script>
 </body>
 </html>

@@ -464,13 +464,11 @@
 
       function resetState() {
         button.setAttribute("data-copy-state", "");
-        button.setAttribute("title", baseLabel);
         button.setAttribute("aria-label", baseLabel);
       }
 
       function setStateCopied() {
         button.setAttribute("data-copy-state", "copied");
-        button.setAttribute("title", doneLabel);
         button.setAttribute("aria-label", doneLabel);
         if (resetTimer) {
           window.clearTimeout(resetTimer);

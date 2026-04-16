@@ -32,6 +32,13 @@
     return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
   }
 
+  function readAutoSizeEnabled(el) {
+    if (!el) return false;
+    var raw = String(el.getAttribute("data-code-autosize") || "").trim().toLowerCase();
+    if (!raw) return false;
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+  }
+
   function pathToMode(path) {
     var raw = String(path || "").trim().toLowerCase();
     if (!raw) return null;
@@ -117,6 +124,7 @@
       if (!el || el.dataset.editorReady === "1") continue;
       var mode = pathToMode(el.getAttribute("data-code-path"));
       var wrapEnabled = readWrapEnabled(el);
+      var autoSizeEnabled = readAutoSizeEnabled(el);
       var cm = window.CodeMirror.fromTextArea(el, {
         mode: mode,
         lineNumbers: true,
@@ -126,14 +134,32 @@
         matchBrackets: true,
         autoCloseBrackets: true,
         readOnly: el.hasAttribute("readonly"),
+        viewportMargin: autoSizeEnabled ? Infinity : 10,
       });
-      var heightRaw = Number(el.getAttribute("data-code-height") || 0);
-      if (Number.isFinite(heightRaw) && heightRaw > 0) {
-        cm.setSize(null, Math.floor(heightRaw));
+      if (autoSizeEnabled) {
+        enableAutoSize(cm);
+      } else {
+        var heightRaw = Number(el.getAttribute("data-code-height") || 0);
+        if (Number.isFinite(heightRaw) && heightRaw > 0) {
+          cm.setSize(null, Math.floor(heightRaw));
+        }
       }
       attachSaveHook(cm, el.form);
       el.dataset.editorReady = "1";
     }
+  }
+
+  function enableAutoSize(cm) {
+    if (!cm) return;
+    var wrapper = cm.getWrapperElement();
+    if (!wrapper) return;
+    function resize() {
+      cm.setSize(null, "auto");
+      cm.refresh();
+    }
+    wrapper.classList.add("CodeMirror-autoheight");
+    cm.on("changes", resize);
+    window.requestAnimationFrame(resize);
   }
 
   function attachSaveHook(cm, form) {
