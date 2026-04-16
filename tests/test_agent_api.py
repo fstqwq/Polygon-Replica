@@ -408,6 +408,8 @@ class TestAgentAPI(SmokeBase):
         _password, auth_cookie = self._issue_auth_cookie(username)
         workspace = self._grant_problem_owner(username)
         self.assertTrue(workspace.exists())
+        workspace_ctx = workspace_service.workspace_context(self.problem, username, include_recent=False)
+        workspace_id = int(workspace_ctx["workspace"]["id"])
 
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
@@ -445,6 +447,10 @@ class TestAgentAPI(SmokeBase):
             )
             self.assertEqual(upload.status_code, 200, upload.text)
             self.assertTrue((workspace / "notes/agent.txt").exists())
+            upload_status = workspace_service.read_workspace_status(workspace)
+            upload_row = config.db.fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
+            self.assertIsNotNone(upload_row)
+            self.assertEqual(int(upload_row["dirty"] or 0), int(upload_status.get("dirty") or 0))
 
             hidden_root = workspace / ".env"
             hidden_nested = workspace / "notes" / ".cache" / "secret.txt"
@@ -497,6 +503,10 @@ class TestAgentAPI(SmokeBase):
             )
             self.assertEqual(delete.status_code, 200, delete.text)
             self.assertFalse((workspace / "notes/agent.txt").exists())
+            delete_status = workspace_service.read_workspace_status(workspace)
+            delete_row = config.db.fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
+            self.assertIsNotNone(delete_row)
+            self.assertEqual(int(delete_row["dirty"] or 0), int(delete_status.get("dirty") or 0))
 
             workspace_service.grant_repo_access(self.problem, username, "read")
             downgraded_upload = client.post(
@@ -517,6 +527,9 @@ class TestAgentAPI(SmokeBase):
         solution = workspace / "solutions" / "main.cpp"
         solution.parent.mkdir(parents=True, exist_ok=True)
         solution.write_text("#include <bits/stdc++.h>\nint main(){return 0;}\n", encoding="utf-8")
+        stale_head = str(workspace_service.read_workspace_status(workspace).get("head_commit") or "")
+        workspace_ctx = workspace_service.workspace_context(self.problem, username, include_recent=False)
+        workspace_id = int(workspace_ctx["workspace"]["id"])
 
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
@@ -613,10 +626,36 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(str(commit_payload.get("status") or ""), "ok")
             head = str(commit_payload.get("head") or "")
             self.assertRegex(head, r"^[0-9a-f]{40}$")
+            commit_row = config.db.fetch_one("SELECT head_commit,dirty FROM workspaces WHERE id=?", [workspace_id])
+            self.assertIsNotNone(commit_row)
+            self.assertEqual(str(commit_row["head_commit"] or ""), head)
+            self.assertEqual(int(commit_row["dirty"] or 0), 0)
 
             commit_status = client.get(f"/agent/v1/commit/{head}/status", headers=self._bearer(commit_token))
             self.assertEqual(commit_status.status_code, 200, commit_status.text)
             self.assertEqual(str(commit_status.json().get("status") or ""), "published")
+            self.assertNotEqual(stale_head, head)
+
+            config.db.execute(
+                "UPDATE workspaces SET head_commit=?, dirty=1 WHERE id=?",
+                [stale_head, workspace_id],
+            )
+
+            live_status = client.get("/agent/v1/workspace/status", headers=self._bearer(readonly_token))
+            self.assertEqual(live_status.status_code, 200, live_status.text)
+            self.assertEqual(str(live_status.json().get("head_commit") or ""), head)
+            self.assertFalse(bool(live_status.json().get("dirty")))
+
+            fresh_icpc_export = client.post(
+                "/agent/v1/export/start",
+                headers=self._bearer(readonly_token),
+                json={"export_type": "icpc"},
+            )
+            self.assertEqual(fresh_icpc_export.status_code, 200, fresh_icpc_export.text)
+            fresh_export_id = str(fresh_icpc_export.json().get("export_id") or "")
+            fresh_export_status = client.get(f"/agent/v1/export/{fresh_export_id}/status", headers=self._bearer(readonly_token))
+            self.assertEqual(fresh_export_status.status_code, 200, fresh_export_status.text)
+            self.assertEqual(str(fresh_export_status.json().get("source_commit") or ""), head)
 
     def test_agent_verification_detail_returns_yaml_table_and_zoom(self) -> None:
         username = self.random_id("agent-detail")

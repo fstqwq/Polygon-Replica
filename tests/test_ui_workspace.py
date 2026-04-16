@@ -463,7 +463,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn("<h2>Access</h2>", html)
         self.assertNotIn("Branch Operations", html)
 
-    def test_workspace_page_get_does_not_persist_workspace_status(self) -> None:
+    def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
         username = f"wsget-{uuid.uuid4().hex[:8]}"
         workspace_service.grant_repo_access("alice/sample", username, "owner")
         ws = Path(workspace_service.ensure_workspace("alice/sample", username))
@@ -486,10 +486,11 @@ class TestUIWorkspace(UIBaseSuite):
 
         after = db_fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
         self.assertIsNotNone(after)
-        self.assertEqual(str(after["branch"] or ""), str(before["branch"] or ""))
-        self.assertEqual(str(after["head_commit"] or ""), str(before["head_commit"] or ""))
-        self.assertEqual(int(after["dirty"] or 0), int(before["dirty"] or 0))
-        self.assertEqual(str(after["updated_at"] or ""), str(before["updated_at"] or ""))
+        live_status = workspace_service.read_workspace_status(ws)
+        self.assertEqual(str(after["branch"] or ""), str(live_status.get("branch") or ""))
+        self.assertEqual(str(after["head_commit"] or ""), str(live_status.get("head_commit") or ""))
+        self.assertEqual(int(after["dirty"] or 0), int(live_status.get("dirty") or 0))
+        self.assertNotEqual(str(after["updated_at"] or ""), str(before["updated_at"] or ""))
 
     def test_git_status_and_workspace_status_ignore_hidden_paths(self) -> None:
         username = f"wshidden-{uuid.uuid4().hex[:8]}"

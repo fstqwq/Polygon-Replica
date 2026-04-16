@@ -458,6 +458,25 @@ class WorkspaceService:
         self._store.update_workspace_status(problem_id, user_id, branch=branch, head_commit=head, dirty=dirty)
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
+    def refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
+        return self._refresh_workspace_status_with_ids(workspace, int(problem_id), int(user_id))
+
+    def refresh_workspace_status_by_path(self, workspace: Path) -> dict[str, str | int | None] | None:
+        safe_workspace = Path(workspace).resolve()
+        if not safe_workspace.exists() or not safe_workspace.is_dir():
+            return None
+        git_dir = safe_workspace / ".git"
+        if not git_dir.exists() or not git_dir.is_dir():
+            return None
+        identity = self._store.workspace_identity_by_path(str(safe_workspace))
+        if identity is None:
+            return None
+        return self._refresh_workspace_status_with_ids(
+            safe_workspace,
+            int(identity["problem_id"]),
+            int(identity["user_id"]),
+        )
+
     def read_workspace_status(self, workspace: Path) -> dict[str, str | int | None]:
         status_v2 = run_git(["git", "-C", str(workspace), "status", "--porcelain=2", "--branch"])
         if status_v2.returncode == 0:
@@ -775,4 +794,12 @@ class WorkspaceService:
     def workspace_lock(self, workspace: Path):
         lock_path = workspace / ".polygonlike.lock"
         with self._exclusive_lock_file(lock_path, "workspace"):
-            yield
+            try:
+                yield
+            except Exception:
+                try:
+                    self.refresh_workspace_status_by_path(workspace)
+                except Exception:
+                    pass
+                raise
+            self.refresh_workspace_status_by_path(workspace)

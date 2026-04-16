@@ -40,6 +40,13 @@ class WorkspaceRow(TypedDict):
     updated_at: str
 
 
+class WorkspaceIdentityRow(TypedDict):
+    id: int
+    problem_id: int
+    user_id: int
+    path: str
+
+
 class WorkspaceRecentVerificationRow(TypedDict):
     id: str
     status: str
@@ -396,6 +403,24 @@ class WorkspaceDiskStore:
             "head_commit": str(row["head_commit"] or ""),
             "dirty": int(row["dirty"] or 0),
             "updated_at": str(row["updated_at"] or ""),
+        }
+
+    def workspace_identity_by_path(self, path: str) -> WorkspaceIdentityRow | None:
+        row = self.db.fetch_one(
+            """
+            SELECT id,problem_id,user_id,path
+            FROM workspaces
+            WHERE path=?
+            """,
+            [path],
+        )
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "problem_id": int(row["problem_id"]),
+            "user_id": int(row["user_id"]),
+            "path": str(row["path"] or ""),
         }
 
     def ensure_workspace_row(self, problem_id: int, user_id: int, path: str) -> None:

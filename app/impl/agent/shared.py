@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from fastapi import HTTPException, Request
 
@@ -40,6 +41,16 @@ def workspace_context_for_identity(identity) -> dict[str, object]:
         raise HTTPException(status_code=403, detail="problem context mismatch")
     if int(ctx["user"]["id"]) != int(identity.user_id):
         raise HTTPException(status_code=403, detail="user context mismatch")
+    workspace_row = cast(dict[str, object], ctx["workspace"])
+    workspace = Path(str(workspace_row["path"])).resolve()
+    try:
+        with config.workspace_service.workspace_lock(workspace):
+            status = config.workspace_service.read_workspace_status(workspace)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    workspace_row["branch"] = str(status.get("branch") or "main")
+    workspace_row["head_commit"] = str(status.get("head_commit") or "")
+    workspace_row["dirty"] = 1 if bool(status.get("dirty")) else 0
     return ctx
 
 
