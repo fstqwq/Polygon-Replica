@@ -346,7 +346,8 @@ class TestUIContests(UIBaseSuite):
         (ws / "README.problem.md").write_text("contest package test\n", encoding="utf-8")
         (ws / "statement" / "olymp.sty").write_text("% problem style\n", encoding="utf-8")
         (ws / "statement-sections" / "english" / "legend.tex").write_text("Problem legend\n", encoding="utf-8")
-        (ws / "statement-sections" / "english" / "example.mp").write_text("verbatimtex\netex\nbeginfig(1);endfig;end.\n", encoding="utf-8")
+        (ws / "statement-assets").mkdir(parents=True, exist_ok=True)
+        (ws / "statement-assets" / "example.mp").write_text("verbatimtex\netex\nbeginfig(1);endfig;end.\n", encoding="utf-8")
         (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
         (ws / "tests" / "manual" / "001.in").write_text("1 2 3\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(

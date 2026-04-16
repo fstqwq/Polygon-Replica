@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.db import DB
+from app.db import DB, SCHEMA
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request
@@ -78,6 +78,10 @@ class TestBackendMinimal(SmokeBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "legacy-schema.db"
             with sqlite3.connect(db_path) as conn:
+                conn.executescript(SCHEMA)
+                conn.commit()
+                conn.execute("PRAGMA foreign_keys=OFF")
+                conn.execute("DROP TABLE problems")
                 conn.execute(
                     """
                     CREATE TABLE problems (
@@ -90,111 +94,9 @@ class TestBackendMinimal(SmokeBase):
                     """
                 )
                 conn.execute(
-                    """
-                    CREATE TABLE users (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        username TEXT UNIQUE NOT NULL,
-                        password_hash TEXT,
-                        password_salt TEXT,
-                        password_iters INTEGER,
-                        password_updated_at TEXT,
-                        is_system_admin INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL
-                    )
-                    """
-                )
-                conn.execute(
-                    """
-                    CREATE TABLE workspaces (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        problem_id INTEGER NOT NULL,
-                        user_id INTEGER NOT NULL,
-                        path TEXT NOT NULL,
-                        branch TEXT,
-                        head_commit TEXT,
-                        dirty INTEGER NOT NULL DEFAULT 0,
-                        recent_verification_status TEXT,
-                        updated_at TEXT NOT NULL,
-                        UNIQUE(problem_id, user_id),
-                        FOREIGN KEY(problem_id) REFERENCES problems(id),
-                        FOREIGN KEY(user_id) REFERENCES users(id)
-                    )
-                    """
-                )
-                conn.execute(
                     "INSERT INTO problems(id,slug,name,repo_name,created_at) VALUES(1,'p','P','p','2026-03-13T00:00:00Z')"
                 )
-                conn.execute(
-                    "INSERT INTO users(id,username,created_at) VALUES(1,'u','2026-03-13T00:00:00Z')"
-                )
-                conn.execute(
-                    """
-                    INSERT INTO workspaces(id,problem_id,user_id,path,branch,head_commit,dirty,recent_verification_status,updated_at)
-                    VALUES(1,1,1,'/tmp/ws','','',0,NULL,'2026-03-13T00:00:00Z')
-                    """
-                )
-                conn.execute(
-                    """
-                    CREATE TABLE runs (
-                        id TEXT PRIMARY KEY,
-                        problem_id INTEGER NOT NULL,
-                        workspace_id INTEGER,
-                        mode TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        payload_json TEXT,
-                        artifact_root TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        finished_at TEXT
-                    )
-                    """
-                )
-                conn.execute(
-                    """
-                    CREATE TABLE verifications (
-                        id TEXT PRIMARY KEY,
-                        problem_id INTEGER NOT NULL,
-                        workspace_id INTEGER,
-                        kind TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        payload_json TEXT,
-                        artifact_root TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        finished_at TEXT
-                    )
-                    """
-                )
-                conn.execute(
-                    """
-                    INSERT INTO verifications(
-                        id,problem_id,workspace_id,kind,status,payload_json,artifact_root,created_at,finished_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?)
-                    """,
-                    [
-                        "ver-current",
-                        1,
-                        1,
-                        "verification",
-                        "running",
-                        json.dumps(
-                            {
-                                "kind": "verification",
-                                "status": "running",
-                                "runs_order": ["r-one"],
-                                "runs": {
-                                    "r-one": {
-                                        "run_id": "r-one",
-                                        "status": "running",
-                                        "source_label": "solutions/ac.cpp",
-                                        "summary": {"source": "solutions/ac.cpp", "tests": []},
-                                    }
-                                },
-                            }
-                        ),
-                        str(Path(tmpdir) / "ver-current"),
-                        "2026-03-13T00:00:00Z",
-                        None,
-                    ],
-                )
+                conn.execute("PRAGMA foreign_keys=ON")
                 conn.commit()
 
             probe = DB(db_path)

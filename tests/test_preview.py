@@ -133,6 +133,7 @@ class TestPreview(SmokeBase):
         )
         (statement / "statements.ftl").write_text(statements_ftl, encoding="utf-8")
         (statement / "problem.tex").write_text(problem_template, encoding="utf-8")
+        (sections / "name.tex").write_text("Rendered Title\n", encoding="utf-8")
         (sections / "legend.tex").write_text("Rendered content.\n", encoding="utf-8")
         out = render_statement_main(statement, problem_title="Rendered Title", language="english")
         rendered = out.read_text(encoding="utf-8")
