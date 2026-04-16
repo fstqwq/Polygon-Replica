@@ -5,12 +5,14 @@ from pathlib import Path
 from app.service.platform.hashing import quick_fp_digest, sha256_hex_bytes
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
 from app.service.statement.constant import (
+    STATEMENT_ASSETS_DIR,
     STATEMENT_DIR,
     STATEMENT_MAIN_REL,
     STATEMENT_RENDERED_DIR_REL,
     STATEMENT_RENDERER_SIGNATURE_VERSION,
     STATEMENT_SECTIONS_DIR,
     TESTS_ANSWERS_DIR_REL,
+    is_canonical_statement_section_entry,
 )
 
 
@@ -41,7 +43,7 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
         return quick_fp_digest(entries, schema="statement-signature")
 
     files: list[tuple[str, Path]] = []
-    for base in (workspace / STATEMENT_DIR, workspace / STATEMENT_SECTIONS_DIR):
+    for base in (workspace / STATEMENT_DIR, workspace / STATEMENT_ASSETS_DIR):
         if not base.exists() or not base.is_dir() or base.is_symlink():
             continue
         for path in base.rglob("*"):
@@ -56,6 +58,23 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
             if rel.startswith(f"{STATEMENT_RENDERED_DIR_REL.as_posix()}/"):
                 continue
             files.append((rel, path))
+    sections_root = workspace / STATEMENT_SECTIONS_DIR
+    if sections_root.exists() and sections_root.is_dir() and (not sections_root.is_symlink()):
+        for language_root in sorted(
+            [item for item in sections_root.iterdir() if item.is_dir() and (not item.is_symlink())],
+            key=lambda item: item.name,
+        ):
+            for file_name in sorted(language_root.iterdir(), key=lambda item: item.name):
+                try:
+                    if file_name.is_symlink() or (not file_name.is_file()):
+                        continue
+                    rel_in_section = file_name.relative_to(language_root)
+                    if not is_canonical_statement_section_entry(rel_in_section):
+                        continue
+                    rel = file_name.relative_to(workspace).as_posix()
+                except (OSError, ValueError):
+                    continue
+                files.append((rel, file_name))
     files.sort(key=lambda item: item[0])
 
     for rel, path in files:

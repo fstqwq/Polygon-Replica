@@ -9,17 +9,20 @@ from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
 from app.main_util import UPLOAD_MAX_BYTES
+from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_MAIN_REL,
+    STATEMENT_ASSETS_DIR,
     STATEMENT_PROBLEM_REL,
     STATEMENT_RENDERED_DIR_REL,
     STATEMENT_SECTIONS_DIR,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
+    is_canonical_statement_section_entry,
 )
 from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import dumps_tests_spec
@@ -429,9 +432,10 @@ class ICPCPackageImportService:
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         _meta: ProblemMeta,
-    ) -> StatementSummary:
+    ) -> tuple[StatementSummary, list[str]]:
         shutil.rmtree(workspace / STATEMENT_RENDERED_DIR_REL, ignore_errors=True)
         shutil.rmtree(workspace / STATEMENT_SECTIONS_DIR, ignore_errors=True)
+        shutil.rmtree(workspace / STATEMENT_ASSETS_DIR, ignore_errors=True)
 
         copied_statement = 0
         for path, info in entries.items():
@@ -444,17 +448,43 @@ class ICPCPackageImportService:
             copied_statement += 1
 
         copied_sections = 0
+        shared_assets: dict[str, bytes] = {}
+        legacy_assets: list[ImportedLegacyStatementAsset] = []
         section_languages: set[str] = set()
         for path, info in entries.items():
             rel = path.replace("\\", "/")
+            if rel.startswith(f"{STATEMENT_ASSETS_DIR.as_posix()}/"):
+                asset_rel = Path(rel).relative_to(STATEMENT_ASSETS_DIR).as_posix()
+                if asset_rel:
+                    shared_assets[asset_rel] = _read_bytes_from_zip(zf, info)
+                continue
             if not rel.startswith("statement-sections/"):
                 continue
             rel_path = Path(rel)
-            self._write_bytes(workspace, rel_path, _read_bytes_from_zip(zf, info))
-            copied_sections += 1
+            if len(rel_path.parts) < 3:
+                continue
+            rel_in_section = Path(*rel_path.parts[2:])
+            if is_canonical_statement_section_entry(rel_in_section):
+                self._write_bytes(workspace, rel_path, _read_bytes_from_zip(zf, info))
+                copied_sections += 1
+            else:
+                legacy_assets.append(
+                    {
+                        "language": rel_path.parts[1],
+                        "package_path": rel_path.as_posix(),
+                        "asset_rel": rel_in_section.as_posix(),
+                        "payload": _read_bytes_from_zip(zf, info),
+                    }
+                )
             parts = rel_path.parts
             if len(parts) >= 2:
                 section_languages.add(_normalize_language_token(parts[1]))
+
+        asset_merge = merge_imported_statement_assets(
+            workspace,
+            shared_assets=shared_assets,
+            legacy_assets=legacy_assets,
+        )
 
         if not (workspace / STATEMENT_TEMPLATE_REL).exists():
             self._write_text(workspace, STATEMENT_TEMPLATE_REL, DEFAULT_STATEMENT_TEMPLATE)
@@ -471,13 +501,16 @@ class ICPCPackageImportService:
             language_warning = f"statement language english not found; defaulting to {selected_language}"
         (workspace / STATEMENT_MAIN_REL).unlink(missing_ok=True)
 
-        return {
-            "copied_statement_files": copied_statement,
-            "copied_section_files": copied_sections,
-            "language": selected_language,
-            "language_warning": language_warning,
-            "header": fallback_header,
-        }
+        return (
+            {
+                "copied_statement_files": copied_statement,
+                "copied_section_files": copied_sections + asset_merge["copied_files"],
+                "language": selected_language,
+                "language_warning": language_warning,
+                "header": fallback_header,
+            },
+            asset_merge["warnings"],
+        )
 
     def _secret_input_sort_key(self, rel_path: str) -> tuple[int, int, str]:
         stem = Path(rel_path).stem
@@ -796,7 +829,7 @@ class ICPCPackageImportService:
                 domjudge_meta = _parse_domjudge_ini(_read_text_from_zip(zf, domjudge_info))
                 if meta["time_limit_ms"] is None:
                     meta["time_limit_ms"] = domjudge_meta["time_limit_ms"]
-            statement_summary = self._import_statement(zf, entry_map, workspace, meta)
+            statement_summary, statement_warnings = self._import_statement(zf, entry_map, workspace, meta)
             tests_summary = self._import_tests(
                 zf,
                 entry_map,
@@ -820,6 +853,7 @@ class ICPCPackageImportService:
                 "problem_cfg": problem_cfg,
                 "build_cfg": build_cfg,
                 "domjudge": domjudge_meta,
+                "warnings": list(statement_warnings),
             }
             if file_io_warning:
                 result["file_io_warning"] = file_io_warning

@@ -11,6 +11,8 @@ from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
+    STATEMENT_ASSETS_DIR,
+    STATEMENT_CANONICAL_SECTION_FILES,
     STATEMENT_DIR,
     STATEMENT_MAIN_REL,
     STATEMENT_PROBLEM_REL,
@@ -178,6 +180,31 @@ def _copy_tree_without_symlinks(src: Path, dst: Path) -> None:
             shutil.copy2(source_file, target_file)
 
 
+def _copy_statement_shared_assets(workspace: Path, target_dir: Path) -> None:
+    _copy_tree_without_symlinks(workspace / STATEMENT_ASSETS_DIR, target_dir)
+
+
+def _copy_statement_language_sources(workspace: Path, language: str, target_dir: Path) -> None:
+    language_root = workspace / STATEMENT_SECTIONS_DIR / language
+    if not language_root.exists() or not language_root.is_dir() or language_root.is_symlink():
+        raise RuntimeError(f"missing statement sections for language: {language}")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for file_name in sorted(STATEMENT_CANONICAL_SECTION_FILES):
+        source_file = language_root / file_name
+        if source_file.is_symlink() or (not source_file.exists()) or (not source_file.is_file()):
+            continue
+        target_file = target_dir / file_name
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, target_file)
+
+
+def _prepare_statement_language_compile_tree(workspace: Path, language: str, target_dir: Path) -> None:
+    shutil.rmtree(target_dir, ignore_errors=True)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    _copy_statement_shared_assets(workspace, target_dir)
+    _copy_statement_language_sources(workspace, language, target_dir)
+
+
 def _statement_language_seed_defaults() -> dict[str, str]:
     return {
         "name.tex": DEFAULT_PROBLEM_TITLE + "\n",
@@ -229,9 +256,7 @@ def _render_polygon_statement(workspace: Path, statement_root: Path, problem_tit
     if not safe_language:
         raise RuntimeError("statement language is required")
     rendered_lang_root = workspace / STATEMENT_RENDERED_DIR_REL / safe_language
-    shutil.rmtree(rendered_lang_root, ignore_errors=True)
-    rendered_lang_root.mkdir(parents=True, exist_ok=True)
-    _copy_tree_without_symlinks(workspace / STATEMENT_SECTIONS_DIR / safe_language, rendered_lang_root)
+    _prepare_statement_language_compile_tree(workspace, safe_language, rendered_lang_root)
     sample_tests = _collect_sample_tests(workspace, rendered_lang_root)
     problem_ctx = _problem_context_for_language(
         workspace,
@@ -284,12 +309,7 @@ def render_statement_problem_assets_for_language(
     safe_language = normalize_statement_language(language)
     if not safe_language:
         raise RuntimeError("statement language is required")
-    language_root = workspace / STATEMENT_SECTIONS_DIR / safe_language
-    if not language_root.exists() or not language_root.is_dir() or language_root.is_symlink():
-        raise RuntimeError(f"missing statement sections for language: {safe_language}")
-    shutil.rmtree(target_dir, ignore_errors=True)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    _copy_tree_without_symlinks(language_root, target_dir)
+    _prepare_statement_language_compile_tree(workspace, safe_language, target_dir)
     sample_tests = _collect_sample_tests(workspace, target_dir)
     problem_ctx = _problem_context_for_language(
         workspace,

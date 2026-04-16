@@ -16,6 +16,7 @@ from unittest.mock import patch
 from app.service.sandbox.base import ExecResult
 from app.service.problem.test_spec import dumps_tests_spec
 from app.service.statement.constant import (
+    STATEMENT_ASSETS_DIR,
     STATEMENT_PROBLEM_REL,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
@@ -169,6 +170,24 @@ class TestPreview(SmokeBase):
         _ = out.read_text(encoding="utf-8")
         rendered_problem = (statement / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
         self.assertIn("\\begin{problem}{Preview Saved Title}", rendered_problem)
+
+    def test_statement_render_uses_shared_assets_and_ignores_legacy_section_extras(self) -> None:
+        ws = self._workspace_path()
+        statement = ws / "statement"
+        sections = ws / "statement-sections" / "english"
+        sections.mkdir(parents=True, exist_ok=True)
+        (sections / "legend.tex").write_text("Legend marker.\n", encoding="utf-8")
+        (sections / "legacy-only.txt").write_text("legacy\n", encoding="utf-8")
+        assets = ws / STATEMENT_ASSETS_DIR
+        assets.mkdir(parents=True, exist_ok=True)
+        (assets / "figures").mkdir(parents=True, exist_ok=True)
+        (assets / "figures" / "diagram.png").write_bytes(b"PNG")
+
+        out = render_statement_main(statement, problem_title="Preview Saved Title", language="english")
+        _ = out.read_text(encoding="utf-8")
+        rendered_root = statement / "rendered" / "english"
+        self.assertTrue((rendered_root / "figures" / "diagram.png").is_file())
+        self.assertFalse((rendered_root / "legacy-only.txt").exists())
 
     def test_statement_template_renders_sections_when_if_condition_uses_gt_operator(self) -> None:
         ws = self._workspace_path()

@@ -245,7 +245,7 @@
     <div class="statement-assets-card-head">
       <h2>Statement attachments</h2>
     </div>
-    <p class="muted statement-assets-card-copy">Stored under <code>{{ statement_section_dir }}/</code>. Used while compiling the statement and kept out of contestant package attachments.</p>
+    <p class="muted statement-assets-card-copy">Stored under <code>{{ statement_assets_dir }}/</code>. Shared across all statement languages, used while compiling the statement, and kept out of contestant package attachments.</p>
     <div class="statement-assets-card-body">
       <div class="form-block statement-assets-upload-block">
         <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/statement/assets/upload">
@@ -273,7 +273,7 @@
         <tr>
           <td><code>{{ row.display_path }}</code></td>
           <td>
-            <a href="/problems/{{ ctx.problem.slug }}/files?dir={{ statement_section_dir }}&path={{ row.path_q }}">Open</a>
+            <a href="/problems/{{ ctx.problem.slug }}/files?dir={{ statement_assets_dir }}&path={{ row.path_q }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
             <a href="/problems/{{ ctx.problem.slug }}/files/download?path={{ row.path_q }}">Download</a>
             <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/assets/delete" data-confirm-message="Delete statement asset {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
@@ -290,7 +290,7 @@
         {% endfor %}
         {% else %}
         <tr>
-          <td colspan="2" class="muted">No compile-only assets in <code>{{ statement_section_dir }}/</code>.</td>
+          <td colspan="2" class="muted">No compile-only assets in <code>{{ statement_assets_dir }}/</code>.</td>
         </tr>
         {% endif %}
       </table>

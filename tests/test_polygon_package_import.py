@@ -277,6 +277,48 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue((ws / "statement-sections" / "russian" / "legend.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
+    def test_import_legacy_statement_assets_merge_to_shared_root_with_conflict_warning(self) -> None:
+        ws = self._workspace_path()
+        payload = io.BytesIO()
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<problem short-name="shared-assets">
+  <names>
+    <name language="english" value="Shared Assets"/>
+  </names>
+  <judging run-count="1">
+    <testset>
+      <time-limit>1000</time-limit>
+      <memory-limit>268435456</memory-limit>
+      <input-path-pattern>tests/%02d</input-path-pattern>
+      <tests>
+        <test method="manual" sample="true"/>
+      </tests>
+    </testset>
+  </judging>
+</problem>
+"""
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("problem.xml", xml)
+            zf.writestr("tests/01", "1\n")
+            zf.writestr("statement-sections/english/legend.tex", "Legend EN\n")
+            zf.writestr("statement-sections/chinese/legend.tex", "Legend ZH\n")
+            zf.writestr("statement-sections/english/diagram.png", b"EN")
+            zf.writestr("statement-sections/chinese/diagram.png", b"ZH")
+            zf.writestr("statement-sections/english/shared.png", b"SAME")
+            zf.writestr("statement-sections/chinese/shared.png", b"SAME")
+
+        service = PolygonPackageImportService()
+        result = service.import_package(ws, "shared-assets.zip", payload.getvalue())
+
+        self.assertEqual((ws / "statement-assets" / "diagram.png").read_bytes(), b"EN")
+        self.assertEqual((ws / "statement-assets" / "diagram-zh.png").read_bytes(), b"ZH")
+        self.assertEqual((ws / "statement-assets" / "shared.png").read_bytes(), b"SAME")
+        self.assertFalse((ws / "statement-assets" / "shared-zh.png").exists())
+        warnings = [str(item) for item in (result.get("warnings") or [])]
+        self.assertTrue(any("statement-sections/chinese/diagram.png" in item for item in warnings))
+        self.assertTrue(any("statement-assets/diagram-zh.png" in item for item in warnings))
+        self.assertFalse(any("shared.png" in item for item in warnings))
+
     def test_import_statement_examples_override_sample_io_and_enable_validate(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()
@@ -389,7 +431,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertIn(r"\import{rendered/english/}{./problem.tex}", rendered)
         rendered_problem = (ws / "statement" / "rendered" / "english" / "problem.tex").read_text(encoding="utf-8")
         self.assertIn(r"\begin{problem}{Guess the Number (Deluxe ver.)}", rendered_problem)
-        self.assertTrue((ws / "statement" / "rendered" / "english" / "problem.pdf").is_file())
+        self.assertFalse((ws / "statement-sections" / "english" / "problem.pdf").exists())
 
         def _fake_run_build(problem: str, username: str, *args, **kwargs) -> str:
             self.assertEqual(problem, self.problem)

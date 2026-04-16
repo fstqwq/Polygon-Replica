@@ -11,6 +11,18 @@ STATEMENT_STYLE_REL = STATEMENT_DIR / "olymp.sty"
 STATEMENT_MAIN_REL = STATEMENT_DIR / "main.tex"
 STATEMENT_RENDERED_DIR_REL = STATEMENT_DIR / "rendered"
 STATEMENT_SECTIONS_DIR = Path("statement-sections")
+STATEMENT_ASSETS_DIR = Path("statement-assets")
+STATEMENT_CANONICAL_SECTION_FILES = frozenset(
+    {
+        "name.tex",
+        "legend.tex",
+        "input.tex",
+        "output.tex",
+        "interaction.tex",
+        "scoring.tex",
+        "notes.tex",
+    }
+)
 TESTS_ANSWERS_DIR_REL = Path("tests/answers")
 WF_STYLE_DIR = Path("third_party") / "Polygon-WF-Styles"
 WF_STYLE_STATEMENTS_REL = WF_STYLE_DIR / "statements.ftl"
@@ -98,5 +110,10 @@ DEFAULT_OLYMP_STY = _load_repo_required_text(
     WF_STYLE_OLYMP_REL,
     label=f"canonical olymp style ({WF_STYLE_OLYMP_REL.as_posix()})",
 )
+
+
+def is_canonical_statement_section_entry(rel_path: str | Path) -> bool:
+    rel = Path(rel_path)
+    return len(rel.parts) == 1 and rel.name in STATEMENT_CANONICAL_SECTION_FILES
 
 

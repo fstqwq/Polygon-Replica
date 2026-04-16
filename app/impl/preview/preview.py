@@ -28,9 +28,12 @@ from app.main_util import (
     write_upload_file_limited,
 )
 from app.service.statement.constant import (
+    STATEMENT_ASSETS_DIR,
+    STATEMENT_CANONICAL_SECTION_FILES,
     STATEMENT_PROBLEM_REL,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
+    is_canonical_statement_section_entry,
 )
 from app.service.statement.context import (
     normalize_statement_language,
@@ -41,41 +44,27 @@ from app.service.statement.render import ensure_statement_language_sources
 from app.service.statement.signature import statement_sources_signature
 
 _C = config.constants
-_STATEMENT_CANONICAL_SECTION_FILES = frozenset({
-    "name.tex",
-    "legend.tex",
-    "input.tex",
-    "output.tex",
-    "interaction.tex",
-    "scoring.tex",
-    "notes.tex",
-})
 _CONTESTANT_ATTACHMENTS_ROOT = "attachments"
 
-def statement_compile_asset_rows(workspace: Path, section_dir_rel: str) -> list[dict[str, str]]:
-    safe_section_dir = normalize_workspace_rel_path(section_dir_rel)
-    if not safe_section_dir:
-        return []
+def statement_compile_asset_rows(workspace: Path) -> list[dict[str, str]]:
     try:
-        section_dir_abs = safe_workspace_path(workspace, safe_section_dir)
+        assets_dir = safe_workspace_path(workspace, STATEMENT_ASSETS_DIR.as_posix())
     except HTTPException:
         return []
-    if not section_dir_abs.exists() or (not section_dir_abs.is_dir()) or section_dir_abs.is_symlink():
+    if not assets_dir.exists() or (not assets_dir.is_dir()) or assets_dir.is_symlink():
         return []
     workspace_root = workspace.resolve()
     rows: list[dict[str, str]] = []
     try:
-        for item in sorted(section_dir_abs.rglob("*")):
+        for item in sorted(assets_dir.rglob("*")):
             if not item.is_file() or item.is_symlink():
-                continue
-            rel_in_section = item.relative_to(section_dir_abs).as_posix()
-            if rel_in_section in _STATEMENT_CANONICAL_SECTION_FILES:
                 continue
             try:
                 rel = item.resolve().relative_to(workspace_root).as_posix()
             except (ValueError, OSError):
                 continue
-            rows.append({"path": rel, "path_q": quote_plus(rel), "display_path": rel_in_section})
+            display_path = item.relative_to(assets_dir).as_posix()
+            rows.append({"path": rel, "path_q": quote_plus(rel), "display_path": display_path})
     except OSError:
         return rows
     return rows
@@ -119,26 +108,22 @@ def normalize_contestant_attachment_target(path: str, *, upload_filename: str = 
     return f"{_CONTESTANT_ATTACHMENTS_ROOT}/{safe_name}"
 
 
-def normalize_statement_compile_asset_target(path: str, section_dir_rel: str, *, upload_filename: str = "") -> str:
-    safe_section_dir = normalize_workspace_rel_path(section_dir_rel)
-    if not safe_section_dir:
-        raise ValueError("statement language directory is required")
+def normalize_statement_compile_asset_target(path: str, *, upload_filename: str = "") -> str:
     safe_path = normalize_workspace_rel_path(path)
-    section_prefix = safe_section_dir.rstrip("/") + "/"
     if safe_path:
-        if safe_path == safe_section_dir:
+        if safe_path == STATEMENT_ASSETS_DIR.as_posix():
             raise ValueError("statement asset target must be a file path")
-        if safe_path.startswith(section_prefix):
+        if safe_path.startswith(STATEMENT_ASSETS_DIR.as_posix() + "/"):
             target_rel = safe_path
         else:
-            target_rel = f"{safe_section_dir}/{safe_path}"
+            target_rel = f"{STATEMENT_ASSETS_DIR.as_posix()}/{safe_path}"
     else:
         safe_name = Path(upload_filename.replace("\\", "/")).name
         if not safe_name:
             raise ValueError("statement asset path is required")
-        target_rel = f"{safe_section_dir}/{safe_name}"
-    rel_in_section = Path(target_rel).relative_to(safe_section_dir).as_posix()
-    if rel_in_section in _STATEMENT_CANONICAL_SECTION_FILES:
+        target_rel = f"{STATEMENT_ASSETS_DIR.as_posix()}/{safe_name}"
+    rel_in_assets = Path(target_rel).relative_to(STATEMENT_ASSETS_DIR)
+    if is_canonical_statement_section_entry(rel_in_assets):
         raise ValueError("canonical statement section sources must be edited in the statement editor")
     return target_rel
 
@@ -427,8 +412,8 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 if len(preview_failure_detail) > 240:
                     preview_failure_detail = preview_failure_detail[:237].rstrip() + '...'
     return_page = 'preview' if str(getattr(request.url, "path")).endswith('/preview') else 'statement'
-    statement_section_dir = Path(section_path_map["legend"]).parent.as_posix()
-    statement_compile_assets = statement_compile_asset_rows(workspace, statement_section_dir)
+    statement_assets_dir = STATEMENT_ASSETS_DIR.as_posix()
+    statement_compile_assets = statement_compile_asset_rows(workspace)
     contestant_attachments = contestant_attachment_rows(workspace)
     return template_response(
         request,
@@ -440,7 +425,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'previews': previews,
             'statement_sections': statement_sections,
             'statement_section_paths': section_path_map,
-            'statement_section_dir': statement_section_dir,
+            'statement_assets_dir': statement_assets_dir,
             'interaction_section_enabled': bool(interaction_section_enabled),
             'statement_template_path': STATEMENT_TEMPLATE_REL.as_posix(),
             'statement_problem_path': STATEMENT_PROBLEM_REL.as_posix(),
@@ -687,18 +672,9 @@ def statement_compile_asset_delete(
             status_code=303,
             message=str(exc),
         )
-    section_dir_rel = statement_editor_section_paths(current_language)['legend'].parent.as_posix()
     message = 'statement asset deleted'
     try:
-        safe_rel = normalize_workspace_rel_path(path)
-        if not safe_rel:
-            raise ValueError('statement asset path is required')
-        section_prefix = section_dir_rel.rstrip('/') + '/'
-        if safe_rel != section_dir_rel and not safe_rel.startswith(section_prefix):
-            raise ValueError('statement asset must be under current statement language directory')
-        rel_in_section = Path(safe_rel).relative_to(section_dir_rel).as_posix()
-        if rel_in_section in _STATEMENT_CANONICAL_SECTION_FILES:
-            raise ValueError('canonical statement section sources cannot be deleted here')
+        safe_rel = normalize_statement_compile_asset_target(path)
         with config.workspace_service.workspace_lock(workspace):
             attachment_abs = safe_workspace_path(workspace, safe_rel)
             if not attachment_abs.exists() or (not attachment_abs.is_file()):
@@ -737,13 +713,12 @@ async def statement_compile_asset_upload(
             status_code=303,
             message=str(exc),
         )
-    section_dir_rel = statement_editor_section_paths(current_language)['legend'].parent.as_posix()
     message = 'statement asset uploaded'
     total_bytes = 0
     tmp_path: Path | None = None
     target_rel = ''
     try:
-        target_rel = normalize_statement_compile_asset_target(path, section_dir_rel, upload_filename=upload.filename or "")
+        target_rel = normalize_statement_compile_asset_target(path, upload_filename=upload.filename or "")
         with config.workspace_service.workspace_lock(workspace):
             asset_abs = safe_workspace_path(workspace, target_rel)
             if asset_abs.exists() and asset_abs.is_dir():

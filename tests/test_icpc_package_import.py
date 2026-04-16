@@ -186,3 +186,40 @@ class TestICPCPackageImport(SmokeBase):
         self.assertTrue((ws / "statement-sections" / "russian" / "legend.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
+    def test_import_icpc_legacy_statement_assets_merge_to_shared_root_with_conflict_warning(self) -> None:
+        ws = self._workspace_path()
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "lang/problem.yaml",
+                "\n".join(
+                    [
+                        "problem_format_version: 2025-09",
+                        "name: Shared Asset ICPC",
+                        "validation: custom",
+                    ]
+                )
+                + "\n",
+            )
+            zf.writestr("lang/data/secret/001.in", "1\n")
+            zf.writestr("lang/submissions/accepted/ac.cpp", "int main(){return 0;}\n")
+            zf.writestr("lang/input_validators/validator.cpp", "int main(){return 0;}\n")
+            zf.writestr("lang/output_validator/checker.cpp", "int main(){return 0;}\n")
+            zf.writestr("lang/statement-sections/english/legend.tex", "Legend EN\n")
+            zf.writestr("lang/statement-sections/chinese/legend.tex", "Legend ZH\n")
+            zf.writestr("lang/statement-sections/english/diagram.png", b"EN")
+            zf.writestr("lang/statement-sections/chinese/diagram.png", b"ZH")
+            zf.writestr("lang/statement-sections/english/shared.png", b"SAME")
+            zf.writestr("lang/statement-sections/chinese/shared.png", b"SAME")
+
+        service = ICPCPackageImportService()
+        result = service.import_package(ws, "lang.zip", payload.getvalue())
+        self.assertEqual((ws / "statement-assets" / "diagram.png").read_bytes(), b"EN")
+        self.assertEqual((ws / "statement-assets" / "diagram-zh.png").read_bytes(), b"ZH")
+        self.assertEqual((ws / "statement-assets" / "shared.png").read_bytes(), b"SAME")
+        self.assertFalse((ws / "statement-assets" / "shared-zh.png").exists())
+        warnings = [str(item) for item in (result.get("warnings") or [])]
+        self.assertTrue(any("statement-sections/chinese/diagram.png" in item for item in warnings))
+        self.assertTrue(any("statement-assets/diagram-zh.png" in item for item in warnings))
+        self.assertFalse(any("shared.png" in item for item in warnings))
+

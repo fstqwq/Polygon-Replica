@@ -190,11 +190,14 @@ class TestExport(SmokeBase):
             "validator": f"validators/validator_roundtrip_{token}.cpp",
             "checker": f"checkers/checker_roundtrip_{token}.cpp",
             "build_cfg": "config/build.json",
+            "statement_asset": f"statement-assets/diagram_{token}.png",
         }
         (ws / files["accepted"]).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / f"{files['accepted']}.desc").write_text("expected: accepted\n", encoding="utf-8")
         (ws / files["validator"]).write_text("#include \"testlib.h\"\nint main(){return 0;}\n", encoding="utf-8")
         (ws / files["checker"]).write_text("#include \"testlib.h\"\nint main(){return 42;}\n", encoding="utf-8")
+        (ws / files["statement_asset"]).parent.mkdir(parents=True, exist_ok=True)
+        (ws / files["statement_asset"]).write_bytes(b"PNG")
         (ws / files["build_cfg"]).write_text(
             "{\n"
             f"  \"validator_source\": \"{files['validator']}\",\n"
@@ -210,6 +213,7 @@ class TestExport(SmokeBase):
                 f"{files['accepted']}.desc",
                 files["validator"],
                 files["checker"],
+                files["statement_asset"],
                 files["build_cfg"],
                 *self._seed_export_tests(ws, "001"),
             ],
@@ -243,6 +247,7 @@ class TestExport(SmokeBase):
         self.assertEqual((imported_ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "1\n")
         self.assertEqual((imported_ws / "tests" / "answers" / "001.ans").read_bytes(), b"1\n")
         self.assertTrue((imported_ws / "statement" / "statements.ftl").is_file())
+        self.assertEqual((imported_ws / files["statement_asset"]).read_bytes(), b"PNG")
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertIn(str(imported_problem_cfg.get("mode") or ""), {"pass-fail", "interactive"})
         self.assertGreaterEqual(int(imported_problem_cfg.get("pass_limit") or 0), 1)

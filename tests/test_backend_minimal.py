@@ -511,7 +511,8 @@ class TestBackendMinimal(SmokeBase):
         english_dir = ws / "statement-sections" / "english"
         english_dir.mkdir(parents=True, exist_ok=True)
         (english_dir / "legend.tex").write_text("Legend.\n", encoding="utf-8")
-        (english_dir / "diagram.png").write_bytes(b"PNG")
+        (ws / "statement-assets").mkdir(parents=True, exist_ok=True)
+        (ws / "statement-assets" / "diagram.png").write_bytes(b"PNG")
         (ws / "attachments").mkdir(parents=True, exist_ok=True)
         (ws / "attachments" / "guess_number_testing_tool.py").write_text("print('ok')\n", encoding="utf-8")
 
@@ -547,7 +548,7 @@ class TestBackendMinimal(SmokeBase):
         self.assertTrue(bool(statement_nav.get("warn")))
         self.assertFalse(bool(statement_nav.get("danger")))
 
-    def test_statement_compile_asset_upload_stores_file_under_current_language_dir(self) -> None:
+    def test_statement_compile_asset_upload_stores_file_under_shared_root(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         upload = self._FakeUpload("diagram.png", b"PNG")
 
@@ -564,7 +565,7 @@ class TestBackendMinimal(SmokeBase):
 
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/{self.problem}/statement?language=english", resp.headers.get("location", ""))
-        self.assertEqual((ws / "statement-sections" / "english" / "figures" / "diagram.png").read_bytes(), b"PNG")
+        self.assertEqual((ws / "statement-assets" / "figures" / "diagram.png").read_bytes(), b"PNG")
 
     def test_statement_attachment_upload_stores_file_under_attachments_root(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])

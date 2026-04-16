@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import TypedDict, cast
 
 from app.main_util import UPLOAD_MAX_BYTES
+from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.verification.standard_checker import copy_standard_checker
@@ -18,11 +19,13 @@ from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
+    STATEMENT_ASSETS_DIR,
     STATEMENT_PROBLEM_REL,
     STATEMENT_RENDERED_DIR_REL,
     STATEMENT_SECTIONS_DIR,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
+    is_canonical_statement_section_entry,
 )
 from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import (
@@ -105,8 +108,6 @@ StatementImportSummary = TypedDict(
         "copied_files": int,
         "language": str,
         "language_warning": str,
-        "prebuilt_pdf_count": int,
-        "prebuilt_pdf_languages": list[str],
     },
 )
 
@@ -450,9 +451,10 @@ class PolygonPackageImportService:
         entries: dict[str, zipfile.ZipInfo],
         workspace: Path,
         meta: PolygonMeta,
-    ) -> StatementImportSummary:
+    ) -> tuple[StatementImportSummary, list[str]]:
         shutil.rmtree(workspace / STATEMENT_RENDERED_DIR_REL, ignore_errors=True)
         shutil.rmtree(workspace / STATEMENT_SECTIONS_DIR, ignore_errors=True)
+        shutil.rmtree(workspace / STATEMENT_ASSETS_DIR, ignore_errors=True)
 
         template_ok = self._copy_zip_entry(
             zf,
@@ -482,32 +484,42 @@ class PolygonPackageImportService:
         if not style_ok:
             self._write_text(workspace, STATEMENT_STYLE_REL, default_olymp_sty_text())
 
-        copied = 0
+        copied_section_files = 0
+        shared_assets: dict[str, bytes] = {}
+        legacy_assets: list[ImportedLegacyStatementAsset] = []
         for path, info in entries.items():
+            rel = Path(path.replace("\\", "/"))
+            if path.startswith(f"{STATEMENT_ASSETS_DIR.as_posix()}/"):
+                asset_rel = rel.relative_to(STATEMENT_ASSETS_DIR).as_posix()
+                if not asset_rel:
+                    continue
+                shared_assets[asset_rel] = _read_bytes_from_zip(zf, info)
+                continue
             if not path.startswith("statement-sections/"):
                 continue
-            rel = Path(path.replace("\\", "/"))
             if len(rel.parts) >= 3 and STATEMENT_SECTION_SAMPLE_FILE_RE.fullmatch(rel.name):
                 continue
-            self._write_bytes(workspace, rel, _read_bytes_from_zip(zf, info))
-            copied += 1
+            if len(rel.parts) < 3:
+                continue
+            rel_in_section = Path(*rel.parts[2:])
+            if is_canonical_statement_section_entry(rel_in_section):
+                self._write_bytes(workspace, rel, _read_bytes_from_zip(zf, info))
+                copied_section_files += 1
+                continue
+            legacy_assets.append(
+                {
+                    "language": rel.parts[1],
+                    "package_path": rel.as_posix(),
+                    "asset_rel": rel_in_section.as_posix(),
+                    "payload": _read_bytes_from_zip(zf, info),
+                }
+            )
 
-        copied_prebuilt_pdf = 0
-        prebuilt_pdf_languages: list[str] = []
-        for path, info in entries.items():
-            rel = path.replace("\\", "/")
-            if not rel.startswith("statements/.pdf/") or not rel.endswith("/problem.pdf"):
-                continue
-            parts = Path(rel).parts
-            if len(parts) < 4:
-                continue
-            language = parts[-2]
-            if not language:
-                continue
-            self._write_bytes(workspace, STATEMENT_SECTIONS_DIR / language / "problem.pdf", _read_bytes_from_zip(zf, info))
-            copied_prebuilt_pdf += 1
-            if language not in prebuilt_pdf_languages:
-                prebuilt_pdf_languages.append(language)
+        asset_merge = merge_imported_statement_assets(
+            workspace,
+            shared_assets=shared_assets,
+            legacy_assets=legacy_assets,
+        )
 
         languages = sorted(
             {
@@ -522,13 +534,14 @@ class PolygonPackageImportService:
         language_warning = ""
         if languages and ("english" not in languages):
             language_warning = f"statement language english not found; defaulting to {preferred}"
-        return {
-            "copied_files": copied,
-            "language": preferred,
-            "language_warning": language_warning,
-            "prebuilt_pdf_count": copied_prebuilt_pdf,
-            "prebuilt_pdf_languages": prebuilt_pdf_languages,
-        }
+        return (
+            {
+                "copied_files": copied_section_files + asset_merge["copied_files"],
+                "language": preferred,
+                "language_warning": language_warning,
+            },
+            asset_merge["warnings"],
+        )
 
     def _supported_generator_tokens(self, meta: PolygonMeta) -> set[str]:
         tokens: set[str] = set()
@@ -937,7 +950,7 @@ class PolygonPackageImportService:
             if xml_info is None:
                 raise ValueError("problem.xml not found in package")
             meta = self._parse_problem_xml(_read_text_from_zip(zf, xml_info))
-            statement_summary = self._import_statement(zf, entry_map, workspace, meta)
+            statement_summary, statement_warnings = self._import_statement(zf, entry_map, workspace, meta)
             tests_summary = self._import_tests(
                 zf,
                 entry_map,
@@ -963,6 +976,7 @@ class PolygonPackageImportService:
             checker_warning = component_summary["checker_import_warning"]
             if checker_warning:
                 warnings.append(checker_warning)
+            warnings.extend(statement_warnings)
             return {
                 "package_name": package_name.strip(),
                 "title": meta["title"],

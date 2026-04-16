@@ -14,6 +14,7 @@ from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
+from app.service.statement.constant import STATEMENT_ASSETS_DIR
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.platform.git_process import run_git
@@ -523,6 +524,9 @@ class ExportService:
         src_sections = snapshot / "statement-sections"
         if src_sections.exists() and src_sections.is_dir() and not src_sections.is_symlink():
             self._copy_dir_contents(src_sections, dst_statement.parent / "statement-sections")
+        src_assets = snapshot / STATEMENT_ASSETS_DIR
+        if src_assets.exists() and src_assets.is_dir() and not src_assets.is_symlink():
+            self._copy_dir_contents(src_assets, dst_statement.parent / STATEMENT_ASSETS_DIR)
 
         for language in self._statement_export_languages(snapshot):
             rendered = render_statement_main(snapshot / "statement", problem_title=problem_name, language=language)
