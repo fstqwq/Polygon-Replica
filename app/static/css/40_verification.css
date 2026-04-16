@@ -143,10 +143,26 @@ section.verification-header-section {
   min-width: 0;
 }
 
+.verification-task-status-main {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .verification-task-status-main > p,
 .verification-task-status-side > p,
 .verification-task-status-side > ul {
   margin: 0;
+}
+
+.verification-task-status-secondary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.verification-task-status-link {
+  white-space: nowrap;
 }
 
 .verification-task-status-side {
@@ -687,6 +703,25 @@ section.verification-header-section {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.verification-sanity-popup {
+  width: min(960px, calc(100vw - 20px));
+  max-height: calc(100vh - 20px);
+}
+
+.verification-sanity-dump {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.35;
+  font-family: Consolas, "Courier New", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
 }
 
 .sol-list {

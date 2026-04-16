@@ -107,13 +107,17 @@ def form_text(value: str | object) -> str:
     return str(default)
 
 
+def normalize_form_text_newlines(value: str | object) -> str:
+    return str(value).replace("\r\n", "\n").replace("\r", "\n")
+
+
 def enforce_textarea_max_bytes(
     value: str,
     *,
     label: str,
     max_bytes: int | None = None,
 ) -> str:
-    safe_value = str(value)
+    safe_value = normalize_form_text_newlines(value)
     cap = TEXTAREA_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
     if len(safe_value.encode("utf-8")) > cap:
         raise ValueError(f"{label} is too long")
@@ -207,5 +211,4 @@ def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] |
     for prefix_token, marker_token in pairs:
         normalized = normalized.replace(prefix_token, marker_token)
     return normalized
-
 

@@ -481,7 +481,7 @@ class TestUIRun(UIBaseSuite):
         updated = save_gen_script_call(
             problem="alice/sample",
             user="alice",
-            gen_script_text="gen 10 1\ngen 30 3\n",
+            gen_script_text="gen 10 1\r\ngen 30 3\r\n",
         )
         self.assertEqual(updated.status_code, 303)
         self.assertTrue(str(updated.headers.get("location", "")).endswith("/problems/alice/sample/tests"))
@@ -491,6 +491,8 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual([(row.get("id"), row.get("kind")) for row in tests], [("001", "manual"), ("002", "gen"), ("003", "gen")])
         self.assertEqual((generator_dir / "002.in").read_text(encoding="utf-8"), "gen 10 1")
         self.assertEqual((generator_dir / "003.in").read_text(encoding="utf-8"), "gen 30 3")
+        self.assertNotIn("\r", (generator_dir / "002.in").read_text(encoding="utf-8"))
+        self.assertNotIn("\r", (generator_dir / "003.in").read_text(encoding="utf-8"))
 
         cleared = save_gen_script_call(problem="alice/sample", user="alice", gen_script_text="")
         self.assertEqual(cleared.status_code, 303)
@@ -4366,6 +4368,52 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("accepted solution failed on 001.in", detail_html)
+
+    def test_run_details_shows_sanity_popup_with_yaml_dump(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-sanity-popup-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-sanity-popup"),
+            kind=Kind.ALL,
+            status="failed",
+            created_at="2026-04-17T00:00:00Z",
+            finished_at="2026-04-17T00:00:02Z",
+            runs=[],
+            summary_extra={
+                "sanity_status": "failed",
+                "sanity_checked_count": 1,
+                "sanity_checks": ["custom_sample_output"],
+                "validation_status": "failed",
+                "validated_count": 1,
+                "failed_step": "sanity",
+                "failed_check": "custom_sample_output",
+                "failed_test": "003.in",
+                "error": "validator reported mismatch",
+            },
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("San check", html)
+        self.assertIn('data-popup-open="verification-sanity-popup"', html)
+        self.assertIn('id="verification-sanity-popup"', html)
+        self.assertIn("sanity_status: failed", html)
+        self.assertIn("sanity_checks:", html)
+        self.assertIn("- custom_sample_output", html)
+        self.assertIn("failed_check: custom_sample_output", html)
+        self.assertIn("failed_test: 003.in", html)
+        self.assertIn("error: validator reported mismatch", html)
 
     def test_workflow_pages_emit_files_source_context_links(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

@@ -443,10 +443,11 @@ class TestAgentAPI(SmokeBase):
                 "/agent/v1/workspace/upload",
                 headers=self._bearer(workspace_token),
                 data={"path": "notes/agent.txt"},
-                files={"file": ("agent.txt", b"hello agent")},
+                files={"file": ("agent.txt", b"hello\r\nagent\r\n")},
             )
             self.assertEqual(upload.status_code, 200, upload.text)
             self.assertTrue((workspace / "notes/agent.txt").exists())
+            self.assertEqual((workspace / "notes/agent.txt").read_bytes(), b"hello\r\nagent\r\n")
             upload_status = workspace_service.read_workspace_status(workspace)
             upload_row = config.db.fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
             self.assertIsNotNone(upload_row)
@@ -495,7 +496,7 @@ class TestAgentAPI(SmokeBase):
                 params={"path": "notes/agent.txt"},
             )
             self.assertEqual(read_back.status_code, 200, read_back.text)
-            self.assertEqual(str(read_back.json().get("content") or ""), "hello agent")
+            self.assertEqual(str(read_back.json().get("content") or ""), "hello\r\nagent\r\n")
 
             delete = client.delete(
                 "/agent/v1/workspace/files/notes/agent.txt",

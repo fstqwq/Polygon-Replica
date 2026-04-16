@@ -606,6 +606,26 @@ class TestBackendMinimal(SmokeBase):
         self.assertEqual(resp.status_code, 303)
         self.assertIn("statement legend is too long", _flash_messages_from_response(resp)[0])
 
+    def test_preview_save_normalizes_textarea_newlines_to_lf(self) -> None:
+        ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        resp = preview_save(
+            self.problem,
+            self.user,
+            legend_tex="Legend\r\nBody\r\n",
+            input_tex="Input\r\nSection\r\n",
+            output_tex="Output\r\nSection\r\n",
+            interaction_tex="",
+            notes_tex="Notes\r\nSection\r\n",
+            page="statement",
+            language="english",
+            preview_id="",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual((ws / "statement-sections" / "english" / "legend.tex").read_bytes(), b"Legend\nBody\n")
+        self.assertEqual((ws / "statement-sections" / "english" / "input.tex").read_bytes(), b"Input\nSection\n")
+        self.assertEqual((ws / "statement-sections" / "english" / "output.tex").read_bytes(), b"Output\nSection\n")
+        self.assertEqual((ws / "statement-sections" / "english" / "notes.tex").read_bytes(), b"Notes\nSection\n")
+
     def test_statement_attachment_delete_removes_file_under_attachments_root(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         attachment = ws / "attachments" / "guess_number_testing_tool.py"

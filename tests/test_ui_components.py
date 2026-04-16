@@ -1084,19 +1084,19 @@ class TestUIComponents(UIBaseSuite):
                 problem=self.problem,
                 user=self.user,
                 path=validator_rel,
-                content="int main(){return 7;}\n",
+                content="int main(){\r\n    return 7;\r\n}\r\n",
             )
         self.assertEqual(validator_saved.status_code, 303)
-        self.assertEqual(validator_abs.read_text(encoding="utf-8"), "int main(){return 7;}\n")
+        self.assertEqual(validator_abs.read_bytes(), b"int main(){\n    return 7;\n}\n")
 
         files_saved = files_save(
             problem=self.problem,
             user=self.user,
             path=validator_rel,
-            content="int main(){return 9;}\n",
+            content="int main(){\r\n    return 9;\r\n}\r\n",
         )
         self.assertEqual(files_saved.status_code, 303)
-        self.assertEqual(validator_abs.read_text(encoding="utf-8"), "int main(){return 9;}\n")
+        self.assertEqual(validator_abs.read_bytes(), b"int main(){\n    return 9;\n}\n")
 
         with patch(
             "app.impl.problem.validator.judgehost_compile_check_error",
@@ -1110,7 +1110,7 @@ class TestUIComponents(UIBaseSuite):
             )
         self.assertEqual(emptied.status_code, 303)
         # Empty validator source should fail compile-check and preserve the previous content.
-        self.assertEqual(validator_abs.read_text(encoding="utf-8"), "int main(){return 9;}\n")
+        self.assertEqual(validator_abs.read_bytes(), b"int main(){\n    return 9;\n}\n")
 
         page = validator_page(_request(f"/problems/{self.problem}/validator"), self.problem, self.user)
         self.assertEqual(page.status_code, 200)

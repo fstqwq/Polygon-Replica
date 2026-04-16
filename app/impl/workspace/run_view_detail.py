@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 from pathlib import Path
 from typing import cast
 from urllib.parse import quote_plus
@@ -76,6 +77,89 @@ _TASK_KIND_GENERATE_INPUT = "generate-input"
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
 _TRANSIENT_REASON_TOKENS = {"running", "queued", "pending"}
+_YAML_SIMPLE_RE = re.compile(r"^[A-Za-z0-9_./@+=,\-() ]+$")
+
+
+def _yaml_scalar(value: object) -> str:
+    text = "" if value is None else str(value)
+    if text == "":
+        return '""'
+    if (
+        _YAML_SIMPLE_RE.fullmatch(text)
+        and text == text.strip()
+        and text.lower() not in {"null", "true", "false", "yes", "no", "on", "off"}
+    ):
+        return text
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+    return f'"{escaped}"'
+
+
+def _normalized_sanity_status(raw: object) -> str:
+    status = str(raw or "").strip().lower()
+    if status in {"passed", "pending", "running", "failed", "skipped"}:
+        return status
+    return "unknown"
+
+
+def _sanity_checks_list(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [str(item or "") for item in raw if str(item or "")]
+
+
+def _build_sanity_payload(verification_details: dict[str, object]) -> dict[str, object]:
+    return {
+        "sanity_status": _normalized_sanity_status(verification_details.get("sanity_status")),
+        "sanity_checked_count": int(verification_details.get("sanity_checked_count") or 0),
+        "sanity_checks": _sanity_checks_list(verification_details.get("sanity_checks")),
+        "validation_status": _normalized_sanity_status(verification_details.get("validation_status")),
+        "validated_count": int(verification_details.get("validated_count") or 0),
+        "failed_step": str(verification_details.get("failed_step") or ""),
+        "failed_check": str(verification_details.get("failed_check") or ""),
+        "failed_test": str(verification_details.get("failed_test") or ""),
+        "error": str(verification_details.get("error") or ""),
+    }
+
+
+def _render_sanity_yaml(payload: dict[str, object]) -> str:
+    lines: list[str] = []
+    scalar_keys = (
+        "sanity_status",
+        "sanity_checked_count",
+        "validation_status",
+        "validated_count",
+        "failed_step",
+        "failed_check",
+        "failed_test",
+        "error",
+    )
+    for key in scalar_keys[:2]:
+        lines.append(f"{key}: {_yaml_scalar(payload.get(key))}")
+    sanity_checks = cast(list[str], payload.get("sanity_checks") or [])
+    if sanity_checks:
+        lines.append("sanity_checks:")
+        for item in sanity_checks:
+            lines.append(f"  - {_yaml_scalar(item)}")
+    else:
+        lines.append("sanity_checks: []")
+    for key in scalar_keys[2:]:
+        lines.append(f"{key}: {_yaml_scalar(payload.get(key))}")
+    return "\n".join(lines)
+
+
+def _detail_sanity_context(verification_id: str, verification_details: dict[str, object]) -> dict[str, object]:
+    if not verification_id:
+        return {
+            "available": False,
+            "status": "unknown",
+            "dump_text": "",
+        }
+    payload = _build_sanity_payload(verification_details)
+    return {
+        "available": True,
+        "status": str(payload["sanity_status"]),
+        "dump_text": _render_sanity_yaml(payload),
+    }
 
 
 def _rewrite_failure_reason_with_source(current_reason: str, columns: list[dict[str, object]]) -> str:
@@ -1417,6 +1501,7 @@ def build_run_detail_context(
     detail_fail_flag = bool(detail_fail_reason)
     detail_fail_reason = _rewrite_failure_reason_with_source(detail_fail_reason, columns)
     detail_fail_flag = bool(detail_fail_reason)
+    detail_sanity = _detail_sanity_context(verification_id, verification_details)
     stage_results = verification_details.get('stage_results') if isinstance(verification_details.get('stage_results'), dict) else {}
     verification_logs: dict[str, object] = {
         'available': False,
@@ -1508,5 +1593,6 @@ def build_run_detail_context(
         'detail_running_tasks': running_tasks,
         'detail_fail_flag': detail_fail_flag,
         'detail_fail_reason': detail_fail_reason,
+        'detail_sanity': detail_sanity,
         'detail_verification_logs': verification_logs,
     }
