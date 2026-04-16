@@ -73,38 +73,29 @@ body.confirm-open {
   position: relative;
 }
 
-.statement-editor-field-body > textarea {
-  padding-bottom: calc(var(--space-3) + 28px);
-}
-
-.statement-editor-field-body .CodeMirror-scroll {
-  padding-bottom: calc(var(--space-3) + 28px);
-  box-sizing: border-box;
-}
-
 .statement-draft-inline-trigger {
   position: absolute;
-  right: var(--space-3);
-  bottom: var(--space-3);
+  right: var(--space-2);
+  bottom: var(--space-2);
   z-index: 3;
   white-space: nowrap;
-  font-size: var(--font-size-ui-sm);
+  font-size: var(--font-size-ui-xs);
   line-height: 1;
-  padding: 7px 10px;
+  padding: 5px 8px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
-  background: color-mix(in srgb, var(--surface) 68%, transparent);
+  background: color-mix(in srgb, var(--surface) 44%, transparent);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
-  opacity: 0.72;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+  opacity: 0.42;
   transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
 
 .statement-draft-inline-trigger:hover,
 .statement-draft-inline-trigger:focus-visible {
-  opacity: 1;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  opacity: 0.88;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
   border-color: var(--line);
 }
 
