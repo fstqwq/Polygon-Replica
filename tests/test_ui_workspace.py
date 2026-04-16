@@ -883,9 +883,22 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn(other_problem, html)
         self.assertNotIn(f"/problems/{other_problem}/statement", html)
         self.assertIn("/problems/alice/sample/statement", html)
+        self.assertIn('class="problem-slug-link"', html)
+        self.assertIn(">alice/sample</a>", html)
+        self.assertNotIn(">sample</a> - <code>alice/sample</code>", html)
         self.assertIn("v0 / upstream v0", html)
         self.assertIn("none / upstream missing", html)
         self.assertIn("revision-alert", html)
+
+    def test_workspace_page_header_uses_slug_link_and_copy_button(self) -> None:
+        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn('class="problem-slug-link problem-context-slug-link"', html)
+        self.assertIn('href="/problems/alice/sample/statement"', html)
+        self.assertIn(">alice/sample</a>", html)
+        self.assertIn('data-copy-text="alice/sample"', html)
+        self.assertIn('aria-label="Copy problem slug"', html)
 
     def test_problems_page_orders_by_last_updated_desc(self) -> None:
         older_slug = f"alice/ui-sort-old-{uuid.uuid4().hex[:8]}"

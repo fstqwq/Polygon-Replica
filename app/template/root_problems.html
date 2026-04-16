@@ -24,7 +24,7 @@
     </tr>
     {% for row in entries %}
     <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
-      <td><a href="/problems/{{ row.slug }}/statement">{{ row.name }}</a> - <code>{{ row.slug }}</code></td>
+      <td><a class="problem-slug-link" href="/problems/{{ row.slug }}/statement">{{ row.slug }}</a></td>
       <td>{{ row.role }}</td>
       <td>{{ row.branch if row.has_workspace else "-" }}</td>
       <td><span class="{{ 'revision-alert' if row.revision_highlight else '' }}">{{ row.revision_display }}</span></td>
@@ -46,7 +46,7 @@
         <button class="btn primary-action" type="submit">Open</button>
         <datalist id="problem-list">
           {% for row in entries %}
-          <option value="{{ row.slug }}">{{ row.name }}</option>
+          <option value="{{ row.slug }}">{{ row.slug }}</option>
           {% endfor %}
         </datalist>
       </form>

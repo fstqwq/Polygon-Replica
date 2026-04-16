@@ -429,6 +429,72 @@
     button.textContent = loading ? loadingLabel : baseLabel;
   }
 
+  async function writeTextToClipboard(text) {
+    var safeText = String(text || "");
+    if (!safeText) return;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(safeText);
+      return;
+    }
+    var probe = document.createElement("textarea");
+    probe.value = safeText;
+    probe.setAttribute("readonly", "readonly");
+    probe.style.position = "fixed";
+    probe.style.top = "-9999px";
+    probe.style.left = "-9999px";
+    document.body.appendChild(probe);
+    try {
+      probe.focus();
+      probe.select();
+      if (!document.execCommand || !document.execCommand("copy")) {
+        throw new Error("copy failed");
+      }
+    } finally {
+      if (probe.parentNode) probe.parentNode.removeChild(probe);
+    }
+  }
+
+  function initCopyTextButtons() {
+    var buttons = document.querySelectorAll("[data-copy-text]");
+    if (!buttons.length) return;
+    buttons.forEach(function (button) {
+      var resetTimer = 0;
+      var baseLabel = String(button.getAttribute("data-copy-label") || button.getAttribute("aria-label") || "Copy").trim() || "Copy";
+      var doneLabel = String(button.getAttribute("data-copy-done-label") || "Copied").trim() || "Copied";
+
+      function resetState() {
+        button.setAttribute("data-copy-state", "");
+        button.setAttribute("title", baseLabel);
+        button.setAttribute("aria-label", baseLabel);
+      }
+
+      function setStateCopied() {
+        button.setAttribute("data-copy-state", "copied");
+        button.setAttribute("title", doneLabel);
+        button.setAttribute("aria-label", doneLabel);
+        if (resetTimer) {
+          window.clearTimeout(resetTimer);
+        }
+        resetTimer = window.setTimeout(function () {
+          resetTimer = 0;
+          resetState();
+        }, 1200);
+      }
+
+      resetState();
+      button.addEventListener("click", async function () {
+        var text = String(button.getAttribute("data-copy-text") || "");
+        if (!text) return;
+        try {
+          await writeTextToClipboard(text);
+          setStateCopied();
+        } catch (_err) {
+          resetState();
+        }
+      });
+    });
+  }
+
   function submitForm(form) {
     if (!form) return;
     if (typeof form.requestSubmit === "function") {
@@ -2834,6 +2900,7 @@
     initStatementLanguageSwitch();
     initAutoSubmitSelects();
     initPolygonImportSlugSuggest();
+    initCopyTextButtons();
     initAgentSessionsConnect();
     initSettingsTokenGenerators();
     initSettingsJudgehostRunnerControls();

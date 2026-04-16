@@ -53,8 +53,21 @@
     {% endfor %}
     {% endif %}
     <div class="problem-context-bar">
-      <strong class="problem-context-name">{{ problem_display_name }}</strong>
-      <span class="problem-context-slug">#{{ ctx.problem.slug }}</span>
+      <a class="problem-slug-link problem-context-slug-link" href="/problems/{{ ctx.problem.slug }}/statement">{{ ctx.problem.slug }}</a>
+      <button
+        class="linkish-button problem-copy-button problem-context-copy-button"
+        type="button"
+        data-copy-text="{{ ctx.problem.slug }}"
+        data-copy-label="Copy problem slug"
+        data-copy-done-label="Copied problem slug"
+        title="Copy problem slug"
+        aria-label="Copy problem slug"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="5" y="3" width="8" height="10" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="1.25"></rect>
+          <rect x="2" y="6" width="8" height="8" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="1.25"></rect>
+        </svg>
+      </button>
       {% if ctx.general_cfg is defined %}
       <div class="problem-context-meta">
         <span class="problem-context-chip">{{ ctx.general_cfg.time_limit_ms }}ms</span>

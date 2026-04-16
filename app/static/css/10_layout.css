@@ -354,13 +354,47 @@
   flex-wrap: wrap;
 }
 
-.problem-context-name {
+.problem-slug-link {
+  color: var(--text);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: var(--font-size-ui-sm);
+  text-decoration: none;
+}
+
+.problem-slug-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.problem-context-slug-link {
   font-size: 16px;
 }
 
-.problem-context-slug {
+.problem-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
   color: var(--muted);
-  font-size: var(--font-size-ui-sm);
+  flex: 0 0 auto;
+}
+
+.problem-copy-button svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.problem-copy-button:hover:not(:disabled) {
+  color: var(--link);
+  background: var(--surface-alt);
+  text-decoration: none;
+}
+
+.problem-copy-button[data-copy-state="copied"] {
+  color: var(--link);
 }
 
 .problem-context-meta {
