@@ -347,18 +347,19 @@
 
 .problem-context-bar {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
   color: var(--text);
   flex-wrap: wrap;
 }
 
 .problem-slug-link {
-  color: var(--text);
+  color: var(--text-secondary);
   font-family: Consolas, "Courier New", monospace;
   font-size: var(--font-size-ui-sm);
   text-decoration: none;
+  line-height: 1.2;
 }
 
 .problem-slug-link:hover {
@@ -367,18 +368,28 @@
 }
 
 .problem-context-slug-link {
-  font-size: 16px;
+  font-size: 15px;
+  color: var(--text);
 }
 
 .problem-copy-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  color: var(--muted);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-secondary);
   flex: 0 0 auto;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .problem-copy-button svg {
@@ -389,12 +400,26 @@
 
 .problem-copy-button:hover:not(:disabled) {
   color: var(--link);
-  background: var(--surface-alt);
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
   text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.problem-copy-button:active:not(:disabled) {
+  background: var(--surface-alt);
+  transform: translateY(0);
+}
+
+.problem-copy-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .problem-copy-button[data-copy-state="copied"] {
   color: var(--link);
+  border-color: var(--line-strong);
+  background: var(--surface-alt);
 }
 
 .problem-context-meta {
