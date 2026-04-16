@@ -7,10 +7,9 @@ from fastapi import HTTPException, Request, Depends
 
 from app.impl.auth.session import has_sudo_session
 from app.impl.auth.shared import template_response
-from app.impl.problem.shared import _looks_like_binary_file
 from app.impl.runtime.config import config
 
-from app.main_util import normalize_workspace_rel_path, safe_workspace_path
+from app.main_util import normalize_workspace_rel_path
 from app.service.statement.constant import DEFAULT_PROBLEM_TITLE, STATEMENT_SECTIONS_DIR
 from app.service.statement.context import statement_languages
 from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
@@ -404,7 +403,6 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
         selected_path = requested_path
     elif change_rows:
         selected_path = cast(str | None, change_rows[0].get('link_path')) or ''
-    selected_change = next((row for row in change_rows if row.get('link_path') == selected_path), None)
 
     selected_diff = ''
     selected_diff_truncated = False
@@ -428,23 +426,4 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
             elif line.startswith('-'):
                 kind = 'del'
             selected_diff_lines.append({'text': line, 'kind': kind})
-    has_added_lines = any((row.get('kind') == 'add' for row in selected_diff_lines))
-    if (not has_added_lines) and selected_path and isinstance(selected_change, dict) and str(selected_change.get('kind') or '') == 'added':
-        try:
-            selected_abs = safe_workspace_path(workspace, selected_path)
-            if selected_abs.exists() and selected_abs.is_file() and (not selected_abs.is_symlink()) and (not _looks_like_binary_file(selected_abs)):
-                selected_diff, selected_diff_truncated = config.git_service.read_file_limited(
-                    workspace,
-                    selected_path,
-                    int(status.get('diff_char_limit') or 0) or int(_C.UI_LOG_TEXT_CHAR_LIMIT),
-                )
-                added_lines = str(selected_diff).splitlines()
-                if added_lines:
-                    selected_diff_lines = [{'text': f'+{line}', 'kind': 'add'} for line in added_lines]
-                else:
-                    selected_diff_lines = [{'text': '+[empty file]', 'kind': 'add'}]
-        except (HTTPException, ValueError, RuntimeError):
-            selected_diff = ''
-            selected_diff_truncated = False
-            selected_diff_lines = []
     return template_response(request, 'workspace.html', {'ctx': ctx, 'status': status, 'branches': ctx.get('branches', []), 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})
