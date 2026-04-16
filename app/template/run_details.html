@@ -115,8 +115,8 @@
         </tr>
         <tr class="verification-detail-result-row">
           <th>
-            <span class="stat-line stat-main">Result</span>
-            <span class="stat-line stat-sub">Expected</span>
+            <span class="stat-line stat-main verification-detail-label-nowrap">Result</span>
+            <span class="stat-line stat-sub verification-detail-label-nowrap">Expected</span>
           </th>
           {% for col in detail_columns %}
           <th class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
@@ -181,8 +181,8 @@
       <tfoot>
         <tr class="verification-detail-summary-row">
           <th>
-            <div class="stat-line stat-main">Summary</div>
-            <div class="stat-line stat-sub">Statistics</div>
+            <div class="stat-line stat-main verification-detail-label-nowrap">Summary</div>
+            <div class="stat-line stat-sub verification-detail-label-nowrap">Statistics</div>
           </th>
           {% for col in detail_columns %}
           <td class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
