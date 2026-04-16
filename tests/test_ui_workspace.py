@@ -660,6 +660,38 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("base", html)
         self.assertIn("changed", html)
 
+    def test_workspace_page_shows_full_green_added_file_diff(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = f"notes/workspace-added-{uuid.uuid4().hex[:8]}.txt"
+        target = ws / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("first line\nsecond line\n", encoding="utf-8")
+
+        resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn(f"Selected: <code>{rel}</code>", html)
+        self.assertIn("workspace-diff-line-add", html)
+        self.assertIn("+first line", html)
+        self.assertIn("+second line", html)
+        self.assertNotIn("No textual diff for selected file.", html)
+
+    def test_workspace_page_shows_empty_placeholder_for_added_empty_file(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = f"notes/workspace-empty-{uuid.uuid4().hex[:8]}.txt"
+        target = ws / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+
+        resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn(f"Selected: <code>{rel}</code>", html)
+        self.assertIn("+[empty file]", html)
+        self.assertNotIn("No textual diff for selected file.", html)
+
     def test_commit_and_publish_rolls_back_commit_when_push_fails(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
