@@ -2,6 +2,28 @@
   vertical-align: middle;
 }
 
+.verification-list-table .verification-list-reason-head,
+.verification-list-table .verification-list-reason-cell {
+  width: 34rem;
+  max-width: 34rem;
+}
+
+.verification-list-table .verification-list-reason-cell {
+  min-width: 0;
+}
+
+.verification-list-reason-text {
+  display: -webkit-box;
+  max-inline-size: min(34rem, 40vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .verification-actions {
   white-space: nowrap;
 }

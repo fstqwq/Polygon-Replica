@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.impl.auth.shared import parse_iso_utc
 from app.impl.runtime.config import config
+from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
@@ -15,6 +16,7 @@ from .run_display import run_verdict_short
 _C = config.constants
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TEST_NAME_NUM_RE = re.compile(r"^(\d+)\.in$")
+_RUN_LIST_REASON_LIMIT_BYTES = 180
 
 
 def _latest_iso_timestamp(values: list[str] | tuple[str, ...]) -> str:
@@ -129,11 +131,24 @@ def _normalized_verification_status(status: str) -> str:
     return token
 
 
+def _list_reason_display(raw: object) -> tuple[str, str]:
+    full_text = normalize_display_text(str(raw or ""))
+    if not full_text:
+        return ("", "")
+    compact_text = " ".join(part.strip() for part in full_text.splitlines() if part.strip())
+    if not compact_text:
+        compact_text = full_text
+    display_text = bounded_display_text(compact_text, limit_bytes=_RUN_LIST_REASON_LIMIT_BYTES)
+    title_text = full_text if (full_text != compact_text or full_text != display_text) else ""
+    return (display_text, title_text)
+
+
 def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] | None:
     verification_id = str(row.get("id") or "")
     if not verification_id:
         return None
     status = _normalized_verification_status(str(row.get("status") or ""))
+    fail_reason_display, fail_reason_title = _list_reason_display(row.get("fail_reason") or "")
     return {
         "index": 0,
         "id": verification_id,
@@ -143,6 +158,8 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
         "finished_at": str(row.get("finished_at") or ""),
         "status": status,
         "fail_reason": str(row.get("fail_reason") or ""),
+        "fail_reason_display": fail_reason_display,
+        "fail_reason_title": fail_reason_title,
         "has_running": status == "running",
         "is_failed": status == "failed",
     }

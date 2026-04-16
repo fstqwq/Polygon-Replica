@@ -12,7 +12,7 @@
     <th>Finished</th>
     <th>Kind</th>
     <th>Status</th>
-    <th>Reason</th>
+    <th class="verification-list-reason-head">Reason</th>
     <th>Actions</th>
   </tr>
   {% for r in runs %}
@@ -39,9 +39,9 @@
       <span>{{ r.status }}</span>
       {% endif %}
     </td>
-    <td>
-      {% if r.fail_reason %}
-      {{ r.fail_reason }}
+    <td class="verification-list-reason-cell">
+      {% if r.fail_reason_display %}
+      <div class="verification-list-reason-text"{% if r.fail_reason_title %} title="{{ r.fail_reason_title }}"{% endif %}>{{ r.fail_reason_display }}</div>
       {% else %}
       <span class="muted">-</span>
       {% endif %}

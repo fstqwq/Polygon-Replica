@@ -4523,6 +4523,41 @@ class TestUIRun(UIBaseSuite):
         self.assertIn(verification_id, html)
         self.assertIn("failed", html)
 
+    def test_run_list_reason_uses_short_display_and_full_title(self) -> None:
+        workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-list-reason-{uuid.uuid4().hex[:8]}"
+        long_reason = "first line\n" + ("very long reason " * 40).strip()
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-list-reason"),
+            kind=Kind.ALL,
+            status="failed",
+            created_at="2026-03-13T00:00:00Z",
+            finished_at="2026-03-13T00:00:01Z",
+            runs=[],
+            summary_extra={"status": "failed"},
+        )
+        db_execute("UPDATE verifications SET fail_reason=? WHERE id=?", [long_reason, verification_id])
+
+        rows = workspace_impl.run_list_rows(
+            problem_id,
+            workspace_id,
+            Path(ctx["workspace"]["path"]),
+            limit=10,
+            actor_user_id=int(ctx["user"]["id"]),
+        )
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(str(row.get("fail_reason") or ""), long_reason)
+        self.assertTrue(str(row.get("fail_reason_display") or ""))
+        self.assertNotIn("\n", str(row.get("fail_reason_display") or ""))
+        self.assertTrue(str(row.get("fail_reason_title") or ""))
+
     def test_run_details_prefers_verification_row_status_over_stale_summary_status(self) -> None:
         from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary
 
