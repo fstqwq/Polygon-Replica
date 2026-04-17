@@ -5,8 +5,31 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   {% set page_title = ctx.page_title if ctx.page_title is defined else '' %}
-  {% set problem_display_name = ctx.problem.display_name %}
-  <title>{% if page_title %}{{ page_title }} - {% elif problem_display_name %}{{ problem_display_name }} - {% endif %}Polygon-Replica</title>
+  {% if (not page_title) and request is defined and request.url is defined %}
+  {% set current_path = request.url.path | default('') %}
+  {% if current_path.startswith('/problems/') %}
+  {% set inferred_problem_title = namespace(value='') %}
+  {% for part in current_path.split('/') | reverse %}
+  {% if not inferred_problem_title.value %}
+  {% if part == 'statement' %}{% set inferred_problem_title.value = 'Statements' %}{% endif %}
+  {% if part == 'checker' %}{% set inferred_problem_title.value = 'Checker' %}{% endif %}
+  {% if part == 'validator' %}{% set inferred_problem_title.value = 'Validator' %}{% endif %}
+  {% if part == 'interactor' %}{% set inferred_problem_title.value = 'Interactor' %}{% endif %}
+  {% if part == 'generators' %}{% set inferred_problem_title.value = 'Generators' %}{% endif %}
+  {% if part == 'solutions' %}{% set inferred_problem_title.value = 'Solutions' %}{% endif %}
+  {% if part == 'tests' %}{% set inferred_problem_title.value = 'Tests' %}{% endif %}
+  {% if part == 'run' %}{% set inferred_problem_title.value = 'Verification' %}{% endif %}
+  {% if part == 'export' %}{% set inferred_problem_title.value = 'Packages' %}{% endif %}
+  {% if part == 'access' %}{% set inferred_problem_title.value = 'Manage Access' %}{% endif %}
+  {% if part == 'files' %}{% set inferred_problem_title.value = 'Files' %}{% endif %}
+  {% if part == 'workspace' %}{% set inferred_problem_title.value = 'Working Copy' %}{% endif %}
+  {% if part == 'history' %}{% set inferred_problem_title.value = 'Revision History' %}{% endif %}
+  {% endif %}
+  {% endfor %}
+  {% set page_title = inferred_problem_title.value %}
+  {% endif %}
+  {% endif %}
+  <title>{% if page_title %}{{ page_title }} - {% endif %}Polygon-Replica</title>
   <link rel="stylesheet" href="/static/style.css?v=20260417-15" />
   <script src="/static/ui.js?v=20260413-02" defer></script>
   <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />

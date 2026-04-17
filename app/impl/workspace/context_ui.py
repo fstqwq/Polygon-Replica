@@ -58,7 +58,6 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     ctx['access'] = access
-    ctx['problem']['display_name'] = str(ctx['problem'].get('name') or '')
     ctx['branches'] = ['main']
     ctx['branches_truncated'] = False
     ctx['branch_limit'] = 1

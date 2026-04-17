@@ -953,6 +953,30 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn("<title>Statement Name Tex Title - Polygon-Replica</title>", html)
         self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
 
+    def test_problem_pages_use_fixed_section_titles_in_html_title(self) -> None:
+        username = f"sectiontitle-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        workspace_service.grant_repo_access("alice/sample", username, "owner")
+        workspace_service.ensure_workspace("alice/sample", username)
+
+        from app.main import app
+
+        expected_titles = [
+            ("/problems/alice/sample/checker", "Checker"),
+            ("/problems/alice/sample/validator", "Validator"),
+            ("/problems/alice/sample/files", "Files"),
+            ("/problems/alice/sample/workspace", "Working Copy"),
+            ("/problems/alice/sample/history", "Revision History"),
+        ]
+        with TestClient(app) as client:
+            for path, title in expected_titles:
+                resp = client.get(path, headers={"cookie": auth_cookie}, follow_redirects=False)
+                self.assertEqual(resp.status_code, 200, f"{path}: {resp.text}")
+                html = resp.text
+                self.assertIn(f"<title>{title} - Polygon-Replica</title>", html)
+                self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
+
     def test_problems_page_shows_only_participating_problems(self) -> None:
         owner_problem = f"alice/ui-owner-{uuid.uuid4().hex[:8]}"
         read_problem = f"alice/ui-read-{uuid.uuid4().hex[:8]}"
