@@ -25,8 +25,29 @@ _C = config.constants
 def problems_root_page(request: Request, user: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
-    entries = user_participating_problems(int(gctx['user']['id']), limit=_C.API_PROBLEMS_LIST_LIMIT)
-    return template_response(request, 'root_problems.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': _C.API_PROBLEMS_LIST_LIMIT, 'active_main': 'problems'})
+    raw_entries = user_participating_problems(int(gctx['user']['id']), limit=_C.API_PROBLEMS_LIST_LIMIT)
+    entries: list[dict[str, object]] = []
+    owner_prefix_chars = 0
+    for row in raw_entries:
+        item = dict(row)
+        slug = str(item["slug"])
+        owner, leaf = slug.split("/", 1)
+        item["slug_owner"] = owner
+        item["slug_leaf"] = leaf
+        entries.append(item)
+        owner_prefix_chars = max(owner_prefix_chars, len(owner) + 1)
+    return template_response(
+        request,
+        'root_problems.html',
+        {
+            'user': gctx['user'],
+            'default_problem': gctx['default_problem'],
+            'entries': entries,
+            'entries_limit': _C.API_PROBLEMS_LIST_LIMIT,
+            'active_main': 'problems',
+            'owner_prefix_chars': owner_prefix_chars,
+        },
+    )
 
 
 def problems_root_import_slug_hint(request: Request, user: str = "", filename: str = "", requested_slug: str = ""):

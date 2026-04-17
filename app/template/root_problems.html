@@ -18,15 +18,22 @@
     <tr>
       <th class="problem-list-head">Problem</th>
       <th>Role</th>
-      <th>Workspace</th>
       <th>Revision</th>
       <th>Updated</th>
     </tr>
     {% for row in entries %}
     <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
-      <td class="problem-list-cell"><a class="problem-slug-link problem-list-slug-link" href="/problems/{{ row.slug }}/statement">{{ row.slug }}</a></td>
+      <td class="problem-list-cell">
+        <a
+          class="problem-slug-link problem-list-slug-link"
+          href="/problems/{{ row.slug }}/statement"
+          style="--problem-owner-prefix-ch: {{ owner_prefix_chars }}"
+        >
+          <span class="problem-list-slug-owner">{{ row.slug_owner }}/</span>
+          <span class="problem-list-slug-leaf">{{ row.slug_leaf }}</span>
+        </a>
+      </td>
       <td>{{ row.role }}</td>
-      <td>{{ row.branch if row.has_workspace else "-" }}</td>
       <td><span class="{{ 'revision-alert' if row.revision_highlight else '' }}">{{ row.revision_display }}</span></td>
       <td>{{ row.updated_at | local_time if row.updated_at else "-" }}</td>
     </tr>

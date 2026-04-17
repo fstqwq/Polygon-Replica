@@ -506,10 +506,28 @@ textarea.textarea-md {
 .problem-list-table .problem-list-slug-link {
   color: var(--text);
   font-weight: 400;
+  display: inline-grid;
+  grid-template-columns: calc(var(--problem-owner-prefix-ch, 0) * 1ch) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 0;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .problem-list-table .problem-list-slug-link:hover {
   color: var(--link);
+}
+
+.problem-list-table .problem-list-slug-owner {
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.problem-list-table .problem-list-slug-leaf {
+  color: inherit;
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 .table-base tbody tr:nth-child(even) td {
@@ -523,4 +541,9 @@ textarea.textarea-md {
 tr.table-row-dirty > td,
 tr.verification-row-failed > td {
   background: var(--surface-danger);
+}
+
+.problem-list-table tbody tr.table-row-dirty > td {
+  background: #f8d7da;
+  border-color: #e9b2bb;
 }
