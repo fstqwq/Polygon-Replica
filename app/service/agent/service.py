@@ -14,7 +14,7 @@ from app.service.repository.workspace import WorkspaceService
 _SCOPE_LEVELS = {"readonly": 1, "workspace": 2, "commit": 3}
 _ROLE_LEVELS = {"read": 1, "write": 3, "owner": 3}
 _DEFAULT_REGISTER_TTL_SEC = 300
-_DEFAULT_REQUEST_TTL_SEC = 300
+_DEFAULT_REQUEST_TTL_SEC = 900
 _DEFAULT_TOKEN_TTL_SEC = 86400
 _ALLOWED_APPROVAL_TTLS = {3600, 86400, 604800, 2592000}
 

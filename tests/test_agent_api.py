@@ -205,6 +205,7 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(request_resp.status_code, 200, request_resp.text)
             request_id = str(request_resp.json().get("request_id") or "")
             self.assertRegex(request_id, r"^ar-[0-9a-f]{16}$")
+            self.assertEqual(int(request_resp.json().get("expires_in") or 0), 900)
             self.assertNotEqual(str(config.agent_service._store.session_by_id(session_id)["last_seen_at"]), stale_seen)
 
             config.agent_service._store.touch_session(session_id, last_seen_at=stale_seen)
@@ -782,5 +783,4 @@ class TestAgentAPI(SmokeBase):
                 headers=self._bearer(readonly_token),
             )
             self.assertEqual(removed_text_resp.status_code, 404)
-
 
