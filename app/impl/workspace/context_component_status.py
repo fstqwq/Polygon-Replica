@@ -223,10 +223,14 @@ def checker_status_context(workspace: Path) -> dict:
                 standard_name = f'std::{detected}'
         except Exception:
             pass
-    if standard_name:
-        return {'mode': 'standard', 'display': standard_name, 'standard_checker': standard_name, 'standard_valid': True, 'repo_source': repo_source, 'repo_source_exists': True}
-    return {'mode': 'repository' if repo_exists else 'missing', 'display': _source_basename_label(repo_source) if repo_exists else 'missing', 'standard_checker': '', 'standard_valid': True, 'repo_source': repo_source, 'repo_source_exists': bool(repo_exists)}
-
+    return {
+        'mode': 'repository' if repo_exists else 'missing',
+        'display': _source_basename_label(repo_source) if repo_exists else 'missing',
+        'standard_checker': standard_name,
+        'standard_valid': True,
+        'repo_source': repo_source,
+        'repo_source_exists': bool(repo_exists),
+    }
 
 
 

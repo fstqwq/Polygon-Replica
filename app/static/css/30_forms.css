@@ -176,21 +176,6 @@ form {
   gap: var(--space-3);
 }
 
-.checker-mode-chip {
-  display: inline-block;
-  font-size: var(--font-size-ui-xs);
-  line-height: 1.2;
-  color: var(--text-secondary);
-  border: 1px solid var(--line-strong);
-  padding: 1px var(--space-2);
-}
-
-.checker-mode-chip-active {
-  border-color: var(--text);
-  background: var(--surface-hover);
-  font-weight: 700;
-}
-
 .run-kind-chip {
   display: inline-flex;
   align-items: center;

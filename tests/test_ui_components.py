@@ -127,12 +127,12 @@ class TestUIComponents(UIBaseSuite):
         before = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
         self.assertEqual(before.status_code, 200)
         before_html = before.body.decode("utf-8", errors="replace")
-        self.assertIn("Standard Checker", before_html)
         self.assertNotIn('aria-label="standard checker help"', before_html)
         self.assertNotIn('aria-label="checker info help"', before_html)
+        self.assertNotIn("checker-mode-chip", before_html)
         self.assertIn("checker/set-standard", before_html)
         self.assertIn("name=\"checker_name\"", before_html)
-        self.assertIn("std::fcmp.cpp - compare files as sequence of full lines (exact)", before_html)
+        self.assertIn('<option value="std::fcmp.cpp"', before_html)
 
         install = checker_set_standard(
             problem=self.problem,
@@ -152,9 +152,11 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(after.status_code, 200)
         after_html = after.body.decode("utf-8", errors="replace")
         self.assertIn('aria-label="checker details"', after_html)
-        self.assertIn('data-tooltip="std::fcmp.cpp - compare files as sequence of full lines (exact)"', after_html)
+        self.assertIn('data-tooltip="Matches standard checker: std::fcmp.cpp - compare files as sequence of full lines (exact)"', after_html)
         self.assertNotIn('class="status-hint-icon"', after_html)
         self.assertNotIn('aria-label="standard checker help"', after_html)
+        self.assertIn('<code>checkers/fcmp.cpp</code> <span class="muted">(matches <code>std::fcmp.cpp</code>)</span>', after_html)
+        self.assertRegex(after_html, r'data-page="checker"[\s\S]*?>\s*std::fcmp\.cpp\s*</span>')
 
     def test_checker_page_supports_source_save_without_files_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -164,7 +166,7 @@ class TestUIComponents(UIBaseSuite):
         resp = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Create checker.cpp template", html)
+        self.assertIn(f'action="/problems/{self.problem}/checker/create-template"', html)
         self.assertNotIn("checker/save-source", html)
         self.assertNotIn("src=checker", html)
 
@@ -178,7 +180,7 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(saved.status_code, 303)
         self.assertIn("return argc", (ws / rel).read_text(encoding="utf-8"))
 
-    def test_checker_save_source_compile_check_failure_keeps_standard_checker_mode(self) -> None:
+    def test_checker_save_source_compile_check_failure_keeps_standard_checker_source(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         rel = "checkers/checker.cpp"
         (ws / rel).unlink(missing_ok=True)
@@ -406,7 +408,7 @@ class TestUIComponents(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('data-component-editor-error="1"', html)
         self.assertIn("compile check failed: checkers/checker.cpp: syntax error", html)
-        self.assertIn("Save Checker Source", html)
+        self.assertIn(f'action="/problems/{self.problem}/checker/save-source"', html)
 
     def test_validator_editor_renders_multiline_compile_error_detail(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -983,11 +985,11 @@ class TestUIComponents(UIBaseSuite):
         )
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("View Standard Checker", html)
         self.assertIn("std::fcmp.cpp", html)
         self.assertIn("third_party/upstream/testlib/checkers/", html)
         self.assertIn("registerTestlibCmd", html)
-        self.assertIn("Use This Standard Checker", html)
+        self.assertIn(f'action="/problems/{self.problem}/checker/set-standard"', html)
+        self.assertIn('name="checker_name" value="std::fcmp.cpp"', html)
 
     def test_validator_and_interactor_pages_support_template_actions(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1051,8 +1053,6 @@ class TestUIComponents(UIBaseSuite):
         checker_after_create = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
         checker_after_html = checker_after_create.body.decode("utf-8", errors="replace")
         self.assertIn("checker/save-source", checker_after_html)
-        self.assertIn("Save Checker Source", checker_after_html)
-        self.assertIn("Create checker.cpp template", checker_after_html)
         self.assertIn(
             f"formaction=\"/problems/{self.problem}/checker/create-template\"",
             checker_after_html,

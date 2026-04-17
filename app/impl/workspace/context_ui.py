@@ -301,14 +301,15 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
     checker_mode = cast(str | None, checker_status.get('mode')) or ''
     checker_applies = mode_text != 'interactive'
     checker_hint = ''
-    if checker_applies and checker_mode == 'standard':
-        standard_checker = cast(str | None, checker_status.get('standard_checker')) or ''
-        if standard_checker:
-            std_name = standard_checker[5:] if standard_checker.startswith('std::') else standard_checker
-            description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(std_name, 'general-purpose standard checker from testlib'))
-            checker_hint = f'{standard_checker} - {description}'
+    checker_text = checker_display
+    standard_checker = cast(str | None, checker_status.get('standard_checker')) or ''
+    if checker_applies and standard_checker:
+        std_name = standard_checker[5:] if standard_checker.startswith('std::') else standard_checker
+        description = str(_C.STANDARD_CHECKER_DESCRIPTIONS.get(std_name, 'general-purpose standard checker from testlib'))
+        checker_hint = f'Matches standard checker: {standard_checker} - {description}'
+        checker_text = standard_checker
     nav['checker'] = {
-        'text': checker_display if checker_applies else 'uses interactor',
+        'text': checker_text if checker_applies else 'uses interactor',
         'danger': checker_applies and (checker_mode in {'missing', 'none'} or checker_display in {'unknown', 'error', 'missing'}),
         'hint': checker_hint,
     }
