@@ -852,6 +852,30 @@ class TestUIWorkspace(UIBaseSuite):
         ws = Path(workspace_service.ensure_workspace(f"{username}/{slug}", username))
         self.assertEqual((ws / "statement-sections" / "english" / "name.tex").read_text(encoding="utf-8"), f"{slug}\n")
 
+    def test_statement_page_title_does_not_use_name_tex(self) -> None:
+        username = f"stmtitle-{uuid.uuid4().hex[:8]}"
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        workspace_service.grant_repo_access("alice/sample", username, "owner")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", username))
+        (ws / "statement-sections" / "english" / "name.tex").write_text("Statement Name Tex Title\n", encoding="utf-8")
+
+        from app.main import app
+
+        with TestClient(app) as client:
+            resp = client.get(
+                "/problems/alice/sample/statement?language=english",
+                headers={"cookie": auth_cookie},
+                follow_redirects=False,
+            )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        html = resp.text
+        self.assertIn("<title>Statements - Polygon-Replica</title>", html)
+        self.assertIn('<h1 class="page-title">Statements</h1>', html)
+        self.assertIn('<strong class="submenu-status-heading">Statements</strong>', html)
+        self.assertNotIn("<title>Statement Name Tex Title - Polygon-Replica</title>", html)
+        self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
+
     def test_problems_page_shows_only_participating_problems(self) -> None:
         owner_problem = f"alice/ui-owner-{uuid.uuid4().hex[:8]}"
         read_problem = f"alice/ui-read-{uuid.uuid4().hex[:8]}"

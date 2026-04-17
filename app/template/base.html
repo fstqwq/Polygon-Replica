@@ -4,8 +4,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  {% set page_title = ctx.page_title if ctx.page_title is defined else '' %}
   {% set problem_display_name = ctx.problem.display_name %}
-  <title>{% if problem_display_name %}{{ problem_display_name }} - {% endif %}Polygon-Replica</title>
+  <title>{% if page_title %}{{ page_title }} - {% elif problem_display_name %}{{ problem_display_name }} - {% endif %}Polygon-Replica</title>
   <link rel="stylesheet" href="/static/style.css?v=20260417-15" />
   <script src="/static/ui.js?v=20260413-02" defer></script>
   <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />
@@ -96,7 +97,7 @@
       <div class="problem-submenu-item">
         <a data-page="statement" href="/problems/{{ ctx.problem.slug }}/statement">
           <span class="submenu-head-line">
-              <strong class="submenu-status-heading">Statement</strong>
+              <strong class="submenu-status-heading">Statements</strong>
           </span>
           <span class="submenu-detail-line {{ 'submenu-status-danger' if statement_meta_nav.get('danger') else 'submenu-status-warn' if statement_meta_nav.get('warn') else '' }}">{{ statement_meta_nav.get("text", "-") }}</span>
         </a>

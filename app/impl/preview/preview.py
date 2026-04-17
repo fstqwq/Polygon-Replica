@@ -41,7 +41,6 @@ from app.service.statement.context import (
     statement_languages,
 )
 from app.service.statement.render import ensure_statement_language_sources
-from app.service.statement.render import statement_title_for_language
 from app.service.statement.signature import statement_sources_signature
 
 _C = config.constants
@@ -328,7 +327,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 preview_id = cached_id
     safe_mode = statement_mode_from_ctx(ctx)
     statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode, current_language)
-    ctx["problem"]["display_name"] = statement_title_for_language(workspace, current_language, problem_title)
+    ctx["page_title"] = "Statements"
     log = ''
     log_truncated = False
     pdf_exists = False
@@ -884,4 +883,3 @@ def statement_language_add(
         status_code=303,
         message=message,
     )
-
