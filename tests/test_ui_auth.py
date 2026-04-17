@@ -297,6 +297,31 @@ class TestUIAuth(UIBaseSuite):
         invalid_messages = _flash_messages_from_response(invalid)
         self.assertTrue(any("invalid username" in item.lower() for item in invalid_messages))
 
+    def test_register_rejects_invalid_username_length(self) -> None:
+        too_short = register_submit(
+            request=_post_request("/register"),
+            username="ab",
+            password="StrongPass123",
+            password_confirm="StrongPass123",
+            next="/",
+        )
+        self.assertEqual(too_short.status_code, 303)
+        self.assertEqual("/register", too_short.headers.get("location", ""))
+        short_messages = _flash_messages_from_response(too_short)
+        self.assertTrue(any("invalid username" in item.lower() for item in short_messages))
+
+        too_long = register_submit(
+            request=_post_request("/register"),
+            username="abcdefghijklmnopq",
+            password="StrongPass123",
+            password_confirm="StrongPass123",
+            next="/",
+        )
+        self.assertEqual(too_long.status_code, 303)
+        self.assertEqual("/register", too_long.headers.get("location", ""))
+        long_messages = _flash_messages_from_response(too_long)
+        self.assertTrue(any("invalid username" in item.lower() for item in long_messages))
+
     def test_setup_page_shows_config_when_no_registered_users(self) -> None:
         count = db_fetch_one(
             "SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''",
@@ -314,7 +339,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("I confirm the configuration paths below.", html)
 
     def test_setup_submit_creates_super_admin(self) -> None:
-        username = f"bootstrap-{uuid.uuid4().hex[:8]}"
+        username = f"boot-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
 
         page = setup_page(_request("/setup"))
@@ -360,7 +385,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertGreater(int(row["password_iters"] or 0), 0)
 
     def test_setup_submit_requires_config_confirmation(self) -> None:
-        username = f"bootstrap-{uuid.uuid4().hex[:8]}"
+        username = f"boot-{uuid.uuid4().hex[:8]}"
         resp = _setup_with_password_proof(username, "StrongPass123", confirm_config="0", next_path="/")
         self.assertEqual(resp.status_code, 303)
         self.assertEqual("/setup", resp.headers.get("location", ""))
@@ -483,7 +508,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(resp.status_code, 200)
 
     def test_auth_middleware_allows_userless_contest_path(self) -> None:
-        username = f"contestauth-{uuid.uuid4().hex[:8]}"
+        username = f"ctauth-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
@@ -905,7 +930,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-admin-snapshot" for item in hosts))
 
     def test_problem_id_validation_requires_lowercase_dash_format(self) -> None:
-        username = f"switchauth-{uuid.uuid4().hex[:8]}"
+        username = f"swauth-{uuid.uuid4().hex[:8]}"
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)

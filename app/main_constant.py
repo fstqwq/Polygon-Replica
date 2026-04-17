@@ -37,16 +37,19 @@ LOGIN_RATE_LIMIT_BLOCK_SEC = 300.0
 LOGIN_RATE_LIMIT_MAX_FAILURES = 8
 
 PROBLEM_ID_RULE_MESSAGE = (
-    "invalid problem id. Use <owner>/<slug> with lowercased words separated by dash. "
+    "invalid problem id. Use <owner>/<slug> with lowercased words separated by dash (64 characters max). "
     "Examples: alice/books, team-7/minimal-spanning-tree"
 )
 USERNAME_RULE_MESSAGE = (
-    "invalid username. Use lowercased words, separated by dash. "
+    "invalid username. Use 3-16 lowercased characters, separated by dash. "
     "Examples: alice, team-7, judge-admin"
 )
 
 USER_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+USERNAME_MIN_LEN = 3
+USERNAME_MAX_LEN = 16
 PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$")
+PROBLEM_ID_MAX_LEN = 64
 SESSION_TOKEN_RE = re.compile(r"^[A-Za-z0-9._~-]{20,256}$")
 ROOT_PROBLEMS_PATH_RE = re.compile(r"^/problems(?:/import(?:/slug-hint)?)?$")
 ROOT_CONTESTS_PATH_RE = re.compile(r"^/contests(?:/(?:create|import(?:/(?:review|confirm))?))?$")

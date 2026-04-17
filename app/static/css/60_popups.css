@@ -9,7 +9,7 @@ body.confirm-open {
   z-index: 1250;
   display: grid;
   place-items: center;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--overlay-scrim);
   padding: var(--space-6);
 }
 
@@ -20,7 +20,7 @@ body.confirm-open {
 .ui-popup-dialog {
   width: min(880px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   background: var(--surface);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -108,7 +108,6 @@ body.confirm-open {
   background: color-mix(in srgb, var(--surface) 44%, transparent);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
   opacity: 0.42;
   transition: opacity 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
@@ -215,7 +214,7 @@ body.confirm-open {
   z-index: 1300;
   display: grid;
   place-items: center;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--overlay-scrim);
   padding: var(--space-6);
 }
 
@@ -225,7 +224,7 @@ body.confirm-open {
 
 .ui-confirm-dialog {
   width: min(540px, calc(100vw - 32px));
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   background: var(--surface);
   padding: var(--space-5);
   display: grid;

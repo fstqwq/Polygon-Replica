@@ -75,18 +75,25 @@ def _select_importer(package_format: str):
     if token == "native":
         return _NATIVE_IMPORTER
     raise ValueError(f"unsupported package format: {package_format}")
-def _slugify_problem_id(raw: str) -> str:
+def _problem_slug_segment_max_len(owner: str) -> int:
+    safe_owner = owner.strip().lower()
+    if not _C.USER_IDENT_RE.fullmatch(safe_owner):
+        raise ValueError(_C.USERNAME_RULE_MESSAGE)
+    return max(1, int(_C.PROBLEM_ID_MAX_LEN) - len(safe_owner) - 1)
+
+
+def _slugify_problem_id(raw: str, *, max_len: int) -> str:
     token = raw.strip().lower()
     if not token:
         return ""
     token = re.sub(r"[^a-z0-9]+", "-", token)
     token = re.sub(r"-{2,}", "-", token).strip("-")
-    if len(token) > 64:
-        token = token[:64].rstrip("-")
+    if len(token) > max_len:
+        token = token[:max_len].rstrip("-")
     return token
 
-def _normalize_problem_slug_segment_required(raw: str) -> str:
-    token = _slugify_problem_id(raw)
+def _normalize_problem_slug_segment_required(owner: str, raw: str) -> str:
+    token = _slugify_problem_id(raw, max_len=_problem_slug_segment_max_len(owner))
     if not token or (not _PROBLEM_SEGMENT_RE.fullmatch(token)):
         raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
     return token
@@ -95,15 +102,18 @@ def _problem_full_slug(owner: str, slug_segment: str) -> str:
     safe_owner = owner.strip().lower()
     if not _C.USER_IDENT_RE.fullmatch(safe_owner):
         raise ValueError(_C.USERNAME_RULE_MESSAGE)
-    safe_segment = _normalize_problem_slug_segment_required(slug_segment)
-    return f"{safe_owner}/{safe_segment}"
+    safe_segment = _normalize_problem_slug_segment_required(safe_owner, slug_segment)
+    full_slug = f"{safe_owner}/{safe_segment}"
+    if len(full_slug) > _C.PROBLEM_ID_MAX_LEN:
+        raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
+    return full_slug
 
-def _import_slug_base_from_package_name(package_name: str) -> str:
+def _import_slug_base_from_package_name(owner: str, package_name: str) -> str:
     raw_stem = Path(package_name or "imported-problem.zip").stem.strip()
     normalized_stem = _POLYGON_LINUX_PACKAGE_SUFFIX_RE.sub("", raw_stem).strip()
     if not normalized_stem:
         normalized_stem = raw_stem
-    stem = _slugify_problem_id(normalized_stem)
+    stem = _slugify_problem_id(normalized_stem, max_len=_problem_slug_segment_max_len(owner))
     base = stem or "imported-problem"
     if not _PROBLEM_SEGMENT_RE.fullmatch(base):
         return "imported-problem"
@@ -113,12 +123,13 @@ def _next_available_problem_slug(owner: str, base: str) -> str:
     token = base.strip()
     if not token:
         token = "imported-problem"
-    token = _normalize_problem_slug_segment_required(token)
+    token = _normalize_problem_slug_segment_required(owner, token)
+    max_len = _problem_slug_segment_max_len(owner)
     candidate = token
     idx = 2
     while config.workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None:
         suffix = f"-{idx}"
-        prefix_len = max(1, 64 - len(suffix))
+        prefix_len = max(1, max_len - len(suffix))
         prefix = token[:prefix_len].rstrip("-") or "p"
         candidate = f"{prefix}{suffix}"
         idx += 1
@@ -127,9 +138,9 @@ def _next_available_problem_slug(owner: str, base: str) -> str:
 def build_import_slug_hint(owner: str, filename: str, requested_slug: str) -> dict[str, object]:
     package_name = filename.strip()
     requested = requested_slug.strip()
-    base = _import_slug_base_from_package_name(package_name)
+    base = _import_slug_base_from_package_name(owner, package_name)
     if requested:
-        normalized = _slugify_problem_id(requested)
+        normalized = _slugify_problem_id(requested, max_len=_problem_slug_segment_max_len(owner))
         valid = bool(normalized and _PROBLEM_SEGMENT_RE.fullmatch(normalized))
         if not valid:
             return {
@@ -174,14 +185,14 @@ def build_import_slug_hint(owner: str, filename: str, requested_slug: str) -> di
 def _resolve_import_problem_slug(owner: str, requested_slug: str, package_name: str) -> str:
     requested = requested_slug.strip()
     if requested:
-        normalized = _normalize_problem_slug_segment_required(requested)
+        normalized = _normalize_problem_slug_segment_required(owner, requested)
         full_requested = _problem_full_slug(owner, normalized)
         if config.workspace_service.known_problem_id(full_requested) is not None:
             suggestion = _next_available_problem_slug(owner, normalized)
             raise ValueError(f"problem already exists: {full_requested} (try: {_problem_full_slug(owner, suggestion)})")
         return full_requested
 
-    base = _import_slug_base_from_package_name(package_name)
+    base = _import_slug_base_from_package_name(owner, package_name)
     return _problem_full_slug(owner, _next_available_problem_slug(owner, base))
 
 def _is_package_marker(names: list[str], marker: str) -> bool:
@@ -457,4 +468,3 @@ def export_import_slug_hint(problem: str, user: Annotated[str, Depends(require_s
     actor_user = ctx["user"]["username"]
     payload = build_import_slug_hint(actor_user, filename, requested_slug)
     return JSONResponse(payload)
-

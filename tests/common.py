@@ -231,7 +231,8 @@ class SmokeBase(unittest.TestCase):
         return ws
 
     def random_id(self, prefix: str) -> str:
-        return f"{prefix}-{uuid.uuid4().hex[:8]}"
+        safe_prefix = str(prefix or "").strip("-")[:7] or "user"
+        return f"{safe_prefix}-{uuid.uuid4().hex[:8]}"
 
     def _artifact_root(self, artifact_id: str) -> Path:
         problem = str(getattr(self, "problem", "alice/sample"))

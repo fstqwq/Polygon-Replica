@@ -9,7 +9,7 @@
 
 .danger-zone {
   border: 1px solid var(--tag-fail-border);
-  background: #fff7f7;
+  background: var(--surface-danger);
   margin: var(--space-4) 0 0;
 }
 
@@ -236,7 +236,7 @@
   height: 18px;
   border-radius: 50%;
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--line);
   transition: transform 0.15s ease;
 }
 
@@ -375,7 +375,6 @@
   font-size: var(--font-size-ui-sm);
   line-height: 1.35;
   border-radius: 4px;
-  box-shadow: none;
   pointer-events: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

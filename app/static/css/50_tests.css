@@ -210,12 +210,12 @@
 
 .files-grid .primary-action {
   border-color: var(--line-strong);
-  background: var(--surface-hover);
+  background: var(--surface-selected);
   color: var(--text);
 }
 
 .files-grid .primary-action:hover:not(:disabled) {
-  background: #dde3eb;
+  background: var(--surface-hover);
 }
 
 .files-grid .selected-path-form .form-row,

@@ -255,7 +255,7 @@ form {
 .statement-page-title-inline {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: var(--space-4);
   flex-wrap: wrap;
 }
@@ -263,9 +263,10 @@ form {
 .statement-page-title-tools {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: var(--space-3);
   min-width: 0;
+  margin-left: auto;
   flex-wrap: wrap;
 }
 
@@ -489,7 +490,8 @@ textarea.textarea-md {
 }
 
 .table-base th {
-  background: var(--surface-alt);
+  background: var(--surface);
+  border-bottom-color: var(--line-strong);
 }
 
 .problem-list-table .problem-list-head {

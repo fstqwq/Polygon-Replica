@@ -24,6 +24,7 @@ PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
 USERNAME_RULE_MESSAGE: str = "invalid username"
 APP_PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$")
 APP_USER_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+APP_PROBLEM_ID_MAX_LEN = 64
 
 
 def apply_runtime_values(values: RuntimeValues) -> None:
@@ -31,10 +32,12 @@ def apply_runtime_values(values: RuntimeValues) -> None:
     global USERNAME_RULE_MESSAGE
     global APP_PROBLEM_IDENT_RE
     global APP_USER_IDENT_RE
+    global APP_PROBLEM_ID_MAX_LEN
     PROBLEM_ID_RULE_MESSAGE = str(values.PROBLEM_ID_RULE_MESSAGE)
     USERNAME_RULE_MESSAGE = str(values.USERNAME_RULE_MESSAGE)
     APP_PROBLEM_IDENT_RE = values.PROBLEM_IDENT_RE
     APP_USER_IDENT_RE = values.USER_IDENT_RE
+    APP_PROBLEM_ID_MAX_LEN = int(values.PROBLEM_ID_MAX_LEN)
 
 apply_runtime_values(build_runtime_values())
 
@@ -43,6 +46,7 @@ class WorkspaceService:
     IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     PROBLEM_IDENT_RE = APP_PROBLEM_IDENT_RE
     USER_IDENT_RE = APP_USER_IDENT_RE
+    PROBLEM_ID_MAX_LEN = APP_PROBLEM_ID_MAX_LEN
     PROBLEM_CACHE_MAX_ENTRIES = 512
     USER_CACHE_MAX_ENTRIES = 2048
     REPO_ROLES = {"owner", "write", "read"}
@@ -80,7 +84,7 @@ class WorkspaceService:
     def _validate_identifier(self, value: str, label: str) -> str:
         ident = str(value or "").strip()
         if label == "problem":
-            if len(ident) > 129 or not self.PROBLEM_IDENT_RE.fullmatch(ident):
+            if len(ident) > self.PROBLEM_ID_MAX_LEN or not self.PROBLEM_IDENT_RE.fullmatch(ident):
                 raise ValueError(PROBLEM_ID_RULE_MESSAGE)
             return ident
         if label == "user":

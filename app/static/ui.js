@@ -2670,7 +2670,9 @@
       var requested = String(slugInput.value || "").trim();
       if (requested) {
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(requested)) {
-          slugInput.setCustomValidity("invalid problem id. Use lowercased words separated by dash.");
+          slugInput.setCustomValidity(
+            "invalid problem id. Use lowercased words separated by dash (full problem id is 64 characters max)."
+          );
           setHint("Slug format is invalid.", "danger");
           return;
         }

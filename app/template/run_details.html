@@ -117,7 +117,20 @@
       </colgroup>
       <thead>
         <tr>
-          <th>Test</th>
+          <th class="verification-detail-corner-status-cell">
+            {% set corner_status = detail_status or 'unknown' %}
+            {% if corner_status == "ok" %}
+            <span class="verification-detail-corner-status ok">{{ corner_status }}</span>
+            {% elif corner_status == "failed" %}
+            <span class="verification-detail-corner-status danger">{{ corner_status }}</span>
+            {% elif corner_status in ["running", "queued", "pending"] %}
+            <span class="verification-detail-corner-status info">{{ corner_status }}</span>
+            {% elif corner_status in ["cancelled", "skipped", "none", "unknown"] %}
+            <span class="verification-detail-corner-status muted">{{ corner_status }}</span>
+            {% else %}
+            <span class="verification-detail-corner-status">{{ corner_status }}</span>
+            {% endif %}
+          </th>
           {% for col in detail_columns %}
           <th class="{{ 'tone-fail' if col.expected_mismatch else '' }}">
             {% if col.source_href %}
@@ -128,8 +141,8 @@
           </th>
           {% endfor %}
         </tr>
-        <tr class="verification-detail-result-row">
-          <th>
+        <tr class="verification-detail-overview-row verification-detail-result-row">
+          <th class="verification-detail-corner-structure-cell">
             <span class="stat-line stat-main verification-detail-label-nowrap">Result</span>
             <span class="stat-line stat-sub verification-detail-label-nowrap">Expected</span>
           </th>
@@ -194,8 +207,8 @@
       {% endif %}
       </tbody>
       <tfoot>
-        <tr class="verification-detail-summary-row">
-          <th>
+        <tr class="verification-detail-overview-row verification-detail-summary-row">
+          <th class="verification-detail-corner-structure-cell">
             <div class="stat-line stat-main verification-detail-label-nowrap">Summary</div>
             <div class="stat-line stat-sub verification-detail-label-nowrap">Statistics</div>
           </th>

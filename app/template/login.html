@@ -6,7 +6,7 @@
 {% block auth_form %}
 <form id="login-form" class="form-stack" method="post" action="/login">
   <label for="username">Username</label>
-  <input id="username" name="username" autofocus />
+  <input id="username" name="username" minlength="3" maxlength="16" autofocus />
   <label for="password">Password</label>
   <input id="password" name="password" type="password" autocomplete="current-password" />
   <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />

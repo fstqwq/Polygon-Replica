@@ -127,7 +127,11 @@ def login_submit(request: Request, username: str=Form(...), password: str=Form('
     rate_limit_key = login_rate_limit_key(raw_user, request)
     try:
         login_rate_limit_check(rate_limit_key)
-        safe_user = raw_user if len(raw_user) <= 64 and _C.USER_IDENT_RE.fullmatch(raw_user) else ''
+        safe_user = (
+            raw_user
+            if _C.USERNAME_MIN_LEN <= len(raw_user) <= _C.USERNAME_MAX_LEN and _C.USER_IDENT_RE.fullmatch(raw_user)
+            else ''
+        )
         if not safe_user:
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')

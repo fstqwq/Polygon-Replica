@@ -34,7 +34,7 @@ def switch_workspace(
             safe_problem = raw_problem
         else:
             safe_problem = f"{active_user}/{raw_problem}"
-        if not _C.PROBLEM_IDENT_RE.fullmatch(safe_problem):
+        if len(safe_problem) > _C.PROBLEM_ID_MAX_LEN or not _C.PROBLEM_IDENT_RE.fullmatch(safe_problem):
             raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
         user_id = config.workspace_service.known_user_id(active_user)
         if user_id is None:
@@ -116,7 +116,6 @@ def problem_delete(request: Request, problem: str, user: Annotated[str, Depends(
         msg = f"problem delete failed: {exc}"
         return redirect_response(next_path, status_code=303, message=msg)
     return redirect_response("/problems", status_code=303, message=msg)
-
 
 
 

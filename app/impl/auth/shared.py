@@ -380,7 +380,7 @@ def password_meta_for_username(username: str) -> tuple[str, int]:
 
 def lookup_user_auth(username: str):
     safe = str(username or "").strip()
-    if not _C.USER_IDENT_RE.fullmatch(safe):
+    if len(safe) < _C.USERNAME_MIN_LEN or len(safe) > _C.USERNAME_MAX_LEN or not _C.USER_IDENT_RE.fullmatch(safe):
         return None
     return config.auth_service.lookup_user_auth(safe)
 
@@ -395,7 +395,7 @@ def has_registered_users() -> bool:
 
 def normalize_username_required(value: str) -> str:
     safe = str(value or "").strip()
-    if len(safe) > 64 or not _C.USER_IDENT_RE.fullmatch(safe):
+    if len(safe) < _C.USERNAME_MIN_LEN or len(safe) > _C.USERNAME_MAX_LEN or not _C.USER_IDENT_RE.fullmatch(safe):
         raise ValueError(_C.USERNAME_RULE_MESSAGE)
     return safe
 

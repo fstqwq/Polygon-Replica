@@ -144,20 +144,26 @@ def _cleanup_stale_contest_import_drafts() -> None:
     except OSError:
         return
 
+def _problem_slug_segment_max_len(owner: str) -> int:
+    safe_owner = owner.strip().lower()
+    if not _C.USER_IDENT_RE.fullmatch(safe_owner):
+        raise ValueError(_C.USERNAME_RULE_MESSAGE)
+    return max(1, int(_C.PROBLEM_ID_MAX_LEN) - len(safe_owner) - 1)
 
-def _slugify_problem_id(raw: str) -> str:
+
+def _slugify_problem_id(raw: str, *, max_len: int) -> str:
     token = raw.strip().lower()
     if not token:
         return ""
     token = re.sub(r"[^a-z0-9]+", "-", token)
     token = re.sub(r"-{2,}", "-", token).strip("-")
-    if len(token) > 64:
-        token = token[:64].rstrip("-")
+    if len(token) > max_len:
+        token = token[:max_len].rstrip("-")
     return token
 
 
-def _normalize_problem_slug_segment_required(raw: str) -> str:
-    token = _slugify_problem_id(raw)
+def _normalize_problem_slug_segment_required(owner: str, raw: str) -> str:
+    token = _slugify_problem_id(raw, max_len=_problem_slug_segment_max_len(owner))
     if not token or (not _PROBLEM_SEGMENT_RE.fullmatch(token)):
         raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
     return token
@@ -167,17 +173,19 @@ def _problem_full_slug(owner: str, slug_segment: str) -> str:
     safe_owner = owner.strip().lower()
     if not _C.USER_IDENT_RE.fullmatch(safe_owner):
         raise ValueError(_C.USERNAME_RULE_MESSAGE)
-    safe_segment = _normalize_problem_slug_segment_required(slug_segment)
-    return f"{safe_owner}/{safe_segment}"
+    safe_segment = _normalize_problem_slug_segment_required(safe_owner, slug_segment)
+    full_slug = f"{safe_owner}/{safe_segment}"
+    if len(full_slug) > _C.PROBLEM_ID_MAX_LEN:
+        raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
+    return full_slug
 
 
 def _next_available_problem_slug(owner: str, base: str, reserved: set[str] | None = None) -> str:
-    token = base.strip().lower()
-    token = _slugify_problem_id(token)
+    token = base.strip()
     if not token:
         token = "imported-problem"
-    if not _PROBLEM_SEGMENT_RE.fullmatch(token):
-        token = "imported-problem"
+    token = _normalize_problem_slug_segment_required(owner, token)
+    max_len = _problem_slug_segment_max_len(owner)
     seen = set(reserved or set())
     candidate = token
     idx = 2
@@ -185,7 +193,7 @@ def _next_available_problem_slug(owner: str, base: str, reserved: set[str] | Non
         config.workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None
     ):
         suffix = f"-{idx}"
-        prefix_len = max(1, 64 - len(suffix))
+        prefix_len = max(1, max_len - len(suffix))
         prefix = token[:prefix_len].rstrip("-") or "p"
         candidate = f"{prefix}{suffix}"
         idx += 1
@@ -198,7 +206,10 @@ def _build_contest_import_problem_draft_rows(owner: str, parsed_rows: list[dict[
     for seq, raw in enumerate(parsed_rows, start=1):
         row = dict(raw) if isinstance(raw, dict) else {}
         source_slug_obj = row.get("source_slug")
-        source_slug = _slugify_problem_id(str(source_slug_obj) if source_slug_obj is not None else "")
+        source_slug = _slugify_problem_id(
+            str(source_slug_obj) if source_slug_obj is not None else "",
+            max_len=_problem_slug_segment_max_len(owner),
+        )
         if not source_slug:
             source_slug = f"problem-{seq}"
         package_name_obj = row.get("package_name")
@@ -322,7 +333,10 @@ def _build_problem_slug_review_rows(
         fallback_obj = row.get("suggested_slug")
         fallback = str(fallback_obj).strip() if fallback_obj is not None else ""
         requested_raw = requested_overrides.get(seq, fallback)
-        requested = _slugify_problem_id(str(requested_raw).strip().lower())
+        requested = _slugify_problem_id(
+            str(requested_raw).strip().lower(),
+            max_len=_problem_slug_segment_max_len(owner),
+        )
         requested_tokens.append(requested)
     duplicate_counts: dict[str, int] = {}
     for token in requested_tokens:
@@ -352,7 +366,10 @@ def _build_problem_slug_review_rows(
             has_error = True
         suggested = ""
         if not ok:
-            base = requested if valid else _slugify_problem_id(requested)
+            base = requested if valid else _slugify_problem_id(
+                requested,
+                max_len=_problem_slug_segment_max_len(owner),
+            )
             if not base:
                 source_slug_obj = row.get("source_slug")
                 base = str(source_slug_obj).strip() if source_slug_obj is not None else ""
