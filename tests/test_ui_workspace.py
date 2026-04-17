@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .db_helpers import db_execute, db_fetch_all, db_fetch_one, write_preview_summary
+from .db_helpers import db_execute, db_fetch_all, db_fetch_one
 
 import asyncio
 import io
@@ -18,6 +18,7 @@ from app.service.importing.contest import PolygonContestImportService
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import run_git
+from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
 
 from .ui_support import (
@@ -43,6 +44,8 @@ from .ui_support import (
     general_page,
     general_save,
     git_commit,
+    git_discard_path,
+    git_pull,
     git_rebase_abort,
     git_restore_revision,
     git_service,
@@ -88,6 +91,16 @@ class TestUIWorkspace(UIBaseSuite):
         refreshed_head = refreshed.stdout.strip() if refreshed.returncode == 0 else ""
         self.assertRegex(refreshed_head, r"^[0-9a-f]{40}$")
         return ws, refreshed_head
+
+    def _provision_shared_problem(self, slug_prefix: str) -> tuple[str, Path, Path]:
+        problem = f"alice/{slug_prefix}-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace_service.grant_repo_access(problem, "alice", "owner")
+        workspace_service.grant_repo_access(problem, "bob", "owner")
+        alice_ws, _ = self._ensure_committed_head(problem, "alice")
+        bob_ws = Path(workspace_service.ensure_workspace(problem, "bob"))
+        git_service.pull(bob_ws, "main")
+        return problem, alice_ws, bob_ws
 
     def _issue_auth_cookie_header(self, username: str, password: str) -> str:
         reg = _register_with_password_proof(username, password, next_path="/")
@@ -581,63 +594,12 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn('data-sudo-required="1"', html)
         self.assertIn('data-sudo-required="0"', html)
 
-    def test_workspace_readiness_separates_statement_failure_from_pipeline_runnable(self) -> None:
-        ws = self._prepare_verification_workspace("alice/sample", "alice")
-        (ws / "tests" / "spec.json").write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "tests": [
-                        {"id": "001", "kind": "manual", "sample": True},
-                    ],
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        preview_id = f"p-workspace-failed-{uuid.uuid4().hex[:8]}"
-        preview_root = Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "sample" / preview_id
-        (preview_root / "logs").mkdir(parents=True, exist_ok=True)
-        (preview_root / "logs" / "latex.log").write_text("statement/main.tex:7 Undefined control sequence\n", encoding="utf-8")
-        db_execute(
-            """
-            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                preview_id,
-                problem_id,
-                workspace_id,
-                None,
-                "",
-                "main",
-                "failed",
-                "{}",
-                "2026-02-23T00:59:00Z",
-                "2026-02-23T01:00:00Z",
-            ],
-        )
-        write_preview_summary(preview_id, {})
-
+    def test_workspace_page_omits_problem_readiness_overview(self) -> None:
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertRegex(
-            html,
-            r'<span class="readiness-label">Statement</span>\s*<span class="readiness-state[^"]*">\s*empty\s*</span>',
-        )
-        self.assertNotRegex(
-            html,
-            r'<span class="readiness-label">Statement</span>\s*<span class="readiness-state[^"]*">\s*failed\s*</span>',
-        )
-        self.assertRegex(
-            html,
-            r'<span class="readiness-label">Judge Pipeline</span>\s*<span class="readiness-state[^"]*">\s*runnable\s*</span>',
-        )
+        self.assertNotIn("Problem Readiness", html)
+        self.assertNotIn("readiness-overview", html)
 
     def test_workspace_page_shows_colored_diff_for_selected_file(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -655,6 +617,120 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(f"Selected: <code>{rel}</code>", html)
         self.assertIn("base", html)
         self.assertIn("changed", html)
+
+    def test_workspace_page_shows_discard_local_changes_for_selected_path(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = f"notes/workspace-discard-{uuid.uuid4().hex[:8]}.txt"
+        target = ws / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("base\n", encoding="utf-8")
+        git_service.commit(ws, f"workspace-discard-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
+        target.write_text("base\nchanged\n", encoding="utf-8")
+
+        resp = workspace_page(_request("/problems/alice/sample/workspace", f"path={rel}"), "alice/sample", "alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Discard local changes", html)
+        self.assertIn("/problems/alice/sample/git/discard-path", html)
+        self.assertIn(f'name="path" value="{rel}"', html)
+
+    def test_git_discard_path_restores_tracked_file_to_head(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = f"notes/discard-tracked-{uuid.uuid4().hex[:8]}.txt"
+        target = ws / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("base\n", encoding="utf-8")
+        git_service.commit(ws, f"discard-tracked-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
+        target.write_text("local change\n", encoding="utf-8")
+
+        resp = git_discard_path(problem="alice/sample", user="alice", path=rel)
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("/problems/alice/sample/workspace", resp.headers.get("location", ""))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("discarded local changes", messages[0])
+        self.assertEqual(target.read_text(encoding="utf-8"), "base\n")
+        status_rows = git_service.status_change_summary(ws, limit=32)["rows"]
+        self.assertFalse(any(str(row.get("link_path") or "") == rel for row in status_rows))
+
+    def test_git_discard_path_removes_untracked_file(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = f"notes/discard-untracked-{uuid.uuid4().hex[:8]}.txt"
+        target = ws / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("temp\n", encoding="utf-8")
+
+        resp = git_discard_path(problem="alice/sample", user="alice", path=rel)
+        self.assertEqual(resp.status_code, 303)
+        self.assertFalse(target.exists())
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("discarded local changes", messages[0])
+
+    def test_git_pull_skips_empty_untracked_file_that_matches_upstream_path(self) -> None:
+        problem, alice_ws, bob_ws = self._provision_shared_problem("ui-pull-empty")
+        rel = "statement/problem.tex"
+        upstream_target = bob_ws / rel
+        upstream_target.parent.mkdir(parents=True, exist_ok=True)
+        upstream_target.write_text("Upstream statement body.\n", encoding="utf-8")
+        git_service.commit(bob_ws, f"pull-empty-{uuid.uuid4().hex[:6]}", "bob", "bob@polygonlike.local")
+        git_service.push(bob_ws, "main")
+
+        local_target = alice_ws / rel
+        local_target.parent.mkdir(parents=True, exist_ok=True)
+        local_target.write_text("", encoding="utf-8")
+
+        resp = git_pull(problem=problem, user="alice")
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("skipped 1 safe untracked path", messages[0])
+        self.assertEqual(local_target.read_text(encoding="utf-8"), "Upstream statement body.\n")
+
+    def test_git_pull_skips_identical_untracked_file_that_matches_upstream_path(self) -> None:
+        problem, alice_ws, bob_ws = self._provision_shared_problem("ui-pull-identical")
+        rel = "statement/statements.ftl"
+        upstream_text = "Template body.\n"
+        upstream_target = bob_ws / rel
+        upstream_target.parent.mkdir(parents=True, exist_ok=True)
+        upstream_target.write_text(upstream_text, encoding="utf-8")
+        git_service.commit(bob_ws, f"pull-identical-{uuid.uuid4().hex[:6]}", "bob", "bob@polygonlike.local")
+        git_service.push(bob_ws, "main")
+
+        local_target = alice_ws / rel
+        local_target.parent.mkdir(parents=True, exist_ok=True)
+        local_target.write_text(upstream_text, encoding="utf-8")
+
+        resp = git_pull(problem=problem, user="alice")
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("skipped 1 safe untracked path", messages[0])
+        self.assertEqual(local_target.read_text(encoding="utf-8"), upstream_text)
+
+    def test_git_pull_rejects_nonempty_untracked_file_that_differs_from_upstream(self) -> None:
+        problem, alice_ws, bob_ws = self._provision_shared_problem("ui-pull-blocked")
+        rel = "statement/olymp.sty"
+        upstream_target = bob_ws / rel
+        upstream_target.parent.mkdir(parents=True, exist_ok=True)
+        upstream_target.write_text("% upstream style\n", encoding="utf-8")
+        git_service.commit(bob_ws, f"pull-blocked-{uuid.uuid4().hex[:6]}", "bob", "bob@polygonlike.local")
+        git_service.push(bob_ws, "main")
+
+        local_target = alice_ws / rel
+        local_target.parent.mkdir(parents=True, exist_ok=True)
+        local_target.write_text("% local custom style\n", encoding="utf-8")
+
+        resp = git_pull(problem=problem, user="alice")
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("pull blocked by untracked files that differ from upstream", messages[0])
+        self.assertIn(rel, messages[0])
+        self.assertEqual(local_target.read_text(encoding="utf-8"), "% local custom style\n")
 
     def test_commit_and_publish_rolls_back_commit_when_push_fails(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -850,7 +926,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/{username}/{slug}/statement", str(resp.headers.get("location", "")))
         ws = Path(workspace_service.ensure_workspace(f"{username}/{slug}", username))
-        self.assertEqual((ws / "statement-sections" / "english" / "name.tex").read_text(encoding="utf-8"), f"{slug}\n")
+        self.assertFalse((ws / "statement-sections" / "english").exists())
 
     def test_statement_page_title_does_not_use_name_tex(self) -> None:
         username = f"stmtitle-{uuid.uuid4().hex[:8]}"
@@ -858,6 +934,7 @@ class TestUIWorkspace(UIBaseSuite):
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
         ws = Path(workspace_service.ensure_workspace("alice/sample", username))
+        ensure_statement_language_sources(ws, "english")
         (ws / "statement-sections" / "english" / "name.tex").write_text("Statement Name Tex Title\n", encoding="utf-8")
 
         from app.main import app
@@ -1632,6 +1709,13 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("Abort Rebase", html)
         self.assertIn(file_rel, html)
         self.assertIn("src=workspace", html)
+        self.assertNotIn("Discard local changes", html)
+
+        discard = git_discard_path(problem="alice/sample", user="bob", path=file_rel)
+        self.assertEqual(discard.status_code, 303)
+        discard_messages = _flash_messages_from_response(discard)
+        self.assertTrue(discard_messages)
+        self.assertIn("rebase in progress", discard_messages[0])
 
         abort = git_rebase_abort("alice/sample", "bob")
         self.assertEqual(abort.status_code, 303)

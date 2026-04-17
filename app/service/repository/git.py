@@ -383,14 +383,126 @@ class GitService:
             raise RuntimeError(proc.stderr or proc.stdout)
         return proc.stdout + proc.stderr
 
+    def _status_entries(self, workspace: Path) -> list[dict[str, str]]:
+        proc = run_git(["git", "-C", str(workspace), "status", "--short", "--untracked-files=all"])
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        entries: list[dict[str, str]] = []
+        for raw in proc.stdout.splitlines():
+            line = raw.rstrip("\n")
+            if not line or self._is_hidden_status_line(line):
+                continue
+            if len(line) < 3:
+                continue
+            code = line[:2]
+            path_part = self._normalize_status_path(line[3:].strip())
+            source_path = ""
+            link_path = path_part
+            if " -> " in path_part:
+                before, after = path_part.split(" -> ", 1)
+                source_path = before
+                link_path = after
+            entries.append(
+                {
+                    "code": code,
+                    "path": path_part,
+                    "link_path": link_path,
+                    "source_path": source_path,
+                    "kind": self._status_kind(code, path_part),
+                }
+            )
+        return entries
+
+    def _status_entry_for_path(self, workspace: Path, rel_path: str) -> dict[str, str] | None:
+        normalized = self._normalize_status_path(rel_path)
+        if not normalized:
+            raise ValueError("path is required")
+        for entry in self._status_entries(workspace):
+            if entry["link_path"] == normalized:
+                return entry
+        return None
+
+    def _upstream_blob_exists(self, workspace: Path, upstream_ref: str, rel_path: str) -> bool:
+        proc = run_git(["git", "-C", str(workspace), "cat-file", "-e", f"{upstream_ref}:{rel_path}"])
+        return proc.returncode == 0
+
+    def _read_upstream_blob_bytes(self, workspace: Path, upstream_ref: str, rel_path: str) -> bytes:
+        tmp_path: Path | None = None
+        try:
+            fd, tmp_name = tempfile.mkstemp(prefix="git-upstream-blob-", suffix=".bin")
+            os.close(fd)
+            tmp_path = Path(tmp_name)
+            proc = run_git(
+                ["git", "-C", str(workspace), "show", f"{upstream_ref}:{rel_path}"],
+                stdout_path=tmp_path,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr or proc.stdout or "failed to read upstream blob")
+            return tmp_path.read_bytes()
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+
+    def _reconcile_safe_untracked_pull_conflicts(self, workspace: Path, upstream_ref: str) -> list[str]:
+        skipped_paths: list[str] = []
+        for entry in self._status_entries(workspace):
+            if entry["code"] != "??":
+                continue
+            rel_path = entry["link_path"]
+            if not rel_path or (not self._upstream_blob_exists(workspace, upstream_ref, rel_path)):
+                continue
+            target = self._resolve_user_path(workspace, rel_path)
+            if (not target.exists()) or (not target.is_file()):
+                continue
+            local_bytes = target.read_bytes()
+            if local_bytes:
+                upstream_bytes = self._read_upstream_blob_bytes(workspace, upstream_ref, rel_path)
+                if local_bytes != upstream_bytes:
+                    continue
+            target.unlink()
+            skipped_paths.append(rel_path)
+        return skipped_paths
+
+    def _blocking_untracked_pull_conflicts(self, workspace: Path, upstream_ref: str) -> list[str]:
+        blocked: list[str] = []
+        for entry in self._status_entries(workspace):
+            if entry["code"] != "??":
+                continue
+            rel_path = entry["link_path"]
+            if not rel_path or (not self._upstream_blob_exists(workspace, upstream_ref, rel_path)):
+                continue
+            target = self._resolve_user_path(workspace, rel_path)
+            if target.exists():
+                blocked.append(rel_path)
+        return blocked
+
     def pull(self, workspace: Path, branch: str) -> str:
         if str(branch or "main") != "main":
             raise RuntimeError("only main is supported")
         self._assert_on_main(workspace)
+        fetch = run_git(["git", "-C", str(workspace), "fetch", "origin", "main"])
+        if fetch.returncode != 0:
+            raise RuntimeError(fetch.stderr or fetch.stdout)
+        skipped_paths = self._reconcile_safe_untracked_pull_conflicts(workspace, "origin/main")
         proc = run_git(["git", "-C", str(workspace), "pull", "--rebase", "--autostash", "origin", "main"])
         if proc.returncode != 0:
+            blocked_paths = self._blocking_untracked_pull_conflicts(workspace, "origin/main")
+            if blocked_paths:
+                detail = ", ".join(blocked_paths[:5])
+                if len(blocked_paths) > 5:
+                    detail = f"{detail}, ... (+{len(blocked_paths) - 5} more)"
+                if skipped_paths:
+                    raise RuntimeError(
+                        f"pull blocked by untracked files that differ from upstream after skipping {len(skipped_paths)} safe path(s): {detail}"
+                    )
+                raise RuntimeError(f"pull blocked by untracked files that differ from upstream: {detail}")
             raise RuntimeError(proc.stderr or proc.stdout)
-        return proc.stdout + proc.stderr
+        if skipped_paths:
+            detail = ", ".join(skipped_paths[:5])
+            if len(skipped_paths) > 5:
+                detail = f"{detail}, ... (+{len(skipped_paths) - 5} more)"
+            return f"pull ok; skipped {len(skipped_paths)} safe untracked path(s): {detail}"
+        return "pull ok"
 
     def _discard_local_changes(self, workspace: Path) -> None:
         reset = run_git(["git", "-C", str(workspace), "reset", "--hard", "HEAD"])
@@ -573,6 +685,39 @@ class GitService:
             shutil.rmtree(p)
         elif p.exists():
             p.unlink()
+
+    def discard_path(self, workspace: Path, rel_path: str) -> None:
+        if self._rebase_active(workspace):
+            raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
+        normalized = self._normalize_status_path(rel_path)
+        if not normalized:
+            raise ValueError("path is required")
+        entry = self._status_entry_for_path(workspace, normalized)
+        if entry is None:
+            raise ValueError("path not found in workspace changes")
+        if entry["code"] == "??":
+            self.delete_path(workspace, normalized)
+            return
+        restore_targets = [normalized]
+        source_path = entry["source_path"]
+        if entry["kind"] == "renamed" and source_path:
+            restore_targets = [source_path, normalized]
+        restore = run_git(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "restore",
+                "--source",
+                "HEAD",
+                "--staged",
+                "--worktree",
+                "--",
+                *restore_targets,
+            ]
+        )
+        if restore.returncode != 0:
+            raise RuntimeError(restore.stderr or restore.stdout or "failed to discard local changes")
 
     def rename_path(self, workspace: Path, old_rel: str, new_rel: str) -> None:
         src = self._resolve_user_path(workspace, old_rel)

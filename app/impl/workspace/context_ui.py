@@ -339,21 +339,6 @@ def _build_problem_nav_status(ctx: dict) -> dict[str, dict[str, object]]:
         solutions_text = solutions_count_display or solutions_display or 'missing'
     solutions_danger = solutions_mode != 'ready'
     nav['solutions'] = {'text': solutions_text, 'danger': solutions_danger}
-    pipeline_blockers: list[str] = []
-    if checker_applies and (checker_mode in {'missing', 'none'} or checker_display in {'unknown', 'error', 'missing'}):
-        pipeline_blockers.append('checker')
-    if mode_text == 'interactive' and interactor_mode in {'missing', 'none', 'invalid'}:
-        pipeline_blockers.append('interactor')
-    if validator_mode in {'missing', 'none', 'invalid'}:
-        pipeline_blockers.append('validator')
-    if tests_mode in {'empty', 'invalid', 'missing', 'none'}:
-        pipeline_blockers.append('tests')
-    if solutions_danger:
-        pipeline_blockers.append('solutions')
-    if pipeline_blockers:
-        nav['pipeline'] = {'text': 'blocked', 'danger': True}
-    else:
-        nav['pipeline'] = {'text': 'runnable', 'danger': False}
     verification_status = cast(dict[str, object], ctx['verification_status'])
     verification_mode_raw = cast(str | None, verification_status.get('mode'))
     verification_display_raw = cast(str | None, verification_status.get('display'))

@@ -13,7 +13,7 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
-from app.service.statement.context import normalize_statement_language, pick_statement_language, statement_languages
+from app.service.statement.context import normalize_statement_language, statement_languages
 from app.service.verification.runtime import coerce_int, normalize_pass_limit, normalize_problem_mode
 from app.impl.workspace.problem_config import read_problem_config
 
@@ -56,10 +56,7 @@ def general_save(
     query: dict[str, str] = {}
     safe_language = normalize_statement_language(language)
     available_languages = statement_languages(workspace)
-    if safe_language and (
-        safe_language in available_languages
-        or ((not available_languages) and safe_language == pick_statement_language(workspace))
-    ):
+    if safe_language and (safe_language in available_languages):
         query['language'] = safe_language
     safe_preview_id = str(preview_id or '').strip()
     if safe_preview_id:
@@ -68,6 +65,5 @@ def general_save(
     if query:
         redirect_url = f'{redirect_url}?{urlencode(query)}'
     return redirect_response(redirect_url, status_code=303, message=msg)
-
 
 

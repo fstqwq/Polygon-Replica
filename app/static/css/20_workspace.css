@@ -7,44 +7,6 @@
   gap: 2px;
 }
 
-.readiness-overview {
-  border: 1px solid var(--line);
-  background: var(--surface);
-  padding: var(--space-4);
-}
-
-.readiness-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.readiness-card {
-  display: grid;
-  gap: 3px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text);
-  padding: var(--space-3);
-}
-
-.readiness-card:hover {
-  text-decoration: none;
-  background: var(--surface-alt);
-}
-
-.readiness-label {
-  font-size: var(--font-size-ui-sm);
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.readiness-state {
-  font-size: var(--font-size-ui-sm);
-  line-height: 1.2;
-  color: var(--muted);
-}
-
 .danger-zone {
   border: 1px solid var(--tag-fail-border);
   background: #fff7f7;

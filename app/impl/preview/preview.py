@@ -3,6 +3,7 @@ from app.impl.auth.session import require_session_user
 
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Annotated
@@ -31,6 +32,7 @@ from app.service.statement.constant import (
     STATEMENT_ASSETS_DIR,
     STATEMENT_CANONICAL_SECTION_FILES,
     STATEMENT_PROBLEM_REL,
+    STATEMENT_SECTIONS_DIR,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
     is_canonical_statement_section_entry,
@@ -156,17 +158,19 @@ def resolve_statement_page_language(workspace: Path, requested_language: object)
     safe_requested = normalize_statement_language(requested_language)
     if safe_requested and safe_requested in available_languages:
         return safe_requested
-    return pick_statement_language(workspace)
+    if available_languages:
+        return pick_statement_language(workspace)
+    return ""
 
 
 def selected_statement_language(workspace: Path, requested_language: object) -> str:
     safe_requested = normalize_statement_language(requested_language)
-    if not safe_requested:
-        return pick_statement_language(workspace)
     available_languages = statement_languages(workspace)
+    if not available_languages:
+        raise ValueError("statement language is missing")
+    if not safe_requested:
+        return available_languages[0]
     if safe_requested in available_languages:
-        return safe_requested
-    if (not available_languages) and safe_requested == pick_statement_language(workspace):
         return safe_requested
     raise ValueError(f"unknown statement language: {safe_requested}")
 
@@ -294,12 +298,11 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     requested_preview_id = request.query_params.get("preview_id", "")
     available_languages = statement_languages(workspace)
     current_language = resolve_statement_page_language(workspace, request.query_params.get("language", ""))
-    if current_language not in available_languages:
-        available_languages = [current_language, *available_languages]
+    has_statement_language = bool(current_language)
     preview_id = requested_preview_id
     message = ''
     previews = config.preview_service.list_workspace_previews(problem_id, workspace_id)
-    if not preview_id:
+    if has_statement_language and (not preview_id):
         dirty = bool(ctx['workspace'].get('dirty'))
         if workspace_head and (not dirty):
             cached_id = config.preview_service.find_cached_preview_id(
@@ -326,7 +329,12 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             if cached_id:
                 preview_id = cached_id
     safe_mode = statement_mode_from_ctx(ctx)
-    statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode, current_language)
+    if has_statement_language:
+        statement_sections, section_path_map, interaction_section_enabled = statement_editor_sections(workspace, safe_mode, current_language)
+    else:
+        statement_sections = []
+        section_path_map = {}
+        interaction_section_enabled = False
     ctx["page_title"] = "Statements"
     log = ''
     log_truncated = False
@@ -345,7 +353,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     preview_failure_detail = ''
     latex_log_href = ''
 
-    if preview_id:
+    if has_statement_language and preview_id:
         lp = None
         preview_state = config.preview_service.get_workspace_preview_state(
             problem_id,
@@ -365,6 +373,8 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             if (not requested_preview_id) and preview_display_status in {'stale', 'missing'}:
                 preview_id = ''
                 preview_state = None
+    else:
+        preview_id = ''
     if preview_id:
         if preview_state is not None:
             pdf_exists = bool(preview_state['pdf_available'])
@@ -461,6 +471,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'statement_mode': safe_mode,
             'available_languages': available_languages,
             'current_language': current_language,
+            'statement_language_missing': not has_statement_language,
         },
     )
 
@@ -552,7 +563,7 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
     try:
         current_language = selected_statement_language(workspace, language)
     except ValueError:
-        current_language = pick_statement_language(workspace)
+        current_language = resolve_statement_page_language(workspace, language)
     current_statement_signature = statement_sources_signature(workspace, problem_title=problem_title)
     workspace_head = str(ctx['workspace'].get('head_commit') or "")
     workspace_key = f'{problem_id}:{workspace_id}'
@@ -569,7 +580,7 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
     latest_status = 'none'
     latest_created_at = ''
     latest_finished_at = ''
-    if row is not None:
+    if current_language and row is not None:
         latest_preview_id = row['id']
         latest_status = row['display_status']
         latest_created_at = row['created_at']
@@ -880,6 +891,47 @@ def statement_language_add(
         message = str(exc)
     return redirect_response(
         statement_redirect_url(problem, user, target_page, language=safe_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
+
+
+def statement_language_delete(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    language: Annotated[str, Form()] = '',
+    page: Annotated[str, Form()] = 'statement',
+    preview_id: Annotated[str, Form()] = '',
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    next_language = resolve_statement_page_language(workspace, language)
+    message = 'statement language deleted'
+    try:
+        current_language = selected_statement_language(workspace, language)
+        with config.workspace_service.workspace_lock(workspace):
+            language_root = safe_workspace_path(
+                workspace,
+                (STATEMENT_SECTIONS_DIR / current_language).as_posix(),
+            )
+            if (not language_root.exists()) or (not language_root.is_dir()) or language_root.is_symlink():
+                raise ValueError('statement language not found')
+            shutil.rmtree(language_root, ignore_errors=False)
+            sections_root = workspace / STATEMENT_SECTIONS_DIR
+            try:
+                if sections_root.exists() and (not any(sections_root.iterdir())):
+                    sections_root.rmdir()
+            except OSError:
+                pass
+            remaining_languages = statement_languages(workspace)
+        next_language = remaining_languages[0] if remaining_languages else ''
+        audit(ctx['user']['id'], ctx['problem']['id'], 'statement.language.delete', {'language': current_language})
+    except (ValueError, OSError, HTTPException) as exc:
+        message = str(exc)
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=next_language),
         status_code=303,
         message=message,
     )

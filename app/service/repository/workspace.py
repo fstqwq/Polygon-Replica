@@ -18,7 +18,6 @@ from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.platform.workspace_path import is_hidden_workspace_path
 from app.setting import Settings
-from app.service.statement.render import seed_statement_sources
 from app.service.platform.git_process import run_git
 
 PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
@@ -423,7 +422,6 @@ class WorkspaceService:
         ]
         for d in required_dirs:
             (workspace / d).mkdir(parents=True, exist_ok=True)
-        seed_statement_sources(workspace)
         testlib = workspace / "third_party/testlib/testlib.h"
         if not testlib.exists():
             source = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[3])

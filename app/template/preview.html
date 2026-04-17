@@ -16,6 +16,7 @@
 <div class="page-title-inline statement-page-title-inline">
   <h1 class="page-title">Statements</h1>
   <div class="statement-page-title-tools">
+    {% if available_languages %}
     <form
       class="inline-form statement-language-switch-form"
       method="get"
@@ -34,11 +35,30 @@
         {% endfor %}
       </select>
     </form>
+    {% else %}
+    <span class="muted"><strong>Language</strong>: missing</span>
+    {% endif %}
     <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
+    {% if current_language %}
+    <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/languages/delete" data-confirm-message="Delete statement language {{ current_language }}? This removes all statement section files for that language.">
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
+      <input type="hidden" name="language" value="{{ current_language }}" />
+      {% if preview_id %}
+      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+      {% endif %}
+      <a href="#" class="linkish danger-link" data-submit-form="1">Delete current language</a>
+    </form>
+    {% endif %}
   </div>
 </div>
 {% include "_flash_message.html" %}
 
+{% if statement_language_missing %}
+<div class="flash">
+  <strong>Statement language missing.</strong>
+  Add a language to start editing or compiling statements.
+</div>
+{% else %}
 <div class="grid">
   <section>
     <form
@@ -187,6 +207,7 @@
     {% endif %}
   </section>
 </div>
+{% endif %}
 
 {% call ui_popup('statement-draft-popup', 'Draft History', overlay_class='statement-draft-popup') %}
       <p class="muted" data-statement-draft-status="1">Loading local drafts...</p>
@@ -208,6 +229,7 @@
       </form>
 {% endcall %}
 
+{% if not statement_language_missing %}
 <div class="statement-assets-grid">
   <section class="statement-assets-card">
     <div class="statement-assets-card-head">
@@ -321,4 +343,5 @@
     </div>
   </section>
 </div>
+{% endif %}
 {% endblock %}

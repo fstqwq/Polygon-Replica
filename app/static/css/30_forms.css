@@ -507,6 +507,24 @@ textarea.textarea-md {
   background: var(--surface-alt);
 }
 
+.problem-list-table .problem-list-head {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.problem-list-table .problem-list-cell {
+  font-size: var(--font-size-body);
+}
+
+.problem-list-table .problem-list-slug-link {
+  color: var(--text);
+  font-weight: 400;
+}
+
+.problem-list-table .problem-list-slug-link:hover {
+  color: var(--link);
+}
+
 .table-base tbody tr:nth-child(even) td {
   background: var(--table-row-alt);
 }

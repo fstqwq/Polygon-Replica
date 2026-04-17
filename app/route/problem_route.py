@@ -11,7 +11,7 @@ from app.impl.problem.checker import checker_create_template, checker_page, chec
 from app.impl.problem.file import files_create_template, files_delete, files_download, files_new, files_page, files_rename, files_save, files_upload
 from app.impl.problem.general import general_save
 from app.impl.problem.generator import generator_create_template, generator_save_source, generators_page
-from app.impl.problem.git_op import git_commit, git_pull, git_push, git_rebase_abort, git_rebase_continue, git_restore_revision
+from app.impl.problem.git_op import git_commit, git_discard_path, git_pull, git_push, git_rebase_abort, git_rebase_continue, git_restore_revision
 from app.impl.problem.history import history_page
 from app.impl.problem.interactor import interactor_create_template, interactor_page, interactor_save_source
 from app.impl.problem.setting import settings_config_category_page, settings_config_category_update, settings_judgehost_host_action, settings_judgehost_runtime_update, settings_judgehost_snapshot, settings_page, settings_password_update, settings_system_config_reset, settings_worker_queue_snapshot
@@ -285,6 +285,11 @@ router.add_api_route(
     methods=["POST"],
 )
 router.add_api_route(
+    "/problems/{problem:path}/git/discard-path",
+    git_discard_path,
+    methods=["POST"],
+)
+router.add_api_route(
     "/problems/{problem:path}/git/push",
     git_push,
     methods=["POST"],
@@ -309,7 +314,6 @@ router.add_api_route(
     git_rebase_abort,
     methods=["POST"],
 )
-
 
 
 

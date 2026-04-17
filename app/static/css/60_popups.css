@@ -244,14 +244,8 @@ body.confirm-open {
   gap: var(--space-3);
 }
 
-.ui-confirm-cancel {
-  border-color: var(--line-strong);
-  background: var(--bg);
-  color: var(--text);
-}
-
-.ui-confirm-cancel:hover:not(:disabled) {
-  background: var(--surface-hover);
+.ui-confirm-actions .btn {
+  min-width: 88px;
 }
 
 .login-shell {

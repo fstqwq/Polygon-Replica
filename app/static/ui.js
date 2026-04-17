@@ -1228,8 +1228,8 @@
         '<h3 id="ui-confirm-title">Please Confirm</h3>' +
         '<p id="ui-confirm-message" class="ui-confirm-message"></p>' +
         '<div class="ui-confirm-actions">' +
-        '<button type="button" class="ui-confirm-cancel">Cancel</button>' +
-        '<button type="button" class="ui-confirm-ok">Confirm</button>' +
+        '<button type="button" class="btn primary-action ui-confirm-cancel">Cancel</button>' +
+        '<button type="button" class="btn danger-link ui-confirm-ok">Confirm</button>' +
         "</div>" +
         "</div>";
       document.body.appendChild(overlay);

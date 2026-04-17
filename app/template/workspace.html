@@ -3,32 +3,6 @@
 {% block content %}
 <h1 class="page-title">Working Copy</h1>
 {% include "_flash_message.html" %}
-{% set nav = ctx.nav_status if ctx.nav_status is defined else {} %}
-{% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
-{% set readiness_items = [
-  {'label': 'Statement', 'href': '/problems/' ~ ctx.problem.slug ~ '/statement', 'meta': nav.get('statement_languages', {}).get('text', '-'), 'danger': nav.get('statement_languages', {}).get('danger', False), 'warn': nav.get('statement_languages', {}).get('warn', False)},
-  {'label': 'Judge Pipeline', 'href': '/problems/' ~ ctx.problem.slug ~ '/run/new', 'meta': nav.get('pipeline', {}).get('text', '-'), 'danger': nav.get('pipeline', {}).get('danger', False), 'warn': nav.get('pipeline', {}).get('warn', False)},
-  {'label': 'Checker', 'href': '/problems/' ~ ctx.problem.slug ~ '/checker', 'meta': nav.get('checker', {}).get('text', '-'), 'danger': nav.get('checker', {}).get('danger', False), 'warn': nav.get('checker', {}).get('warn', False), 'mode': 'pass-fail'},
-  {'label': 'Interactor', 'href': '/problems/' ~ ctx.problem.slug ~ '/interactor', 'meta': nav.get('interactor', {}).get('text', '-'), 'danger': nav.get('interactor', {}).get('danger', False), 'warn': nav.get('interactor', {}).get('warn', False), 'mode': 'interactive'},
-  {'label': 'Validator', 'href': '/problems/' ~ ctx.problem.slug ~ '/validator', 'meta': nav.get('validator', {}).get('text', '-'), 'danger': nav.get('validator', {}).get('danger', False), 'warn': nav.get('validator', {}).get('warn', False)},
-  {'label': 'Tests', 'href': '/problems/' ~ ctx.problem.slug ~ '/tests', 'meta': nav.get('tests', {}).get('text', '-'), 'danger': nav.get('tests', {}).get('danger', False), 'warn': nav.get('tests', {}).get('warn', False)},
-  {'label': 'Solutions', 'href': '/problems/' ~ ctx.problem.slug ~ '/solutions', 'meta': nav.get('solutions', {}).get('text', '-'), 'danger': nav.get('solutions', {}).get('danger', False), 'warn': nav.get('solutions', {}).get('warn', False)},
-  {'label': 'Packages', 'href': '/problems/' ~ ctx.problem.slug ~ '/export', 'meta': nav.get('export', {}).get('text', '-'), 'danger': nav.get('export', {}).get('danger', False), 'warn': nav.get('export', {}).get('warn', False)}
-] %}
-
-<section class="readiness-overview">
-  <h2>Problem Readiness</h2>
-  <div class="readiness-grid">
-    {% for item in readiness_items %}
-    {% if item.get('mode', problem_mode) == problem_mode %}
-    <a class="readiness-card" href="{{ item.href }}">
-      <span class="readiness-label">{{ item.label }}</span>
-      <span class="readiness-state {{ 'submenu-status-warn' if (item.danger or item.warn) else '' }}">{{ item.meta }}</span>
-    </a>
-    {% endif %}
-    {% endfor %}
-  </div>
-</section>
 
 <div class="grid">
   <section>
@@ -127,6 +101,12 @@
     </div>
     {% if selected_path %}
     <p class="muted">Selected: <code>{{ selected_path }}</code></p>
+    {% if ctx.access.can_write and not status.rebase_active %}
+    <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/git/discard-path" data-confirm-message="Discard local changes for {{ selected_path }} and restore it to the current committed version?">
+      <input type="hidden" name="path" value="{{ selected_path }}" />
+      <button class="btn danger-link" type="submit">Discard local changes</button>
+    </form>
+    {% endif %}
     {% endif %}
     {% else %}
     <p class="muted">No local changes.</p>

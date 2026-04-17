@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from app.service.platform.git_process import run_git
 from app.service.sandbox.base import ExecResult
+from app.service.statement.render import ensure_statement_language_sources
 from app.service.verification.signature import verification_signature
 
 from .ui_support import (
@@ -343,6 +344,7 @@ class TestUIContests(UIBaseSuite):
         workspace_service.ensure_problem(problem_slug)
         workspace_service.grant_repo_access(problem_slug, "alice", "owner")
         ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
+        ensure_statement_language_sources(ws, "english")
         (ws / "README.problem.md").write_text("contest package test\n", encoding="utf-8")
         (ws / "statement" / "olymp.sty").write_text("% problem style\n", encoding="utf-8")
         (ws / "statement-sections" / "english" / "legend.tex").write_text("Problem legend\n", encoding="utf-8")

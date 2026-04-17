@@ -363,8 +363,9 @@
 
 .problem-slug-link {
   color: var(--text-secondary);
-  font-family: Consolas, "Courier New", monospace;
-  font-size: var(--font-size-ui-sm);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
   text-decoration: none;
   line-height: 1.2;
 }
@@ -380,7 +381,7 @@
   font-weight: 700;
   color: var(--text);
   text-decoration: none;
-  font-family: Consolas, "Courier New", monospace;
+  font-family: inherit;
   line-height: 1.2;
 }
 

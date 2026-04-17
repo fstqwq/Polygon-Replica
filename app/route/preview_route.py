@@ -11,6 +11,7 @@ from app.impl.preview.preview import (
     statement_compile_asset_upload,
     statement_attachment_upload,
     statement_language_add,
+    statement_language_delete,
     statement_attachment_delete,
     statement_compile_asset_delete,
 )
@@ -61,5 +62,10 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/statement/languages/add",
     statement_language_add,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/statement/languages/delete",
+    statement_language_delete,
     methods=["POST"],
 )

@@ -3,6 +3,7 @@ from app.impl.auth.session import require_session_user
 
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlencode
 
 from fastapi import Form, Depends
 
@@ -11,6 +12,14 @@ from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
+
+
+def _workspace_redirect_href(problem: str, selected_path: str = "") -> str:
+    base = f"/problems/{problem}/workspace"
+    safe_path = str(selected_path or "").strip()
+    if not safe_path:
+        return base
+    return f"{base}?{urlencode({'path': safe_path})}"
 
 
 def git_commit(problem: str, user: Annotated[str, Depends(require_session_user)], message: str=Form(...)):
@@ -70,12 +79,45 @@ def git_pull(problem: str, user: Annotated[str, Depends(require_session_user)]):
     workspace = Path(ctx['workspace']['path'])
     try:
         with config.workspace_service.workspace_lock(workspace):
-            config.git_service.pull(workspace, 'main')
+            msg = config.git_service.pull(workspace, 'main')
         audit(ctx['user']['id'], ctx['problem']['id'], 'git.pull', {'branch': 'main'})
-        msg = 'pull ok'
     except Exception as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
+
+
+def git_discard_path(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    path: Annotated[str, Form()] = '',
+):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    selected_path = str(path or "").strip()
+    next_path = selected_path
+    msg = 'discarded local changes'
+    try:
+        with config.workspace_service.workspace_lock(workspace):
+            config.git_service.discard_path(workspace, selected_path)
+            changes = config.git_service.status_change_summary(workspace)
+        rows = changes.get('rows') if isinstance(changes, dict) else []
+        row_list = rows if isinstance(rows, list) else []
+        link_paths = [
+            str(row.get('link_path') or '')
+            for row in row_list
+            if isinstance(row, dict) and str(row.get('link_path') or '')
+        ]
+        if selected_path in link_paths:
+            next_path = selected_path
+        elif link_paths:
+            next_path = link_paths[0]
+        else:
+            next_path = ''
+        audit(ctx['user']['id'], ctx['problem']['id'], 'git.discard_path', {'path': selected_path})
+    except Exception as exc:
+        msg = str(exc)
+    return redirect_response(_workspace_redirect_href(problem, next_path), status_code=303, message=msg)
 
 def git_restore_revision(problem: str, user: Annotated[str, Depends(require_session_user)], revision: str=Form(...), page: str=Form('history')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -116,6 +158,5 @@ def git_rebase_abort(problem: str, user: Annotated[str, Depends(require_session_
     except Exception as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
-
 
 
