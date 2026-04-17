@@ -3,6 +3,7 @@
 {% block content %}
 <h1 class="page-title">Working Copy</h1>
 {% include "_flash_message.html" %}
+{% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/workspace?sudo_popup_done=1' %}
 
 <div class="grid">
   <section>
@@ -47,26 +48,11 @@
     {% endif %}
     {% endif %}
 
-    {% if ctx.access.can_write or ctx.access.can_manage %}
-    {% set sudo_popup_next = '/problems/' ~ ctx.problem.slug ~ '/workspace?sudo_popup_done=1' %}
+    {% if ctx.access.can_manage %}
     <details class="danger-zone">
       <summary>Danger Zone</summary>
       <div class="danger-zone-body">
-        <p class="muted">Destructive operations require short-lived sudo proof. If sudo is missing, clicking delete opens a password popup first.</p>
-        {% if ctx.access.can_write %}
-        <form
-          class="danger-zone-delete"
-          method="post"
-          action="/problems/{{ ctx.problem.slug }}/workspace/delete"
-          data-confirm-message="Delete current working copy for {{ ctx.problem.slug }}? Local uncommitted changes will be lost."
-          data-sudo-gated="1"
-          data-sudo-required="{{ '0' if has_destructive_sudo else '1' }}"
-          data-sudo-url="/sudo?next={{ sudo_popup_next | urlencode }}"
-        >
-          <button class="btn danger-link" type="submit">Delete Working Copy</button>
-        </form>
-        {% endif %}
-        {% if ctx.access.can_manage %}
+        <p class="muted">Permanent destructive operations require short-lived sudo proof.</p>
         <form
           class="form-stack danger-zone-delete"
           method="post"
@@ -81,14 +67,25 @@
           <input id="confirm_problem" name="confirm_problem" placeholder="{{ problem_slug_segment }}" autocomplete="off" spellcheck="false" />
         <button class="btn danger-link" type="submit">Delete Problem</button>
         </form>
-        {% endif %}
       </div>
     </details>
     {% endif %}
   </section>
 
   <section>
-    <h2>Diff</h2>
+    <div class="workspace-section-head">
+      <h2>Diff</h2>
+      {% if ctx.access.can_write %}
+      <form
+        class="inline-form workspace-section-head-action"
+        method="post"
+        action="/problems/{{ ctx.problem.slug }}/workspace/delete"
+        data-confirm-message="Delete current working copy for {{ ctx.problem.slug }}? Local uncommitted changes will be lost."
+      >
+        <button class="btn danger-link" type="submit">Delete Working Copy</button>
+      </form>
+      {% endif %}
+    </div>
     {% if change_rows %}
     <div class="workspace-diff-files">
       {% for row in change_rows %}

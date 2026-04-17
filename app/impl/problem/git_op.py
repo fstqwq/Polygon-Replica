@@ -119,11 +119,21 @@ def git_discard_path(
         msg = str(exc)
     return redirect_response(_workspace_redirect_href(problem, next_path), status_code=303, message=msg)
 
-def git_restore_revision(problem: str, user: Annotated[str, Depends(require_session_user)], revision: str=Form(...), page: str=Form('history')):
+def git_restore_revision(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    revision: str = Form(...),
+    page: str = Form('history'),
+):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     target_page = 'workspace' if page.strip().lower() == 'workspace' else 'history'
+    next_path = (
+        f"/problems/{problem}/workspace"
+        if target_page == 'workspace'
+        else f"/problems/{problem}/history?{urlencode({'revision': revision})}"
+    )
     try:
         with config.workspace_service.workspace_lock(workspace):
             resolved = config.git_service.restore_revision_to_working_copy(workspace, revision)
@@ -131,7 +141,7 @@ def git_restore_revision(problem: str, user: Annotated[str, Depends(require_sess
         msg = f'restored files from {resolved[:12]} on top of latest main; commit when ready'
     except Exception as exc:
         msg = str(exc)
-    return redirect_response(f'/problems/{problem}/{target_page}', status_code=303, message=msg)
+    return redirect_response(next_path, status_code=303, message=msg)
 
 def git_rebase_continue(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -158,5 +168,3 @@ def git_rebase_abort(problem: str, user: Annotated[str, Depends(require_session_
     except Exception as exc:
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/workspace', status_code=303, message=msg)
-
-

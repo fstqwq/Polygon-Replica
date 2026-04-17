@@ -1,18 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Revision History</h1>
+  <h1 class="page-title">Revision History</h1>
 {% include "_flash_message.html" %}
 <section>
   {% if commits %}
-  <table class="table-base">
-    <tr><th>Revision</th><th>Message</th><th>Author</th><th>Date</th><th>Commit</th><th>Action</th></tr>
+  <table class="table-base revision-history-table">
+    <tr>
+      <th class="revision-history-col-tight">Revision</th>
+      <th>Message</th>
+      <th>Author</th>
+      <th class="revision-history-col-tight">Date</th>
+      <th class="revision-history-col-tight">Commit</th>
+      <th>Action</th>
+    </tr>
     {% for c in commits %}
     <tr>
-      <td><code>{{ ("v" ~ c.version) if c.version else "-" }}</code></td>
+      <td class="revision-history-col-tight"><code>{{ ("v" ~ c.version) if c.version else "-" }}</code></td>
       <td>{{ c.subject }}</td>
       <td>{{ c.author }}</td>
-      <td>{{ c.date|local_time }}</td>
-      <td>
+      <td class="revision-history-col-tight">{{ c.date|local_time }}</td>
+      <td class="revision-history-col-tight">
         <code title="{{ c.commit }}">{{ c.commit[:12] }}</code>
         {% if selected_commit == c.commit %}
         <span class="muted">selected</span>
@@ -21,7 +28,12 @@
       <td>
         <a href="/problems/{{ ctx.problem.slug }}/history?revision={{ c.commit }}">View Diff</a>
         <span class="muted">|</span>
-        <form method="post" action="/problems/{{ ctx.problem.slug }}/git/restore-revision">
+        <form
+          class="inline-form"
+          method="post"
+          action="/problems/{{ ctx.problem.slug }}/git/restore-revision"
+          data-confirm-message="Restore working copy from revision {{ c.commit[:12] }}? Current local uncommitted changes will be replaced."
+        >
           <input type="hidden" name="revision" value="{{ c.commit }}" />
           <input type="hidden" name="page" value="history" />
           <a

@@ -103,6 +103,21 @@
   background: var(--surface-hover);
 }
 
+.workspace-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.workspace-section-head > h2 {
+  margin: 0;
+}
+
+.workspace-section-head-action {
+  margin-left: auto;
+}
+
 .workspace-links {
   display: flex;
   align-items: center;
@@ -115,6 +130,13 @@
   font-size: var(--font-size-ui-md);
   line-height: 1.35;
   white-space: nowrap;
+}
+
+.revision-history-table .revision-history-col-tight {
+  width: 1%;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 
 .workspace-link-sep {

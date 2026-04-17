@@ -55,12 +55,10 @@ def switch_workspace(
     target_page = normalize_page_target(page)
     return redirect_response(f'/problems/{safe_problem}/{target_page}', status_code=303)
 
-def workspace_delete(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
+def workspace_delete(problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     next_path = f'/problems/{problem}/workspace'
-    if not _has_destructive_sudo_for_ctx(request, ctx):
-        return _sudo_redirect_for_destructive(next_path)
     msg = 'working copy deleted; it will be recreated on next open'
     try:
         result = config.workspace_service.delete_workspace(problem, user)
@@ -116,6 +114,4 @@ def problem_delete(request: Request, problem: str, user: Annotated[str, Depends(
         msg = f"problem delete failed: {exc}"
         return redirect_response(next_path, status_code=303, message=msg)
     return redirect_response("/problems", status_code=303, message=msg)
-
-
 

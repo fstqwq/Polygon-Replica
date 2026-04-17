@@ -76,5 +76,3 @@ def history_page(request: Request, problem: str, user: Annotated[str, Depends(re
         },
     )
 
-
-
