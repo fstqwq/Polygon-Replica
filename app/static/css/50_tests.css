@@ -314,23 +314,7 @@
 }
 
 .solutions-table {
-  width: 100%;
   table-layout: fixed;
-  border-collapse: collapse;
-}
-
-.solutions-table th,
-.solutions-table td {
-  border-bottom: 1px solid var(--line);
-  padding: var(--space-3) var(--space-4);
-  text-align: left;
-  vertical-align: middle;
-}
-
-.solutions-table th {
-  background: var(--surface-alt);
-  font-weight: 700;
-  font-size: var(--font-size-ui-sm);
 }
 
 .solutions-table col.solutions-col-source {

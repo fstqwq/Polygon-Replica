@@ -651,6 +651,12 @@ class TestUIComponents(UIBaseSuite):
         self.assertIn('class="linkish" data-submit-form="1">Rename</a>', html)
         self.assertIn('class="linkish danger-link" data-submit-form="1">Delete</a>', html)
 
+    def test_solutions_page_uses_table_base_plus_solutions_table_class(self) -> None:
+        page = solutions_page(_request(f"/problems/{self.problem}/solutions"), self.problem, self.user)
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('<table class="table-base solutions-table">', html)
+
     def test_solutions_set_tag_main_correct_updates_main_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         token = uuid.uuid4().hex[:8]
