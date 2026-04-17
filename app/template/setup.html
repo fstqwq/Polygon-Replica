@@ -2,18 +2,15 @@
 {% block auth_page_title %}Polygon-Replica Setup{% endblock %}
 {% block auth_title %}System Setup{% endblock %}
 {% block auth_subtitle %}No registered users found. Create the first super administrator account.{% endblock %}
-{% block auth_hint %}
-<p class="muted">Username format: 3-16 lowercased characters, separated by dash. Examples: alice, team-7, judge-admin</p>
-{% endblock %}
 
 {% block auth_form %}
 <form id="setup-form" class="form-stack" method="post" action="/setup">
   <label for="username">Super Admin Username</label>
-  <input id="username" name="username" minlength="3" maxlength="16" autofocus />
+  <input id="username" name="username" minlength="3" maxlength="16" placeholder="user-name" autofocus />
   <label for="password">Password</label>
-  <input id="password" name="password" type="password" autocomplete="new-password" />
+  <input id="password" name="password" type="password" autocomplete="new-password" placeholder="password (minimum 8 characters)" />
   <label for="password_confirm">Confirm Password</label>
-  <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" />
+  <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" placeholder="confirm password" />
   <label><input type="checkbox" name="confirm_config" value="1" /> I confirm the configuration paths below.</label>
   <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
   <input type="hidden" name="password_salt" value="{{ password_salt }}" />

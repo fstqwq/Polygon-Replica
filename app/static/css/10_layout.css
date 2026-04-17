@@ -86,13 +86,21 @@
 .logo {
   display: inline-block;
   font-size: 44px;
-  line-height: 1;
+  line-height: 1.04;
   color: var(--text);
 }
 
 .logo:hover {
   color: var(--text);
   text-decoration: none;
+}
+
+.logo-gradient-text {
+  display: inline-block;
+  line-height: 1.04;
+  padding-bottom: 0.08em;
+  margin-bottom: -0.08em;
+  overflow: visible;
 }
 
 .tagline {

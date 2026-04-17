@@ -1,19 +1,16 @@
 {% extends "auth_base.html" %}
 {% block auth_page_title %}Polygon-Replica Register{% endblock %}
 {% block auth_title %}Create Account{% endblock %}
-{% block auth_subtitle %}Register with username and password (minimum 8 characters).{% endblock %}
-{% block auth_hint %}
-<p class="muted">Username format: 3-16 lowercased characters, separated by dash. Examples: alice, team-7, judge-admin</p>
-{% endblock %}
+{% block auth_subtitle %}Register with username and password.{% endblock %}
 
 {% block auth_form %}
 <form id="register-form" class="form-stack" method="post" action="/register">
   <label for="username">Username</label>
-  <input id="username" name="username" minlength="3" maxlength="16" autofocus />
+  <input id="username" name="username" minlength="3" maxlength="16" placeholder="user-name" autofocus />
   <label for="password">Password</label>
-  <input id="password" name="password" type="password" autocomplete="new-password" />
+  <input id="password" name="password" type="password" autocomplete="new-password" placeholder="password (minimum 8 characters)" />
   <label for="password_confirm">Confirm Password</label>
-  <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" />
+  <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" placeholder="confirm password" />
   <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
   <input type="hidden" name="password_salt" value="{{ password_salt }}" />
   <input type="hidden" name="password_iters" value="{{ password_iters }}" />
