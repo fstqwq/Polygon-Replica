@@ -188,22 +188,21 @@
       </div>
       <div class="problem-submenu-item problem-submenu-item-run">
         <div class="problem-submenu-run-block">
-          <span class="submenu-head-line {{ 'submenu-status-warn' if verification_mode == 'stale' else '' }}">
+          <span class="submenu-head-line">
             <a data-page="run" class="submenu-head-link" href="/problems/{{ ctx.problem.slug }}/run">
-              <span hidden>Verification</span><strong hidden>{{ verification_status }}</strong>
               <strong class="submenu-status-heading">Verification</strong>
-              <span
-                class="submenu-status-state {{ 'danger' if verification_mode in ['none', 'failed'] else 'warn' if verification_mode == 'stale' else 'info' if verification_mode == 'running' else '' }}"
-                {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}
-              >{{ verification_status }}</span>
             </a>
-          </span>
-          <span class="submenu-detail-line verification-start-line">
             <form class="inline-form verification-start-form" method="post" action="/problems/{{ ctx.problem.slug }}/verification/start">
               <input class="page-target" type="hidden" name="page" value="{{ verification_page_target.value }}" />
-              <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start verification)</a>
+              <a class="linkish status-inline-link" href="#" data-submit-form="1" {% if not ctx.access.can_write %}aria-disabled="true" title="{{ ctx.access.write_block_reason }}"{% endif %}>(start)</a>
             </form>
           </span>
+          <a
+            data-page="run"
+            class="submenu-detail-line problem-submenu-run-status {{ 'submenu-status-danger' if verification_mode in ['none', 'failed'] else 'submenu-status-warn' if verification_mode == 'stale' else '' }}"
+            href="/problems/{{ ctx.problem.slug }}/run"
+            {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}
+          >{{ verification_status }}</a>
         </div>
       </div>
       <div class="problem-submenu-item">

@@ -36,6 +36,7 @@ class TestAgentAPI(SmokeBase):
         payload = resp.json()
         self.assertTrue(payload.get("ok"))
         self.assertRegex(str(payload.get("register_url") or ""), r"^http://testserver/agent/v1/register/reg-[0-9a-f]{16}$")
+        self.assertEqual(int(payload.get("expires_in") or 0), 900)
         return payload
 
     def _register_agent(self, client: TestClient, register_url: str, *, desktop_id: str = "D-test") -> dict[str, object]:
@@ -783,4 +784,3 @@ class TestAgentAPI(SmokeBase):
                 headers=self._bearer(readonly_token),
             )
             self.assertEqual(removed_text_resp.status_code, 404)
-

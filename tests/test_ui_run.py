@@ -1108,11 +1108,11 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'<strong class="submenu-status-heading">Verification</strong>\s*<span\s+class="submenu-status-state warn"[^>]*>\s*stale</span>',
+            r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?action="/problems/[^"]+/verification/start"[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*>\s*stale\s*</a>',
         )
         self.assertRegex(
             html,
-            r'<span\s+class="submenu-status-state warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale</span>',
+            r'<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale\s*</a>',
         )
         self.assertIn("changed: verification inputs", html)
 
@@ -1155,11 +1155,11 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'<strong class="submenu-status-heading">Verification</strong>\s*<span\s+class="submenu-status-state warn"[^>]*>\s*stale</span>',
+            r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?action="/problems/[^"]+/verification/start"[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*>\s*stale\s*</a>',
         )
         self.assertRegex(
             html,
-            r'<span\s+class="submenu-status-state warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale</span>',
+            r'<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status submenu-status-warn"[^>]*data-tooltip="[^"]*changed: verification inputs[^"]*"[^>]*>\s*stale\s*</a>',
         )
         self.assertIn("changed: verification inputs", html)
 

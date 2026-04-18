@@ -280,13 +280,6 @@
   line-height: 14.4px;
 }
 
-.submenu-status-state {
-  color: var(--text);
-  font-weight: 400;
-  font-size: var(--font-size-ui-sm);
-  line-height: 14.4px;
-}
-
 .submenu-status-danger {
   color: var(--danger);
 }
@@ -335,21 +328,13 @@
   text-decoration: none;
 }
 
-.verification-start-line {
+.problem-submenu-run-status {
   display: block;
-  margin-top: 0;
-  padding-left: 0;
-  font-size: var(--font-size-ui-xs);
-  line-height: 13.2px;
-  font-weight: 400;
+  text-decoration: none;
 }
 
-.submenu-status-state.danger {
-  color: var(--danger);
-}
-
-.submenu-status-state.warn {
-  color: var(--warn);
+.problem-submenu-run-status:hover {
+  text-decoration: none;
 }
 
 .problem-context-bar {
