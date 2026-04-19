@@ -18,7 +18,10 @@ from app.service.statement.constant import STATEMENT_ASSETS_DIR
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.platform.git_process import run_git
-from app.service.platform.workspace_path import is_hidden_workspace_path
+from app.service.platform.workspace_path import (
+    is_allowed_workspace_root_path,
+    is_hidden_workspace_path,
+)
 
 
 class ExportService:
@@ -358,6 +361,8 @@ class ExportService:
                 continue
             if is_hidden_workspace_path(rel.parts):
                 continue
+            if not is_allowed_workspace_root_path(rel.parts):
+                continue
             if child.is_symlink():
                 continue
             target = dst_dir / child.name
@@ -663,7 +668,46 @@ class ExportService:
         snapshot: Path,
     ) -> None:
         package_root.mkdir(parents=True, exist_ok=True)
-        self._copy_dir_contents(snapshot, package_root)
+        self._copy_native_working_tree(snapshot, package_root, root_dir=snapshot)
+
+    def create_workspace_snapshot(
+        self,
+        problem: str,
+        *,
+        workspace_id: int,
+    ) -> Path:
+        problem_row = self._store.problem_export_row(problem)
+        if problem_row is None:
+            raise ValueError(f"unknown problem: {problem}")
+        snapshots_root = self.artifacts_root / "snapshots"
+        snapshots_root.mkdir(parents=True, exist_ok=True)
+        tmp_parent = snapshots_root / f"snap-{uuid.uuid4().hex[:12]}"
+        tmp_root = tmp_parent / "work"
+        package_root = tmp_root / self._package_root_name(str(problem_row["slug"]))
+        try:
+            package_root.mkdir(parents=True, exist_ok=True)
+            snapshot = self._snapshot_working_tree(
+                int(workspace_id),
+                str(problem_row["slug"]),
+                tmp_root,
+            )
+            self._build_native_package(
+                package_root=package_root,
+                snapshot=snapshot,
+            )
+            archive_stem = tmp_parent / f"{self._archive_filename_slug(str(problem_row['slug']))}-snapshot"
+            archive = shutil.make_archive(
+                str(archive_stem),
+                "zip",
+                root_dir=tmp_root,
+                base_dir=package_root.name,
+            )
+            return Path(archive)
+        except Exception:
+            shutil.rmtree(tmp_parent, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
     def _export_problem_root(self, problem_slug: str) -> Path:
         return self.artifacts_root / "exports" / self._archive_filename_slug(problem_slug)
@@ -706,13 +750,13 @@ class ExportService:
         if resolved_workspace_id is None:
             raise ValueError("export requires workspace_id")
         workspace = self._workspace_path_for_export(resolved_workspace_id, problem)
-        if resolved_export_type == "icpc" and not requested_source_commit:
+        if not requested_source_commit:
             head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"], timeout=120)
             if head.returncode == 0 and head.stdout.strip():
                 requested_source_commit = head.stdout.strip()
             else:
                 raise ValueError("no committed revision; commit changes first")
-        stored_source_commit = "" if resolved_export_type == "native" else requested_source_commit
+        stored_source_commit = requested_source_commit
         export_id = f"e-{uuid.uuid4().hex[:10]}"
         export_dir = self._export_dir(str(problem_row["slug"]), export_id)
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -750,9 +794,10 @@ class ExportService:
                     pass_limit=pass_limit,
                 )
             else:
-                snapshot = self._snapshot_working_tree(
+                snapshot = self._snapshot_source(
                     resolved_workspace_id,
                     str(problem_row["slug"]),
+                    requested_source_commit,
                     tmp_root,
                 )
                 self._build_native_package(
@@ -761,7 +806,7 @@ class ExportService:
                 )
 
             if resolved_export_type == "native":
-                preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}.zip"
+                preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-native-{revision_token}.zip"
             else:
                 preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"
             archive_target = self._export_path(str(problem_row["slug"]), export_id, preferred_filename)

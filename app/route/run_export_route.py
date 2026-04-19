@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from app.impl.run_export.artifact import artifact_file, export_file
-from app.impl.run_export.export import export_create, export_page
+from app.impl.run_export.export import export_create, export_page, export_snapshot
 from app.impl.run_export.import_source import export_import, export_import_slug_hint
 from app.impl.run_export.run import run_cancel, run_details_page, run_details_test_fragment, run_execute, run_new_page, run_page
 
@@ -53,6 +53,11 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/export/create",
     export_create,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/export/snapshot",
+    export_snapshot,
     methods=["POST"],
 )
 router.add_api_route(

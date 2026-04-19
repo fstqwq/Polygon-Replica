@@ -8,7 +8,10 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from app.main_util import UPLOAD_MAX_BYTES
-from app.service.platform.workspace_path import is_hidden_workspace_path
+from app.service.platform.workspace_path import (
+    is_allowed_workspace_root_path,
+    is_hidden_workspace_path,
+)
 from app.service.problem.test_spec import load_tests_spec
 from app.service.statement.constant import STATEMENT_SECTIONS_DIR
 
@@ -75,6 +78,8 @@ def _validated_native_entries(
             continue
         if is_hidden_workspace_path(target_rel.parts):
             raise ValueError(f"native package contains forbidden hidden path: {rel}")
+        if not is_allowed_workspace_root_path(target_rel.parts):
+            raise ValueError(f"native package contains forbidden root path: {rel}")
         info = entry_map[rel]
         entry_size = int(info.file_size)
         if entry_size > ZIP_MAX_FILE_BYTES:

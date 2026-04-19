@@ -192,8 +192,7 @@ _DYNAMIC_EXPORT_KEEP = (start_verification_job,)
 _ = len(_DYNAMIC_EXPORT_KEEP)
 
 def _export_source_commit(export_type: str, source_commit: str) -> str:
-    if export_type == "native":
-        return ""
+    _ = export_type
     return source_commit
 
 
@@ -210,7 +209,7 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
     try:
         if safe_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
-        if not effective_source_commit and safe_export_type != 'native':
+        if not effective_source_commit:
             raise ValueError('no committed revision; commit changes first')
         out = config.export_service.create_export(
             problem,

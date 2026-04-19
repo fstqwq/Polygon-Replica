@@ -2,12 +2,15 @@ from __future__ import annotations
 from app.impl.auth.session import require_session_user
 
 import json
+import shutil
 import uuid
 import zipfile
 from pathlib import Path
 from typing import TypedDict, cast, Annotated, Annotated
 
 from fastapi import Form, Request, Depends
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
@@ -286,7 +289,11 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         if head_commit
         else 'ICPC (requires committed revision)'
     )
-    native_option_label = 'Native (current working tree)'
+    native_option_label = (
+        f'Native (committed revision {icpc_revision_display})'
+        if head_commit
+        else 'Native (requires committed revision)'
+    )
     exports_rows = config.export_service.workspace_exports(int(ctx['problem']['id']), int(workspace_id), limit=40)
     revision_cache: dict[str, int | None] = {}
     verification_meta_cache: dict[str, dict[str, object] | None] = {}
@@ -319,7 +326,12 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         if not fallback_stem:
             fallback_stem = "problem"
         native_export = cast(str, item["export_type"]) == "native"
-        item['display_filename'] = stored_filename or (f"{fallback_stem}.zip" if native_export else f"{fallback_stem}-{item['source_display']}.zip")
+        if native_export and item["source_display"] == "working tree":
+            item['display_filename'] = stored_filename or f"{fallback_stem}.zip"
+        elif native_export:
+            item['display_filename'] = stored_filename or f"{fallback_stem}-native-{item['source_display']}.zip"
+        else:
+            item['display_filename'] = stored_filename or f"{fallback_stem}-{item['source_display']}.zip"
         verification_id = _resolve_export_verification_id(
             problem_id=problem_id,
             workspace_id=int(workspace_id),
@@ -425,7 +437,7 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
         head_commit = ""
     if not requested_export_type:
         requested_export_type = 'icpc'
-    source_commit = "" if requested_export_type == "native" else head_commit
+    source_commit = head_commit
     export_task_id = f"exp-{uuid.uuid4().hex[:12]}"
     initial_details: dict[str, object] = {
         'status': 'running',
@@ -439,7 +451,7 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
     try:
         if requested_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
-        if not head_commit and requested_export_type != 'native':
+        if not head_commit:
             raise ValueError('no committed revision; commit changes first')
         started = start_export_job(
             problem,
@@ -465,3 +477,19 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
         audit(ctx['user']['id'], ctx['problem']['id'], 'export.create', initial_details)
         msg = str(exc)
     return redirect_response(f'/problems/{problem}/export', status_code=303, message=msg)
+
+
+def export_snapshot(problem: str, user: Annotated[str, Depends(require_session_user)]):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
+    require_write_access(ctx)
+    archive = config.export_service.create_workspace_snapshot(
+        problem,
+        workspace_id=int(ctx["workspace"]["id"]),
+    )
+    archive_root = archive.parent
+    return FileResponse(
+        archive,
+        filename=archive.name,
+        media_type="application/zip",
+        background=BackgroundTask(lambda: shutil.rmtree(archive_root, ignore_errors=True)),
+    )

@@ -580,16 +580,16 @@ class TestAgentAPI(SmokeBase):
                 headers=self._bearer(readonly_token),
                 json={"export_type": "native"},
             )
-            self.assertEqual(native_export.status_code, 200, native_export.text)
-            self.assertRegex(str(native_export.json().get("export_id") or ""), r"^exp-api-")
+            self.assertEqual(native_export.status_code, 400, native_export.text)
+            self.assertIn("no committed revision", native_export.text)
 
             icpc_export = client.post(
                 "/agent/v1/export/start",
                 headers=self._bearer(readonly_token),
                 json={"export_type": "icpc"},
             )
-            self.assertEqual(icpc_export.status_code, 200, icpc_export.text)
-            self.assertRegex(str(icpc_export.json().get("export_id") or ""), r"^exp-api-")
+            self.assertEqual(icpc_export.status_code, 400, icpc_export.text)
+            self.assertIn("no committed revision", icpc_export.text)
 
             _workspace_request, workspace_token = self._approve_token(
                 client,
@@ -659,6 +659,17 @@ class TestAgentAPI(SmokeBase):
             fresh_export_status = client.get(f"/agent/v1/export/{fresh_export_id}/status", headers=self._bearer(readonly_token))
             self.assertEqual(fresh_export_status.status_code, 200, fresh_export_status.text)
             self.assertEqual(str(fresh_export_status.json().get("source_commit") or ""), head)
+
+            fresh_native_export = client.post(
+                "/agent/v1/export/start",
+                headers=self._bearer(readonly_token),
+                json={"export_type": "native"},
+            )
+            self.assertEqual(fresh_native_export.status_code, 200, fresh_native_export.text)
+            fresh_native_id = str(fresh_native_export.json().get("export_id") or "")
+            fresh_native_status = client.get(f"/agent/v1/export/{fresh_native_id}/status", headers=self._bearer(readonly_token))
+            self.assertEqual(fresh_native_status.status_code, 200, fresh_native_status.text)
+            self.assertEqual(str(fresh_native_status.json().get("source_commit") or ""), head)
 
     def test_agent_verification_detail_returns_yaml_table_and_zoom(self) -> None:
         username = self.random_id("agent-detail")

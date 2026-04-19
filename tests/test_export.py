@@ -5,6 +5,7 @@ from .db_helpers import db_execute, db_fetch_all, db_fetch_one
 import io
 import json
 import re
+import shutil
 import tempfile
 import uuid
 import zipfile
@@ -415,7 +416,7 @@ class TestExport(SmokeBase):
 
     def test_native_import_rejects_hidden_workspace_paths(self) -> None:
         service = NativePackageImportService()
-        blocked_paths = [".env", "a/.hidden/file", ".gitignore"]
+        blocked_paths = [".env", "solutions/.hidden/file", ".gitignore"]
         for blocked_path in blocked_paths:
             with self.subTest(blocked_path=blocked_path):
                 ws = Path(self._workspace_path())
@@ -430,13 +431,14 @@ class TestExport(SmokeBase):
 
     def test_native_import_rejects_total_unzipped_repo_payload_too_large(self) -> None:
         ws = Path(self._workspace_path())
-        sentinel = ws / "keep.txt"
+        sentinel = ws / "solutions" / "keep.cpp"
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
         sentinel.write_text("keep\n", encoding="utf-8")
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("config/problem.json", json.dumps({"mode": "pass-fail", "pass_limit": 1}))
-            zf.writestr("a.txt", "1234567890")
-            zf.writestr("b.txt", "abcdefghij")
+            zf.writestr("solutions/a.cpp", "1234567890")
+            zf.writestr("solutions/b.cpp", "abcdefghij")
 
         service = NativePackageImportService()
         with patch.object(native_import_module, "ZIP_MAX_EXTRACTED_BYTES", 16):
@@ -444,6 +446,18 @@ class TestExport(SmokeBase):
                 service.import_package(ws, "native-too-large.zip", payload.getvalue())
 
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_native_import_rejects_root_files(self) -> None:
+        ws = Path(self._workspace_path())
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("config/problem.json", json.dumps({"mode": "pass-fail", "pass_limit": 1}))
+            zf.writestr("README.md", "root file\n")
+            zf.writestr("tests/spec.json", json.dumps({"tests": []}))
+
+        service = NativePackageImportService()
+        with self.assertRaisesRegex(ValueError, r"forbidden root path: README\.md"):
+            service.import_package(ws, "native-root-file.zip", payload.getvalue())
 
     def test_native_export_roundtrip_preserves_canonical_repo_state(self) -> None:
         ws = Path(self._workspace_path())
@@ -534,7 +548,7 @@ class TestExport(SmokeBase):
         self.assertRegex(imported_head.stdout.strip(), r"^[0-9a-f]{40}$")
         self.assertEqual(run_git(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
 
-    def test_native_export_uses_working_tree_snapshot_even_when_head_exists(self) -> None:
+    def test_native_export_uses_committed_revision_even_when_working_tree_is_dirty(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
         rel = f"solutions/native_dirty_{token}.cpp"
@@ -544,7 +558,7 @@ class TestExport(SmokeBase):
         head = self._commit_workspace_paths(
             ws,
             [rel, desc_rel, *self._seed_export_tests(ws, "001")],
-            f"test native export working tree snapshot {token}",
+            f"test native export committed revision {token}",
         )
         dirty_source = "int main(){return 7;}\n"
         (ws / rel).write_text(dirty_source, encoding="utf-8")
@@ -560,24 +574,31 @@ class TestExport(SmokeBase):
 
         with zipfile.ZipFile(archive, "r") as zf:
             solution_name = next(name for name in zf.namelist() if name.endswith(f"/{rel}"))
-            self.assertEqual(zf.read(solution_name).decode("utf-8", errors="replace"), dirty_source)
+            self.assertEqual(zf.read(solution_name).decode("utf-8", errors="replace"), "int main(){return 0;}\n")
 
         row = db_fetch_one(
             "SELECT source_commit FROM exports WHERE export_type='native' ORDER BY created_at DESC LIMIT 1"
         )
         self.assertIsNotNone(row)
-        self.assertEqual(str(row["source_commit"] or ""), "")
+        self.assertEqual(str(row["source_commit"] or ""), head)
 
-    def test_native_export_excludes_hidden_paths_from_working_tree_snapshot(self) -> None:
+    def test_download_snapshot_uses_working_tree_without_export_activity(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
-        rel = f"solutions/native_visible_{token}.cpp"
+        rel = f"solutions/snapshot_dirty_{token}.cpp"
         desc_rel = f"{rel}.desc"
         hidden_root = ws / ".env"
-        hidden_nested = ws / "notes" / ".cache" / "secret.txt"
+        hidden_nested = ws / "solutions" / ".cache" / "secret.txt"
         draft_file = ws / "draft" / "skip.txt"
         (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / desc_rel).write_text("expected: accepted\n", encoding="utf-8")
+        self._commit_workspace_paths(
+            ws,
+            [rel, desc_rel, *self._seed_export_tests(ws, "001")],
+            f"test snapshot download {token}",
+        )
+        dirty_source = "int main(){return 9;}\n"
+        (ws / rel).write_text(dirty_source, encoding="utf-8")
         hidden_root.write_text("hidden\n", encoding="utf-8")
         hidden_nested.parent.mkdir(parents=True, exist_ok=True)
         hidden_nested.write_text("hidden nested\n", encoding="utf-8")
@@ -585,36 +606,81 @@ class TestExport(SmokeBase):
         draft_file.write_text("draft\n", encoding="utf-8")
 
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        archive = export_service.create_export(
-            self.problem,
-            "",
-            "native",
-            workspace_id=int(ctx["workspace"]["id"]),
-            source_commit="",
+        exports_before = int(db_fetch_one("SELECT COUNT(*) AS c FROM exports")["c"])
+        audit_before = int(
+            db_fetch_one(
+                "SELECT COUNT(*) AS c FROM audit_log WHERE problem_id=? AND actor_user_id=? AND action='export.create'",
+                [int(ctx["problem"]["id"]), int(ctx["user"]["id"])],
+            )["c"]
         )
+        response = export_page_module.export_snapshot(self.problem, self.user)
+        self.assertEqual(response.status_code, 200)
+        archive = Path(response.path)
+        self.assertTrue(archive.is_file())
 
-        with zipfile.ZipFile(archive, "r") as zf:
-            names = set(zf.namelist())
-            package_root = next(name.split("/", 1)[0] for name in names if name.endswith("/config/problem.json"))
-            self.assertIn(f"{package_root}/{rel}", names)
-            self.assertNotIn(f"{package_root}/.env", names)
-            self.assertNotIn(f"{package_root}/notes/.cache/secret.txt", names)
-            self.assertNotIn(f"{package_root}/draft/skip.txt", names)
+        try:
+            with zipfile.ZipFile(archive, "r") as zf:
+                names = set(zf.namelist())
+                package_root = next(name.split("/", 1)[0] for name in names if name.endswith("/config/problem.json"))
+                self.assertIn(f"{package_root}/{rel}", names)
+                solution_name = f"{package_root}/{rel}"
+                self.assertEqual(zf.read(solution_name).decode("utf-8", errors="replace"), dirty_source)
+                self.assertNotIn(f"{package_root}/.env", names)
+                self.assertNotIn(f"{package_root}/solutions/.cache/secret.txt", names)
+                self.assertNotIn(f"{package_root}/draft/skip.txt", names)
+        finally:
+            shutil.rmtree(archive.parent, ignore_errors=True)
 
-    def test_native_export_route_queues_working_tree_source(self) -> None:
+        exports_after = int(db_fetch_one("SELECT COUNT(*) AS c FROM exports")["c"])
+        audit_after = int(
+            db_fetch_one(
+                "SELECT COUNT(*) AS c FROM audit_log WHERE problem_id=? AND actor_user_id=? AND action='export.create'",
+                [int(ctx["problem"]["id"]), int(ctx["user"]["id"])],
+            )["c"]
+        )
+        self.assertEqual(exports_after, exports_before)
+        self.assertEqual(audit_after, audit_before)
+
+    def test_native_export_route_queues_committed_revision_source(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/native_route_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test native export route {token}",
+        )
         with patch.object(export_page_module, "start_export_job", return_value=True) as start_job:
             resp = export_page_module.export_create(self.problem, self.user, verification_id="", export_type="native")
         self.assertEqual(resp.status_code, 303)
-        self.assertEqual(str(start_job.call_args.kwargs["source_commit"]), "")
+        self.assertEqual(str(start_job.call_args.kwargs["source_commit"]), head)
 
-    def test_export_page_labels_native_source_as_working_tree(self) -> None:
+    def test_native_export_route_requires_committed_revision(self) -> None:
+        resp = export_page_module.export_create(self.problem, self.user, verification_id="", export_type="native")
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(any("no committed revision" in item for item in messages))
+
+    def test_export_page_labels_native_source_as_committed_revision_and_snapshot_action(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/native_page_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test native export page {token}",
+        )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         archive = export_service.create_export(
             self.problem,
             "",
             "native",
             workspace_id=int(ctx["workspace"]["id"]),
-            source_commit="",
+            source_commit=head,
         )
         self.assertTrue(archive.exists())
         db_execute(
@@ -627,7 +693,7 @@ class TestExport(SmokeBase):
                     {
                         "status": "running",
                         "export_type": "native",
-                        "source_commit": "",
+                        "source_commit": head,
                         "verification_id": "",
                         "filename": "",
                         "error": "",
@@ -647,7 +713,7 @@ class TestExport(SmokeBase):
                     {
                         "status": "ok",
                         "export_type": "native",
-                        "source_commit": "",
+                        "source_commit": head,
                         "verification_id": "",
                         "filename": archive.name,
                         "error": "",
@@ -667,7 +733,7 @@ class TestExport(SmokeBase):
                     {
                         "status": "running",
                         "export_type": "native",
-                        "source_commit": "",
+                        "source_commit": head,
                         "verification_id": "",
                         "filename": "",
                         "error": "",
@@ -686,14 +752,14 @@ class TestExport(SmokeBase):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("Export Into Package", html)
-        self.assertIn("Native (current working tree)", html)
-        self.assertIn("ICPC (requires committed revision)", html)
+        self.assertIn("Native (committed revision v", html)
+        self.assertIn("Download Snapshot", html)
+        self.assertIn(f'/problems/{self.problem}/export/snapshot', html)
         self.assertIn("Import Into Working Copy", html)
         self.assertIn("Activity", html)
         self.assertNotIn("Generation Tasks", html)
         self.assertNotIn("Generated Exports", html)
         self.assertIn(f'/problems/{self.problem}/export/import', html)
-        self.assertIn("working tree", html)
         self.assertIn(">running<", html)
         self.assertEqual(html.count(">RUNNING<"), 1)
         self.assertEqual(html.count(">OK<"), 1)

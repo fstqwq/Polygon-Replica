@@ -554,7 +554,11 @@ async def agent_export_start(request: Request):
     export_type = str(payload.get("export_type") or "icpc").strip().lower() or "icpc"
     verification_id = str(payload.get("verification_id") or "")
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
-    source_commit = "" if export_type == "native" else workspace_head
+    if export_type not in {"icpc", "native"}:
+        return json_error_response("unsupported package type", status_code=400)
+    if not workspace_head:
+        return json_error_response("no committed revision; commit changes first", status_code=400)
+    source_commit = workspace_head
     export_task_id = f"exp-api-{Path(verification_id).name}" if verification_id else f"exp-api-{allocate_run_id()}"
     initial_details: dict[str, object] = {
         "status": "running",

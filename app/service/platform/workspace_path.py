@@ -9,6 +9,19 @@ from app.runtime_value import RuntimeValues, build_runtime_values
 CPP_SOURCE_EXTENSIONS: set[str] = set()
 SOLUTION_SOURCE_EXTENSIONS: set[str] = set()
 GENERATOR_SOURCE_EXTENSIONS: set[str] = set()
+ALLOWED_WORKSPACE_ROOT_NAMES = {
+    "attachments",
+    "checkers",
+    "config",
+    "generators",
+    "interactors",
+    "solutions",
+    "statement",
+    "statement-assets",
+    "statement-sections",
+    "tests",
+    "third_party",
+}
 
 
 def apply_runtime_values(values: RuntimeValues) -> None:
@@ -50,6 +63,10 @@ def contains_symlink_component(root: Path, candidate: Path) -> bool:
 
 def is_hidden_workspace_path(rel_parts: tuple[str, ...]) -> bool:
     return any(part.startswith(".") for part in rel_parts)
+
+
+def is_allowed_workspace_root_path(rel_parts: tuple[str, ...]) -> bool:
+    return bool(rel_parts) and rel_parts[0] in ALLOWED_WORKSPACE_ROOT_NAMES
 
 
 def safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool = False) -> Path:
