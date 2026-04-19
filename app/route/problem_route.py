@@ -7,16 +7,38 @@ from fastapi.responses import HTMLResponse
 
 from app.impl.workspace.context_ui import render_workspace_page
 from app.impl.problem.access import workspace_access_grant, workspace_access_revoke
-from app.impl.problem.checker import checker_create_template, checker_page, checker_save_source, checker_set_standard, checker_view_standard
+from app.impl.problem.checker import (
+    checker_create_template,
+    checker_page,
+    checker_rename_source,
+    checker_save_source,
+    checker_set_standard,
+    checker_view_standard,
+)
 from app.impl.problem.file import files_create_template, files_delete, files_download, files_new, files_page, files_rename, files_save, files_upload
 from app.impl.problem.general import general_save
-from app.impl.problem.generator import generator_create_template, generator_save_source, generators_page
+from app.impl.problem.generator import (
+    generator_create_template,
+    generator_rename_source,
+    generator_save_source,
+    generators_page,
+)
 from app.impl.problem.git_op import git_commit, git_discard_path, git_pull, git_push, git_rebase_abort, git_rebase_continue, git_restore_revision
 from app.impl.problem.history import history_page
-from app.impl.problem.interactor import interactor_create_template, interactor_page, interactor_save_source
+from app.impl.problem.interactor import (
+    interactor_create_template,
+    interactor_page,
+    interactor_rename_source,
+    interactor_save_source,
+)
 from app.impl.problem.setting import settings_config_category_page, settings_config_category_update, settings_judgehost_host_action, settings_judgehost_runtime_update, settings_judgehost_snapshot, settings_page, settings_password_update, settings_system_config_reset, settings_worker_queue_snapshot
 from app.impl.problem.solution import solutions_create_template, solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
-from app.impl.problem.validator import validator_create_template, validator_page, validator_save_source
+from app.impl.problem.validator import (
+    validator_create_template,
+    validator_page,
+    validator_rename_source,
+    validator_save_source,
+)
 from app.impl.problem.workspace_op import problem_delete, switch_workspace, workspace_delete
 from app.impl.preview.preview import preview_page
 
@@ -53,6 +75,11 @@ router.add_api_route(
     methods=["POST"],
 )
 router.add_api_route(
+    "/problems/{problem:path}/generators/rename-source",
+    generator_rename_source,
+    methods=["POST"],
+)
+router.add_api_route(
     "/problems/{problem:path}/checker",
     checker_page,
     methods=["GET"],
@@ -80,6 +107,11 @@ router.add_api_route(
     methods=["POST"],
 )
 router.add_api_route(
+    "/problems/{problem:path}/checker/rename-source",
+    checker_rename_source,
+    methods=["POST"],
+)
+router.add_api_route(
     "/problems/{problem:path}/validator",
     validator_page,
     methods=["GET"],
@@ -96,6 +128,11 @@ router.add_api_route(
     methods=["POST"],
 )
 router.add_api_route(
+    "/problems/{problem:path}/validator/rename-source",
+    validator_rename_source,
+    methods=["POST"],
+)
+router.add_api_route(
     "/problems/{problem:path}/interactor",
     interactor_page,
     methods=["GET"],
@@ -109,6 +146,11 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/interactor/save-source",
     interactor_save_source,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/interactor/rename-source",
+    interactor_rename_source,
     methods=["POST"],
 )
 router.add_api_route(
@@ -314,6 +356,4 @@ router.add_api_route(
     git_rebase_abort,
     methods=["POST"],
 )
-
-
 

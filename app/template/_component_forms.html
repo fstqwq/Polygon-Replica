@@ -23,3 +23,12 @@
   <button class="btn" type="submit">{{ button_label }}</button>
 </form>
 {%- endmacro %}
+
+{% macro rename_source_form(action, old_path, input_id='component-rename-path') -%}
+<form class="form-row component-rename-form" method="post" action="{{ action }}">
+  <input type="hidden" name="old_path" value="{{ old_path }}" />
+  <label for="{{ input_id }}">Rename to</label>
+  <input id="{{ input_id }}" name="new_path" value="{{ old_path }}" />
+  <button class="btn" type="submit">Rename</button>
+</form>
+{%- endmacro %}

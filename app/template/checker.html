@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import create_template_form, source_editor_form %}
+{% from "_component_forms.html" import create_template_form, rename_source_form, source_editor_form %}
 {% macro repository_checker_section(inline_error='') -%}
 <section>
   <h2 class="checker-section-title">Repository Checker</h2>
@@ -7,7 +7,17 @@
     <strong>{{ "Current file" if checker_status.repo_source_exists else "New file" }}:</strong>
     <code>{{ repo_source }}</code>{% if checker_status.standard_checker %} <span class="muted">(matches <code>{{ checker_status.standard_checker }}</code>)</span>{% endif %}
   </p>
+  {% if checker_status.standard_warning %}
+  <p class="flash flash-inline tone-warn">{{ checker_status.standard_warning }}</p>
+  {% endif %}
   {% if checker_status.repo_source_exists or inline_error %}
+  {% if checker_status.repo_source_exists %}
+  {{ rename_source_form(
+    "/problems/" ~ ctx.problem.slug ~ "/checker/rename-source",
+    repo_source,
+    "checker-rename-path"
+  ) }}
+  {% endif %}
   {{ source_editor_form(
     "/problems/" ~ ctx.problem.slug ~ "/checker/save-source",
     repo_source,

@@ -6,6 +6,9 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
+# tests.common installs isolated /tmp paths before app modules can create runtime config.
+from .common import SmokeBase, config
+
 from app.service.disk.verification_store import VerificationStore
 from app.service.verification.task_metadata import canonical_diagnostics, canonical_truncated_text, diagnostics_json_text
 from app.service.verification.task_scheduler import (
@@ -16,8 +19,9 @@ from app.service.verification.task_scheduler import (
     _ready_rows,
 )
 from app.service.verification.task_store import VerificationTaskStore
+from app.impl.workspace.verification_dag_plan import VerificationTestPlan
 
-from .common import SmokeBase, config
+
 def _task_row(
     task_id: str,
     *,
@@ -38,6 +42,30 @@ def _task_row(
         "queue_index": queue_index,
         "status": status,
     }
+
+
+def _sanity_test_plan(
+    *,
+    test_name: str = "001.in",
+    sample: bool = False,
+    sample_output_text: str = "",
+    sample_output_validate: bool = True,
+) -> VerificationTestPlan:
+    return VerificationTestPlan(
+        test_name=test_name,
+        source_kind="manual",
+        display_source_path="manual_validate.cpp",
+        execution_source_name="manual_validate.cpp",
+        execution_source_bytes=b"int main(){return 0;}\n",
+        execution_input_bytes=b"1\n",
+        extra_sources_b64={},
+        tests_meta={},
+        sample=sample,
+        sample_input_custom=False,
+        uses_custom_sample_input=False,
+        sample_output_text=sample_output_text,
+        sample_output_validate=sample_output_validate,
+    )
 
 
 class _InMemoryTaskStore:
@@ -207,6 +235,138 @@ class TestVerificationTaskScheduler(SmokeBase):
         )
         self.assertEqual(status, "failed")
         self.assertTrue(finished)
+
+    def test_planned_sanity_checks_include_stability_probes(self) -> None:
+        from app.impl.workspace.sanity_checks import (
+            CUSTOM_SAMPLE_OUTPUT_CHECK,
+            EMPTY_OUTPUT_STABILITY_CHECK,
+            UNICODE_OUTPUT_STABILITY_CHECK,
+            planned_sanity_checks,
+        )
+
+        self.assertEqual(
+            planned_sanity_checks([_sanity_test_plan()]),
+            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK],
+        )
+        self.assertEqual(
+            planned_sanity_checks([_sanity_test_plan(sample=True, sample_output_text="ok\n")]),
+            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, CUSTOM_SAMPLE_OUTPUT_CHECK],
+        )
+
+    def test_sanity_stability_probes_pass_on_non_ac_non_fl(self) -> None:
+        from app.impl.workspace.sanity_checks import run_verification_sanity_checks
+
+        verification_id = self.random_id("ver-sanity-stable")
+        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        calls: list[dict[str, object]] = []
+
+        def _fake_enqueue_task(**kwargs: object) -> str:
+            calls.append(dict(kwargs))
+            return f"jt-{len(calls)}"
+
+        def _fake_wait_for_task_case_result(task_id: str, test_name: str) -> dict[str, object]:
+            return {
+                "summary": {
+                    "tests": [
+                        {
+                            "test": test_name,
+                            "verdict": "WA",
+                            "message": f"{task_id} rejected",
+                        }
+                    ]
+                }
+            }
+
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "wait_for_task_case_result",
+            side_effect=_fake_wait_for_task_case_result,
+        ):
+            result = run_verification_sanity_checks(
+                problem=self.problem,
+                user=self.user,
+                verification_id=verification_id,
+                mode="pass-fail",
+                logs_dir=logs_dir,
+                test_plans=[_sanity_test_plan()],
+            )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.checked_count, 2)
+        self.assertEqual([str(call["upload_filename"]) for call in calls], ["sanity_empty_output.py", "sanity_unicode_output.py"])
+        self.assertTrue(all(call["persist_verification_run"] is False for call in calls))
+        self.assertTrue(all(call["selected_tests"] == ["001.in"] for call in calls))
+        self.assertTrue(all(call["expected_behavior"] == "unknown" for call in calls))
+        self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
+
+    def test_sanity_stability_probe_fails_fast_on_ac(self) -> None:
+        from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
+
+        verification_id = self.random_id("ver-sanity-ac")
+        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        calls: list[dict[str, object]] = []
+
+        def _fake_enqueue_task(**kwargs: object) -> str:
+            calls.append(dict(kwargs))
+            return f"jt-{len(calls)}"
+
+        def _fake_wait_for_task_case_result(_task_id: str, test_name: str) -> dict[str, object]:
+            return {"summary": {"tests": [{"test": test_name, "verdict": "OK", "message": "accepted"}]}}
+
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "wait_for_task_case_result",
+            side_effect=_fake_wait_for_task_case_result,
+        ):
+            result = run_verification_sanity_checks(
+                problem=self.problem,
+                user=self.user,
+                verification_id=verification_id,
+                mode="pass-fail",
+                logs_dir=logs_dir,
+                test_plans=[_sanity_test_plan()],
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.check_name, EMPTY_OUTPUT_STABILITY_CHECK)
+        self.assertEqual(result.checked_count, 0)
+        self.assertIn("got OK", result.error)
+        self.assertEqual(len(calls), 1)
+
+    def test_sanity_stability_probe_fails_on_unicode_fl(self) -> None:
+        from app.impl.workspace.sanity_checks import UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
+
+        verification_id = self.random_id("ver-sanity-fl")
+        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+        calls: list[dict[str, object]] = []
+
+        def _fake_enqueue_task(**kwargs: object) -> str:
+            calls.append(dict(kwargs))
+            return f"jt-{len(calls)}"
+
+        def _fake_wait_for_task_case_result(task_id: str, test_name: str) -> dict[str, object]:
+            verdict = "WA" if task_id == "jt-1" else "FL"
+            return {"summary": {"tests": [{"test": test_name, "verdict": verdict, "message": "unicode crash"}]}}
+
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "wait_for_task_case_result",
+            side_effect=_fake_wait_for_task_case_result,
+        ):
+            result = run_verification_sanity_checks(
+                problem=self.problem,
+                user=self.user,
+                verification_id=verification_id,
+                mode="pass-fail",
+                logs_dir=logs_dir,
+                test_plans=[_sanity_test_plan()],
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.check_name, UNICODE_OUTPUT_STABILITY_CHECK)
+        self.assertEqual(result.checked_count, 1)
+        self.assertIn("got FL", result.error)
+        self.assertEqual(len(calls), 2)
 
     def test_effective_verification_kind_uses_full_available_test_set(self) -> None:
         from app.impl.workspace.verification_dag import _effective_verification_kind

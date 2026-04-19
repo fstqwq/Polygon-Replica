@@ -1,7 +1,7 @@
 from __future__ import annotations
 from app.impl.auth.session import require_session_user
 from pathlib import Path
-from typing import cast, Annotated, Annotated
+from typing import Annotated, cast
 
 from fastapi import HTTPException, Request, Depends
 
@@ -106,7 +106,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     try:
         ctx['checker_status'] = checker_status_context(workspace_path)
     except Exception:
-        ctx['checker_status'] = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_valid': False, 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
+        ctx['checker_status'] = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_expected_checker': '', 'standard_warning': '', 'standard_valid': False, 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
     try:
         ctx['generator_status'] = generator_status_context(workspace_path)
     except Exception:

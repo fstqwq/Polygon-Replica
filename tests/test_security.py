@@ -15,7 +15,7 @@ from starlette.requests import Request
 
 from .common import SmokeBase, suite_root
 from app.impl.runtime.config import config
-from app.impl.problem.checker import checker_set_standard
+from app.impl.problem.checker import checker_rename_source, checker_set_standard
 from app.impl.problem.file import (
     files_create_template,
     files_delete,
@@ -25,8 +25,8 @@ from app.impl.problem.file import (
     files_save,
     files_upload,
 )
-from app.impl.problem.generator import generator_create_template
-from app.impl.problem.interactor import interactor_create_template, interactor_save_source
+from app.impl.problem.generator import generator_create_template, generator_rename_source
+from app.impl.problem.interactor import interactor_create_template, interactor_rename_source, interactor_save_source
 from app.impl.problem.solution import (
     solutions_create_template,
     solutions_delete,
@@ -34,7 +34,7 @@ from app.impl.problem.solution import (
     solutions_save_source,
     solutions_set_tag,
 )
-from app.impl.problem.validator import validator_create_template, validator_save_source
+from app.impl.problem.validator import validator_create_template, validator_rename_source, validator_save_source
 from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
@@ -642,6 +642,69 @@ class TestSecurity(SmokeBase):
         target = ws / "interactors" / "interactor.cpp"
         self.assertTrue(target.exists())
         self.assertEqual(target.read_text(encoding="utf-8"), content)
+
+    def test_component_source_rename_rejects_destination_path_traversal(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        marker = suite_root() / f"component-rename-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker.unlink(missing_ok=True)
+        cases = [
+            (checker_rename_source, "checkers/security_checker.cpp"),
+            (validator_rename_source, "validators/security_validator.cpp"),
+            (interactor_rename_source, "interactors/security_interactor.cpp"),
+            (generator_rename_source, "generators/security_generator.cpp"),
+        ]
+        for rename_func, old_rel in cases:
+            old_abs = ws / old_rel
+            old_abs.parent.mkdir(parents=True, exist_ok=True)
+            old_abs.write_text("// keep\n", encoding="utf-8")
+            resp = rename_func(
+                problem=self.problem,
+                user=self.user,
+                old_path=old_rel,
+                new_path="../../" + marker.name,
+            )
+            self.assertEqual(resp.status_code, 303)
+            self.assertFalse(marker.exists())
+            self.assertTrue(old_abs.exists())
+            self.assertIn("new ", self._first_flash_message(resp).lower())
+
+    def test_component_source_rename_rejects_existing_destination(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        old_rel = "validators/security_rename_old.cpp"
+        new_rel = "validators/security_rename_new.cpp"
+        (ws / old_rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / old_rel).write_text("// old\n", encoding="utf-8")
+        (ws / new_rel).write_text("// existing\n", encoding="utf-8")
+
+        resp = validator_rename_source(
+            problem=self.problem,
+            user=self.user,
+            old_path=old_rel,
+            new_path=new_rel,
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertTrue((ws / old_rel).exists())
+        self.assertEqual((ws / new_rel).read_text(encoding="utf-8"), "// existing\n")
+        self.assertIn("destination source already exists", self._first_flash_message(resp).lower())
+
+    def test_component_source_rename_rejects_source_path_traversal(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        default_rel = "validators/validator.cpp"
+        (ws / default_rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / default_rel).write_text("// default validator\n", encoding="utf-8")
+
+        resp = validator_rename_source(
+            problem=self.problem,
+            user=self.user,
+            old_path="../../escape.cpp",
+            new_path="renamed_validator.cpp",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertTrue((ws / default_rel).exists())
+        self.assertFalse((ws / "validators/renamed_validator.cpp").exists())
+        self.assertIn("validator source is required", self._first_flash_message(resp).lower())
 
     def test_solutions_create_template_path_traversal_stays_in_workspace(self) -> None:
         marker = suite_root() / f"solution-template-escape-{uuid.uuid4().hex[:8]}.cpp"

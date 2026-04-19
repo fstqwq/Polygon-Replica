@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import source_editor_form %}
+{% from "_component_forms.html" import rename_source_form, source_editor_form %}
 {% block content %}
 <h1 class="page-title">Generators</h1>
 {% include "_flash_message.html" %}
@@ -30,6 +30,13 @@
     <h2>Generator Editor</h2>
     {% if selected_exists or editor_error %}
     <p><strong>{{ "File path" if selected_exists else "New file" }}:</strong> <code>{{ selected_source }}</code></p>
+    {% if selected_exists %}
+    {{ rename_source_form(
+      "/problems/" ~ ctx.problem.slug ~ "/generators/rename-source",
+      selected_source,
+      "generator-rename-path"
+    ) }}
+    {% endif %}
     {{ source_editor_form(
       "/problems/" ~ ctx.problem.slug ~ "/generators/save-source",
       selected_source,

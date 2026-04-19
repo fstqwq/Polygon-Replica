@@ -8,6 +8,7 @@ from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
+from app.impl.problem.shared import rename_component_source
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit, read_build_config, template_for_kind, write_build_config
 from app.impl.workspace.access import require_write_access
@@ -60,6 +61,25 @@ def validator_create_template(problem: str, user: Annotated[str, Depends(require
     except HTTPException as exc:
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/validator', status_code=303, message=msg)
+
+def validator_rename_source(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    old_path: str = Form(...),
+    new_path: str = Form(...),
+):
+    return rename_component_source(
+        problem=problem,
+        user=user,
+        old_path=old_path,
+        new_path=new_path,
+        folder='validators',
+        default_filename='validator.cpp',
+        component_label='validator',
+        audit_event='validator.rename_source',
+        redirect_url_for_path=lambda _path: f'/problems/{problem}/validator',
+        config_key='validator_source',
+    )
 
 def validator_save_source(
     problem: str,
@@ -118,7 +138,6 @@ def validator_save_source(
             return json_redirect_response(redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)
-
 
 
 

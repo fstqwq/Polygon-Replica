@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 from urllib.parse import quote_plus
 
 from fastapi import HTTPException, Request
@@ -9,8 +10,17 @@ from fastapi.responses import RedirectResponse
 from app.impl.auth.session import has_sudo_session
 from app.impl.auth.shared import redirect_response, safe_next_path
 from app.impl.runtime.config import config
+from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context import global_user_ctx
+from app.impl.workspace.context_operation import (
+    audit,
+    generator_sources_from_build_cfg,
+    read_build_config,
+    write_build_config,
+)
+from app.impl.workspace.context_ui import page_ctx
 from app.main_util import normalize_component_source_path, normalize_workspace_rel_path
+from app.service.platform.workspace_path import safe_workspace_path
 
 _C = config.constants
 _BINARY_SNIFF_BYTES = 8192
@@ -43,6 +53,87 @@ def _normalize_component_create_path(raw: str | None, folder: str, default_filen
     if normalized and (not normalized.startswith(expected_prefix)):
         normalized = f"{folder}/{normalized}"
     return normalize_component_source_path(normalized, folder, default_filename)
+
+
+def _normalize_component_rename_target(raw: str | None, folder: str, default_filename: str, component_label: str) -> str:
+    normalized = normalize_workspace_rel_path(raw)
+    if not normalized:
+        raise ValueError(f"new {component_label} source is required")
+    expected_prefix = f"{folder}/"
+    if not normalized.startswith(expected_prefix):
+        normalized = f"{folder}/{normalized}"
+    return normalize_component_source_path(normalized, folder, default_filename)
+
+
+def _normalize_component_rename_source(raw: str | None, folder: str, default_filename: str, component_label: str) -> str:
+    normalized = normalize_workspace_rel_path(raw)
+    if not normalized:
+        raise ValueError(f"{component_label} source is required")
+    return normalize_component_source_path(normalized, folder, default_filename)
+
+
+def rename_component_source(
+    *,
+    problem: str,
+    user: str,
+    old_path: str,
+    new_path: str,
+    folder: str,
+    default_filename: str,
+    component_label: str,
+    audit_event: str,
+    redirect_url_for_path: Callable[[str], str],
+    config_key: str = "",
+    ctx: dict | None = None,
+) -> RedirectResponse:
+    source_for_redirect = f"{folder}/{default_filename}"
+    active_ctx = ctx
+    if active_ctx is None:
+        active_ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(active_ctx)
+    workspace = Path(active_ctx["workspace"]["path"])
+    msg = f"{component_label} source renamed"
+    try:
+        old_source = _normalize_component_rename_source(old_path, folder, default_filename, component_label)
+        new_source = _normalize_component_rename_target(new_path, folder, default_filename, component_label)
+        source_for_redirect = old_source
+        if old_source == new_source:
+            msg = f"{component_label} source rename skipped"
+        else:
+            with config.workspace_service.workspace_lock(workspace):
+                old_abs = safe_workspace_path(workspace, old_source)
+                if old_abs.is_symlink() or (not old_abs.exists()) or (not old_abs.is_file()):
+                    raise ValueError(f"{component_label} source does not exist")
+                new_abs = safe_workspace_path(workspace, new_source)
+                if new_abs.exists():
+                    raise ValueError("destination source already exists")
+                if new_abs.parent.exists() and (not new_abs.parent.is_dir()):
+                    raise ValueError("destination parent is not a directory")
+                config.git_service.rename_path(workspace, old_source, new_source)
+                build_cfg, cfg_path = read_build_config(workspace)
+                if config_key == "generator_sources":
+                    generator_sources = generator_sources_from_build_cfg(build_cfg)
+                    if old_source in generator_sources:
+                        build_cfg["generator_sources"] = [
+                            new_source if source == old_source else source
+                            for source in generator_sources
+                        ]
+                        write_build_config(cfg_path, build_cfg)
+                elif config_key:
+                    build_cfg[config_key] = new_source
+                    write_build_config(cfg_path, build_cfg)
+            source_for_redirect = new_source
+            audit(
+                active_ctx["user"]["id"],
+                active_ctx["problem"]["id"],
+                audit_event,
+                {"old": old_source, "new": new_source},
+            )
+    except (ValueError, OSError) as exc:
+        msg = str(exc)
+    except HTTPException as exc:
+        msg = str(exc.detail)
+    return redirect_response(redirect_url_for_path(source_for_redirect), status_code=303, message=msg)
 
 
 def _settings_user_ctx(user: str) -> dict:

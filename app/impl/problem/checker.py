@@ -9,6 +9,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
+from app.impl.problem.shared import rename_component_source
 from app.impl.workspace.context_operation import audit, read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
 from app.impl.workspace.context_component_status import checker_status_context
 from app.impl.workspace.access import require_write_access
@@ -121,6 +122,29 @@ def checker_create_template(problem: str, user: Annotated[str, Depends(require_s
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/checker', status_code=303, message=msg)
 
+def checker_rename_source(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    old_path: str = Form(...),
+    new_path: str = Form(...),
+):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    if ctx.get('problem_mode') == 'interactive':
+        return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
+    return rename_component_source(
+        problem=problem,
+        user=user,
+        old_path=old_path,
+        new_path=new_path,
+        folder='checkers',
+        default_filename='checker.cpp',
+        component_label='checker',
+        audit_event='checker.rename_source',
+        redirect_url_for_path=lambda _path: f'/problems/{problem}/checker',
+        config_key='checker_source',
+        ctx=ctx,
+    )
+
 def checker_save_source(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
@@ -180,7 +204,6 @@ def checker_save_source(
             return json_redirect_response(redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)
-
 
 
 

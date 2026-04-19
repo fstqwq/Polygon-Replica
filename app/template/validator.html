@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_component_forms.html" import create_template_form, source_editor_form %}
+{% from "_component_forms.html" import create_template_form, rename_source_form, source_editor_form %}
 {% block content %}
 <h1 class="page-title">Validator</h1>
 {% include "_flash_message.html" %}
@@ -8,6 +8,11 @@
     <h2>Validator Editor</h2>
     <p><strong>{{ "File path" if validator_status.repo_source_exists else "New file" }}:</strong> <code>{{ repo_source }}</code></p>
     {% if validator_status.repo_source_exists %}
+    {{ rename_source_form(
+      "/problems/" ~ ctx.problem.slug ~ "/validator/rename-source",
+      repo_source,
+      "validator-rename-path"
+    ) }}
     {{ source_editor_form(
       "/problems/" ~ ctx.problem.slug ~ "/validator/save-source",
       repo_source,

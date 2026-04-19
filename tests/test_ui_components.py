@@ -12,16 +12,19 @@ from .ui_support import (
     _request,
     _request_with_cookie,
     checker_page,
+    checker_rename_source,
     checker_save_source,
     checker_set_standard,
     checker_view_standard,
     files_save,
     general_page,
     generator_create_template,
+    generator_rename_source,
     generator_save_source,
     generators_page,
     interactor_create_template,
     interactor_page,
+    interactor_rename_source,
     interactor_save_source,
     json,
     quote_plus,
@@ -36,6 +39,7 @@ from .ui_support import (
     uuid,
     validator_create_template,
     validator_page,
+    validator_rename_source,
     validator_save_source,
     workspace_service,
 )
@@ -157,6 +161,38 @@ class TestUIComponents(UIBaseSuite):
         self.assertNotIn('aria-label="standard checker help"', after_html)
         self.assertIn('<code>checkers/fcmp.cpp</code> <span class="muted">(matches <code>std::fcmp.cpp</code>)</span>', after_html)
         self.assertRegex(after_html, r'data-page="checker"[\s\S]*?>\s*std::fcmp\.cpp\s*</span>')
+
+    def test_checker_page_warns_when_standard_checker_name_content_differs(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        rel = "checkers/wcmp.cpp"
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text("// custom checker with a standard name\n", encoding="utf-8")
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps({"checker_source": rel}, indent=2) + "\n", encoding="utf-8")
+
+        resp = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("File name matches std::wcmp.cpp, but content differs.", html)
+        self.assertNotIn("(matches <code>std::wcmp.cpp</code>)", html)
+
+    def test_checker_page_does_not_warn_when_custom_name_matches_standard_content(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        from app.service.verification.standard_checker import copy_standard_checker
+
+        standard_rel = copy_standard_checker("wcmp.cpp", ws)
+        custom_rel = "checkers/custom.cpp"
+        (ws / custom_rel).write_bytes((ws / standard_rel).read_bytes())
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps({"checker_source": custom_rel}, indent=2) + "\n", encoding="utf-8")
+
+        resp = checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user)
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn('<code>checkers/custom.cpp</code> <span class="muted">(matches <code>std::wcmp.cpp</code>)</span>', html)
+        self.assertNotIn("but content differs", html)
 
     def test_checker_page_supports_source_save_without_files_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -294,6 +330,101 @@ class TestUIComponents(UIBaseSuite):
         list_html = list_page.body.decode("utf-8", errors="replace")
         self.assertIn(rel, list_html)
         self.assertIn(rel_second, list_html)
+
+    def test_component_source_pages_include_rename_shortcuts(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        paths = {
+            "checker": "checkers/checker.cpp",
+            "validator": "validators/validator.cpp",
+            "interactor": "interactors/interactor.cpp",
+            "generator": "generators/generator.cpp",
+        }
+        for rel in paths.values():
+            (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+            (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "checker_source": paths["checker"],
+                    "validator_source": paths["validator"],
+                    "interactor_source": paths["interactor"],
+                    "generator_sources": [paths["generator"]],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        rendered = [
+            checker_page(_request(f"/problems/{self.problem}/checker"), self.problem, self.user).body.decode("utf-8", errors="replace"),
+            validator_page(_request(f"/problems/{self.problem}/validator"), self.problem, self.user).body.decode("utf-8", errors="replace"),
+            interactor_page(_request(f"/problems/{self.problem}/interactor"), self.problem, self.user).body.decode("utf-8", errors="replace"),
+            generators_page(_request(f"/problems/{self.problem}/generators"), self.problem, self.user).body.decode("utf-8", errors="replace"),
+        ]
+
+        for html, endpoint, rel in zip(rendered, ["checker", "validator", "interactor", "generators"], paths.values()):
+            self.assertIn(f'action="/problems/{self.problem}/{endpoint}/rename-source"', html)
+            self.assertIn(f'name="old_path" value="{rel}"', html)
+            self.assertIn(f'name="new_path" value="{rel}"', html)
+
+    def test_component_source_rename_updates_files_and_build_config(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        old_paths = {
+            "checker": "checkers/old_checker.cpp",
+            "validator": "validators/old_validator.cpp",
+            "interactor": "interactors/old_interactor.cpp",
+            "generator": "generators/old_generator.cpp",
+        }
+        for rel in old_paths.values():
+            (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+            (ws / rel).write_text(f"// {rel}\n", encoding="utf-8")
+        other_generator = "generators/other.cpp"
+        (ws / other_generator).write_text("// other generator\n", encoding="utf-8")
+        cfg_path = ws / "config" / "build.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "checker_source": old_paths["checker"],
+                    "validator_source": old_paths["validator"],
+                    "interactor_source": old_paths["interactor"],
+                    "generator_sources": [old_paths["generator"], other_generator],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        responses = [
+            checker_rename_source(problem=self.problem, user=self.user, old_path=old_paths["checker"], new_path="new_checker.cpp"),
+            validator_rename_source(problem=self.problem, user=self.user, old_path=old_paths["validator"], new_path="new_validator.cpp"),
+            interactor_rename_source(problem=self.problem, user=self.user, old_path=old_paths["interactor"], new_path="new_interactor.cpp"),
+            generator_rename_source(problem=self.problem, user=self.user, old_path=old_paths["generator"], new_path="new_generator.cpp"),
+        ]
+        for response in responses:
+            self.assertEqual(response.status_code, 303)
+
+        new_paths = {
+            "checker": "checkers/new_checker.cpp",
+            "validator": "validators/new_validator.cpp",
+            "interactor": "interactors/new_interactor.cpp",
+            "generator": "generators/new_generator.cpp",
+        }
+        for rel in old_paths.values():
+            self.assertFalse((ws / rel).exists())
+        for rel in new_paths.values():
+            self.assertTrue((ws / rel).exists())
+
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg.get("checker_source"), new_paths["checker"])
+        self.assertEqual(cfg.get("validator_source"), new_paths["validator"])
+        self.assertEqual(cfg.get("interactor_source"), new_paths["interactor"])
+        self.assertEqual([str(x) for x in cfg.get("generator_sources", [])], [new_paths["generator"], other_generator])
+        self.assertIn(f"/problems/{self.problem}/generators?path=generators%2Fnew_generator.cpp", responses[-1].headers.get("location", ""))
 
     def test_generator_save_source_compile_check_failure_does_not_persist_source_or_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))

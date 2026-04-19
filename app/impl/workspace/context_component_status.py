@@ -213,24 +213,36 @@ def checker_status_context(workspace: Path) -> dict:
     build_cfg, _ = read_build_config(workspace)
     repo_source, repo_exists = _component_repo_source_from_build_cfg(workspace, build_cfg, 'checker_source', 'checkers', 'checker.cpp')
     standard_name = ''
+    expected_standard_name = ''
+    standard_warning = ''
     if repo_exists:
-        from app.service.verification.standard_checker import detect_standard_checker
+        from app.service.verification.standard_checker import detect_standard_checker, standard_checker_hash_map
         from app.service.platform.workspace_path import safe_workspace_path
         try:
             abs_path = safe_workspace_path(workspace, repo_source)
             detected = detect_standard_checker(abs_path)
             if detected:
                 standard_name = f'std::{detected}'
+            standard_filenames = set(standard_checker_hash_map().values())
+            repo_filename = Path(repo_source).name
+            if repo_filename in standard_filenames:
+                expected_standard_name = f'std::{repo_filename}'
+            if expected_standard_name and standard_name != expected_standard_name:
+                if standard_name:
+                    standard_warning = f'File name matches {expected_standard_name}, but content matches {standard_name}.'
+                else:
+                    standard_warning = f'File name matches {expected_standard_name}, but content differs.'
         except Exception:
             pass
     return {
         'mode': 'repository' if repo_exists else 'missing',
         'display': _source_basename_label(repo_source) if repo_exists else 'missing',
         'standard_checker': standard_name,
+        'standard_expected_checker': expected_standard_name,
+        'standard_warning': standard_warning,
         'standard_valid': True,
         'repo_source': repo_source,
         'repo_source_exists': bool(repo_exists),
     }
-
 
 

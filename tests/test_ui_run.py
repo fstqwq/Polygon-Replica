@@ -9,8 +9,6 @@ import os
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import HTTPException
-
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.signature import statement_sources_signature
 
@@ -4388,7 +4386,7 @@ class TestUIRun(UIBaseSuite):
             summary_extra={
                 "sanity_status": "failed",
                 "sanity_checked_count": 1,
-                "sanity_checks": ["custom_sample_output"],
+                "sanity_checks": ["empty_output_stability", "unicode_output_stability", "custom_sample_output"],
                 "validation_status": "failed",
                 "validated_count": 1,
                 "failed_step": "sanity",
@@ -4410,6 +4408,8 @@ class TestUIRun(UIBaseSuite):
         self.assertIn('id="verification-sanity-popup"', html)
         self.assertIn("sanity_status: failed", html)
         self.assertIn("sanity_checks:", html)
+        self.assertIn("- empty_output_stability", html)
+        self.assertIn("- unicode_output_stability", html)
         self.assertIn("- custom_sample_output", html)
         self.assertIn("failed_check: custom_sample_output", html)
         self.assertIn("failed_test: 003.in", html)
