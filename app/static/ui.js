@@ -1076,6 +1076,17 @@
     });
   }
 
+  function initVerificationCellLinks() {
+    document.querySelectorAll(".verification-detail-table td, .verification-detail-table th").forEach(function (cell) {
+      var link = cell.querySelector(":scope > a[href], :scope > [data-popup-open]");
+      if (!link) return;
+      cell.addEventListener("click", function (ev) {
+        if (ev.target && ev.target.closest && ev.target.closest("a, button, input, select, textarea, label")) return;
+        link.click();
+      });
+    });
+  }
+
   function initLifecycleTabs() {
     var groups = document.querySelectorAll("[data-lifecycle-tabs='1']");
     if (!groups.length) return;
@@ -1451,12 +1462,22 @@
       }, 0);
     }
 
+    function openFromTrigger(opener, ev) {
+      if (ev) {
+        ev.preventDefault();
+      }
+      var overlay = getOverlayById(opener.getAttribute("data-popup-open"));
+      if (!overlay) return;
+      openOverlay(overlay, opener);
+    }
+
     openers.forEach(function (opener) {
       opener.addEventListener("click", function (ev) {
-        ev.preventDefault();
-        var overlay = getOverlayById(opener.getAttribute("data-popup-open"));
-        if (!overlay) return;
-        openOverlay(overlay, opener);
+        openFromTrigger(opener, ev);
+      });
+      opener.addEventListener("keydown", function (ev) {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        openFromTrigger(opener, ev);
       });
     });
 
@@ -2878,6 +2899,7 @@
     initDataTooltips();
     initNetworkEstimateProfile();
     initRunDetailsToggle();
+    initVerificationCellLinks();
     initLifecycleTabs();
     initRunExecuteSelectors();
     initTestsSampleForms();

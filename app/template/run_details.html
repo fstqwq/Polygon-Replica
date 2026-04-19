@@ -33,7 +33,7 @@
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 
 <section class="verification-header-section">
-  {% if detail_status or detail_task_counts or detail_running_tasks or detail_fail_flag or detail_sanity.available %}
+  {% if detail_status or detail_task_counts or detail_running_tasks or detail_fail_flag %}
   <div class="preview-card verification-task-status-card">
     <div class="preview-head verification-task-status-head">
       <div class="verification-task-status-title">
@@ -51,21 +51,6 @@
     </div>
     <div class="verification-task-status-grid{% if detail_running_tasks or detail_running %} verification-task-status-grid-split{% endif %}">
       <div class="verification-task-status-main">
-        {% if detail_sanity.available %}
-        <div class="verification-task-status-secondary">
-          <strong>San check</strong>
-          {% if detail_sanity.status == "passed" %}
-          <span class="verification-task-status-state ok">{{ detail_sanity.status }}</span>
-          {% elif detail_sanity.status == "failed" %}
-          <span class="verification-task-status-state danger">{{ detail_sanity.status }}</span>
-          {% elif detail_sanity.status in ["running", "pending"] %}
-          <span class="verification-task-status-state info">{{ detail_sanity.status }}</span>
-          {% else %}
-          <span class="verification-task-status-state">{{ detail_sanity.status }}</span>
-          {% endif %}
-          <a href="#verification-sanity-popup" class="linkish verification-task-status-link" data-popup-open="verification-sanity-popup">Details</a>
-        </div>
-        {% endif %}
         {% if detail_fail_flag and detail_status == "failed" %}
         <p class="verification-task-fail">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
         {% elif detail_fail_flag and detail_status == "running" %}
@@ -117,20 +102,44 @@
       </colgroup>
       <thead>
         <tr>
+          {% if detail_sanity.available %}
+          <th
+            class="verification-detail-corner-status-cell verification-detail-sanity-cell"
+            data-popup-open="verification-sanity-popup"
+            role="button"
+            tabindex="0"
+            title="Open sanity checks"
+          >
+            {% set sanity_status = detail_sanity.status or 'no' %}
+            <span class="stat-line stat-main">Sanity</span>
+            {% if sanity_status == "passed" %}
+            <span class="stat-line stat-sub verification-detail-sanity-state ok">{{ sanity_status }}</span>
+            {% elif sanity_status == "failed" %}
+            <span class="stat-line stat-sub verification-detail-sanity-state danger">{{ sanity_status }}</span>
+            {% elif sanity_status in ["running", "pending"] %}
+            <span class="stat-line stat-sub verification-detail-sanity-state info">{{ sanity_status }}</span>
+            {% elif sanity_status in ["skipped", "none", "unknown", "no"] %}
+            <span class="stat-line stat-sub verification-detail-sanity-state muted">{{ sanity_status }}</span>
+            {% else %}
+            <span class="stat-line stat-sub verification-detail-sanity-state">{{ sanity_status }}</span>
+            {% endif %}
+          </th>
+          {% else %}
           <th class="verification-detail-corner-status-cell">
-            {% set corner_status = detail_status or 'unknown' %}
+            {% set corner_status = detail_status or 'no' %}
             {% if corner_status == "ok" %}
             <span class="verification-detail-corner-status ok">{{ corner_status }}</span>
             {% elif corner_status == "failed" %}
             <span class="verification-detail-corner-status danger">{{ corner_status }}</span>
             {% elif corner_status in ["running", "queued", "pending"] %}
             <span class="verification-detail-corner-status info">{{ corner_status }}</span>
-            {% elif corner_status in ["cancelled", "skipped", "none", "unknown"] %}
+            {% elif corner_status in ["cancelled", "skipped", "none", "unknown", "no"] %}
             <span class="verification-detail-corner-status muted">{{ corner_status }}</span>
             {% else %}
             <span class="verification-detail-corner-status">{{ corner_status }}</span>
             {% endif %}
           </th>
+          {% endif %}
           {% for col in detail_columns %}
           <th class="{{ 'tone-fail' if col.expected_mismatch else '' }}">
             {% if col.source_href %}
@@ -160,7 +169,7 @@
       {% for row in detail_rows %}
       <tr>
         {% set test_cell = row.test_cell if row.test_cell is defined else {} %}
-        <td class="vcell tcell tone-{{ test_cell.kind or 'neutral' }}" {% if test_cell.detail %}title="{{ test_cell.detail }}"{% elif row.test_name %}title="{{ row.test_name }}"{% endif %}>
+        <td class="tcell tone-{{ test_cell.kind or 'neutral' }}" {% if test_cell.detail %}title="{{ test_cell.detail }}"{% elif row.test_name %}title="{{ row.test_name }}"{% endif %}>
           {% if test_cell.short %}
           <span class="vcode">{{ test_cell.short }}</span>
           {% if test_cell.meta %}<span class="vmeta">{{ test_cell.meta }}</span>{% endif %}
@@ -224,7 +233,7 @@
   </div>
 </section>
 {% if detail_sanity.available %}
-{% call ui_popup('verification-sanity-popup', 'San checks', dialog_class='verification-sanity-popup') %}
+{% call ui_popup('verification-sanity-popup', 'Sanity checks', dialog_class='verification-sanity-popup') %}
       <pre class="verification-sanity-dump">{{ detail_sanity.dump_text }}</pre>
 {% endcall %}
 {% endif %}
@@ -319,7 +328,7 @@
   {% endif %}
 </section>
 {% if detail_sanity.available %}
-{% call ui_popup('verification-sanity-popup', 'San checks', dialog_class='verification-sanity-popup') %}
+{% call ui_popup('verification-sanity-popup', 'Sanity checks', dialog_class='verification-sanity-popup') %}
       <pre class="verification-sanity-dump">{{ detail_sanity.dump_text }}</pre>
 {% endcall %}
 {% endif %}

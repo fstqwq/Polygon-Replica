@@ -4158,7 +4158,7 @@ class TestUIRun(UIBaseSuite):
         page_html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             page_html,
-            r'(?s)<td class="vcell tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in">001\.in</a>',
+            r'(?s)<td class="tcell tone-fail"[^>]*>\s*<a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="001\.in">001\.in</a>',
         )
 
         detail = run_details_test_fragment(
@@ -4368,11 +4368,14 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("accepted solution failed on 001.in", detail_html)
 
     def test_run_details_shows_sanity_popup_with_yaml_dump(self) -> None:
-        workspace_service.ensure_workspace("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = f"ver-sanity-popup-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-sanity-popup-{uuid.uuid4().hex[:8]}"
         self._insert_verification_row(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -4382,7 +4385,20 @@ class TestUIRun(UIBaseSuite):
             status="failed",
             created_at="2026-04-17T00:00:00Z",
             finished_at="2026-04-17T00:00:02Z",
-            runs=[],
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "failed",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "tests": [{"test": "003.in", "verdict": "WA", "feedback_files": []}],
+                        "tests_total": 1,
+                    },
+                }
+            ],
             summary_extra={
                 "sanity_status": "failed",
                 "sanity_checked_count": 1,
@@ -4395,6 +4411,27 @@ class TestUIRun(UIBaseSuite):
                 "error": "validator reported mismatch",
             },
         )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-sanity-popup-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "003.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "WA",
+                    "runtime_sec": 0.01,
+                    "cpu_sec": 0.01,
+                    "wall_sec": 0.01,
+                    "memory_kb": 1,
+                }
+            ],
+            edges=[],
+        )
 
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
@@ -4403,7 +4440,10 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("San check", html)
+        self.assertIn("Sanity", html)
+        self.assertIn("Sanity checks", html)
+        self.assertNotIn("San check", html)
+        self.assertIn("verification-detail-sanity-cell", html)
         self.assertIn('data-popup-open="verification-sanity-popup"', html)
         self.assertIn('id="verification-sanity-popup"', html)
         self.assertIn("sanity_status: failed", html)
