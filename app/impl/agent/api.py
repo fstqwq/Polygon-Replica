@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 from pathlib import Path
@@ -18,14 +17,9 @@ from app.impl.workspace.context_operation import audit, run_solution_options_con
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
-from app.main_util import normalize_workspace_rel_path, read_upload_bytes_limited, safe_workspace_path, write_upload_file_limited
-from app.service.agent.workspace_sync import (
-    apply_agent_workspace_zip,
-    build_agent_workspace_snapshot_zip,
-    compare_agent_workspace_zip,
-    validate_agent_workspace_rel_path,
-)
+from app.main_util import read_upload_bytes_limited
 from app.service.platform.git_process import run_git
+from app.service.workspace.mutation import WorkspaceMutationConflict
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
 
@@ -651,23 +645,14 @@ async def agent_workspace_files(request: Request):
     workspace = Path(str(_agent_problem_ctx(identity)["workspace"]["path"])).resolve()
     rel = str(request.query_params.get("path") or "").strip()
     try:
-        normalized = normalize_workspace_rel_path(rel)
-        if normalized:
-            validate_agent_workspace_rel_path(normalized)
-        entries, truncated = config.git_service.list_files_capped(workspace, normalized or ".", limit=config.constants.WORKSPACE_FILE_LIST_LIMIT)
-        items: list[dict[str, object]] = []
-        for entry in entries:
-            try:
-                validate_agent_workspace_rel_path(entry)
-            except ValueError:
-                continue
-            target = safe_workspace_path(workspace, entry)
-            items.append({
-                "path": entry,
-                "is_dir": bool(target.exists() and target.is_dir()),
-                "is_file": bool(target.exists() and target.is_file()),
-            })
-        return _json_body({"base_path": normalized, "entries": items, "truncated": truncated})
+        listed = config.workspace_file_service.list_entries(
+            workspace,
+            rel,
+            limit=config.constants.WORKSPACE_FILE_LIST_LIMIT,
+            require_allowed_root=True,
+        )
+        items = [{"path": item.path, "is_dir": item.is_dir, "is_file": item.is_file} for item in listed.entries]
+        return _json_body({"base_path": listed.base_path, "entries": items, "truncated": listed.truncated})
     except ValueError as exc:
         return json_error_response(str(exc), status_code=400)
     except HTTPException as exc:
@@ -701,9 +686,12 @@ async def agent_workspace_snapshot(request: Request):
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            status = config.workspace_service.read_workspace_status(workspace)
-            payload = build_agent_workspace_snapshot_zip(workspace)
+        result = config.workspace_mutation_service.read_locked(
+            workspace,
+            lambda: config.workspace_archive_service.build_snapshot_zip(workspace),
+        )
+        status = result.status
+        payload = result.value
         head_commit = str(status.get("head_commit") or "")
         dirty = bool(status.get("dirty"))
         return Response(
@@ -726,9 +714,12 @@ async def agent_workspace_compare(request: Request, archive: UploadFile = File(.
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
         archive_bytes = await read_upload_bytes_limited(archive, label="workspace archive")
-        with config.workspace_service.workspace_lock(workspace):
-            status = config.workspace_service.read_workspace_status(workspace)
-            diff = compare_agent_workspace_zip(workspace, archive_bytes)
+        result = config.workspace_mutation_service.read_locked(
+            workspace,
+            lambda: config.workspace_archive_service.compare_zip(workspace, archive_bytes),
+        )
+        status = result.status
+        diff = result.value
         payload = {
             "problem": identity.problem_slug,
             "head_commit": str(status.get("head_commit") or ""),
@@ -751,13 +742,16 @@ async def agent_workspace_apply(
     expected_head = str(base_head_commit or "").strip()
     try:
         archive_bytes = await read_upload_bytes_limited(archive, label="workspace archive")
-        with config.workspace_service.workspace_lock(workspace):
+        def apply_archive():
             status_before = config.workspace_service.read_workspace_status(workspace)
             current_head = str(status_before.get("head_commit") or "")
             if expected_head and expected_head != current_head:
-                return json_error_response("workspace head changed", status_code=409)
-            diff = apply_agent_workspace_zip(workspace, archive_bytes)
-            status_after = config.workspace_service.refresh_workspace_status_by_path(workspace) or config.workspace_service.read_workspace_status(workspace)
+                raise WorkspaceMutationConflict("workspace head changed")
+            return config.workspace_archive_service.apply_zip(workspace, archive_bytes)
+
+        result = config.workspace_mutation_service.write_locked(workspace, apply_archive)
+        diff = result.value
+        status_after = result.status
         audit(
             int(identity.user_id),
             int(identity.problem_id),
@@ -777,6 +771,8 @@ async def agent_workspace_apply(
             **diff.as_payload(),
         }
         return _json_body(payload)
+    except WorkspaceMutationConflict as exc:
+        return json_error_response(str(exc), status_code=409)
     except ValueError as exc:
         return json_error_response(str(exc), status_code=400)
 
@@ -786,37 +782,23 @@ async def agent_workspace_file(request: Request):
     workspace = Path(str(_agent_problem_ctx(identity)["workspace"]["path"])).resolve()
     rel = str(request.query_params.get("path") or "").strip()
     try:
-        normalized = normalize_workspace_rel_path(rel)
-        if not normalized:
-            return json_error_response("path is required", status_code=400)
-        validate_agent_workspace_rel_path(normalized)
-        target = safe_workspace_path(workspace, normalized)
-        if not target.exists() or target.is_symlink():
-            return json_error_response("file not found", status_code=404)
-        if target.is_dir():
-            return _json_body({"path": normalized, "is_dir": True})
-        raw = target.read_bytes()
-        media_type = "application/octet-stream"
-        content_text = ""
-        content_b64 = ""
-        try:
-            content_text = raw.decode("utf-8")
-            media_type = "text/plain; charset=utf-8"
-        except Exception:
-            content_b64 = base64.b64encode(raw).decode("ascii")
+        file_payload = config.workspace_file_service.file_payload(workspace, rel, require_allowed_root=True)
         payload: dict[str, object] = {
-            "path": normalized,
-            "is_dir": False,
-            "size_bytes": len(raw),
-            "media_type": media_type,
+            "path": file_payload.path,
+            "is_dir": file_payload.is_dir,
         }
-        if content_b64:
-            payload["encoding"] = "base64"
-            payload["content"] = content_b64
-        else:
-            payload["encoding"] = "utf-8"
-            payload["content"] = content_text
+        if not file_payload.is_dir:
+            payload.update(
+                {
+                    "size_bytes": file_payload.size_bytes,
+                    "media_type": file_payload.media_type,
+                    "encoding": file_payload.encoding,
+                    "content": file_payload.content,
+                }
+            )
         return _json_body(payload)
+    except FileNotFoundError as exc:
+        return json_error_response(str(exc), status_code=404)
     except ValueError as exc:
         return json_error_response(str(exc), status_code=400)
     except HTTPException as exc:
@@ -832,18 +814,7 @@ async def agent_workspace_upload(request: Request, file: UploadFile = File(...))
     if not rel:
         return json_error_response("path is required", status_code=400)
     try:
-        normalized = normalize_workspace_rel_path(rel)
-        if not normalized:
-            return json_error_response("path is required", status_code=400)
-        validate_agent_workspace_rel_path(normalized)
-        total_bytes = 0
-        with config.workspace_service.workspace_lock(workspace):
-            target = safe_workspace_path(workspace, normalized)
-            if target.exists() and target.is_dir():
-                return json_error_response("upload target must be a file path", status_code=400)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("wb") as handle:
-                total_bytes = await write_upload_file_limited(file, handle)
+        normalized, total_bytes = await config.workspace_file_service.upload_file(workspace, rel, file, require_allowed_root=True)
         audit(int(identity.user_id), int(identity.problem_id), "agent.workspace.upload", {"path": normalized, "bytes": total_bytes})
         return _json_body({"ok": True, "path": normalized, "bytes": total_bytes})
     except HTTPException as exc:
@@ -857,12 +828,7 @@ async def agent_workspace_delete(request: Request, path: str):
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
-        normalized = normalize_workspace_rel_path(path)
-        if not normalized:
-            return json_error_response("path is required", status_code=400)
-        validate_agent_workspace_rel_path(normalized)
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.delete_path(workspace, normalized)
+        normalized = config.workspace_file_service.delete_path(workspace, path, require_allowed_root=True)
         audit(int(identity.user_id), int(identity.problem_id), "agent.workspace.delete", {"path": normalized})
         return _json_body({"ok": True, "path": normalized})
     except HTTPException as exc:

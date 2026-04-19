@@ -23,28 +23,8 @@ from app.main_util import normalize_component_source_path, normalize_workspace_r
 from app.service.platform.workspace_path import safe_workspace_path
 
 _C = config.constants
-_BINARY_SNIFF_BYTES = 8192
-
 MAIN_CORRECT_EXPECTED_VALUE = "main_correct"
 MAIN_CORRECT_EXPECTED_LABEL = "main correct solution (AC)"
-
-
-def _looks_like_binary_file(path: Path, sniff_bytes: int = _BINARY_SNIFF_BYTES) -> bool:
-    cap = max(1, int(sniff_bytes))
-    try:
-        with path.open("rb") as fh:
-            chunk = fh.read(cap)
-    except OSError:
-        return False
-    if not chunk:
-        return False
-    if b"\x00" in chunk:
-        return True
-    try:
-        chunk.decode("utf-8")
-    except UnicodeDecodeError:
-        return True
-    return False
 
 
 def _normalize_component_create_path(raw: str | None, folder: str, default_filename: str) -> str:

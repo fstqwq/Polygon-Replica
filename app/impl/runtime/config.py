@@ -23,6 +23,9 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.preview import PreviewService
 from app.service.platform.system_config import SystemConfigService
+from app.service.workspace.archive import WorkspaceArchiveService
+from app.service.workspace.files import WorkspaceFileService
+from app.service.workspace.mutation import WorkspaceMutationService
 from app.service.disk.auth_store import AuthStore
 from app.service.disk.runtime_state_store import RuntimeStateStore
 from app.service.runtime.state_service import RuntimeStateService
@@ -57,6 +60,9 @@ class RuntimeConfig:
     worker_queue_service: WorkerQueueService = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
     runtime_state_service: RuntimeStateService = field(init=False)
+    workspace_archive_service: WorkspaceArchiveService = field(init=False)
+    workspace_file_service: WorkspaceFileService = field(init=False)
+    workspace_mutation_service: WorkspaceMutationService = field(init=False)
     templates: Jinja2Templates = field(
         default_factory=lambda: Jinja2Templates(directory=str(RuntimeConfig.TEMPLATE_ROOT))
     )
@@ -118,6 +124,9 @@ class RuntimeConfig:
         self.agent_service = AgentService(self.db, self.workspace_service, constants=self.constants)
         self.contest_service = ContestService(self.db, self.settings)
         self.git_service = GitService()
+        self.workspace_archive_service = WorkspaceArchiveService()
+        self.workspace_file_service = WorkspaceFileService(self.git_service, self.workspace_service)
+        self.workspace_mutation_service = WorkspaceMutationService(self.workspace_service)
         self.fs_manager = FsManager(self.settings.cache_root, self.settings.artifacts_root)
         self.artifact_service = ArtifactService(self.settings.artifacts_root)
         self.tex_sandbox_backend = TexSandboxBackend()

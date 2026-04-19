@@ -1,9 +1,6 @@
 from __future__ import annotations
 from app.impl.auth.session import require_session_user
 
-import mimetypes
-import os
-import tempfile
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
@@ -13,12 +10,11 @@ from fastapi.responses import FileResponse
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
-from app.impl.problem.shared import _looks_like_binary_file
 from app.impl.workspace.context_operation import audit, build_line_focus_context, build_repo_browser_entries, default_files_selected_path, files_browse_query_tail, kind_for_path, parse_line_param, template_for_kind
 from app.impl.workspace.solution import ensure_solution_metadata_for_source
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
-from app.main_util import enforce_textarea_max_bytes, normalize_workspace_rel_path, safe_workspace_path, write_upload_file_limited
+from app.main_util import normalize_workspace_rel_path, safe_workspace_path
 
 _C = config.constants
 
@@ -53,26 +49,38 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     selected_is_pdf = False
     selected_media_type = ''
     auto_message = ''
-    files, files_truncated = config.git_service.list_files_capped(workspace, limit=_C.WORKSPACE_FILE_LIST_LIMIT)
+    files, files_truncated = config.workspace_file_service.list_paths(
+        workspace,
+        limit=_C.WORKSPACE_FILE_LIST_LIMIT,
+        require_allowed_root=False,
+    )
     default_selected = default_files_selected_path(workspace, files)
     if not selected:
         selected = default_selected
     try:
-        selected_abs = safe_workspace_path(workspace, selected)
-    except HTTPException:
+        selected = config.workspace_file_service.normalize_path(selected, require_allowed_root=False)
+        selected_view = config.workspace_file_service.file_view(
+            workspace,
+            selected,
+            char_limit=_C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+            require_allowed_root=False,
+        )
+    except (HTTPException, ValueError):
         selected = default_selected
-        selected_abs = safe_workspace_path(workspace, selected)
+        selected_view = config.workspace_file_service.file_view(
+            workspace,
+            selected,
+            char_limit=_C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+            require_allowed_root=False,
+        )
         auto_message = f'invalid path; opened {selected}'
-    if selected_abs.exists() and selected_abs.is_file():
-        selected_media_type = mimetypes.guess_type(selected)[0] or ''
-        selected_is_pdf = selected.lower().endswith('.pdf') or selected_media_type == 'application/pdf'
-        selected_is_binary = selected_is_pdf or _looks_like_binary_file(selected_abs)
-        if not selected_is_binary:
-            content, content_truncated = config.git_service.read_file_limited(workspace, selected, _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT)
-    elif selected_abs.exists() and selected_abs.is_dir():
-        selected_is_dir = True
-    else:
-        selected_missing = True
+    selected_missing = not selected_view.exists
+    selected_is_dir = selected_view.is_dir
+    selected_is_binary = selected_view.is_binary
+    selected_is_pdf = selected_view.is_pdf
+    selected_media_type = selected_view.media_type
+    content = selected_view.content
+    content_truncated = selected_view.content_truncated
     selected_template_kind = kind_for_path(selected)
     selected_parent = str(Path(selected).parent)
     if selected_parent in {'.', ''}:
@@ -101,10 +109,8 @@ def files_save(
     workspace = Path(ctx['workspace']['path'])
     msg = 'saved'
     try:
-        safe_content = enforce_textarea_max_bytes(content, label='file content')
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.write_file(workspace, path, safe_content)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.save', {'path': path})
+        saved_path = config.workspace_file_service.write_text(workspace, path, content, require_allowed_root=False)
+        audit(ctx['user']['id'], ctx['problem']['id'], 'files.save', {'path': saved_path})
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -124,9 +130,8 @@ def files_new(
     workspace = Path(ctx['workspace']['path'])
     msg = 'created'
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.write_file(workspace, path, '')
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.new', {'path': path})
+        created_path = config.workspace_file_service.create_empty(workspace, path, require_allowed_root=False)
+        audit(ctx['user']['id'], ctx['problem']['id'], 'files.new', {'path': created_path})
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -182,34 +187,18 @@ async def files_upload(
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
-    total_bytes = 0
-    tmp_path: Path | None = None
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            abs_path = safe_workspace_path(workspace, path)
-            if abs_path.exists() and abs_path.is_dir():
-                raise HTTPException(status_code=400, detail='upload target must be a file path')
-            abs_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(prefix=f'.upload-{abs_path.name}.', suffix='.tmp', dir=str(abs_path.parent))
-            tmp_path = Path(tmp_name)
-            try:
-                with os.fdopen(fd, 'wb') as out:
-                    total_bytes = await write_upload_file_limited(upload, out)
-                os.replace(tmp_path, abs_path)
-                tmp_path = None
-            except Exception:
-                if tmp_path is not None:
-                    tmp_path.unlink(missing_ok=True)
-                    tmp_path = None
-                raise
+        uploaded_path, total_bytes = await config.workspace_file_service.upload_file(
+            workspace,
+            path,
+            upload,
+            require_allowed_root=False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except OSError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    finally:
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
-    audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': path, 'bytes': total_bytes})
+    audit(ctx['user']['id'], ctx['problem']['id'], 'files.upload', {'path': uploaded_path, 'bytes': total_bytes})
     return redirect_response(
         _files_redirect_href(problem, user, path=path, browse_tail=files_browse_query_tail(dir)),
         status_code=303,
@@ -229,9 +218,13 @@ def files_rename(
     selected = new_path
     msg = 'renamed'
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.rename_path(workspace, old_path, new_path)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.rename', {'old': old_path, 'new': new_path})
+        old_path, selected = config.workspace_file_service.rename_path(
+            workspace,
+            old_path,
+            new_path,
+            require_allowed_root=False,
+        )
+        audit(ctx['user']['id'], ctx['problem']['id'], 'files.rename', {'old': old_path, 'new': selected})
     except (ValueError, OSError) as exc:
         selected = old_path
         msg = str(exc)
@@ -252,9 +245,8 @@ def files_delete(
     workspace = Path(ctx['workspace']['path'])
     msg = 'deleted'
     try:
-        with config.workspace_service.workspace_lock(workspace):
-            config.git_service.delete_path(workspace, path)
-        audit(ctx['user']['id'], ctx['problem']['id'], 'files.delete', {'path': path})
+        deleted_path = config.workspace_file_service.delete_path(workspace, path, require_allowed_root=False)
+        audit(ctx['user']['id'], ctx['problem']['id'], 'files.delete', {'path': deleted_path})
     except ValueError as exc:
         msg = str(exc)
     return redirect_response(
@@ -266,11 +258,13 @@ def files_delete(
 def files_download(problem: str, user: Annotated[str, Depends(require_session_user)], path: str):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     workspace = Path(ctx['workspace']['path'])
-    file_path = safe_workspace_path(workspace, path)
-    if not file_path.is_file():
+    try:
+        file_path = config.workspace_file_service.download_path(workspace, path, require_allowed_root=False)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail='file not found')
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return FileResponse(file_path, filename=file_path.name)
-
 
 
 

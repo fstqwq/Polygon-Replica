@@ -9,14 +9,13 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from app.main_util import UPLOAD_MAX_BYTES
-from app.service.platform.zip_extract import extract_zip_entry_to_path_limited
+import app.main_util as main_util
 from app.service.platform.workspace_path import (
     ALLOWED_WORKSPACE_ROOT_NAMES,
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
-    normalize_workspace_rel_path,
 )
+from app.service.platform.zip_extract import extract_zip_entry_to_path_limited
 
 
 @dataclass(frozen=True)
@@ -38,24 +37,12 @@ class WorkspaceDiff:
         }
 
 
-def normalize_agent_text_bytes(payload: bytes) -> tuple[bytes, bool]:
+def normalize_workspace_text_bytes(payload: bytes) -> tuple[bytes, bool]:
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError:
         return (payload, False)
     return (text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8"), True)
-
-
-def validate_agent_workspace_rel_path(raw: str) -> str:
-    normalized = normalize_workspace_rel_path(raw)
-    if not normalized:
-        raise ValueError("path is required")
-    rel_parts = PurePosixPath(normalized).parts
-    if is_hidden_workspace_path(rel_parts):
-        raise ValueError("hidden path is not allowed")
-    if not is_allowed_workspace_root_path(rel_parts):
-        raise ValueError("workspace path root is not allowed")
-    return normalized
 
 
 def _zipinfo_is_symlink(info: zipfile.ZipInfo) -> bool:
@@ -85,7 +72,7 @@ def _safe_workspace_files(root: Path) -> dict[str, bytes]:
         if not base.exists() or base.is_symlink():
             continue
         if base.is_file():
-            result[root_name] = normalize_agent_text_bytes(base.read_bytes())[0]
+            result[root_name] = normalize_workspace_text_bytes(base.read_bytes())[0]
             continue
         if not base.is_dir():
             continue
@@ -105,7 +92,7 @@ def _safe_workspace_files(root: Path) -> dict[str, bytes]:
                 if child.is_symlink() or is_hidden_workspace_path(rel_parts) or not child.is_file():
                     continue
                 rel = child.relative_to(root).as_posix()
-                result[rel] = normalize_agent_text_bytes(child.read_bytes())[0]
+                result[rel] = normalize_workspace_text_bytes(child.read_bytes())[0]
     return result
 
 
@@ -130,57 +117,6 @@ def _safe_workspace_dirs(root: Path) -> list[str]:
     return sorted(set(result))
 
 
-def build_agent_workspace_snapshot_zip(workspace: Path) -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for dirname in _safe_workspace_dirs(workspace):
-            archive.writestr(dirname, b"")
-        for rel, payload in sorted(_safe_workspace_files(workspace).items()):
-            archive.writestr(rel, payload)
-    return buffer.getvalue()
-
-
-def extract_agent_workspace_zip(payload: bytes, destination: Path) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
-    seen_files: set[str] = set()
-    seen_dirs: set[str] = set()
-    extracted_total = 0
-    try:
-        with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
-            for info in archive.infolist():
-                if _zipinfo_is_symlink(info):
-                    raise ValueError(f"zip symlink is not allowed: {info.filename}")
-                rel = _normalize_zip_entry_name(info.filename)
-                if not rel:
-                    continue
-                if info.is_dir():
-                    if rel in seen_files:
-                        raise ValueError(f"zip path conflict: {rel}")
-                    seen_dirs.add(rel)
-                    (destination / rel).mkdir(parents=True, exist_ok=True)
-                    continue
-                if rel in seen_files or rel in seen_dirs:
-                    raise ValueError(f"zip path conflict: {rel}")
-                seen_files.add(rel)
-                target = destination / rel
-                extracted_total += extract_zip_entry_to_path_limited(
-                    archive,
-                    info,
-                    target,
-                    total_before=extracted_total,
-                    max_file_bytes=UPLOAD_MAX_BYTES,
-                    max_total_bytes=UPLOAD_MAX_BYTES,
-                    display_name=rel,
-                    entry_too_large_prefix="workspace archive entry is too large",
-                    payload_too_large_prefix="workspace archive payload is too large at",
-                    normalize_utf8_newlines=True,
-                )
-    except OSError as exc:
-        raise ValueError("invalid workspace archive layout") from exc
-    except zipfile.BadZipFile as exc:
-        raise ValueError("workspace archive is not a valid zip") from exc
-
-
 def _compare_file_maps(remote: dict[str, bytes], local: dict[str, bytes]) -> WorkspaceDiff:
     remote_paths = set(remote)
     local_paths = set(local)
@@ -188,13 +124,6 @@ def _compare_file_maps(remote: dict[str, bytes], local: dict[str, bytes]) -> Wor
     deletes = sorted(remote_paths - local_paths)
     same = sorted(path for path in remote_paths & local_paths if remote[path] == local[path])
     return WorkspaceDiff(uploads=uploads, deletes=deletes, same=same)
-
-
-def compare_agent_workspace_zip(workspace: Path, payload: bytes) -> WorkspaceDiff:
-    with tempfile.TemporaryDirectory(prefix="polygon-agent-compare-") as temp_name:
-        local_root = Path(temp_name) / "local"
-        extract_agent_workspace_zip(payload, local_root)
-        return _compare_file_maps(_safe_workspace_files(workspace), _safe_workspace_files(local_root))
 
 
 def _copy_safe_workspace_tree(src: Path, dst: Path) -> None:
@@ -222,19 +151,76 @@ def _clear_safe_workspace_roots(workspace: Path) -> None:
             child.unlink()
 
 
-def apply_agent_workspace_zip(workspace: Path, payload: bytes) -> WorkspaceDiff:
-    with tempfile.TemporaryDirectory(prefix="polygon-agent-apply-") as temp_name:
-        temp_root = Path(temp_name)
-        local_root = temp_root / "local"
-        backup_root = temp_root / "backup"
-        extract_agent_workspace_zip(payload, local_root)
-        diff = _compare_file_maps(_safe_workspace_files(workspace), _safe_workspace_files(local_root))
-        _copy_safe_workspace_tree(workspace, backup_root)
+class WorkspaceArchiveService:
+    def build_snapshot_zip(self, workspace: Path) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for dirname in _safe_workspace_dirs(workspace):
+                archive.writestr(dirname, b"")
+            for rel, payload in sorted(_safe_workspace_files(workspace).items()):
+                archive.writestr(rel, payload)
+        return buffer.getvalue()
+
+    def extract_zip(self, payload: bytes, destination: Path, *, max_bytes: int | None = None) -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        seen_files: set[str] = set()
+        seen_dirs: set[str] = set()
+        extracted_total = 0
+        cap = main_util.UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
         try:
-            _clear_safe_workspace_roots(workspace)
-            _copy_safe_workspace_tree(local_root, workspace)
-        except Exception:
-            _clear_safe_workspace_roots(workspace)
-            _copy_safe_workspace_tree(backup_root, workspace)
-            raise
-        return diff
+            with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
+                for info in archive.infolist():
+                    if _zipinfo_is_symlink(info):
+                        raise ValueError(f"zip symlink is not allowed: {info.filename}")
+                    rel = _normalize_zip_entry_name(info.filename)
+                    if not rel:
+                        continue
+                    if info.is_dir():
+                        if rel in seen_files:
+                            raise ValueError(f"zip path conflict: {rel}")
+                        seen_dirs.add(rel)
+                        (destination / rel).mkdir(parents=True, exist_ok=True)
+                        continue
+                    if rel in seen_files or rel in seen_dirs:
+                        raise ValueError(f"zip path conflict: {rel}")
+                    seen_files.add(rel)
+                    target = destination / rel
+                    extracted_total += extract_zip_entry_to_path_limited(
+                        archive,
+                        info,
+                        target,
+                        total_before=extracted_total,
+                        max_file_bytes=cap,
+                        max_total_bytes=cap,
+                        display_name=rel,
+                        entry_too_large_prefix="workspace archive entry is too large",
+                        payload_too_large_prefix="workspace archive payload is too large at",
+                        normalize_utf8_newlines=True,
+                    )
+        except OSError as exc:
+            raise ValueError("invalid workspace archive layout") from exc
+        except zipfile.BadZipFile as exc:
+            raise ValueError("workspace archive is not a valid zip") from exc
+
+    def compare_zip(self, workspace: Path, payload: bytes, *, max_bytes: int | None = None) -> WorkspaceDiff:
+        with tempfile.TemporaryDirectory(prefix="polygon-workspace-compare-") as temp_name:
+            local_root = Path(temp_name) / "local"
+            self.extract_zip(payload, local_root, max_bytes=max_bytes)
+            return _compare_file_maps(_safe_workspace_files(workspace), _safe_workspace_files(local_root))
+
+    def apply_zip(self, workspace: Path, payload: bytes, *, max_bytes: int | None = None) -> WorkspaceDiff:
+        with tempfile.TemporaryDirectory(prefix="polygon-workspace-apply-") as temp_name:
+            temp_root = Path(temp_name)
+            local_root = temp_root / "local"
+            backup_root = temp_root / "backup"
+            self.extract_zip(payload, local_root, max_bytes=max_bytes)
+            diff = _compare_file_maps(_safe_workspace_files(workspace), _safe_workspace_files(local_root))
+            _copy_safe_workspace_tree(workspace, backup_root)
+            try:
+                _clear_safe_workspace_roots(workspace)
+                _copy_safe_workspace_tree(local_root, workspace)
+            except Exception:
+                _clear_safe_workspace_roots(workspace)
+                _copy_safe_workspace_tree(backup_root, workspace)
+                raise
+            return diff

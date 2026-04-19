@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import HTTPException
 
@@ -104,6 +104,28 @@ def normalize_workspace_rel_path(raw: str | None) -> str:
     if not parts:
         return ""
     return "/".join(parts)
+
+
+def validate_workspace_rel_path(
+    raw: str | None,
+    *,
+    allow_empty: bool = False,
+    require_allowed_root: bool = False,
+) -> str:
+    raw_text = str(raw or "").strip()
+    normalized = normalize_workspace_rel_path(raw)
+    if not normalized:
+        if raw_text:
+            raise ValueError("invalid path")
+        if allow_empty:
+            return ""
+        raise ValueError("path is required")
+    rel_parts = PurePosixPath(normalized).parts
+    if is_hidden_workspace_path(rel_parts):
+        raise ValueError("hidden path is not allowed")
+    if require_allowed_root and not is_allowed_workspace_root_path(rel_parts):
+        raise ValueError("workspace path root is not allowed")
+    return normalized
 
 
 def normalize_component_source_path(raw: str | None, folder: str, default_filename: str) -> str:
