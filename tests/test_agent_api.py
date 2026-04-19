@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -119,6 +121,22 @@ class TestAgentAPI(SmokeBase):
     @staticmethod
     def _bearer(raw_token: str) -> dict[str, str]:
         return {"authorization": f"Bearer {raw_token}"}
+
+    @staticmethod
+    def _workspace_zip(files: dict[str, bytes | str], dirs: list[str] | None = None) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for dirname in dirs or []:
+                archive.writestr(dirname.rstrip("/") + "/", b"")
+            for rel, payload in files.items():
+                data = payload.encode("utf-8") if isinstance(payload, str) else payload
+                archive.writestr(rel, data)
+        return buffer.getvalue()
+
+    @staticmethod
+    def _zip_entries(payload: bytes) -> dict[str, bytes]:
+        with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
+            return {name: archive.read(name) for name in archive.namelist() if not name.endswith("/")}
 
     def test_agent_pages_require_login_and_connect_enforces_same_origin(self) -> None:
         username = self.random_id("agent-ui")
@@ -429,7 +447,7 @@ class TestAgentAPI(SmokeBase):
             readonly_upload = client.post(
                 "/agent/v1/workspace/upload",
                 headers=self._bearer(readonly_token),
-                data={"path": "notes/readonly.txt"},
+                data={"path": "solutions/readonly.txt"},
                 files={"file": ("readonly.txt", b"blocked")},
             )
             self.assertEqual(readonly_upload.status_code, 403, readonly_upload.text)
@@ -444,19 +462,19 @@ class TestAgentAPI(SmokeBase):
             upload = client.post(
                 "/agent/v1/workspace/upload",
                 headers=self._bearer(workspace_token),
-                data={"path": "notes/agent.txt"},
+                data={"path": "solutions/agent.txt"},
                 files={"file": ("agent.txt", b"hello\r\nagent\r\n")},
             )
             self.assertEqual(upload.status_code, 200, upload.text)
-            self.assertTrue((workspace / "notes/agent.txt").exists())
-            self.assertEqual((workspace / "notes/agent.txt").read_bytes(), b"hello\r\nagent\r\n")
+            self.assertTrue((workspace / "solutions/agent.txt").exists())
+            self.assertEqual((workspace / "solutions/agent.txt").read_bytes(), b"hello\r\nagent\r\n")
             upload_status = workspace_service.read_workspace_status(workspace)
             upload_row = config.db.fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
             self.assertIsNotNone(upload_row)
             self.assertEqual(int(upload_row["dirty"] or 0), int(upload_status.get("dirty") or 0))
 
             hidden_root = workspace / ".env"
-            hidden_nested = workspace / "notes" / ".cache" / "secret.txt"
+            hidden_nested = workspace / "solutions" / ".cache" / "secret.txt"
             hidden_root.write_text("token=secret\n", encoding="utf-8")
             hidden_nested.parent.mkdir(parents=True, exist_ok=True)
             hidden_nested.write_text("nested\n", encoding="utf-8")
@@ -475,8 +493,16 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(hidden_list.status_code, 200, hidden_list.text)
             listed_paths = {str(item.get("path") or "") for item in hidden_list.json().get("entries") or []}
             self.assertNotIn(".env", listed_paths)
-            self.assertNotIn("notes/.cache", listed_paths)
-            self.assertNotIn("notes/.cache/secret.txt", listed_paths)
+            self.assertNotIn("solutions/.cache", listed_paths)
+            self.assertNotIn("solutions/.cache/secret.txt", listed_paths)
+
+            invalid_root_upload = client.post(
+                "/agent/v1/workspace/upload",
+                headers=self._bearer(workspace_token),
+                data={"path": "README.md"},
+                files={"file": ("README.md", b"blocked")},
+            )
+            self.assertEqual(invalid_root_upload.status_code, 400, invalid_root_upload.text)
 
             hidden_upload = client.post(
                 "/agent/v1/workspace/upload",
@@ -495,17 +521,17 @@ class TestAgentAPI(SmokeBase):
             read_back = client.get(
                 "/agent/v1/workspace/file",
                 headers=self._bearer(workspace_token),
-                params={"path": "notes/agent.txt"},
+                params={"path": "solutions/agent.txt"},
             )
             self.assertEqual(read_back.status_code, 200, read_back.text)
             self.assertEqual(str(read_back.json().get("content") or ""), "hello\r\nagent\r\n")
 
             delete = client.delete(
-                "/agent/v1/workspace/files/notes/agent.txt",
+                "/agent/v1/workspace/files/solutions/agent.txt",
                 headers=self._bearer(workspace_token),
             )
             self.assertEqual(delete.status_code, 200, delete.text)
-            self.assertFalse((workspace / "notes/agent.txt").exists())
+            self.assertFalse((workspace / "solutions/agent.txt").exists())
             delete_status = workspace_service.read_workspace_status(workspace)
             delete_row = config.db.fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
             self.assertIsNotNone(delete_row)
@@ -515,13 +541,118 @@ class TestAgentAPI(SmokeBase):
             downgraded_upload = client.post(
                 "/agent/v1/workspace/upload",
                 headers=self._bearer(workspace_token),
-                data={"path": "notes/downgraded.txt"},
+                data={"path": "solutions/downgraded.txt"},
                 files={"file": ("downgraded.txt", b"blocked")},
             )
             self.assertEqual(downgraded_upload.status_code, 403, downgraded_upload.text)
 
             still_readable = client.get("/agent/v1/workspace/status", headers=self._bearer(workspace_token))
             self.assertEqual(still_readable.status_code, 200, still_readable.text)
+
+    def test_agent_workspace_snapshot_compare_and_apply_full_zip(self) -> None:
+        username = self.random_id("agent-sync")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        workspace = self._grant_problem_owner(username)
+        main_source = workspace / "solutions" / "main.cpp"
+        main_source.parent.mkdir(parents=True, exist_ok=True)
+        main_source.write_bytes(b"int main(){return 0;}\r\n")
+        test_input = workspace / "tests" / "manual" / "001.in"
+        test_input.parent.mkdir(parents=True, exist_ok=True)
+        test_input.write_text("1\n", encoding="utf-8")
+        (workspace / "README.md").write_text("private\n", encoding="utf-8")
+        (workspace / ".env").write_text("secret\n", encoding="utf-8")
+        (workspace / "temp").mkdir(exist_ok=True)
+        (workspace / "temp" / "scratch.txt").write_text("scratch\n", encoding="utf-8")
+        (workspace / "draft").mkdir(exist_ok=True)
+        (workspace / "draft" / "draft.txt").write_text("draft\n", encoding="utf-8")
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-sync")
+            session_id = str(register["agent_session_id"])
+            identity_hash = str(register["identity_hash"])
+            _readonly_request, readonly_token = self._approve_token(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="readonly",
+            )
+            _workspace_request, workspace_token = self._approve_token(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="workspace",
+            )
+
+            snapshot = client.get("/agent/v1/workspace/snapshot", headers=self._bearer(readonly_token))
+            self.assertEqual(snapshot.status_code, 200, snapshot.text)
+            self.assertIn("application/zip", snapshot.headers.get("content-type", ""))
+            self.assertEqual(snapshot.headers.get("x-problem"), self.problem)
+            snapshot_entries = self._zip_entries(snapshot.content)
+            self.assertEqual(snapshot_entries["solutions/main.cpp"], b"int main(){return 0;}\n")
+            self.assertEqual(snapshot_entries["tests/manual/001.in"], b"1\n")
+            self.assertNotIn("README.md", snapshot_entries)
+            self.assertNotIn(".env", snapshot_entries)
+            self.assertNotIn("temp/scratch.txt", snapshot_entries)
+            self.assertNotIn("draft/draft.txt", snapshot_entries)
+
+            local_files = dict(snapshot_entries)
+            local_files["solutions/main.cpp"] = b"int main(){return 0;}\r\n"
+            local_files["solutions/new.cpp"] = b"int main(){return 1;}\r\n"
+            del local_files["tests/manual/001.in"]
+            local_zip = self._workspace_zip(local_files)
+
+            compare = client.post(
+                "/agent/v1/workspace/compare",
+                headers=self._bearer(readonly_token),
+                files={"archive": ("workspace.zip", local_zip, "application/zip")},
+            )
+            self.assertEqual(compare.status_code, 200, compare.text)
+            compare_payload = compare.json()
+            self.assertTrue(bool(compare_payload.get("changed")))
+            self.assertIn("solutions/new.cpp", compare_payload.get("uploads") or [])
+            self.assertIn("tests/manual/001.in", compare_payload.get("deletes") or [])
+            self.assertIn("solutions/main.cpp", compare_payload.get("same") or [])
+
+            readonly_apply = client.post(
+                "/agent/v1/workspace/apply",
+                headers=self._bearer(readonly_token),
+                files={"archive": ("workspace.zip", local_zip, "application/zip")},
+            )
+            self.assertEqual(readonly_apply.status_code, 403, readonly_apply.text)
+
+            conflict = client.post(
+                "/agent/v1/workspace/apply",
+                headers=self._bearer(workspace_token),
+                data={"base_head_commit": "not-current-head"},
+                files={"archive": ("workspace.zip", local_zip, "application/zip")},
+            )
+            self.assertEqual(conflict.status_code, 409, conflict.text)
+
+            invalid_zip = self._workspace_zip({"README.md": "bad\n"})
+            invalid_compare = client.post(
+                "/agent/v1/workspace/compare",
+                headers=self._bearer(readonly_token),
+                files={"archive": ("workspace.zip", invalid_zip, "application/zip")},
+            )
+            self.assertEqual(invalid_compare.status_code, 400, invalid_compare.text)
+
+            apply = client.post(
+                "/agent/v1/workspace/apply",
+                headers=self._bearer(workspace_token),
+                files={"archive": ("workspace.zip", local_zip, "application/zip")},
+            )
+            self.assertEqual(apply.status_code, 200, apply.text)
+            apply_payload = apply.json()
+            self.assertTrue(bool(apply_payload.get("applied")))
+            self.assertIn("solutions/new.cpp", apply_payload.get("uploads") or [])
+            self.assertIn("tests/manual/001.in", apply_payload.get("deletes") or [])
+            self.assertEqual(main_source.read_bytes(), b"int main(){return 0;}\n")
+            self.assertEqual((workspace / "solutions" / "new.cpp").read_bytes(), b"int main(){return 1;}\n")
+            self.assertFalse(test_input.exists())
+            self.assertEqual((workspace / "README.md").read_text(encoding="utf-8"), "private\n")
 
     def test_agent_verification_export_workspace_and_commit_endpoints(self) -> None:
         username = self.random_id("agent-api")

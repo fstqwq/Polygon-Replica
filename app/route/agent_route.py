@@ -17,8 +17,11 @@ from app.impl.agent.api import (
     agent_verification_start,
     agent_verification_status,
     agent_workspace_delete,
+    agent_workspace_apply,
+    agent_workspace_compare,
     agent_workspace_file,
     agent_workspace_files,
+    agent_workspace_snapshot,
     agent_workspace_status,
     agent_workspace_upload,
 )
@@ -52,6 +55,9 @@ router.add_api_route("/agent/v1/export/{export_id}/status", agent_export_status,
 router.add_api_route("/agent/v1/export/{export_id}/download", agent_export_download, methods=["GET"])
 router.add_api_route("/agent/v1/workspace/files", agent_workspace_files, methods=["GET"])
 router.add_api_route("/agent/v1/workspace/status", agent_workspace_status, methods=["GET"])
+router.add_api_route("/agent/v1/workspace/snapshot", agent_workspace_snapshot, methods=["GET"])
+router.add_api_route("/agent/v1/workspace/compare", agent_workspace_compare, methods=["POST"])
+router.add_api_route("/agent/v1/workspace/apply", agent_workspace_apply, methods=["POST"])
 router.add_api_route("/agent/v1/workspace/file", agent_workspace_file, methods=["GET"])
 router.add_api_route("/agent/v1/workspace/upload", agent_workspace_upload, methods=["POST"])
 router.add_api_route("/agent/v1/workspace/files/{path:path}", agent_workspace_delete, methods=["DELETE"])

@@ -21,6 +21,7 @@ ALLOWED_WORKSPACE_ROOT_NAMES = {
     "statement-sections",
     "tests",
     "third_party",
+    "validators",
 }
 
 

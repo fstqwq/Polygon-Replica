@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import cast
 
-from fastapi import File, HTTPException, Request, UploadFile
+from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from app.impl.agent.shared import require_agent_token, workspace_context_for_identity
@@ -18,7 +18,13 @@ from app.impl.workspace.context_operation import audit, run_solution_options_con
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
-from app.main_util import normalize_workspace_rel_path, safe_workspace_path, write_upload_file_limited
+from app.main_util import normalize_workspace_rel_path, read_upload_bytes_limited, safe_workspace_path, write_upload_file_limited
+from app.service.agent.workspace_sync import (
+    apply_agent_workspace_zip,
+    build_agent_workspace_snapshot_zip,
+    compare_agent_workspace_zip,
+    validate_agent_workspace_rel_path,
+)
 from app.service.platform.git_process import run_git
 from app.service.problem.solution_metadata import normalize_expected_behavior
 
@@ -646,9 +652,15 @@ async def agent_workspace_files(request: Request):
     rel = str(request.query_params.get("path") or "").strip()
     try:
         normalized = normalize_workspace_rel_path(rel)
+        if normalized:
+            validate_agent_workspace_rel_path(normalized)
         entries, truncated = config.git_service.list_files_capped(workspace, normalized or ".", limit=config.constants.WORKSPACE_FILE_LIST_LIMIT)
         items: list[dict[str, object]] = []
         for entry in entries:
+            try:
+                validate_agent_workspace_rel_path(entry)
+            except ValueError:
+                continue
             target = safe_workspace_path(workspace, entry)
             items.append({
                 "path": entry,
@@ -678,6 +690,97 @@ async def agent_workspace_status(request: Request):
     )
 
 
+def _workspace_zip_filename(problem_slug: str, suffix: str) -> str:
+    token = str(problem_slug or "problem").strip().replace("/", "-")
+    token = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in token).strip("-.")
+    return f"{token or 'problem'}-{suffix}.zip"
+
+
+async def agent_workspace_snapshot(request: Request):
+    identity = require_agent_token(request, min_scope="readonly")
+    ctx = _agent_problem_ctx(identity)
+    workspace = Path(str(ctx["workspace"]["path"])).resolve()
+    try:
+        with config.workspace_service.workspace_lock(workspace):
+            status = config.workspace_service.read_workspace_status(workspace)
+            payload = build_agent_workspace_snapshot_zip(workspace)
+        head_commit = str(status.get("head_commit") or "")
+        dirty = bool(status.get("dirty"))
+        return Response(
+            content=payload,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{_workspace_zip_filename(identity.problem_slug, "snapshot")}"',
+                "X-Problem": identity.problem_slug,
+                "X-Head-Commit": head_commit,
+                "X-Workspace-Dirty": "true" if dirty else "false",
+            },
+        )
+    except ValueError as exc:
+        return json_error_response(str(exc), status_code=400)
+
+
+async def agent_workspace_compare(request: Request, archive: UploadFile = File(...)):
+    identity = require_agent_token(request, min_scope="readonly")
+    ctx = _agent_problem_ctx(identity)
+    workspace = Path(str(ctx["workspace"]["path"])).resolve()
+    try:
+        archive_bytes = await read_upload_bytes_limited(archive, label="workspace archive")
+        with config.workspace_service.workspace_lock(workspace):
+            status = config.workspace_service.read_workspace_status(workspace)
+            diff = compare_agent_workspace_zip(workspace, archive_bytes)
+        payload = {
+            "problem": identity.problem_slug,
+            "head_commit": str(status.get("head_commit") or ""),
+            "dirty": bool(status.get("dirty")),
+            **diff.as_payload(),
+        }
+        return _json_body(payload)
+    except ValueError as exc:
+        return json_error_response(str(exc), status_code=400)
+
+
+async def agent_workspace_apply(
+    request: Request,
+    archive: UploadFile = File(...),
+    base_head_commit: str = Form(""),
+):
+    identity = require_agent_token(request, min_scope="workspace")
+    ctx = _agent_problem_ctx(identity)
+    workspace = Path(str(ctx["workspace"]["path"])).resolve()
+    expected_head = str(base_head_commit or "").strip()
+    try:
+        archive_bytes = await read_upload_bytes_limited(archive, label="workspace archive")
+        with config.workspace_service.workspace_lock(workspace):
+            status_before = config.workspace_service.read_workspace_status(workspace)
+            current_head = str(status_before.get("head_commit") or "")
+            if expected_head and expected_head != current_head:
+                return json_error_response("workspace head changed", status_code=409)
+            diff = apply_agent_workspace_zip(workspace, archive_bytes)
+            status_after = config.workspace_service.refresh_workspace_status_by_path(workspace) or config.workspace_service.read_workspace_status(workspace)
+        audit(
+            int(identity.user_id),
+            int(identity.problem_id),
+            "agent.workspace.apply",
+            {
+                "uploads": diff.uploads,
+                "deletes": diff.deletes,
+                "base_head_commit": expected_head,
+                "head_commit": str(status_after.get("head_commit") or ""),
+            },
+        )
+        payload = {
+            "problem": identity.problem_slug,
+            "head_commit": str(status_after.get("head_commit") or ""),
+            "dirty": bool(status_after.get("dirty")),
+            "applied": True,
+            **diff.as_payload(),
+        }
+        return _json_body(payload)
+    except ValueError as exc:
+        return json_error_response(str(exc), status_code=400)
+
+
 async def agent_workspace_file(request: Request):
     identity = require_agent_token(request, min_scope="readonly")
     workspace = Path(str(_agent_problem_ctx(identity)["workspace"]["path"])).resolve()
@@ -686,6 +789,7 @@ async def agent_workspace_file(request: Request):
         normalized = normalize_workspace_rel_path(rel)
         if not normalized:
             return json_error_response("path is required", status_code=400)
+        validate_agent_workspace_rel_path(normalized)
         target = safe_workspace_path(workspace, normalized)
         if not target.exists() or target.is_symlink():
             return json_error_response("file not found", status_code=404)
@@ -713,6 +817,8 @@ async def agent_workspace_file(request: Request):
             payload["encoding"] = "utf-8"
             payload["content"] = content_text
         return _json_body(payload)
+    except ValueError as exc:
+        return json_error_response(str(exc), status_code=400)
     except HTTPException as exc:
         return json_error_response(str(exc.detail), status_code=exc.status_code)
 
@@ -729,6 +835,7 @@ async def agent_workspace_upload(request: Request, file: UploadFile = File(...))
         normalized = normalize_workspace_rel_path(rel)
         if not normalized:
             return json_error_response("path is required", status_code=400)
+        validate_agent_workspace_rel_path(normalized)
         total_bytes = 0
         with config.workspace_service.workspace_lock(workspace):
             target = safe_workspace_path(workspace, normalized)
@@ -753,6 +860,7 @@ async def agent_workspace_delete(request: Request, path: str):
         normalized = normalize_workspace_rel_path(path)
         if not normalized:
             return json_error_response("path is required", status_code=400)
+        validate_agent_workspace_rel_path(normalized)
         with config.workspace_service.workspace_lock(workspace):
             config.git_service.delete_path(workspace, normalized)
         audit(int(identity.user_id), int(identity.problem_id), "agent.workspace.delete", {"path": normalized})
