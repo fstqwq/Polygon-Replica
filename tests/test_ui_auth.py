@@ -160,6 +160,17 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(register_csrf)
         self.assertRegex(register_salt, r"^[0-9a-f]{32}$")
         self.assertGreater(register_iters, 0)
+        self.assertIn('name="terms_accepted"', register_html)
+        self.assertIn("I have read and agree to the Terms of Use.", register_html)
+        self.assertIn("Review Terms of Use", register_html)
+        self.assertIn("Effective date: April 19, 2026.", register_html)
+        self.assertIn("No warranty.", register_html)
+        self.assertIn('data-popup-open="terms-of-use-popup"', register_html)
+        self.assertIn('id="terms-of-use-popup"', register_html)
+        self.assertGreater(
+            register_html.rfind('data-popup-open="terms-of-use-popup"'),
+            register_html.find('id="profile-judgehost-health-summary"'),
+        )
 
         register_verifier = _password_verifier_hex(password, register_salt, register_iters)
         register_proof = _sha256_hex(register_csrf + register_verifier)
@@ -176,6 +187,7 @@ class TestUIAuth(UIBaseSuite):
             password_salt=register_salt,
             password_iters=str(register_iters),
             next="/",
+            terms_accepted="yes",
         )
         self.assertEqual(reg.status_code, 303)
         self.assertIn("/problems", reg.headers.get("location", ""))
@@ -322,6 +334,37 @@ class TestUIAuth(UIBaseSuite):
         long_messages = _flash_messages_from_response(too_long)
         self.assertTrue(any("invalid username" in item.lower() for item in long_messages))
 
+    def test_register_requires_terms_of_use_acceptance(self) -> None:
+        username = self.random_id("terms")
+        password = "StrongPass123"
+        page = register_page(_request("/register"))
+        html = page.body.decode("utf-8", errors="replace")
+        csrf = _extract_hidden_input_value(html, "csrf_token")
+        salt = _extract_hidden_input_value(html, "password_salt")
+        iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
+        verifier = _password_verifier_hex(password, salt, iters)
+        proof = _sha256_hex(csrf + verifier)
+        password_hash = _sha256_hex(csrf + password)
+
+        resp = register_submit(
+            request=_post_request("/register"),
+            username=username,
+            password=password_hash,
+            password_confirm=password_hash,
+            password_verifier=verifier,
+            password_proof=proof,
+            csrf_token=csrf,
+            password_salt=salt,
+            password_iters=str(iters),
+            next="/",
+            terms_accepted="",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.headers.get("location", ""), "/register")
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(any("terms of use" in item.lower() for item in messages))
+
     def test_setup_page_shows_config_when_no_registered_users(self) -> None:
         count = db_fetch_one(
             "SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''",
@@ -441,7 +484,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertFalse(str(row["password_hash"] or ""))
 
     def test_login_rate_limit_blocks_repeated_failures(self) -> None:
-        username = f"ratelimit-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("ratelim")
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
@@ -529,7 +572,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(resp.body, b"ok")
 
     def test_auth_middleware_keeps_userless_contest_query_intact(self) -> None:
-        username = f"contestauthmsg-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("ctmsg")
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)

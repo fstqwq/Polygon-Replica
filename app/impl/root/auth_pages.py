@@ -172,7 +172,7 @@ def register_page(request: Request):
         return redirect_response(target, status_code=303)
     return template_response(request, 'register.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('register-password'), 'password_salt': secrets.token_hex(16), 'password_iters': int(_C.PASSWORD_HASH_ITERS)})
 
-def register_submit(request: Request, username: str=Form(...), password: str=Form(''), password_confirm: str=Form(''), password_verifier: str=Form(''), password_proof: str=Form(''), csrf_token: str=Form(''), password_salt: str=Form(''), password_iters: str=Form(''), next: str=Form('/')):
+def register_submit(request: Request, username: str=Form(...), password: str=Form(''), password_confirm: str=Form(''), password_verifier: str=Form(''), password_proof: str=Form(''), csrf_token: str=Form(''), password_salt: str=Form(''), password_iters: str=Form(''), next: str=Form('/'), terms_accepted: str=Form('')):
     enforce_same_origin_state_change(request)
     _ = (password, password_confirm)
     try:
@@ -183,9 +183,12 @@ def register_submit(request: Request, username: str=Form(...), password: str=For
         salt_value = form_text(password_salt)
         iter_value = form_text(password_iters)
         next_path = form_text(next)
+        terms_value = form_text(terms_accepted)
         existing = lookup_user_auth(safe_user)
         if existing is not None:
             raise ValueError('registration failed; username is unavailable')
+        if terms_value != 'yes':
+            raise ValueError('registration failed; terms of use must be accepted')
         if not verify_password_form_csrf_token(proof_token, 'register-password'):
             raise ValueError('registration failed; invalid csrf token')
         verifier = normalize_password_verifier_hex(verifier_value)

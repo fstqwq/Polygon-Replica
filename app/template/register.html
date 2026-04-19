@@ -1,4 +1,5 @@
 {% extends "auth_base.html" %}
+{% from "_terms_of_use.html" import terms_of_use_link %}
 {% block auth_page_title %}Polygon-Replica Register{% endblock %}
 {% block auth_title %}Create Account{% endblock %}
 {% block auth_subtitle %}Register with username and password.{% endblock %}
@@ -17,6 +18,13 @@
   <input type="hidden" name="password_verifier" value="" />
   <input type="hidden" name="password_proof" value="" />
   <input type="hidden" name="next" value="{{ next_path }}" />
+  <div class="terms-consent">
+    <input id="terms-accepted" name="terms_accepted" type="checkbox" value="yes" required />
+    <div class="terms-consent-copy">
+      <label for="terms-accepted">I have read and agree to the Terms of Use.</label>
+      <span>{{ terms_of_use_link('Review Terms of Use') }}</span>
+    </div>
+  </div>
   <button class="btn primary-action" type="submit">Register</button>
 </form>
 {% endblock %}

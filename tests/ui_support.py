@@ -427,6 +427,7 @@ def _register_with_password_proof(username: str, password: str, *, next_path: st
         password_salt=salt,
         password_iters=str(iters),
         next=next_path,
+        terms_accepted="yes",
     )
 
 def _login_with_password_proof(username: str, password: str, *, next_path: str = "/"):
