@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from .common import SmokeBase
 from .ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_proof
 from app.impl.runtime.config import config
 from app.main import app
+from app.service.agent import workspace_sync as agent_workspace_sync_module
 from app.service.verification.task_store import VerificationTaskStore
 
 workspace_service = config.workspace_service
@@ -653,6 +655,62 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual((workspace / "solutions" / "new.cpp").read_bytes(), b"int main(){return 1;}\n")
             self.assertFalse(test_input.exists())
             self.assertEqual((workspace / "README.md").read_text(encoding="utf-8"), "private\n")
+
+    def test_agent_workspace_compare_and_apply_reject_large_unzipped_zip_payload(self) -> None:
+        username = self.random_id("agent-zip-cap")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        workspace = self._grant_problem_owner(username)
+        sentinel = workspace / "solutions" / "keep.cpp"
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("keep\n", encoding="utf-8")
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-zip-cap")
+            session_id = str(register["agent_session_id"])
+            identity_hash = str(register["identity_hash"])
+            _readonly_request, readonly_token = self._approve_token(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="readonly",
+            )
+            _workspace_request, workspace_token = self._approve_token(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="workspace",
+            )
+
+            oversized_entry_zip = self._workspace_zip({"solutions/bomb.txt": "x" * 17})
+            oversized_total_zip = self._workspace_zip({"solutions/a.txt": "1234567890", "solutions/b.txt": "abcdefghij"})
+            with patch.object(agent_workspace_sync_module, "UPLOAD_MAX_BYTES", 16):
+                too_large_entry = client.post(
+                    "/agent/v1/workspace/compare",
+                    headers=self._bearer(readonly_token),
+                    files={"archive": ("workspace.zip", oversized_entry_zip, "application/zip")},
+                )
+                self.assertEqual(too_large_entry.status_code, 400, too_large_entry.text)
+                self.assertIn("workspace archive entry is too large", too_large_entry.text)
+
+                too_large_total = client.post(
+                    "/agent/v1/workspace/compare",
+                    headers=self._bearer(readonly_token),
+                    files={"archive": ("workspace.zip", oversized_total_zip, "application/zip")},
+                )
+                self.assertEqual(too_large_total.status_code, 400, too_large_total.text)
+                self.assertIn("workspace archive payload is too large", too_large_total.text)
+
+                rejected_apply = client.post(
+                    "/agent/v1/workspace/apply",
+                    headers=self._bearer(workspace_token),
+                    files={"archive": ("workspace.zip", oversized_total_zip, "application/zip")},
+                )
+                self.assertEqual(rejected_apply.status_code, 400, rejected_apply.text)
+                self.assertIn("workspace archive payload is too large", rejected_apply.text)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
     def test_agent_verification_export_workspace_and_commit_endpoints(self) -> None:
         username = self.random_id("agent-api")

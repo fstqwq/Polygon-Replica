@@ -9,6 +9,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from app.main_util import UPLOAD_MAX_BYTES
+from app.service.platform.zip_extract import extract_zip_entry_to_path_limited
 from app.service.platform.workspace_path import (
     ALLOWED_WORKSPACE_ROOT_NAMES,
     is_allowed_workspace_root_path,
@@ -142,6 +144,7 @@ def extract_agent_workspace_zip(payload: bytes, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     seen_files: set[str] = set()
     seen_dirs: set[str] = set()
+    extracted_total = 0
     try:
         with zipfile.ZipFile(io.BytesIO(payload), "r") as archive:
             for info in archive.infolist():
@@ -160,8 +163,18 @@ def extract_agent_workspace_zip(payload: bytes, destination: Path) -> None:
                     raise ValueError(f"zip path conflict: {rel}")
                 seen_files.add(rel)
                 target = destination / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(normalize_agent_text_bytes(archive.read(info))[0])
+                extracted_total += extract_zip_entry_to_path_limited(
+                    archive,
+                    info,
+                    target,
+                    total_before=extracted_total,
+                    max_file_bytes=UPLOAD_MAX_BYTES,
+                    max_total_bytes=UPLOAD_MAX_BYTES,
+                    display_name=rel,
+                    entry_too_large_prefix="workspace archive entry is too large",
+                    payload_too_large_prefix="workspace archive payload is too large at",
+                    normalize_utf8_newlines=True,
+                )
     except OSError as exc:
         raise ValueError("invalid workspace archive layout") from exc
     except zipfile.BadZipFile as exc:

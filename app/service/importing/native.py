@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from app.main_util import UPLOAD_MAX_BYTES
+from app.service.platform.zip_extract import extract_zip_entry_to_path_limited, validate_zip_entry_size
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
@@ -81,12 +82,16 @@ def _validated_native_entries(
         if not is_allowed_workspace_root_path(target_rel.parts):
             raise ValueError(f"native package contains forbidden root path: {rel}")
         info = entry_map[rel]
-        entry_size = int(info.file_size)
-        if entry_size > ZIP_MAX_FILE_BYTES:
-            raise ValueError(f"zip entry too large: {rel}")
+        entry_size = validate_zip_entry_size(
+            info,
+            total_before=total_size,
+            max_file_bytes=ZIP_MAX_FILE_BYTES,
+            max_total_bytes=ZIP_MAX_EXTRACTED_BYTES,
+            display_name=rel,
+            entry_too_large_prefix="zip entry too large",
+            payload_too_large_prefix="native package repo payload is too large at",
+        )
         total_size += entry_size
-        if total_size > ZIP_MAX_EXTRACTED_BYTES:
-            raise ValueError(f"native package repo payload is too large at: {rel}")
         validated.append((target_rel, info, rel))
     return validated
 
@@ -95,25 +100,22 @@ def _extract_zip_entry_to_path(
     zf: zipfile.ZipFile,
     info: zipfile.ZipInfo,
     target: Path,
+    *,
+    extracted_before: int,
+    display_name: str,
 ) -> int:
-    written = 0
-    tmp_target = target.with_name(f"{target.name}.native-import-tmp")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with zf.open(info, "r") as src, tmp_target.open("wb") as dst:
-            while True:
-                chunk = src.read(1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > ZIP_MAX_FILE_BYTES:
-                    raise ValueError(f"zip entry too large: {info.filename}")
-                dst.write(chunk)
-        tmp_target.replace(target)
-        return written
-    except Exception:
-        tmp_target.unlink(missing_ok=True)
-        raise
+    return extract_zip_entry_to_path_limited(
+        zf,
+        info,
+        target,
+        total_before=extracted_before,
+        max_file_bytes=ZIP_MAX_FILE_BYTES,
+        max_total_bytes=ZIP_MAX_EXTRACTED_BYTES,
+        display_name=display_name,
+        entry_too_large_prefix="zip entry too large",
+        payload_too_large_prefix="native package repo payload is too large at",
+        normalize_utf8_newlines=False,
+    )
 
 
 def _clear_workspace_tree(workspace: Path) -> None:
@@ -182,9 +184,13 @@ class NativePackageImportService:
             try:
                 staging_root.mkdir(parents=True, exist_ok=False)
                 for target_rel, info, rel in files_to_write:
-                    written_total += _extract_zip_entry_to_path(zf, info, staging_root / target_rel)
-                    if written_total > ZIP_MAX_EXTRACTED_BYTES:
-                        raise ValueError(f"native package repo payload is too large at: {rel}")
+                    written_total += _extract_zip_entry_to_path(
+                        zf,
+                        info,
+                        staging_root / target_rel,
+                        extracted_before=written_total,
+                        display_name=rel,
+                    )
 
                 _clear_workspace_tree(workspace)
                 for child in staging_root.iterdir():
