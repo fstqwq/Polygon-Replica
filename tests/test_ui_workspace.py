@@ -459,6 +459,22 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(payload.get("pass_limit"), 2)
         self.assertNotIn("interactive", payload)
 
+    def test_metadata_popup_shows_readonly_system_limits(self) -> None:
+        resp = general_page(_request("/problems/alice/sample/statement"), "alice/sample", "alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("System limits", html)
+        self.assertIn("Contact an administrator to change these limits if needed.", html)
+        self.assertIn("Program output limit", html)
+        self.assertIn("Compilation size limit", html)
+        self.assertIn("Saved judging log limit", html)
+        self.assertIn(f"{int(config.constants.RUN_EXEC_OUTPUT_KB)} KiB", html)
+        self.assertIn(f"{int(config.constants.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB", html)
+        self.assertIn(f"{int(config.constants.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes", html)
+        self.assertNotIn('name="RUN_EXEC_OUTPUT_KB"', html)
+        self.assertNotIn('name="TOOLCHAIN_COMPILE_OUTPUT_KB"', html)
+        self.assertNotIn('name="JUDGEHOST_STORED_LOG_LIMIT_BYTES"', html)
+
     def test_workspace_page_main_only_controls(self) -> None:
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)

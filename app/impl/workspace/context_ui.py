@@ -1,7 +1,7 @@
 from __future__ import annotations
 from app.impl.auth.session import require_session_user
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, TypedDict, cast
 
 from fastapi import HTTPException, Request, Depends
 
@@ -41,6 +41,29 @@ from .problem_config import read_problem_config
 from .revision import git_commit_count, workspace_revision_info
 
 _C = config.constants
+
+
+class SystemLimitRow(TypedDict):
+    label: str
+    value: str
+
+
+class SystemLimitInfo(TypedDict):
+    title: str
+    description: str
+    rows: list[SystemLimitRow]
+
+
+def _system_limit_info() -> SystemLimitInfo:
+    return {
+        'title': 'System limits',
+        'description': 'Contact an administrator to change these limits if needed.',
+        'rows': [
+            {'label': 'Program output limit', 'value': f'{int(_C.RUN_EXEC_OUTPUT_KB)} KiB'},
+            {'label': 'Compilation size limit', 'value': f'{int(_C.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB'},
+            {'label': 'Saved judging log limit', 'value': f'{int(_C.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes'},
+        ],
+    }
 
 
 def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_status: bool=True, include_recent: bool=True, include_workspace_changes: bool=True) -> dict:
@@ -84,6 +107,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     safe_mode = normalize_problem_mode(general_cfg.get('mode'), str(_C.GENERAL_CONFIG_DEFAULTS['mode']))
     ctx['problem_mode'] = safe_mode
     ctx['general_cfg'] = {'time_limit_ms': coerce_int(general_cfg.get('time_limit_ms'), int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']), _C.GENERAL_TIME_LIMIT_MIN_MS, _C.GENERAL_TIME_LIMIT_MAX_MS), 'memory_limit_mb': coerce_int(general_cfg.get('memory_limit_mb'), int(_C.GENERAL_CONFIG_DEFAULTS['memory_limit_mb']), _C.GENERAL_MEMORY_LIMIT_MIN_MB, _C.GENERAL_MEMORY_LIMIT_MAX_MB), 'mode': safe_mode, 'pass_limit': normalize_pass_limit(general_cfg.get('pass_limit'), int(_C.GENERAL_CONFIG_DEFAULTS['pass_limit']))}
+    ctx['system_limit_info'] = _system_limit_info()
     ctx['workspace_revision'] = workspace_revision_info(
         workspace_path,
         workspace_branch,

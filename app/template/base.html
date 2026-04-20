@@ -302,6 +302,18 @@
           </div>
           <button class="btn" type="submit">Save</button>
         </div>
+        <section class="info-card metadata-system-limits" aria-label="{{ ctx.system_limit_info.title }}">
+          <h3>{{ ctx.system_limit_info.title }}</h3>
+          <p class="muted">{{ ctx.system_limit_info.description }}</p>
+          <dl class="metadata-system-limit-list">
+            {% for row in ctx.system_limit_info.rows %}
+            <div class="metadata-system-limit-row">
+              <dt>{{ row.label }}</dt>
+              <dd>{{ row.value }}</dd>
+            </div>
+            {% endfor %}
+          </dl>
+        </section>
       </form>
   {% endcall %}
   {% include "_page_profile.html" %}
