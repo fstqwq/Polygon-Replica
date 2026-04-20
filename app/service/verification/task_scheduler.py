@@ -194,7 +194,7 @@ class VerificationRuntimeCoordinator:
         elif event.kind == "cancel":
             self._cancel_reason = event.reason or "verification cancelled by user"
             self._task_store.set_fail_flag(self.verification_id, reason=self._cancel_reason)
-            changed = True
+            return True
         if self._apply_fail_flag():
             changed = True
         if changed:

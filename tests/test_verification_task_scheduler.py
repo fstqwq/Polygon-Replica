@@ -964,7 +964,7 @@ class TestVerificationTaskScheduler(SmokeBase):
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
-    def test_runtime_coordinator_cancel_keeps_leased_rows_until_reported(self) -> None:
+    def test_runtime_coordinator_cancel_releases_worker_without_finalizing_leased_rows(self) -> None:
         store = _InMemoryTaskStore(
             rows=[
                 {
@@ -995,23 +995,6 @@ class TestVerificationTaskScheduler(SmokeBase):
             edges=[],
         )
         queued_cancel_reasons: list[str] = []
-        final_result = TaskExecutionResult(
-            task_id="vt-leased",
-            status=VerificationTaskStore.TASK_DONE,
-            verdict="OK",
-            run_id="r-a",
-            judgehost_task_id="jt-leased",
-            runtime_sec=0.01,
-            cpu_sec=0.01,
-            wall_sec=0.01,
-            memory_kb=1,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="",
-            feedback_text="",
-            output_ref="",
-        )
-
         callbacks = VerificationRuntimeCallbacks(
             publish_task=lambda _row: (_ for _ in ()).throw(RuntimeError("unexpected publish")),
             resolve_case_result=lambda _task_id, _test_name: None,
@@ -1028,6 +1011,8 @@ class TestVerificationTaskScheduler(SmokeBase):
         thread.start()
         try:
             coordinator.enqueue_cancel("verification cancelled by user")
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
             store.cancel_not_started_tasks("ver-runtime-cancel", reason="verification cancelled by user")
             self._wait_until(
                 lambda: str({str(row["id"]): row for row in store.list_rows("ver-runtime-cancel")}["vt-queued"]["status"]) == VerificationTaskStore.TASK_CANCELLED,
@@ -1039,27 +1024,11 @@ class TestVerificationTaskScheduler(SmokeBase):
             self.assertEqual(str(rows["vt-leased"]["status"]), VerificationTaskStore.TASK_LEASED)
             self.assertEqual(str(rows["vt-queued"]["status"]), VerificationTaskStore.TASK_CANCELLED)
             self.assertEqual(queued_cancel_reasons, [])
-
-            coordinator.enqueue_case_reported(
-                "jt-leased",
-                "001.in",
-                {"final_result": final_result},
-            )
-            self._wait_until(
-                lambda: str({str(row["id"]): row for row in store.list_rows("ver-runtime-cancel")}["vt-leased"]["status"]) == VerificationTaskStore.TASK_DONE,
-                timeout=2.0,
-                interval=0.01,
-                message="leased row was not finalized after case report",
-            )
         finally:
             if thread.is_alive():
-                coordinator.enqueue_case_reported(
-                    "jt-leased",
-                    "001.in",
-                    {"final_result": final_result},
-                )
-            thread.join(timeout=2.0)
-            self.assertFalse(thread.is_alive())
+                coordinator.enqueue_cancel("test shutdown")
+                thread.join(timeout=2.0)
+                self.assertFalse(thread.is_alive())
 
     def test_cancel_not_started_tasks_leaves_leased_rows_reportable(self) -> None:
         self._insert_verification_row("ver-cancel")
@@ -1166,6 +1135,62 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(status, "failed")
         self.assertEqual(str(summary["status"]), "failed")
         self.assertEqual(int(counts["cancelled"]), 1)
+
+    def test_verification_summary_from_tasks_finishes_cancelled_fail_flag_with_leased_rows(self) -> None:
+        from app.impl.workspace.verification_dag import LogicalRunSpec, _verification_summary_from_tasks
+
+        rows = [
+            {
+                "id": "vt-leased",
+                "verification_id": "ver-cancel-leased-summary",
+                "task_kind": "solution-run",
+                "source_path": "solutions/a.cpp",
+                "logical_run_id": "r-a",
+                "test_name": "001.in",
+                "expected_behavior": "accepted",
+                "queue_index": 1,
+                "status": VerificationTaskStore.TASK_LEASED,
+                "verdict": "",
+                "run_id": "r-a",
+                "judgehost_task_id": "jt-a",
+                "runtime_sec": None,
+                "cpu_sec": None,
+                "wall_sec": None,
+                "memory_kb": None,
+                "compile_log": "",
+                "diagnostics_json": "[]",
+                "error_text": "",
+                "feedback_text": "",
+                "output_ref": "",
+                "started_at": "2026-03-23T00:00:00Z",
+                "finished_at": "",
+                "cancel_reason": "",
+                "created_at": "2026-03-23T00:00:00Z",
+                "updated_at": "2026-03-23T00:00:01Z",
+            }
+        ]
+        status, summary, counts = _verification_summary_from_tasks(
+            verification_id="ver-cancel-leased-summary",
+            artifact_verification_id="ver-cancel-leased-summary",
+            mode="pass-fail",
+            pass_limit=1,
+            logical_runs=[
+                LogicalRunSpec(
+                    logical_run_id="r-a",
+                    source_path="solutions/a.cpp",
+                    expected_behavior="accepted",
+                    task_kind="solution-run",
+                )
+            ],
+            rows=rows,
+            test_names=["001.in"],
+            fail_flag=True,
+            fail_reason="verification cancelled by user",
+        )
+        self.assertEqual(status, "failed")
+        self.assertEqual(str(summary["status"]), "failed")
+        self.assertTrue(str(summary["finished_at"] or ""))
+        self.assertEqual(int(counts["running"]), 1)
 
     def test_task_store_caps_frontend_display_fields(self) -> None:
         verification_id = f"ver-display-cap-{self.test_id}"
@@ -1274,6 +1299,26 @@ class TestVerificationTaskScheduler(SmokeBase):
         verification_row = VerificationStore(config.db).record_row(verification_id)
         assert verification_row is not None
         self.assertEqual(str(verification_row["status"] or ""), "failed")
+
+    def test_startup_finalize_cancelled_verifications_fills_missing_finished_at(self) -> None:
+        from app.impl.auth.internal.runtime import _startup_finalize_cancelled_verifications
+
+        verification_id = "ver-startup-user-cancel"
+        self._insert_verification_row(verification_id)
+        config.verification_service.update_verification_record_status(
+            verification_id,
+            status="failed",
+            fail_reason="verification cancelled by user",
+            finished=False,
+        )
+
+        _startup_finalize_cancelled_verifications("2026-04-20T00:00:00Z")
+
+        verification_row = VerificationStore(config.db).record_row(verification_id)
+        assert verification_row is not None
+        self.assertEqual(str(verification_row["status"] or ""), "failed")
+        self.assertEqual(str(verification_row["fail_reason"] or ""), "verification cancelled by user")
+        self.assertEqual(str(verification_row["finished_at"] or ""), "2026-04-20T00:00:00Z")
 
     def test_verification_summary_from_tasks_excludes_main_correct_runs_from_solution_columns(self) -> None:
         from app.impl.workspace.verification_dag import LogicalRunSpec, _verification_summary_from_tasks

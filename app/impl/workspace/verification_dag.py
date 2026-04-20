@@ -529,7 +529,10 @@ def _verification_summary_from_tasks(
         "mode": mode,
         "pass_limit": pass_limit,
         "updated_at": now_iso(),
-        "finished_at": now_iso() if verification_status in {Status.OK.value, Status.FAILED.value} and not has_pending_or_running else "",
+        "finished_at": now_iso()
+        if verification_status in {Status.OK.value, Status.FAILED.value}
+        and ((not has_pending_or_running) or (fail_flag and is_cancel_reason(fail_reason)))
+        else "",
     }
     return (verification_status, summary, counts)
 
@@ -931,12 +934,15 @@ def run_workspace_verification_dag(
             )
             if rows and int(counts["total"]) <= 0:
                 raise RuntimeError("verification task graph has rows but computed zero task counts")
-            status, finished = effective_verification_status(
-                task_status=task_status,
-                counts=counts,
-                sanity_checks=sanity_checks,
-                sanity_status=sanity_status,
-            )
+            if fail_flag and is_cancel_reason(fail_reason):
+                status, finished = Status.FAILED.value, True
+            else:
+                status, finished = effective_verification_status(
+                    task_status=task_status,
+                    counts=counts,
+                    sanity_checks=sanity_checks,
+                    sanity_status=sanity_status,
+                )
             config.verification_service.update_verification_record_status(
                 verification_id,
                 status=status,

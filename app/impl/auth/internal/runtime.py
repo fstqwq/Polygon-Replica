@@ -8,6 +8,7 @@ from pathlib import Path
 from app.db import now_iso
 from app.impl.runtime.config import config
 from app.service.verification.task_store import VerificationTaskStore
+from app.service.verification.types import is_cancel_reason
 
 _C = config.constants
 
@@ -152,6 +153,33 @@ def _startup_cancel_task_graph_verifications(reason: str) -> None:
             warnings.warn(f"startup task-graph verification reconciliation failed for {verification_id}: {exc}", RuntimeWarning)
 
 
+def _startup_finalize_cancelled_verifications(now_text: str) -> None:
+    rows = config.db.fetch_all(
+        """
+        SELECT id,fail_reason
+        FROM verifications
+        WHERE status='failed'
+          AND (finished_at IS NULL OR finished_at='')
+        """,
+    )
+    for row in rows:
+        verification_id = str(row["id"] or "")
+        fail_reason = str(row["fail_reason"] or "")
+        if (not verification_id) or (not is_cancel_reason(fail_reason)):
+            continue
+        try:
+            config.db.execute(
+                """
+                UPDATE verifications
+                SET status='failed', fail_reason=?, finished_at=?
+                WHERE id=? AND status='failed' AND (finished_at IS NULL OR finished_at='')
+                """,
+                [fail_reason, now_text, verification_id],
+            )
+        except Exception as exc:
+            warnings.warn(f"startup cancelled verification finalization failed for {verification_id}: {exc}", RuntimeWarning)
+
+
 def _startup_clear_all_caches() -> None:
     try:
         config.judge_fs_index_service.clear_all()
@@ -192,6 +220,7 @@ def _startup_reset_runtime_state() -> None:
     _startup_cancel_judgehost_inflight(cancel_reason, now_text=now_text)
     _startup_cancel_summary_rows("verifications", cancel_reason, now_text=now_text)
     _startup_cancel_task_graph_verifications(cancel_reason)
+    _startup_finalize_cancelled_verifications(now_text)
     _startup_clear_all_caches()
 
 

@@ -1530,9 +1530,10 @@ class TestUIRun(UIBaseSuite):
         self.assertTrue(cancel_messages)
         self.assertIn("verification cancelled", cancel_messages[0])
 
-        verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
+        verification_row = db_fetch_one("SELECT status,finished_at FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or "").lower(), "failed")
+        self.assertTrue(str(verification_row["finished_at"] or ""))
         rows = {
             str(row["id"]): row
             for row in VerificationTaskStore(config.db).list_rows(verification_id)
