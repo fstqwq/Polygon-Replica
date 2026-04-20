@@ -677,7 +677,7 @@ class GitService:
         if p.exists() and p.is_dir():
             raise ValueError("path is a directory")
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        p.write_text(content, encoding="utf-8", newline="\n")
 
     def delete_path(self, workspace: Path, rel_path: str) -> None:
         p = self._resolve_user_path(workspace, rel_path)

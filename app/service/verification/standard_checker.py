@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 from pathlib import Path
 
 from app.service.platform.workspace_path import safe_workspace_path
@@ -89,5 +88,5 @@ def copy_standard_checker(name: str, workspace: Path) -> str:
     target_dir = safe_workspace_path(workspace, "checkers")
     target_dir.mkdir(parents=True, exist_ok=True)
     dest = safe_workspace_path(workspace, f"checkers/{token}")
-    shutil.copy2(source, dest)
+    dest.write_text(source.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     return f"checkers/{token}"

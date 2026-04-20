@@ -13,6 +13,7 @@ from typing import TypedDict, cast
 from app.main_util import UPLOAD_MAX_BYTES
 from app.service.importing.statement_assets import ImportedLegacyStatementAsset, merge_imported_statement_assets
 from app.service.platform.testlib_source import maintained_testlib_header
+from app.service.problem.build_config import dumps_build_config
 from app.service.problem.solution_metadata import normalize_expected_behavior, render_solution_desc
 from app.service.verification.standard_checker import copy_standard_checker
 from app.service.statement.constant import (
@@ -824,8 +825,9 @@ class PolygonPackageImportService:
 
         (workspace / "config").mkdir(parents=True, exist_ok=True)
         (workspace / "config" / "build.json").write_text(
-            json.dumps(build_cfg, indent=2, sort_keys=True) + "\n",
+            dumps_build_config(build_cfg),
             encoding="utf-8",
+            newline="\n",
         )
 
         return {
@@ -977,8 +979,9 @@ class PolygonPackageImportService:
                 build_cfg_changed = True
             if build_cfg_changed:
                 (workspace / "config" / "build.json").write_text(
-                    json.dumps(build_cfg, indent=2, sort_keys=True) + "\n",
+                    dumps_build_config(build_cfg),
                     encoding="utf-8",
+                    newline="\n",
                 )
             problem_cfg = self._write_problem_config(workspace, meta, component_summary)
             warnings: list[str] = []

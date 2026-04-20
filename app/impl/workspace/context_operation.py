@@ -34,6 +34,7 @@ from app.service.problem.solution_metadata import (
     normalize_expected_behavior,
     parse_solution_desc,
 )
+from app.service.problem.build_config import dumps_build_config
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     summarize_tests_spec,
@@ -372,7 +373,7 @@ def write_build_config(cfg_path: Path, payload: dict) -> None:
         else:
             data.pop('generator_sources', None)
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    cfg_path.write_text(dumps_build_config(data), encoding='utf-8', newline='\n')
 
 def dedupe_preserve_order(values: list[str]) -> list[str]:
     result: list[str] = []
