@@ -7,6 +7,7 @@ from .db_helpers import (
     write_preview_summary,
 )
 
+import base64
 import json
 import fcntl
 import uuid
@@ -631,6 +632,7 @@ class TestPreview(SmokeBase):
             tests_meta={},
             sample=True,
             sample_input_custom=False,
+            sample_input_text="",
             uses_custom_sample_input=False,
             sample_output_text="ok\n",
             sample_output_validate=True,
@@ -676,8 +678,8 @@ class TestPreview(SmokeBase):
         self.assertEqual(calls, [("custom_sample_output.py", ["001.in"])])
         self.assertEqual((logs_root / "validate.log").read_text(encoding="utf-8"), "001.in: ok\n")
 
-    def test_validate_custom_sample_outputs_skips_custom_input_without_sample_only(self) -> None:
-        verification_id = self.random_id("ver-validate-sample-skip")
+    def test_validate_custom_sample_outputs_uses_custom_input_without_sample_only(self) -> None:
+        verification_id = self.random_id("ver-validate-sample-custom-input")
         artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
         logs_root = artifact_root / "logs"
         logs_root.mkdir(parents=True, exist_ok=True)
@@ -692,11 +694,78 @@ class TestPreview(SmokeBase):
             tests_meta={},
             sample=True,
             sample_input_custom=True,
+            sample_input_text="custom-input\n",
             uses_custom_sample_input=False,
             sample_output_text="custom-answer\n",
             sample_output_validate=True,
         )
-        with patch.object(config.judgehost_task_service, "enqueue_task") as enqueue_task:
+        calls: list[dict[str, object]] = []
+
+        def _fake_enqueue_task(**kwargs):
+            calls.append(dict(kwargs))
+            return "jt-main-ok" if len(calls) == 1 else "jt-sanity-ok"
+
+        def _fake_wait_for_task_case_result(task_id: str, test_name: str) -> dict[str, object]:
+            self.assertEqual(test_name, "001.in")
+            if task_id == "jt-main-ok":
+                return {
+                    "status": "ok",
+                    "error": "",
+                    "summary": {
+                        "tests": [
+                            {
+                                "test": "001.in",
+                                "verdict": "OK",
+                                "message": "",
+                                "output_ref": "cache://answer",
+                            }
+                        ]
+                    },
+                }
+            self.assertEqual(task_id, "jt-sanity-ok")
+            return {
+                "status": "ok",
+                "error": "",
+                "summary": {
+                    "tests": [
+                        {
+                            "test": "001.in",
+                            "verdict": "OK",
+                            "message": "",
+                        }
+                    ]
+                },
+            }
+
+        def _fake_case_output(task_id: str, test_name: str):
+            self.assertEqual(task_id, "jt-main-ok")
+            self.assertEqual(test_name, "001.in")
+            return ("cache://answer", None, 1)
+
+        def _fake_resolve_artifact_blob(output_ref: str, *, work_root: object = None) -> bytes | None:
+            self.assertEqual(output_ref, "cache://answer")
+            self.assertIsNone(work_root)
+            return b"custom-answer\n"
+
+        payload_base = {
+            "run_config_json": "{}",
+            "problem_limits": {"time_limit_ms": 2000, "memory_limit_mb": 1024, "pass_limit": 1},
+            "binaries_b64": {},
+            "sources_b64": {},
+        }
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "wait_for_task_case_result",
+            side_effect=_fake_wait_for_task_case_result,
+        ), patch.object(
+            config.judgehost_task_service,
+            "domjudge_case_output_for_task",
+            side_effect=_fake_case_output,
+        ), patch.object(
+            config.judgehost_task_service,
+            "resolve_artifact_blob",
+            side_effect=_fake_resolve_artifact_blob,
+        ):
             result = validate_custom_sample_outputs(
                 problem="alice/sample",
                 user="alice",
@@ -704,12 +773,25 @@ class TestPreview(SmokeBase):
                 mode="pass-fail",
                 logs_dir=logs_root,
                 test_plans=[plan],
+                accepted_source_label="solutions/std.cpp",
+                accepted_source_name="std.cpp",
+                accepted_source_bytes=b"int main(){return 0;}\n",
+                run_verification_payload_base=payload_base,
             )
-        enqueue_task.assert_not_called()
-        self.assertEqual(result.status, "unknown")
-        self.assertEqual(result.validated_count, 0)
-        self.assertIn("sample-only verification", result.error)
-        self.assertIn("skip 001.in:", (logs_root / "validate.log").read_text(encoding="utf-8"))
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.validated_count, 1)
+        self.assertEqual([str(call["upload_filename"]) for call in calls], ["std.cpp", "custom_sample_output.py"])
+        self.assertEqual(str(calls[0]["verification_source"]), "main-correct")
+        self.assertEqual(str(calls[0]["task_kind"]), "main-correct")
+        first_payload = dict(calls[0]["prepared_payload"])
+        second_payload = dict(calls[1]["prepared_payload"])
+        first_test = list(dict(first_payload["verification_payload"])["tests"])[0]
+        second_test = list(dict(second_payload["verification_payload"])["tests"])[0]
+        self.assertEqual(first_test["input_b64"], base64.b64encode(b"custom-input\n").decode("ascii"))
+        self.assertEqual(first_test["answer_b64"], "")
+        self.assertEqual(second_test["input_b64"], base64.b64encode(b"custom-input\n").decode("ascii"))
+        self.assertEqual(second_test["answer_b64"], base64.b64encode(b"custom-answer\n").decode("ascii"))
+        self.assertEqual((logs_root / "validate.log").read_text(encoding="utf-8"), "001.in: ok\n")
 
     def test_render_ftl_strips_standalone_directive_lines(self) -> None:
         rendered = render_ftl_template(

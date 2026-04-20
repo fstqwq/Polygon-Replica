@@ -26,6 +26,7 @@ class VerificationTestPlan:
     tests_meta: dict[str, object]
     sample: bool
     sample_input_custom: bool
+    sample_input_text: str
     uses_custom_sample_input: bool
     sample_output_text: str
     sample_output_validate: bool
@@ -195,6 +196,7 @@ def _manual_plan(
     tests_meta: dict[str, object],
     sample: bool = False,
     sample_input_custom: bool = False,
+    sample_input_text: str = "",
     uses_custom_sample_input: bool = False,
     sample_output_text: str = "",
     sample_output_validate: bool = True,
@@ -210,6 +212,7 @@ def _manual_plan(
         tests_meta=tests_meta,
         sample=sample,
         sample_input_custom=sample_input_custom,
+        sample_input_text=sample_input_text,
         uses_custom_sample_input=uses_custom_sample_input,
         sample_output_text=sample_output_text,
         sample_output_validate=sample_output_validate,
@@ -226,6 +229,7 @@ def _generated_plan(
     testlib_header: Path | None,
     sample: bool = False,
     sample_input_custom: bool = False,
+    sample_input_text: str = "",
     uses_custom_sample_input: bool = False,
     sample_output_text: str = "",
     sample_output_validate: bool = True,
@@ -244,6 +248,7 @@ def _generated_plan(
         tests_meta=tests_meta,
         sample=sample,
         sample_input_custom=sample_input_custom,
+        sample_input_text=sample_input_text,
         uses_custom_sample_input=uses_custom_sample_input,
         sample_output_text=sample_output_text,
         sample_output_validate=sample_output_validate,
@@ -296,6 +301,7 @@ def _tests_from_spec(
                 tests_meta=tests_meta,
                 sample=sample,
                 sample_input_custom=bool(sample_input),
+                sample_input_text=sample_input,
                 uses_custom_sample_input=use_custom_sample_input,
                 sample_output_text=sample_output,
                 sample_output_validate=sample_output_validate,
@@ -327,6 +333,7 @@ def _tests_from_spec(
                 testlib_header=testlib_header,
                 sample=sample,
                 sample_input_custom=bool(sample_input),
+                sample_input_text=sample_input,
                 uses_custom_sample_input=False,
                 sample_output_text=sample_output,
                 sample_output_validate=sample_output_validate,

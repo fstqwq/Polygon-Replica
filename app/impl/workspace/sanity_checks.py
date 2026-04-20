@@ -226,6 +226,10 @@ def run_verification_sanity_checks(
     mode: str,
     logs_dir: Path,
     test_plans: list[VerificationTestPlan],
+    accepted_source_label: str = "",
+    accepted_source_name: str = "",
+    accepted_source_bytes: bytes = b"",
+    run_verification_payload_base: dict[str, object] | None = None,
 ) -> VerificationSanityResult:
     checks = planned_sanity_checks(test_plans)
     if not checks:
@@ -256,6 +260,10 @@ def run_verification_sanity_checks(
         mode=mode,
         logs_dir=logs_dir,
         test_plans=test_plans,
+        accepted_source_label=accepted_source_label,
+        accepted_source_name=accepted_source_name,
+        accepted_source_bytes=accepted_source_bytes,
+        run_verification_payload_base=run_verification_payload_base,
     )
     checked_count += int(result.validated_count)
     return VerificationSanityResult(

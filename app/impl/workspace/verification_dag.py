@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import json
-import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -41,6 +39,7 @@ from .sanity_checks import (
     run_verification_sanity_checks,
 )
 from .verification_dag_plan import VerificationTestPlan, build_verification_execution_plan
+from .verification_payload import prepared_payload_for_uploaded_source as _prepared_payload_for_uploaded_source
 from .problem_config import read_problem_config
 
 _C = config.constants
@@ -105,13 +104,6 @@ def _require_online_judgehost() -> None:
         status = {}
     if int(status.get("hosts_online") or 0) <= 0:
         raise RuntimeError("judgehost is offline")
-
-
-def _answer_name(test_name: str) -> str:
-    stem = Path(test_name).stem
-    if not stem:
-        raise RuntimeError("test name is required")
-    return f"{stem}.ans"
 
 
 def _verification_required_blob(verification_id: str, test_name: str, ref_key: str, *, label: str) -> bytes:
@@ -529,45 +521,6 @@ def _effective_verification_kind(
             return Kind.CUSTOM.value
         return Kind.ALL.value
     return Kind.ALL.value
-
-
-def _test_payload_entry(
-    *,
-    test_name: str,
-    input_bytes: bytes,
-    answer_bytes: bytes,
-) -> dict[str, str]:
-    return {
-        "name": test_name,
-        "input_b64": base64.b64encode(input_bytes).decode("ascii"),
-        "answer_name": _answer_name(test_name),
-        "answer_b64": base64.b64encode(answer_bytes).decode("ascii"),
-    }
-
-
-def _prepared_payload_for_uploaded_source(
-    *,
-    source_label: str,
-    run_id: str,
-    test_name: str,
-    input_bytes: bytes,
-    answer_bytes: bytes,
-    verification_payload_base: dict[str, object],
-    extra_sources_b64: dict[str, str] | None = None,
-    manual_validate_only: bool = False,
-) -> dict[str, object]:
-    verification_payload = copy.deepcopy(verification_payload_base)
-    verification_payload["tests"] = [_test_payload_entry(test_name=test_name, input_bytes=input_bytes, answer_bytes=answer_bytes)]
-    prepared: dict[str, object] = {
-        "run_id": run_id,
-        "verification_payload": verification_payload,
-        "source_label": source_label,
-    }
-    if extra_sources_b64:
-        prepared["extra_sources_b64"] = dict(extra_sources_b64)
-    if manual_validate_only:
-        prepared["manual_validate_only"] = True
-    return prepared
 
 
 def _source_bytes_for_path(execution: TaskExecutionContext, source_path: str) -> tuple[str, bytes]:
@@ -1050,6 +1003,7 @@ def run_workspace_verification_dag(
             updated_detail = dict(detail)
             updated_detail["sanity_status"] = sanity_status
             config.verification_service.persist_verification_detail(verification_id, updated_detail)
+            accepted_source_file = source_file_by_path.get(execution_plan.accepted_source_path)
             sanity_result = run_verification_sanity_checks(
                 problem=problem,
                 user=user,
@@ -1057,6 +1011,10 @@ def run_workspace_verification_dag(
                 mode=verification_mode,
                 logs_dir=layout.logs,
                 test_plans=selected_test_plans,
+                accepted_source_label=execution_plan.accepted_source_path,
+                accepted_source_name=accepted_source_file.name if accepted_source_file is not None else "",
+                accepted_source_bytes=accepted_source_file.read_bytes() if accepted_source_file is not None else b"",
+                run_verification_payload_base=execution_plan.run_verification_payload_base,
             )
             detail = config.verification_service.verification_detail(verification_id)
             updated_detail = dict(detail)
