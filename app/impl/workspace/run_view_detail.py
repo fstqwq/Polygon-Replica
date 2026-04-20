@@ -63,6 +63,7 @@ from app.impl.workspace.run_view_list import (
     _run_test_sort_key,
     _run_timeout_ms_from_summary,
 )
+from app.impl.workspace.sanity_display import normalized_sanity_status, verification_status_display
 from app.impl.workspace.run_display import (
     run_actual_display,
     run_actual_short,
@@ -102,10 +103,7 @@ def _yaml_scalar(value: object) -> str:
 
 
 def _normalized_sanity_status(raw: object) -> str:
-    status = str(raw or "").strip().lower()
-    if status in {"passed", "pending", "running", "warning", "failed", "skipped"}:
-        return status
-    return "unknown"
+    return normalized_sanity_status(raw)
 
 
 def _sanity_checks_list(raw: object) -> list[str]:
@@ -1519,6 +1517,8 @@ def build_run_detail_context(
     detail_fail_reason = _rewrite_failure_reason_with_source(detail_fail_reason, columns)
     detail_fail_flag = bool(detail_fail_reason)
     detail_sanity = _detail_sanity_context(verification_id, verification_details)
+    detail_status = str(status_summary['status'])
+    detail_status_display = verification_status_display(detail_status, str(detail_sanity.get('status') or ''))
     stage_results = verification_details.get('stage_results') if isinstance(verification_details.get('stage_results'), dict) else {}
     verification_logs: dict[str, object] = {
         'available': False,
@@ -1599,7 +1599,8 @@ def build_run_detail_context(
         'matched_count': int(status_summary['matched_count']),
         'match_total': int(status_summary['total_count']),
         'all_matched': bool(columns) and all((bool(col.get('matched')) for col in columns)),
-        'detail_status': (status_summary['status']),
+        'detail_status': detail_status,
+        'detail_status_display': detail_status_display,
         'detail_is_main_correct_run': bool(detail_is_main_correct_run),
         'detail_running': bool(status_summary['has_running']),
         'detail_last_updated': last_updated,

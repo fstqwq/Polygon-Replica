@@ -58,7 +58,7 @@
     {% set verification_mode = ctx.verification_status.mode if ctx.verification_status is defined else verification_status %}
     {% set verification_error = ctx.verification_status.error if ctx.verification_status is defined else "" %}
     {% set verification_stale_reason = ctx.verification_status.stale_reason if ctx.verification_status is defined else "" %}
-    {% set verification_tooltip = verification_error if verification_mode == 'failed' else verification_stale_reason if verification_mode == 'stale' else '' %}
+    {% set verification_tooltip = verification_stale_reason if verification_mode == 'stale' else verification_error %}
     {% if verification_mode == 'failed' and (not verification_tooltip) %}
     {% set verification_tooltip = 'verification failed; open Verification for details' %}
     {% elif verification_mode == 'stale' and (not verification_tooltip) %}

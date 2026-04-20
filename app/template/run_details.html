@@ -16,11 +16,11 @@
         <strong>Status</strong>
         {% if detail_status %}
           {% if detail_status == "ok" %}
-          <span class="verification-task-status-state ok">{{ detail_status }}</span>
+          <span class="verification-task-status-state ok">{{ detail_status_display or detail_status }}</span>
           {% elif detail_status == "failed" %}
-          <span class="verification-task-status-state danger">{{ detail_status }}</span>
+          <span class="verification-task-status-state danger">{{ detail_status_display or detail_status }}</span>
           {% else %}
-          <span class="verification-task-status-state info">{{ detail_status }}</span>
+          <span class="verification-task-status-state info">{{ detail_status_display or detail_status }}</span>
           {% endif %}
         {% endif %}
       </div>
@@ -91,14 +91,14 @@
       <thead>
         <tr>
           {% if detail_sanity.available %}
+          {% set sanity_status = detail_sanity.status or 'no' %}
           <th
-            class="verification-detail-corner-status-cell verification-detail-sanity-cell"
+            class="verification-detail-corner-status-cell verification-detail-sanity-cell verification-detail-sanity-cell-{{ sanity_status }}"
             data-popup-open="verification-sanity-popup"
             role="button"
             tabindex="0"
             title="Open sanity checks"
           >
-            {% set sanity_status = detail_sanity.status or 'no' %}
             <span class="stat-line stat-main">Sanity</span>
             {% if sanity_status == "passed" %}
             <span class="stat-line stat-sub verification-detail-sanity-state ok">{{ sanity_status }}</span>

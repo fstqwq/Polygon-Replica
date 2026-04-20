@@ -30,13 +30,13 @@
     <td class="verification-list-kind-cell">{{ r.kind }}</td>
     <td class="verification-list-status-cell">
       {% if r.status == "ok" %}
-      <span class="ok">{{ r.status }}</span>
+      <span class="ok">{{ r.status_display or r.status }}</span>
       {% elif r.status == "running" %}
-      <span class="info">{{ r.status }}</span>
+      <span class="info">{{ r.status_display or r.status }}</span>
       {% elif r.is_failed %}
-      <span class="danger">{{ r.status }}</span>
+      <span class="danger">{{ r.status_display or r.status }}</span>
       {% else %}
-      <span>{{ r.status }}</span>
+      <span>{{ r.status_display or r.status }}</span>
       {% endif %}
     </td>
     <td class="verification-list-reason-cell">

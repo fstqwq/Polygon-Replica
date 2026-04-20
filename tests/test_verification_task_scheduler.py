@@ -234,7 +234,7 @@ class TestVerificationTaskScheduler(SmokeBase):
             sanity_checks=["custom_sample_output"],
             sanity_status="failed",
         )
-        self.assertEqual(status, "failed")
+        self.assertEqual(status, "ok")
         self.assertTrue(finished)
 
         status, finished = effective_verification_status(

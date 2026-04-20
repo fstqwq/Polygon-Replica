@@ -4533,6 +4533,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("Sanity checks", html)
         self.assertNotIn("San check", html)
         self.assertIn("verification-detail-sanity-cell", html)
+        self.assertIn("verification-detail-sanity-cell-failed", html)
         self.assertIn('data-popup-open="verification-sanity-popup"', html)
         self.assertIn('id="verification-sanity-popup"', html)
         self.assertIn("sanity_status: failed", html)
@@ -4614,11 +4615,135 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("verification-detail-sanity-cell-warning", html)
         self.assertIn("verification-detail-sanity-state warn", html)
         self.assertIn("sanity_status: warning", html)
         self.assertIn("- boundary_coverage", html)
         self.assertIn("failed_check: boundary_coverage", html)
         self.assertIn("boundary coverage missing: n max=3", html)
+
+    def test_run_details_sanity_failed_keeps_verification_status_ok(self) -> None:
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-sanity-ok-failed-{uuid.uuid4().hex[:8]}"
+        run_id = f"run-sanity-ok-failed-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-sanity-ok-failed"),
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-04-17T00:00:00Z",
+            finished_at="2026-04-17T00:00:02Z",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "ok",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "tests": [{"test": "001.in", "verdict": "OK", "feedback_files": []}],
+                        "tests_total": 1,
+                    },
+                }
+            ],
+            summary_extra={
+                "sanity_status": "failed",
+                "sanity_checked_count": 1,
+                "sanity_checks": ["empty_output_stability"],
+                "validation_status": "failed",
+                "validated_count": 1,
+                "failed_step": "sanity",
+                "failed_check": "empty_output_stability",
+                "failed_test": "001.in",
+                "error": "empty output probe was accepted",
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-sanity-ok-failed-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "runtime_sec": 0.01,
+                    "cpu_sec": 0.01,
+                    "wall_sec": 0.01,
+                    "memory_kb": 1,
+                }
+            ],
+            edges=[],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('verification-task-status-state ok">ok (Sanity failed)</span>', html)
+        self.assertNotIn('verification-task-status-state danger">failed</span>', html)
+        self.assertIn("verification-detail-sanity-cell-failed", html)
+        self.assertIn("sanity_status: failed", html)
+        self.assertIn("empty output probe was accepted", html)
+
+    def test_run_list_and_submenu_show_sanity_suffix_without_failed_row(self) -> None:
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-sanity-list-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-sanity-list"),
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-04-17T00:00:00Z",
+            finished_at="2026-04-17T00:00:02Z",
+            runs=[],
+            summary_extra={
+                "sanity_status": "warning",
+                "sanity_checked_count": 3,
+                "sanity_checks": ["boundary_coverage"],
+                "validation_status": "warning",
+                "validated_count": 3,
+                "failed_step": "sanity",
+                "failed_check": "boundary_coverage",
+                "error": "boundary coverage missing: n max=3",
+            },
+        )
+
+        rows = workspace_impl.run_list_rows(
+            problem_id,
+            workspace_id,
+            Path(ctx["workspace"]["path"]),
+            limit=10,
+            actor_user_id=int(ctx["user"]["id"]),
+        )
+        row = next(item for item in rows if str(item.get("id")) == verification_id)
+        self.assertEqual(str(row.get("status")), "ok")
+        self.assertEqual(str(row.get("status_display")), "ok (Sanity warning)")
+        self.assertEqual(str(row.get("fail_reason")), "boundary coverage missing: n max=3")
+        self.assertFalse(bool(row.get("is_failed")))
+
+        page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("ok (Sanity warning)", html)
+        self.assertIn("boundary coverage missing: n max=3", html)
+        self.assertNotRegex(html, r'problem-submenu-run-status [^"]*submenu-status-danger[^"]*"[^>]*>\s*ok \(Sanity warning\)')
 
     def test_workflow_pages_emit_files_source_context_links(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

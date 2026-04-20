@@ -1060,43 +1060,32 @@ def run_workspace_verification_dag(
             updated_detail["sanity_checked_count"] = int(sanity_result.checked_count)
             updated_detail["validation_status"] = sanity_result.status
             updated_detail["validated_count"] = int(sanity_result.checked_count)
-            if sanity_result.status == SANITY_FAILED:
+            if sanity_result.status == SANITY_PASSED:
+                updated_detail.pop("failed_step", None)
+                updated_detail.pop("failed_check", None)
+                updated_detail.pop("failed_test", None)
+                updated_detail.pop("error", None)
+            else:
+                updated_detail.pop("failed_step", None)
+                updated_detail.pop("failed_test", None)
+                updated_detail.pop("failed_check", None)
+                updated_detail.pop("error", None)
+            if sanity_result.status in {SANITY_WARNING, SANITY_FAILED}:
                 updated_detail["failed_step"] = "sanity"
                 updated_detail["failed_check"] = sanity_result.check_name
                 updated_detail["failed_test"] = sanity_result.failed_test
                 updated_detail["error"] = sanity_result.error
-                config.verification_service.persist_verification_detail(verification_id, updated_detail)
-                config.verification_service.update_verification_record_status(
-                    verification_id,
-                    status=Status.FAILED.value,
-                    fail_reason=sanity_result.error,
-                    finished=True,
-                )
-                record["status"] = Status.FAILED.value
-                record["fail_reason"] = sanity_result.error
-                summary["status"] = Status.FAILED.value
-                summary["error"] = sanity_result.error
-            else:
-                updated_detail.pop("failed_step", None)
-                updated_detail.pop("failed_test", None)
-                if sanity_result.status == SANITY_WARNING:
-                    updated_detail["failed_step"] = "sanity"
-                    updated_detail["failed_check"] = sanity_result.check_name
-                    updated_detail["error"] = sanity_result.error
-                else:
-                    updated_detail.pop("failed_check", None)
-                if sanity_result.status == SANITY_PASSED:
-                    updated_detail.pop("error", None)
-                config.verification_service.persist_verification_detail(verification_id, updated_detail)
-                config.verification_service.update_verification_record_status(
-                    verification_id,
-                    status=Status.OK.value,
-                    fail_reason="",
-                    finished=True,
-                )
-                record["status"] = Status.OK.value
-                record["fail_reason"] = ""
-                summary["status"] = Status.OK.value
+            config.verification_service.persist_verification_detail(verification_id, updated_detail)
+            config.verification_service.update_verification_record_status(
+                verification_id,
+                status=Status.OK.value,
+                fail_reason="",
+                finished=True,
+            )
+            record["status"] = Status.OK.value
+            record["fail_reason"] = ""
+            summary["status"] = Status.OK.value
+            summary["error"] = ""
         elif sanity_checks and sanity_status == SANITY_PENDING:
             detail = config.verification_service.verification_detail(verification_id)
             updated_detail = dict(detail)

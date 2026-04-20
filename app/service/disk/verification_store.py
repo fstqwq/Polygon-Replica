@@ -23,6 +23,8 @@ class VerificationRecordRow(TypedDict):
     kind: str
     status: str
     fail_reason: str
+    error: str
+    sanity_status: str
     created_at: str
     finished_at: str
 
@@ -32,6 +34,9 @@ class WorkspaceVerificationRow(TypedDict):
     status: str
     signature: str
     kind: str
+    fail_reason: str
+    error: str
+    sanity_status: str
     created_at: str
     finished_at: str
 
@@ -64,6 +69,8 @@ class VerificationStore:
             "kind": str(row["kind"] or ""),
             "status": str(row["status"] or ""),
             "fail_reason": str(row["fail_reason"] or ""),
+            "error": str(row.get("error") or ""),
+            "sanity_status": str(row.get("sanity_status") or ""),
             "created_at": str(row["created_at"] or ""),
             "finished_at": str(row["finished_at"] or ""),
         }
@@ -93,7 +100,7 @@ class VerificationStore:
     def record_row(self, verification_id: str) -> VerificationRecordRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at
+            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE id=?
             """,
@@ -215,7 +222,7 @@ class VerificationStore:
         placeholders = ",".join(("?" for _ in kind_tokens))
         rows = self.db.fetch_all(
             f"""
-            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at
+            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
             ORDER BY created_at DESC
@@ -237,7 +244,7 @@ class VerificationStore:
         kind_tokens = list(kinds) or [Kind.ALL.value, Kind.CUSTOM.value]
         placeholders = ",".join(("?" for _ in kind_tokens))
         sql = f"""
-            SELECT id,status,signature,kind,created_at,finished_at
+            SELECT id,status,signature,kind,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
         """
@@ -253,6 +260,9 @@ class VerificationStore:
                 "status": str(row["status"] or ""),
                 "signature": str(row["signature"] or ""),
                 "kind": str(row["kind"] or ""),
+                "fail_reason": str(row["fail_reason"] or ""),
+                "error": str(row["error"] or ""),
+                "sanity_status": str(row["sanity_status"] or ""),
                 "created_at": str(row["created_at"] or ""),
                 "finished_at": str(row["finished_at"] or ""),
             }
@@ -267,7 +277,7 @@ class VerificationStore:
     ) -> WorkspaceVerificationRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,signature,kind,created_at,finished_at
+            SELECT id,status,signature,kind,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE id=? AND problem_id=? AND workspace_id=?
             """,
@@ -280,6 +290,9 @@ class VerificationStore:
             "status": str(row["status"] or ""),
             "signature": str(row["signature"] or ""),
             "kind": str(row["kind"] or ""),
+            "fail_reason": str(row["fail_reason"] or ""),
+            "error": str(row["error"] or ""),
+            "sanity_status": str(row["sanity_status"] or ""),
             "created_at": str(row["created_at"] or ""),
             "finished_at": str(row["finished_at"] or ""),
         }

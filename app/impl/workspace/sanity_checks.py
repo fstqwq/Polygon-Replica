@@ -69,9 +69,7 @@ def effective_verification_status(
         return (Status.OK.value, True)
     if sanity_status in {SANITY_PENDING, SANITY_RUNNING}:
         return (Status.RUNNING.value, False)
-    if sanity_status == SANITY_FAILED:
-        return (Status.FAILED.value, True)
-    if sanity_status == SANITY_WARNING:
+    if sanity_status in {SANITY_FAILED, SANITY_WARNING}:
         return (Status.OK.value, True)
     return (Status.OK.value, True)
 

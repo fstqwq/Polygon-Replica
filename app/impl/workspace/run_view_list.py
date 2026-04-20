@@ -11,6 +11,7 @@ from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
 from .context_verification import _verification_solution_match
 from .run_display import run_verdict_short
+from .sanity_display import normalized_sanity_status, sanity_status_attention, verification_status_display
 
 
 _C = config.constants
@@ -148,7 +149,12 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
     if not verification_id:
         return None
     status = _normalized_verification_status(str(row.get("status") or ""))
-    fail_reason_display, fail_reason_title = _list_reason_display(row.get("fail_reason") or "")
+    sanity_status = normalized_sanity_status(row.get("sanity_status"))
+    reason_source = row.get("fail_reason") or ""
+    if status == "ok" and sanity_status_attention(sanity_status):
+        reason_source = row.get("error") or ""
+    fail_reason_display, fail_reason_title = _list_reason_display(reason_source)
+    status_display = verification_status_display(status, sanity_status)
     return {
         "index": 0,
         "id": verification_id,
@@ -157,7 +163,9 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
         "created_at": str(row.get("created_at") or ""),
         "finished_at": str(row.get("finished_at") or ""),
         "status": status,
-        "fail_reason": str(row.get("fail_reason") or ""),
+        "status_display": status_display,
+        "sanity_status": sanity_status,
+        "fail_reason": str(reason_source or ""),
         "fail_reason_display": fail_reason_display,
         "fail_reason_title": fail_reason_title,
         "has_running": status == "running",
