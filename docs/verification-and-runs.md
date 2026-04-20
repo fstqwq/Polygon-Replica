@@ -175,7 +175,6 @@ A single verification can write to these places:
 - `runtime/snapshots/<snapshot_id>/src`
 - `runtime/judgehost-runs/<judgehost_task_id>/...`
 - `judge-fs-index/...`
-- `async-task-cache/...`
 - `runtime/worker-queue-events.jsonl`
 
 By current runtime policy, cache-root data is startup-cleared.

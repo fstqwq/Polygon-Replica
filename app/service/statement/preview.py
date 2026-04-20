@@ -22,7 +22,6 @@ from app.service.repository.workspace import WorkspaceService
 from app.service.statement.context import normalize_statement_language
 
 if TYPE_CHECKING:
-    from app.service.platform.async_task_cache import AsyncTaskCacheService
     from app.service.verification.service import VerificationService
 
 
@@ -40,8 +39,6 @@ class PreviewStateRow(TypedDict):
 
 
 class PreviewService:
-    PREVIEW_CACHE_NAMESPACE = "preview.compile"
-
     @dataclass(frozen=True)
     class _SampleVerificationRow:
         index: int
@@ -58,7 +55,6 @@ class PreviewService:
         artifacts: ArtifactService,
         pdf_compiler: TexCompileService,
         verification_service: VerificationService | None = None,
-        async_task_cache_service: AsyncTaskCacheService | None = None,
     ):
         self.db = db
         self._store = PreviewStore(db)
@@ -66,7 +62,6 @@ class PreviewService:
         self.workspace_service = workspace_service
         self.artifacts = artifacts
         self.verification_service = verification_service
-        self._async_task_cache_service = async_task_cache_service
         self.fs_manager = FsManager(
             self.workspace_service.settings.cache_root,
             self.workspace_service.settings.artifacts_root,
@@ -273,60 +268,11 @@ class PreviewService:
         language: str,
         source_commit: str | None = None,
         statement_signature: str | None = None,
-        allow_cache_mutation: bool = True,
     ) -> str | None:
         safe_language = normalize_statement_language(language)
         if not safe_language:
             raise RuntimeError("preview language is required")
-        source = str(source_commit or "").strip()
         signature = str(statement_signature or "").strip()
-        cache_key = {
-            "problem_id": int(problem_id),
-            "workspace_id": int(workspace_id),
-            "source_commit": source if source_commit is not None else "__dirty__",
-            "statement_signature": signature,
-            "language": safe_language,
-            "schema": "statement-preview-cache",
-        }
-
-        def _cached_preview_still_valid(preview_id: str) -> bool:
-            root = self._preview_artifact_root(
-                problem_id=int(problem_id),
-                workspace_id=int(workspace_id),
-                preview_id=preview_id,
-            )
-            if root is None:
-                return False
-            cached_pdf = root / "statement_preview" / "statement.pdf"
-            cached_log = root / "logs" / "latex.log"
-            if not self._is_safe_regular_file(root, cached_pdf, root_resolved=root):
-                return False
-            if not self._is_safe_regular_file(root, cached_log, root_resolved=root):
-                return False
-            row = self._store.get_workspace_preview(int(problem_id), int(workspace_id), preview_id)
-            if row is None:
-                return False
-            if self._summary_language(dict(row["summary"])) != safe_language:
-                return False
-            if row["status"].strip().lower() != "ok":
-                return False
-            if signature:
-                cached_signature = self._summary_statement_signature(row["summary"])
-                if cached_signature != signature:
-                    return False
-            return True
-
-        cache_service = self._async_task_cache_service
-        if cache_service is not None:
-            cached_entry = cache_service.get(self.PREVIEW_CACHE_NAMESPACE, cache_key)
-            if isinstance(cached_entry, dict):
-                cached_obj = cached_value if isinstance(cached_value := cached_entry.get("value"), dict) else {}
-                cached_preview_id_obj = cached_obj.get("preview_id")
-                cached_preview_id = str(cached_preview_id_obj).strip() if cached_preview_id_obj is not None else ""
-                if cached_preview_id and _cached_preview_still_valid(cached_preview_id):
-                    return cached_preview_id
-                if cached_preview_id and allow_cache_mutation:
-                    cache_service.delete(self.PREVIEW_CACHE_NAMESPACE, cache_key)
         rows = self._store.list_cached_ok_previews(
             int(problem_id),
             int(workspace_id),
@@ -354,17 +300,6 @@ class PreviewService:
                 continue
             if not self._is_safe_regular_file(root, cached_log, root_resolved=root):
                 continue
-            if cache_service is not None and allow_cache_mutation:
-                cache_service.put(
-                    self.PREVIEW_CACHE_NAMESPACE,
-                    cache_key,
-                    {"preview_id": preview_id},
-                    tags={
-                        "problem_id": str(problem_id),
-                        "workspace_id": str(workspace_id),
-                        "source_commit": source if source_commit is not None else "__dirty__",
-                    },
-                )
             return preview_id
         return None
 
@@ -721,24 +656,6 @@ class PreviewService:
                 status=status,
                 summary=summary,
             )
-            if status == "ok" and self._async_task_cache_service is not None:
-                self._async_task_cache_service.put(
-                    self.PREVIEW_CACHE_NAMESPACE,
-                    {
-                        "problem_id": int(problem_id),
-                        "workspace_id": int(workspace_id),
-                        "source_commit": source_commit if source_commit else "__dirty__",
-                        "statement_signature": str(statement_signature or "").strip(),
-                        "language": safe_language,
-                        "schema": "statement-preview-cache",
-                    },
-                    {"preview_id": preview_id},
-                    tags={
-                        "problem_id": str(problem_id),
-                        "workspace_id": str(workspace_id),
-                        "source_commit": source_commit if source_commit else "__dirty__",
-                    },
-                )
             self.prune_workspace_preview_history(problem, problem_id, workspace_id, preview_id)
             shutil.rmtree(snapshot.parent, ignore_errors=True)
         return preview_id

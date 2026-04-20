@@ -312,7 +312,6 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 language=current_language,
                 source_commit=workspace_head,
                 statement_signature=current_statement_signature,
-                allow_cache_mutation=False,
             )
             if cached_id:
                 preview_id = cached_id
@@ -324,7 +323,6 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
                 language=current_language,
                 source_commit=None,
                 statement_signature=current_statement_signature,
-                allow_cache_mutation=False,
             )
             if cached_id:
                 preview_id = cached_id

@@ -154,10 +154,6 @@ def _startup_cancel_task_graph_verifications(reason: str) -> None:
 
 def _startup_clear_all_caches() -> None:
     try:
-        config.async_task_cache_service.clear_all()
-    except Exception as exc:
-        warnings.warn(f"startup async cache clear failed: {exc}", RuntimeWarning)
-    try:
         config.judge_fs_index_service.clear_all()
     except Exception as exc:
         warnings.warn(f"startup judge fs index clear failed: {exc}", RuntimeWarning)

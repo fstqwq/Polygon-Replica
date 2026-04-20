@@ -34,7 +34,7 @@ from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job import _run_export_create_worker
 from app.main_util import TEXTAREA_MAX_BYTES
-from app.service.statement.render import ensure_statement_language_sources
+from app.service.statement.render import default_statement_title_for_workspace, ensure_statement_language_sources
 from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
 
@@ -63,7 +63,6 @@ class TestBackendMinimal(SmokeBase):
         durable_log.write_text("event\n", encoding="utf-8")
 
         with (
-            patch.object(config.async_task_cache_service, "clear_all", return_value=None),
             patch.object(config.judge_fs_index_service, "clear_all", return_value=None),
             patch.object(config.judgehost_task_service, "clear_testcase_registry", return_value=None),
         ):
@@ -458,10 +457,10 @@ class TestBackendMinimal(SmokeBase):
         self.assertIn("/statement/assets/upload", html)
         self.assertIn("/statement/assets/delete", html)
 
-    def test_statement_nav_shows_empty_until_multiple_languages_exist(self) -> None:
+    def test_statement_nav_lists_language_names_when_statement_has_content(self) -> None:
         initial_page = page_ctx(self.problem, self.user)
         initial_nav = dict(initial_page["nav_status"]["statement_languages"])
-        self.assertEqual(str(initial_nav.get("text") or ""), "empty")
+        self.assertEqual(str(initial_nav.get("text") or ""), "english")
 
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         ensure_statement_language_sources(ws, "chinese")
@@ -471,8 +470,19 @@ class TestBackendMinimal(SmokeBase):
 
     def test_statement_nav_ignores_legacy_scoring_section_file(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        scoring_path = ws / "statement-sections" / "english" / "scoring.tex"
-        scoring_path.parent.mkdir(parents=True, exist_ok=True)
+        section_root = ws / "statement-sections" / "english"
+        shutil.rmtree(section_root, ignore_errors=True)
+        section_root.mkdir(parents=True, exist_ok=True)
+        for rel, content in {
+            "name.tex": default_statement_title_for_workspace(ws) + "\n",
+            "legend.tex": "",
+            "input.tex": "",
+            "output.tex": "",
+            "interaction.tex": "",
+            "notes.tex": "",
+        }.items():
+            (section_root / rel).write_text(content, encoding="utf-8")
+        scoring_path = section_root / "scoring.tex"
         scoring_path.write_text("", encoding="utf-8")
 
         page = page_ctx(self.problem, self.user)
@@ -584,7 +594,7 @@ class TestBackendMinimal(SmokeBase):
         self.assertEqual(resp.status_code, 303)
         self.assertFalse(attachment.exists())
 
-    def test_preview_run_accepts_default_english_when_no_language_directories_exist(self) -> None:
+    def test_preview_run_rejects_missing_language_directories(self) -> None:
         ws = Path(config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         sections_root = ws / "statement-sections"
         if sections_root.exists():
@@ -595,13 +605,12 @@ class TestBackendMinimal(SmokeBase):
                     path.rmdir()
             sections_root.rmdir()
         preview_id = self.random_id("p-preview-no-language-dirs")
-        with patch.object(config.preview_service, "compile_preview", return_value=preview_id):
+        with patch.object(config.preview_service, "compile_preview", return_value=preview_id) as compile_preview:
             resp = preview_run(self.problem, self.user, page="statement", language="english")
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(
-            f"/problems/{self.problem}/statement?language=english&preview_id={preview_id}",
-            resp.headers.get("location", ""),
-        )
+        self.assertEqual(resp.headers.get("location", ""), f"/problems/{self.problem}/statement")
+        self.assertEqual(_flash_messages_from_response(resp), ["statement language is missing."])
+        compile_preview.assert_not_called()
 
     def test_preview_page_shows_full_sample_build_failure_detail(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

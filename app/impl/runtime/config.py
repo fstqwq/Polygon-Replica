@@ -8,7 +8,6 @@ from app.db import DB
 from app.main_util import configure_runtime_values
 from app.runtime_value import RuntimeValues, build_runtime_values
 from app.service.platform.artifact import ArtifactService
-from app.service.platform.async_task_cache import AsyncTaskCacheService
 from app.service.auth.service import AuthService
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
@@ -55,7 +54,6 @@ class RuntimeConfig:
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
-    async_task_cache_service: AsyncTaskCacheService = field(init=False)
     judge_fs_index_service: JudgeFsIndexService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
@@ -108,7 +106,6 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         self.db = DB(self.settings.db_path)
         self.system_config_service = SystemConfigService(self.db)
-        self.async_task_cache_service = AsyncTaskCacheService(self.db, self.settings.cache_root)
         self.judge_fs_index_service = JudgeFsIndexService(self.settings.cache_root)
         runtime_overrides = self.system_config_service.refresh()
         self.constants = build_runtime_values(runtime_overrides)
@@ -156,7 +153,6 @@ class RuntimeConfig:
             self.artifact_service,
             self.tex_compile_service,
             verification_service=self.verification_service,
-            async_task_cache_service=self.async_task_cache_service,
         )
         self.export_service = ExportService(
             self.db,

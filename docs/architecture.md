@@ -75,7 +75,6 @@ Important domains:
 `service/platform/` provides shared infrastructure:
 - `worker_queue.py`: async worker queue with durable event log
 - `judge_fs_index.py`: content-addressed blob store under cache root
-- `async_task_cache.py`: startup-cleared async result cache
 - `fs/layout.py`: typed filesystem layout helpers
 - `hashing.py`, `git_process.py`, `latex_process.py`, `workspace_path.py`, `system_config.py`
 
@@ -124,7 +123,6 @@ The exact root paths come from environment settings. Relative to those roots, th
     judgehost-runs/<judgehost_task_id>/
     worker-queue-events.jsonl
   judge-fs-index/
-  async-task-cache/
 ```
 
 What each area means:
@@ -134,7 +132,6 @@ What each area means:
 - `runtime/snapshots/<id>/src`: snapshot created for verification/preview/export execution
 - `runtime/judgehost-runs/<task_id>`: temporary judgehost workdirs
 - `judge-fs-index`: content-addressed blobs for testcase files, exact case-cache payloads, and verification artifact blobs
-- `async-task-cache`: startup-cleared async cache namespaces
 
 ### Artifacts root
 
@@ -168,7 +165,6 @@ Important current rules:
 
 At startup the runtime layer:
 - cancels inflight preview, contest, judgehost, and verification rows
-- clears `async-task-cache`
 - clears `judge-fs-index`
 - clears `cache_root/artifacts`
 - clears `cache_root/runtime`

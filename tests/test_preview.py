@@ -16,12 +16,11 @@ from unittest.mock import patch
 from app.service.sandbox.base import ExecResult
 from app.service.problem.test_spec import dumps_tests_spec
 from app.service.statement.constant import (
+    DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     STATEMENT_ASSETS_DIR,
     STATEMENT_PROBLEM_REL,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
-    WF_STYLE_OLYMP_REL,
-    WF_STYLE_STATEMENTS_REL,
 )
 from app.impl.workspace.sample_output_validation import validate_custom_sample_outputs
 from app.impl.workspace.verification_dag_plan import VerificationTestPlan
@@ -50,15 +49,13 @@ class TestPreview(SmokeBase):
         self.assertTrue((ws / "statement-sections" / "english" / "notes.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english" / "example.01").exists())
         self.assertFalse((ws / "statement-sections" / "english" / "example.01.a").exists())
-        self.assertEqual((ws / "statement-sections" / "english" / "legend.tex").read_text(encoding="utf-8"), "")
-        self.assertEqual((ws / "statement-sections" / "english" / "input.tex").read_text(encoding="utf-8"), "")
-        self.assertEqual((ws / "statement-sections" / "english" / "output.tex").read_text(encoding="utf-8"), "")
+        self.assertEqual((ws / "statement-sections" / "english" / "legend.tex").read_text(encoding="utf-8"), "Legend.\n")
+        self.assertEqual((ws / "statement-sections" / "english" / "input.tex").read_text(encoding="utf-8"), "Input.\n")
+        self.assertEqual((ws / "statement-sections" / "english" / "output.tex").read_text(encoding="utf-8"), "Output.\n")
         self.assertEqual((ws / "statement-sections" / "english" / "notes.tex").read_text(encoding="utf-8"), "")
-        repo_root = Path(__file__).resolve().parents[1]
-        expected_ftl = (repo_root / WF_STYLE_STATEMENTS_REL).read_text(encoding="utf-8")
-        expected_olymp = (repo_root / WF_STYLE_OLYMP_REL).read_text(encoding="utf-8")
-        self.assertEqual((ws / STATEMENT_TEMPLATE_REL).read_text(encoding="utf-8"), expected_ftl)
-        self.assertEqual((ws / STATEMENT_STYLE_REL).read_text(encoding="utf-8"), expected_olymp)
+        self.assertIn("\\input{rendered/english/problem.tex}", (ws / STATEMENT_TEMPLATE_REL).read_text(encoding="utf-8"))
+        self.assertIn("${problem.legend}", (ws / STATEMENT_PROBLEM_REL).read_text(encoding="utf-8"))
+        self.assertIn("minimal olymp style for tests", (ws / STATEMENT_STYLE_REL).read_text(encoding="utf-8"))
         self.assertTrue(callable(preview_service.compile_preview))
 
     def test_statement_languages_sort_english_then_chinese_then_alphabetical(self) -> None:
@@ -70,21 +67,28 @@ class TestPreview(SmokeBase):
         self.assertEqual(statement_languages(ws), ["english", "chinese", "arabic", "japanese"])
         self.assertEqual(pick_statement_language(ws), "english")
 
-    def test_find_cached_preview_id_is_partitioned_by_language(self) -> None:
+    def test_find_cached_preview_id_uses_db_artifact_fallback(self) -> None:
         ctx = preview_service.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
 
-        def _insert_preview(preview_id: str, language: str) -> None:
-            layout = config.fs_manager.prepare_preview_layout(preview_id)
-            (layout.statement_preview / "statement.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-            (layout.logs / "latex.log").write_text("ok\n", encoding="utf-8")
+        def _insert_preview(
+            preview_id: str,
+            *,
+            language: str,
+            created_at: str,
+            write_artifacts: bool = True,
+        ) -> None:
+            if write_artifacts:
+                layout = config.fs_manager.prepare_preview_layout(preview_id)
+                (layout.statement_preview / "statement.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+                (layout.logs / "latex.log").write_text("ok\n", encoding="utf-8")
             db_execute(
                 """
                 INSERT INTO previews(id,problem_id,workspace_id,source_commit,source_ref,status,summary_json,created_at)
                 VALUES(?,?,?,?,?,?,?,?)
                 """,
-                [preview_id, problem_id, workspace_id, "head-123", "main", "ok", "{}", "2026-04-11T00:00:00Z"],
+                [preview_id, problem_id, workspace_id, "head-123", "main", "ok", "{}", created_at],
             )
             write_preview_summary(
                 preview_id,
@@ -97,19 +101,45 @@ class TestPreview(SmokeBase):
 
         english_id = f"p-{uuid.uuid4().hex[:12]}"
         chinese_id = f"p-{uuid.uuid4().hex[:12]}"
-        _insert_preview(english_id, "english")
-        _insert_preview(chinese_id, "chinese")
+        missing_latest_id = f"p-{uuid.uuid4().hex[:12]}"
+        _insert_preview(english_id, language="english", created_at="2026-04-11T00:00:00Z")
+        _insert_preview(chinese_id, language="chinese", created_at="2026-04-11T00:00:01Z")
+        _insert_preview(
+            missing_latest_id,
+            language="english",
+            created_at="2026-04-11T00:00:02Z",
+            write_artifacts=False,
+        )
 
-        resolved = preview_service.find_cached_preview_id(
+        resolved_chinese = preview_service.find_cached_preview_id(
             "alice/sample",
             problem_id,
             workspace_id,
             language="chinese",
             source_commit="head-123",
             statement_signature="sig-123",
-            allow_cache_mutation=False,
         )
-        self.assertEqual(resolved, chinese_id)
+        self.assertEqual(resolved_chinese, chinese_id)
+
+        resolved_english = preview_service.find_cached_preview_id(
+            "alice/sample",
+            problem_id,
+            workspace_id,
+            language="english",
+            source_commit="head-123",
+            statement_signature="sig-123",
+        )
+        self.assertEqual(resolved_english, english_id)
+
+        resolved_stale = preview_service.find_cached_preview_id(
+            "alice/sample",
+            problem_id,
+            workspace_id,
+            language="english",
+            source_commit="head-123",
+            statement_signature="sig-other",
+        )
+        self.assertIsNone(resolved_stale)
 
     def test_statement_template_renders_into_main_tex(self) -> None:
         ws = self._workspace_path()
@@ -194,6 +224,7 @@ class TestPreview(SmokeBase):
     def test_statement_template_renders_sections_when_if_condition_uses_gt_operator(self) -> None:
         ws = self._workspace_path()
         statement = ws / "statement"
+        (statement / "problem.tex").write_text(DEFAULT_STATEMENT_PROBLEM_TEMPLATE, encoding="utf-8")
         sections = ws / "statement-sections" / "english"
         sections.mkdir(parents=True, exist_ok=True)
         (sections / "legend.tex").write_text("Legend marker.\n", encoding="utf-8")
@@ -214,6 +245,7 @@ class TestPreview(SmokeBase):
     def test_statement_template_samples_are_loaded_from_tests_spec_manual_entries(self) -> None:
         ws = self._workspace_path()
         statement = ws / "statement"
+        (statement / "problem.tex").write_text(DEFAULT_STATEMENT_PROBLEM_TEMPLATE, encoding="utf-8")
         sections = ws / "statement-sections" / "english"
         sections.mkdir(parents=True, exist_ok=True)
         (sections / "legend.tex").write_text("Legend marker.\n", encoding="utf-8")
@@ -240,6 +272,7 @@ class TestPreview(SmokeBase):
     def test_statement_template_samples_include_generator_entries(self) -> None:
         ws = self._workspace_path()
         statement = ws / "statement"
+        (statement / "problem.tex").write_text(DEFAULT_STATEMENT_PROBLEM_TEMPLATE, encoding="utf-8")
         sections = ws / "statement-sections" / "english"
         sections.mkdir(parents=True, exist_ok=True)
         (sections / "legend.tex").write_text("Legend marker.\n", encoding="utf-8")
