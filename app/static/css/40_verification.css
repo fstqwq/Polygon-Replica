@@ -655,6 +655,16 @@ section.verification-header-section {
   font-weight: 700;
 }
 
+@keyframes verification-running-scan {
+  from {
+    background-position: 0 0, 0 0, 0 0;
+  }
+
+  to {
+    background-position: 0 0, 180% 0, 0 0;
+  }
+}
+
 .verification-detail-table th.tone-ok,
 .verification-detail-table td.tone-ok,
 .verification-detail-table th.tone-fail,
@@ -684,6 +694,16 @@ section.verification-header-section {
 .verification-detail-table th.tone-expected-nonac,
 .verification-detail-table td.tone-expected-nonac {
   --tone-hover-bg: #dbeafe;
+}
+
+.verification-detail-table th.tone-running,
+.verification-detail-table td.tone-running {
+  background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.34) 0 3px, transparent 3px),
+    linear-gradient(110deg, transparent 0 36%, rgba(96, 165, 250, 0.22) 46%, transparent 56%) 0 0 / 180% 100%,
+    var(--tone-bg);
+  animation: verification-running-scan 1.45s linear infinite;
+  color: #1d4ed8;
 }
 
 .verification-detail-table th.tone-neutral,
@@ -758,6 +778,14 @@ section.verification-header-section {
   background: var(--tone-hover-bg);
 }
 
+.verification-detail-table td.tone-running:has(> [data-popup-open="run-test-detail-popup"][data-test-name]):hover,
+.verification-detail-table td.tone-running:has(> [data-popup-open="run-test-detail-popup"][data-test-name]):focus-within {
+  background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.42) 0 3px, transparent 3px),
+    linear-gradient(110deg, transparent 0 36%, rgba(59, 130, 246, 0.26) 46%, transparent 56%) 0 0 / 180% 100%,
+    var(--tone-hover-bg);
+}
+
 .verification-detail-table td:has(> [data-popup-open="run-test-detail-popup"][data-test-name]):focus-within,
 .verification-detail-table th:has(> .col-link):focus-within {
   outline: 2px solid var(--focus-ring);
@@ -787,6 +815,18 @@ section.verification-header-section {
   opacity: 1;
   font-weight: 400;
   white-space: nowrap;
+}
+
+.verification-detail-table .tone-running .vmeta {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verification-detail-table th.tone-running,
+  .verification-detail-table td.tone-running {
+    animation: none;
+  }
 }
 
 .verification-detail-popup {
