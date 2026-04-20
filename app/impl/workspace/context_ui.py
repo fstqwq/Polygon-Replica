@@ -59,7 +59,7 @@ def _system_limit_info() -> SystemLimitInfo:
         'title': 'System limits',
         'description': 'Contact an administrator to change these limits if needed.',
         'rows': [
-            {'label': 'Program output limit', 'value': f'{int(_C.RUN_EXEC_OUTPUT_KB)} KiB'},
+            {'label': 'Program input/output limit', 'value': f'{int(_C.RUN_EXEC_OUTPUT_KB)} KiB'},
             {'label': 'Compilation size limit', 'value': f'{int(_C.TOOLCHAIN_COMPILE_OUTPUT_KB)} KiB'},
             {'label': 'Saved judging log limit', 'value': f'{int(_C.JUDGEHOST_STORED_LOG_LIMIT_BYTES)} bytes'},
         ],

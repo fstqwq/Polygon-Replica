@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from app.service.judgehost.limits import STORED_LOG_TRUNCATED_MARKER
 from app.service.platform.error_text import (
     aux_display_text_limit_bytes,
     bounded_display_text,
@@ -19,6 +20,10 @@ TASK_MAIN_CORRECT = "main-correct"
 
 _COMPILE_DIAGNOSTICS_LIMIT = 64
 _ACCEPTING_VERDICTS = frozenset({"OK", "AC"})
+_GENERATED_INPUT_TRUNCATION_MARKERS = (
+    b"[output storage truncated after",
+    STORED_LOG_TRUNCATED_MARKER,
+)
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,10 @@ def _accepted_verdict(verdict: str) -> bool:
     return str(verdict or "").upper() in _ACCEPTING_VERDICTS
 
 
+def _generated_input_truncated(blob: bytes) -> bool:
+    return any(marker in blob for marker in _GENERATED_INPUT_TRUNCATION_MARKERS)
+
+
 def _final_error_text(parts: _TaskSummaryParts, *, fallback: str) -> str:
     error_text = str(parts.error_text or "").strip()
     if error_text:
@@ -315,6 +324,25 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 diagnostics_json=parts.diagnostics_json,
                 error_text=fail_message,
                 feedback_text=parts.feedback_text,
+                output_ref=materialized_output_ref,
+                fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
+            )
+        if _generated_input_truncated(output_blob):
+            fail_message = f"generated input output was truncated for {test_name}"
+            return TaskExecutionResult(
+                task_id=task_id,
+                status=VerificationTaskStore.TASK_FAILED,
+                verdict="FL",
+                run_id=run_id,
+                judgehost_task_id=judgehost_task_id,
+                runtime_sec=parts.runtime_sec,
+                cpu_sec=parts.cpu_sec,
+                wall_sec=parts.wall_sec,
+                memory_kb=parts.memory_kb,
+                compile_log=parts.compile_log,
+                diagnostics_json=parts.diagnostics_json,
+                error_text=fail_message,
+                feedback_text=fail_message,
                 output_ref=materialized_output_ref,
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
             )

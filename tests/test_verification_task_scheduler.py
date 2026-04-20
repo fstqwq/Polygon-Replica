@@ -742,6 +742,84 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(final_result.feedback_text, "validator rejected generated input\nline 2 detail")
         self.assertEqual(final_result.output_ref, "cache://case/output/001.out")
 
+    def test_finalize_generate_input_truncation_fails_before_persisting_input_ref(self) -> None:
+        from app.service.verification.task_result_finalize import finalize_verification_task_result
+
+        class _JudgehostTaskService:
+            def domjudge_case_output_for_task(self, judgehost_task_id: str, test_name: str) -> tuple[str, None, str]:
+                self.seen = (judgehost_task_id, test_name)
+                return ("", None, "")
+
+            def resolve_artifact_blob(self, output_ref: str, *, work_root: object = None) -> bytes | None:
+                self.seen_output_ref = output_ref
+                return b"50000 50000\n[output storage truncated after 65536 B]\n"
+
+        class _VerificationService:
+            def __init__(self) -> None:
+                self.stored: list[dict[str, object]] = []
+                self.updated: list[tuple[str, str, dict[str, str]]] = []
+
+            def store_verification_blob(self, **kwargs: object) -> str:
+                self.stored.append(dict(kwargs))
+                return "cache://verification/should-not-store"
+
+            def update_verification_artifact_refs(
+                self,
+                verification_id: str,
+                test_name: str,
+                refs: dict[str, str],
+            ) -> dict[str, object]:
+                self.updated.append((verification_id, test_name, dict(refs)))
+                return {}
+
+        fake_task_service = _JudgehostTaskService()
+        fake_verification_service = _VerificationService()
+        fake_config = SimpleNamespace(
+            judgehost_task_service=fake_task_service,
+            verification_service=fake_verification_service,
+        )
+        task_row = {
+            "id": "vt-generate",
+            "verification_id": "ver-truncated-generate",
+            "task_kind": "generate-input",
+            "source_path": "generators/gen.cpp",
+            "test_name": "020.in",
+            "judgehost_task_id": "jt-generate",
+            "run_id": "r-generate",
+            "logical_run_id": "r-generate",
+        }
+        result = {
+            "status": "ok",
+            "summary": {
+                "tests": [
+                    {
+                        "verdict": "OK",
+                        "message": "validator ok",
+                        "output_ref": "cache://case/output/020.out",
+                        "time_ms": 7,
+                        "time_user_ms": 7,
+                        "time_wall_ms": 8,
+                        "memory_kb": 64,
+                    }
+                ]
+            },
+        }
+
+        with patch("app.impl.runtime.config.config", fake_config):
+            final_result = finalize_verification_task_result(task_row, result=result)
+
+        self.assertEqual(final_result.status, VerificationTaskStore.TASK_FAILED)
+        self.assertEqual(final_result.verdict, "FL")
+        self.assertEqual(final_result.error_text, "generated input output was truncated for 020.in")
+        self.assertEqual(final_result.feedback_text, "generated input output was truncated for 020.in")
+        self.assertEqual(final_result.output_ref, "cache://case/output/020.out")
+        self.assertEqual(
+            final_result.fail_flag_reason,
+            "generate-input / generators/gen.cpp / 020.in: generated input output was truncated for 020.in",
+        )
+        self.assertEqual(fake_verification_service.stored, [])
+        self.assertEqual(fake_verification_service.updated, [])
+
     def test_finalize_main_correct_prefers_detailed_summary_error_over_generic_result_error(self) -> None:
         from app.service.verification.task_result_finalize import finalize_verification_task_result
 

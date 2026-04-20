@@ -49,6 +49,8 @@ def judgehost_form_part_limit_bytes(
 
 
 def truncate_stored_log_bytes(raw: bytes, constants: object) -> bytes:
+    # This limit is only for server-side auxiliary logs such as compile output
+    # and compile metadata. Do not use it for program.out/output_run artifacts.
     limit = stored_log_limit_bytes(constants)
     if len(raw) <= limit:
         return raw

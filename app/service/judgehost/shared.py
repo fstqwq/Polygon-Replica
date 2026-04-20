@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import cast
 
-from app.service.judgehost.limits import compile_output_kb, stored_log_limit_bytes
+from app.service.judgehost.limits import compile_output_kb, run_output_kb
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -72,9 +72,10 @@ def domjudge_config_from_constants(constants: object) -> dict[str, object]:
     compile_mem_mb = max(64, int(getattr(constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048))
     return {
         "diskspace_error": 1048576,
-        # DOMjudge interprets output_storage_limit in bytes, unlike
-        # script_filesize_limit, which is configured in KiB.
-        "output_storage_limit": int(stored_log_limit_bytes(constants)),
+        # DOMjudge applies output_storage_limit to program stdout artifacts.
+        # Generator stdout becomes verification input for downstream tasks, so
+        # this must follow the run input/output cap, not the saved-log cap.
+        "output_storage_limit": int(run_output_kb(constants) * 1024),
         "script_timelimit": compile_timeout,
         "script_memory_limit": int(compile_mem_mb * 1024),
         "script_filesize_limit": int(compile_output_kb(constants)),

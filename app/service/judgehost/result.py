@@ -653,6 +653,8 @@ class ResultProcessor:
             return raw
 
         if not compile_only:
+            # Keep program.out intact. For generate-input tasks this is
+            # semantic data consumed by downstream verification tasks.
             _capture_payload_file(
                 "program.out",
                 payload.get("output_run"),
