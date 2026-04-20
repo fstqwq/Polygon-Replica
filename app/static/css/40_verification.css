@@ -566,6 +566,11 @@ section.verification-header-section {
   font-weight: 700;
 }
 
+.verification-detail-sanity-state.warn {
+  color: var(--warn);
+  font-weight: 700;
+}
+
 .verification-detail-sanity-state.info {
   color: var(--tag-info-fg);
   font-weight: 700;

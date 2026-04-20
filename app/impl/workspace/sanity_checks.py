@@ -8,6 +8,10 @@ from pathlib import Path
 from app.impl.runtime.config import config
 from app.service.verification.types import Status
 
+from .boundary_coverage import (
+    BOUNDARY_COVERAGE_CHECK,
+    boundary_coverage_from_feedback,
+)
 from .sample_output_validation import _result_verdict, validate_custom_sample_outputs
 from .verification_dag_plan import VerificationTestPlan
 
@@ -16,6 +20,7 @@ SANITY_RUNNING = "running"
 SANITY_PASSED = "passed"
 SANITY_FAILED = "failed"
 SANITY_SKIPPED = "skipped"
+SANITY_WARNING = "warning"
 CUSTOM_SAMPLE_OUTPUT_CHECK = "custom_sample_output"
 EMPTY_OUTPUT_STABILITY_CHECK = "empty_output_stability"
 UNICODE_OUTPUT_STABILITY_CHECK = "unicode_output_stability"
@@ -40,7 +45,7 @@ class _StabilityProbe:
 def planned_sanity_checks(test_plans: list[VerificationTestPlan]) -> list[str]:
     checks: list[str] = []
     if test_plans:
-        checks.extend([EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK])
+        checks.extend([EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, BOUNDARY_COVERAGE_CHECK])
     for plan in test_plans:
         if plan.sample and plan.sample_output_text and plan.sample_output_validate:
             checks.append(CUSTOM_SAMPLE_OUTPUT_CHECK)
@@ -66,6 +71,8 @@ def effective_verification_status(
         return (Status.RUNNING.value, False)
     if sanity_status == SANITY_FAILED:
         return (Status.FAILED.value, True)
+    if sanity_status == SANITY_WARNING:
+        return (Status.OK.value, True)
     return (Status.OK.value, True)
 
 
@@ -230,6 +237,7 @@ def run_verification_sanity_checks(
     accepted_source_name: str = "",
     accepted_source_bytes: bytes = b"",
     run_verification_payload_base: dict[str, object] | None = None,
+    generate_feedback_by_test: dict[str, str] | None = None,
 ) -> VerificationSanityResult:
     checks = planned_sanity_checks(test_plans)
     if not checks:
@@ -251,25 +259,49 @@ def run_verification_sanity_checks(
     if stability_result.status == SANITY_FAILED:
         return stability_result
     checked_count = int(stability_result.checked_count)
-    if CUSTOM_SAMPLE_OUTPUT_CHECK not in checks:
-        return stability_result
-    result = validate_custom_sample_outputs(
-        problem=problem,
-        user=user,
-        verification_id=verification_id,
-        mode=mode,
-        logs_dir=logs_dir,
+    if CUSTOM_SAMPLE_OUTPUT_CHECK in checks:
+        result = validate_custom_sample_outputs(
+            problem=problem,
+            user=user,
+            verification_id=verification_id,
+            mode=mode,
+            logs_dir=logs_dir,
+            test_plans=test_plans,
+            accepted_source_label=accepted_source_label,
+            accepted_source_name=accepted_source_name,
+            accepted_source_bytes=accepted_source_bytes,
+            run_verification_payload_base=run_verification_payload_base,
+        )
+        checked_count += int(result.validated_count)
+        if result.status == SANITY_FAILED:
+            return VerificationSanityResult(
+                status=result.status,
+                check_name=CUSTOM_SAMPLE_OUTPUT_CHECK,
+                checked_count=checked_count,
+                failed_test=result.failed_test,
+                error=result.error,
+            )
+    boundary_result = boundary_coverage_from_feedback(
+        feedback_by_test=dict(generate_feedback_by_test or {}),
         test_plans=test_plans,
-        accepted_source_label=accepted_source_label,
-        accepted_source_name=accepted_source_name,
-        accepted_source_bytes=accepted_source_bytes,
-        run_verification_payload_base=run_verification_payload_base,
     )
-    checked_count += int(result.validated_count)
+    checked_count += int(boundary_result.checked_count)
+    boundary_log = logs_dir / "boundary.log"
+    boundary_log.parent.mkdir(parents=True, exist_ok=True)
+    if boundary_result.status == SANITY_WARNING:
+        boundary_log.write_text("\n".join(boundary_result.missing) + "\n", encoding="utf-8")
+        return VerificationSanityResult(
+            status=SANITY_WARNING,
+            check_name=BOUNDARY_COVERAGE_CHECK,
+            checked_count=checked_count,
+            failed_test="",
+            error=boundary_result.error,
+        )
+    boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
     return VerificationSanityResult(
-        status=result.status,
-        check_name=CUSTOM_SAMPLE_OUTPUT_CHECK,
+        status=SANITY_PASSED,
+        check_name="",
         checked_count=checked_count,
-        failed_test=result.failed_test,
-        error=result.error,
+        failed_test="",
+        error="",
     )

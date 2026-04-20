@@ -7,6 +7,9 @@ shift 3
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 mkdir -p "$FEEDBACK"
 TEAMOUT="$FEEDBACK/team.out"
+OVERVIEW_LOG="$FEEDBACK/testlib-overview.log"
+OVERVIEW_BEGIN="__POLYGON_TESTLIB_OVERVIEW_BEGIN__"
+OVERVIEW_END="__POLYGON_TESTLIB_OVERVIEW_END__"
 VALIDATE_INPUT=0
 
 if [ "${1:-}" = "--validate-input" ]; then
@@ -99,8 +102,17 @@ if [ ! -x "$VALIDATOR_BIN" ]; then
   echo "validator executable missing" >"$FEEDBACK/judgemessage.txt"
   exit 43
 fi
+append_overview_log() {
+  if [ -s "$OVERVIEW_LOG" ]; then
+    {
+      printf '\n%s\n' "$OVERVIEW_BEGIN"
+      cat "$OVERVIEW_LOG"
+      printf '%s\n' "$OVERVIEW_END"
+    } >>"$FEEDBACK/judgemessage.txt"
+  fi
+}
 set +e
-"$VALIDATOR_BIN" <"$TEAMOUT" >"$FEEDBACK/validator.log" 2>&1
+"$VALIDATOR_BIN" --testOverviewLogFileName "$OVERVIEW_LOG" <"$TEAMOUT" >"$FEEDBACK/validator.log" 2>&1
 VALIDATOR_RC=$?
 set -e
 if [ "$VALIDATOR_RC" -eq 0 ]; then
@@ -109,6 +121,7 @@ if [ "$VALIDATOR_RC" -eq 0 ]; then
   else
     echo "validator ok" >"$FEEDBACK/judgemessage.txt"
   fi
+  append_overview_log
   exit 42
 fi
 if [ -s "$FEEDBACK/validator.log" ]; then

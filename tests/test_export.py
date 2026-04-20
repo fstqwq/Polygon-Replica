@@ -183,6 +183,18 @@ class TestExport(SmokeBase):
         )
         self.assertEqual(status, "validation failed")
 
+    def test_build_validation_status_treats_sanity_warning_as_passed_when_verification_ok(self) -> None:
+        status = export_page_module._build_validation_status(
+            {
+                "status": "ok",
+                "details": {
+                    "sanity_status": "warning",
+                    "validation_status": "warning",
+                },
+            }
+        )
+        self.assertEqual(status, "validation passed")
+
     def test_icpc_export_can_be_imported_as_new_problem(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]

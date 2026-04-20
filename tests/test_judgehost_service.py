@@ -2359,6 +2359,57 @@ class TestJudgehostService(SmokeBase):
             )
             self.assertEqual(bad.returncode, 43, bad.stderr)
 
+    def test_domjudge_generate_compare_script_appends_testlib_overview_log(self) -> None:
+        from app.impl.workspace.boundary_coverage import TESTLIB_OVERVIEW_BEGIN, TESTLIB_OVERVIEW_END
+
+        service = config.judgehost_task_service
+        script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            compare_script = root / "run"
+            test_in = root / "001.in"
+            test_ans = root / "001.ans"
+            feedback = root / "feedback"
+            team_out = root / "program.out"
+            validator = root / "validator"
+            compare_script.write_text(script_text, encoding="utf-8")
+            os.chmod(compare_script, 0o755)
+            test_in.write_text("", encoding="utf-8")
+            test_ans.write_text("", encoding="utf-8")
+            team_out.write_text("42\n", encoding="utf-8")
+            validator.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                "overview=''\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = \"--testOverviewLogFileName\" ]; then\n"
+                "    shift\n"
+                "    overview=\"$1\"\n"
+                "  fi\n"
+                "  shift || true\n"
+                "done\n"
+                "read -r token || exit 1\n"
+                "[ \"$token\" = \"42\" ] || exit 1\n"
+                "[ -n \"$overview\" ] || exit 1\n"
+                "printf '\"n\": min-value-hit\\nconstant-bounds \"n\": 1 3\\nvariable \"n\"\\n' >\"$overview\"\n",
+                encoding="utf-8",
+            )
+            os.chmod(validator, 0o755)
+
+            ok = subprocess.run(
+                [str(compare_script), str(test_in), str(test_ans), str(feedback), str(team_out)],
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=root,
+            )
+            self.assertEqual(ok.returncode, 42, ok.stderr)
+            judge_message = (feedback / "judgemessage.txt").read_text(encoding="utf-8", errors="replace")
+            self.assertIn(TESTLIB_OVERVIEW_BEGIN, judge_message)
+            self.assertIn('"n": min-value-hit', judge_message)
+            self.assertIn('constant-bounds "n": 1 3', judge_message)
+            self.assertIn(TESTLIB_OVERVIEW_END, judge_message)
+
     def test_domjudge_generate_compare_script_prefers_feedback_program_out_over_stdin(self) -> None:
         service = config.judgehost_task_service
         script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")

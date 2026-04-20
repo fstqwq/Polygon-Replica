@@ -96,7 +96,7 @@ def _yaml_scalar(value: object) -> str:
 
 def _normalized_sanity_status(raw: object) -> str:
     status = str(raw or "").strip().lower()
-    if status in {"passed", "pending", "running", "failed", "skipped"}:
+    if status in {"passed", "pending", "running", "warning", "failed", "skipped"}:
         return status
     return "unknown"
 

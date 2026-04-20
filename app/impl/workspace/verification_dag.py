@@ -34,6 +34,7 @@ from .sanity_checks import (
     SANITY_PASSED,
     SANITY_RUNNING,
     SANITY_SKIPPED,
+    SANITY_WARNING,
     effective_verification_status,
     planned_sanity_checks,
     run_verification_sanity_checks,
@@ -319,6 +320,35 @@ def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
         output_ref=str(row["output_ref"] or ""),
         feedback_files=[],
     )
+
+
+def _generate_feedback_by_test(rows: list[VerificationTaskRow]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for row in rows:
+        if str(row["task_kind"] or "") != TASK_GENERATE_INPUT:
+            continue
+        if str(row["status"] or "") != VerificationTaskStore.TASK_DONE:
+            continue
+        test_name = str(row["test_name"] or "")
+        if not test_name:
+            continue
+        feedback_text = ""
+        judgehost_task_id = str(row["judgehost_task_id"] or "")
+        if judgehost_task_id:
+            try:
+                feedback_blob = config.judgehost_task_service.domjudge_case_feedback_blob_for_task(
+                    judgehost_task_id,
+                    test_name,
+                )
+            except Exception:
+                feedback_blob = None
+            if feedback_blob:
+                feedback_text = feedback_blob.decode("utf-8", errors="replace")
+        if not feedback_text:
+            feedback_text = str(row["feedback_text"] or "")
+        if feedback_text:
+            result[test_name] = feedback_text
+    return result
 
 
 def _logical_run_summary(
@@ -1015,6 +1045,7 @@ def run_workspace_verification_dag(
                 accepted_source_name=accepted_source_file.name if accepted_source_file is not None else "",
                 accepted_source_bytes=accepted_source_file.read_bytes() if accepted_source_file is not None else b"",
                 run_verification_payload_base=execution_plan.run_verification_payload_base,
+                generate_feedback_by_test=_generate_feedback_by_test(rows),
             )
             detail = config.verification_service.verification_detail(verification_id)
             updated_detail = dict(detail)
@@ -1041,8 +1072,13 @@ def run_workspace_verification_dag(
                 summary["error"] = sanity_result.error
             else:
                 updated_detail.pop("failed_step", None)
-                updated_detail.pop("failed_check", None)
                 updated_detail.pop("failed_test", None)
+                if sanity_result.status == SANITY_WARNING:
+                    updated_detail["failed_step"] = "sanity"
+                    updated_detail["failed_check"] = sanity_result.check_name
+                    updated_detail["error"] = sanity_result.error
+                else:
+                    updated_detail.pop("failed_check", None)
                 if sanity_result.status == SANITY_PASSED:
                     updated_detail.pop("error", None)
                 config.verification_service.persist_verification_detail(verification_id, updated_detail)

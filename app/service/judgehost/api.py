@@ -282,6 +282,18 @@ class Judgehost:
             return (output_ref, None, case_id)
         return (output_ref, Path(work_root).resolve(), case_id)
 
+    def domjudge_case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:
+        row = self._state.judgehost_state_store.case_for_task(task_id, test_name)
+        if row is None:
+            return None
+        output_diff_ref = str(row["output_diff_rel"] or "")
+        if not output_diff_ref:
+            return None
+        work_root = str(row["work_root"] or "")
+        if work_root:
+            return self.resolve_artifact_blob(output_diff_ref, work_root=Path(work_root).resolve())
+        return self.resolve_artifact_blob(output_diff_ref)
+
     def reset_runtime_state(self) -> None:
         with self._state.state_lock:
             self._state.tasks_by_id.clear()

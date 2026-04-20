@@ -116,6 +116,8 @@
             <span class="stat-line stat-sub verification-detail-sanity-state ok">{{ sanity_status }}</span>
             {% elif sanity_status == "failed" %}
             <span class="stat-line stat-sub verification-detail-sanity-state danger">{{ sanity_status }}</span>
+            {% elif sanity_status == "warning" %}
+            <span class="stat-line stat-sub verification-detail-sanity-state warn">{{ sanity_status }}</span>
             {% elif sanity_status in ["running", "pending"] %}
             <span class="stat-line stat-sub verification-detail-sanity-state info">{{ sanity_status }}</span>
             {% elif sanity_status in ["skipped", "none", "unknown", "no"] %}

@@ -4455,6 +4455,82 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("failed_test: 003.in", html)
         self.assertIn("error: validator reported mismatch", html)
 
+    def test_run_details_sanity_warning_is_visible_without_failed_verification(self) -> None:
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-sanity-warning-{uuid.uuid4().hex[:8]}"
+        run_id = f"run-warning-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-sanity-warning"),
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-04-17T00:00:00Z",
+            finished_at="2026-04-17T00:00:02Z",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "ok",
+                    "source_label": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/accepted.cpp",
+                        "tests": [{"test": "001.in", "verdict": "OK", "feedback_files": []}],
+                        "tests_total": 1,
+                    },
+                }
+            ],
+            summary_extra={
+                "sanity_status": "warning",
+                "sanity_checked_count": 3,
+                "sanity_checks": ["empty_output_stability", "unicode_output_stability", "boundary_coverage"],
+                "validation_status": "warning",
+                "validated_count": 3,
+                "failed_step": "sanity",
+                "failed_check": "boundary_coverage",
+                "failed_test": "",
+                "error": "boundary coverage missing: n max=3",
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-sanity-warning-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/accepted.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "runtime_sec": 0.01,
+                    "cpu_sec": 0.01,
+                    "wall_sec": 0.01,
+                    "memory_kb": 1,
+                }
+            ],
+            edges=[],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("verification-detail-sanity-state warn", html)
+        self.assertIn("sanity_status: warning", html)
+        self.assertIn("- boundary_coverage", html)
+        self.assertIn("failed_check: boundary_coverage", html)
+        self.assertIn("boundary coverage missing: n max=3", html)
+
     def test_workflow_pages_emit_files_source_context_links(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])

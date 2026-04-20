@@ -237,8 +237,18 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(status, "failed")
         self.assertTrue(finished)
 
+        status, finished = effective_verification_status(
+            task_status="ok",
+            counts=counts,
+            sanity_checks=["boundary_coverage"],
+            sanity_status="warning",
+        )
+        self.assertEqual(status, "ok")
+        self.assertTrue(finished)
+
     def test_planned_sanity_checks_include_stability_probes(self) -> None:
         from app.impl.workspace.sanity_checks import (
+            BOUNDARY_COVERAGE_CHECK,
             CUSTOM_SAMPLE_OUTPUT_CHECK,
             EMPTY_OUTPUT_STABILITY_CHECK,
             UNICODE_OUTPUT_STABILITY_CHECK,
@@ -247,12 +257,69 @@ class TestVerificationTaskScheduler(SmokeBase):
 
         self.assertEqual(
             planned_sanity_checks([_sanity_test_plan()]),
-            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK],
+            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, BOUNDARY_COVERAGE_CHECK],
         )
         self.assertEqual(
             planned_sanity_checks([_sanity_test_plan(sample=True, sample_output_text="ok\n")]),
-            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, CUSTOM_SAMPLE_OUTPUT_CHECK],
+            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, BOUNDARY_COVERAGE_CHECK, CUSTOM_SAMPLE_OUTPUT_CHECK],
         )
+
+    def test_boundary_coverage_aggregates_testlib_overview_logs(self) -> None:
+        from app.impl.workspace.boundary_coverage import (
+            TESTLIB_OVERVIEW_BEGIN,
+            TESTLIB_OVERVIEW_END,
+            boundary_coverage_from_feedback,
+        )
+
+        first = (
+            f"{TESTLIB_OVERVIEW_BEGIN}\n"
+            '"n": min-value-hit\n'
+            'constant-bounds "n": 1 3\n'
+            'variable "n"\n'
+            f"{TESTLIB_OVERVIEW_END}\n"
+        )
+        second = (
+            f"{TESTLIB_OVERVIEW_BEGIN}\n"
+            '"n": max-value-hit\n'
+            'constant-bounds "n": 1 3\n'
+            'variable "n"\n'
+            f"{TESTLIB_OVERVIEW_END}\n"
+        )
+        result = boundary_coverage_from_feedback(
+            feedback_by_test={"001.in": first, "002.in": second},
+            test_plans=[_sanity_test_plan(test_name="001.in"), _sanity_test_plan(test_name="002.in")],
+        )
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.checked_count, 1)
+        self.assertEqual(result.missing, [])
+
+    def test_boundary_coverage_warns_for_missing_hits_and_respects_skipped_bounds(self) -> None:
+        from app.impl.workspace.boundary_coverage import (
+            TESTLIB_OVERVIEW_BEGIN,
+            TESTLIB_OVERVIEW_END,
+            boundary_coverage_from_feedback,
+        )
+
+        feedback = (
+            f"{TESTLIB_OVERVIEW_BEGIN}\n"
+            '"n": min-value-hit\n'
+            'constant-bounds "n": 1 3\n'
+            'variable "n"\n'
+            '"~T~": min-value-hit max-value-hit\n'
+            'constant-bounds "~T~": 0 10\n'
+            'variable "~T~"\n'
+            'constant-bounds "x": ? 9\n'
+            'variable "x"\n'
+            f"{TESTLIB_OVERVIEW_END}\n"
+        )
+        result = boundary_coverage_from_feedback(
+            feedback_by_test={"001.in": feedback},
+            test_plans=[_sanity_test_plan()],
+        )
+        self.assertEqual(result.status, "warning")
+        self.assertEqual(result.checked_count, 3)
+        self.assertEqual(result.missing, ["n max=3", "x max=9"])
+        self.assertIn("boundary coverage missing", result.error)
 
     def test_sanity_stability_probes_pass_on_non_ac_non_fl(self) -> None:
         from app.impl.workspace.sanity_checks import run_verification_sanity_checks
@@ -299,6 +366,47 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertTrue(all(call["selected_tests"] == ["001.in"] for call in calls))
         self.assertTrue(all(call["expected_behavior"] == "unknown" for call in calls))
         self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
+
+    def test_sanity_boundary_coverage_warning_keeps_verification_ok(self) -> None:
+        from app.impl.workspace.boundary_coverage import TESTLIB_OVERVIEW_BEGIN, TESTLIB_OVERVIEW_END
+        from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, run_verification_sanity_checks
+
+        verification_id = self.random_id("ver-sanity-boundary")
+        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+
+        def _fake_enqueue_task(**kwargs: object) -> str:
+            return "jt-boundary"
+
+        def _fake_wait_for_task_case_result(_task_id: str, test_name: str) -> dict[str, object]:
+            return {"summary": {"tests": [{"test": test_name, "verdict": "WA", "message": "rejected"}]}}
+
+        feedback = (
+            f"{TESTLIB_OVERVIEW_BEGIN}\n"
+            '"n": min-value-hit\n'
+            'constant-bounds "n": 1 3\n'
+            'variable "n"\n'
+            f"{TESTLIB_OVERVIEW_END}\n"
+        )
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "wait_for_task_case_result",
+            side_effect=_fake_wait_for_task_case_result,
+        ):
+            result = run_verification_sanity_checks(
+                problem=self.problem,
+                user=self.user,
+                verification_id=verification_id,
+                mode="pass-fail",
+                logs_dir=logs_dir,
+                test_plans=[_sanity_test_plan()],
+                generate_feedback_by_test={"001.in": feedback},
+            )
+
+        self.assertEqual(result.status, "warning")
+        self.assertEqual(result.check_name, BOUNDARY_COVERAGE_CHECK)
+        self.assertEqual(result.checked_count, 3)
+        self.assertIn("n max=3", result.error)
+        self.assertIn("n max=3", (logs_dir / "boundary.log").read_text(encoding="utf-8"))
 
     def test_sanity_stability_probe_fails_fast_on_ac(self) -> None:
         from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
