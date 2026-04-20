@@ -110,6 +110,9 @@ TOOLCHAIN_COMPILE_TIMEOUT_SEC = 120
 TOOLCHAIN_COMPILE_MEMORY_MB = 2048
 TOOLCHAIN_COMPILE_PROCESS_LIMIT = 0
 AUX_DISPLAY_TEXT_LIMIT_BYTES = 2048
+# Compile/compare sandbox file cap in KiB. This is not a UI or persisted log
+# display limit; it must stay large enough for normal compiler/checker output.
+TOOLCHAIN_COMPILE_OUTPUT_KB = 262144
 TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC = 600
 TOOLCHAIN_CACHE_MAX_BYTES = 2147483648
 TOOLCHAIN_CACHE_MAX_ENTRIES = 0
@@ -117,9 +120,12 @@ VERIFICATION_EXEC_MEMORY_MB = 1024
 VERIFICATION_EXEC_PROCESS_LIMIT = 64
 RUN_EXEC_MEMORY_MB = 1024
 RUN_EXEC_PROCESS_LIMIT = 64
-# Judgehost uses this KiB value for run output and script filesize caps. Shared
-# DOMjudge config converts it to bytes for output_storage_limit.
+# Judgehost run-stage stdout cap in KiB. Compile/compare script file caps use
+# TOOLCHAIN_COMPILE_OUTPUT_KB instead.
 RUN_EXEC_OUTPUT_KB = 65536
+# Persisted/in-memory judgehost auxiliary log cap in bytes. Compile output and
+# compile metadata are truncated to this size before base64 storage.
+JUDGEHOST_STORED_LOG_LIMIT_BYTES = 65536
 RUN_WALL_TIME_SLACK_PASS_FAIL_SEC = 1
 RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC = 15
 RUN_WALL_TIME_SLACK_INTERACTIVE_SEC = 15
@@ -291,6 +297,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "TOOLCHAIN_COMPILE_MEMORY_MB": {"type": "int", "min": 64, "max": 262144, "description": "Compilation memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_COMPILE_PROCESS_LIMIT": {"type": "int", "min": 0, "max": 4096, "description": "Compilation process count limit (0 disables RLIMIT_NPROC).", "restart_required": False, "impact": "runtime"},
     "AUX_DISPLAY_TEXT_LIMIT_BYTES": {"type": "int", "min": 256, "max": 1048576, "description": "Unified byte cap for front-end-facing auxiliary text such as compile, error, feedback, and diagnostic messages.", "restart_required": False, "impact": "runtime"},
+    "TOOLCHAIN_COMPILE_OUTPUT_KB": {"type": "int", "min": 1024, "max": 1048576, "description": "Judgehost compile/compare sandbox file size cap in KiB; this is not the saved or displayed log limit.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC": {"type": "int", "min": 0, "max": 86400, "description": "Compile cache cleanup interval in seconds.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_MAX_BYTES": {"type": "int", "min": 0, "max": 1125899906842624, "description": "Compile cache size cap in bytes.", "restart_required": False, "impact": "runtime"},
     "TOOLCHAIN_CACHE_MAX_ENTRIES": {"type": "int", "min": 0, "max": 10000000, "description": "Compile cache entry cap (0 disables entry-count eviction).", "restart_required": False, "impact": "runtime"},
@@ -298,7 +305,8 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "VERIFICATION_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Verification-stage sandbox process limit.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_MEMORY_MB": {"type": "int", "min": 16, "max": 262144, "description": "Run-time sandbox memory limit in MB.", "restart_required": False, "impact": "runtime"},
     "RUN_EXEC_PROCESS_LIMIT": {"type": "int", "min": 1, "max": 4096, "description": "Run-time sandbox process limit.", "restart_required": False, "impact": "runtime"},
-    "RUN_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Unified judgehost size cap in KiB for run output and compile/compare sandbox file limits; output_storage_limit derives from this value but is written to DOMjudge in bytes.", "restart_required": False, "impact": "runtime"},
+    "RUN_EXEC_OUTPUT_KB": {"type": "int", "min": 64, "max": 1048576, "description": "Judgehost run-stage stdout cap in KiB; compile/compare sandbox output uses TOOLCHAIN_COMPILE_OUTPUT_KB.", "restart_required": False, "impact": "runtime"},
+    "JUDGEHOST_STORED_LOG_LIMIT_BYTES": {"type": "int", "min": 1024, "max": 16777216, "description": "Max bytes of judgehost auxiliary compile output and compile metadata stored server-side before truncation.", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_PASS_FAIL_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for pass-fail runs (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for pass-limit runs with pass_limit > 1 (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
     "RUN_WALL_TIME_SLACK_INTERACTIVE_SEC": {"type": "int", "min": 0, "max": 300, "description": "Wall-time slack seconds for interactive runs (effective timeout = 2*TL + slack).", "restart_required": False, "impact": "runtime"},
@@ -333,6 +341,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     PASSWORD_MAX_LEN,
     TOOLCHAIN_COMPILE_PROCESS_LIMIT,
     AUX_DISPLAY_TEXT_LIMIT_BYTES,
+    TOOLCHAIN_COMPILE_OUTPUT_KB,
     TOOLCHAIN_CACHE_CLEANUP_INTERVAL_SEC,
     TOOLCHAIN_CACHE_MAX_BYTES,
     TOOLCHAIN_CACHE_MAX_ENTRIES,
@@ -342,6 +351,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     PREVIEW_TEX_MEMORY_MB,
     PREVIEW_TEX_PROCESS_LIMIT,
     PREVIEW_TEX_OUTPUT_KB,
+    JUDGEHOST_STORED_LOG_LIMIT_BYTES,
 )
 
 ADMIN_CONFIG_DEFAULTS: dict[str, object] = {

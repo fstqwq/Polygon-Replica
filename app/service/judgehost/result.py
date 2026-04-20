@@ -16,6 +16,7 @@ from app.service.judgehost.shared import (
 from app.db import now_iso
 from app.service.judgehost.domjudge.cache import domjudge_json_hash, domjudge_source_hash
 from app.service.judgehost.domjudge.client import domjudge_parse_script_id, domjudge_script_hash_field, domjudge_script_id
+from app.service.judgehost.limits import truncate_stored_log_bytes
 from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_feedback_text_and_files,
@@ -586,7 +587,7 @@ class ResultProcessor:
         def _payload_blob_as_b64(value: object) -> str:
             raw = self._toolkit.payload_blob_bytes(value)
             if raw:
-                return base64.b64encode(raw).decode("ascii")
+                return base64.b64encode(truncate_stored_log_bytes(raw, self._s.constants)).decode("ascii")
             return domjudge_text(value)
 
         compile_output = _payload_blob_as_b64(payload.get("output_compile"))

@@ -2079,17 +2079,19 @@ class TestJudgehostService(SmokeBase):
     def test_domjudge_config_uses_kib_for_script_filesize_and_bytes_for_output_storage(self) -> None:
         service = config.judgehost_task_service
         cfg = service.domjudge_config()
-        run_output_kb = int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536)
+        compile_output_kb = int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
+        stored_log_limit_bytes = int(getattr(service._state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
         aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(str(cfg.get("timelimit_overshoot") or ""), "1s|100%")
         self.assertEqual(
             int(cfg.get("output_storage_limit") or 0),
-            run_output_kb * 1024,
+            stored_log_limit_bytes,
         )
         self.assertEqual(
             int(cfg.get("script_filesize_limit") or 0),
-            run_output_kb,
+            compile_output_kb,
         )
+        self.assertGreaterEqual(int(cfg.get("script_filesize_limit") or 0), 1024)
         self.assertNotEqual(
             int(cfg.get("output_storage_limit") or 0),
             int(cfg.get("script_filesize_limit") or 0),
@@ -3611,6 +3613,69 @@ class TestJudgehostService(SmokeBase):
             self.assertTrue(str(row["output_diff_rel"] or "").startswith("cache://"))
             self.assertTrue(str(row["metadata_rel"] or "").startswith("cache://"))
 
+    def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service._state.enabled
+        old_token = service._state.api_token
+        old_username = service._state.api_username
+        old_include_build_payload = service._state.include_build_payload
+        self.addCleanup(setattr, service._state, "enabled", old_enabled)
+        self.addCleanup(setattr, service._state, "api_token", old_token)
+        self.addCleanup(setattr, service._state, "api_username", old_username)
+        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
+        service._state.enabled = True
+        service._state.api_token = "test-token"
+        service._state.api_username = "judgehost"
+        service._state.include_build_payload = True
+
+        verification_id = f"b-jh-compile-log-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-compile-log-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id="inv-domjudge-compile-log",
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        service.domjudge_register_host("judgehost-compile-log")
+        tasks = service.domjudge_fetch_work("judgehost-compile-log", max_batchsize=1)
+        self.assertEqual(len(tasks), 1)
+        case_id = int(tasks[0].get("judgetaskid") or 0)
+        case_row = judgehost_fetch_case(service, case_id)
+        self.assertIsNotNone(case_row)
+        assert case_row is not None
+        job_id = int(case_row["job_id"])
+
+        limit = int(getattr(service._state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
+        service.domjudge_update_judging(
+            "judgehost-compile-log",
+            case_id,
+            {
+                "compile_success": "1",
+                "output_compile": b"A" * (limit + 8192),
+                "compile_metadata": b"B" * (limit + 4096),
+            },
+        )
+
+        job_row = judgehost_fetch_job(service, job_id)
+        self.assertIsNotNone(job_row)
+        assert job_row is not None
+        stored_compile_output = base64.b64decode(str(job_row["compile_output_b64"] or ""))
+        stored_compile_metadata = base64.b64decode(str(job_row["compile_metadata_b64"] or ""))
+        self.assertLessEqual(len(stored_compile_output), limit)
+        self.assertLessEqual(len(stored_compile_metadata), limit)
+        self.assertIn(b"...[truncated]", stored_compile_output)
+        self.assertIn(b"...[truncated]", stored_compile_metadata)
+
     def test_domjudge_fetch_work_endpoint_requires_hostname(self) -> None:
         from app.main import app
 
@@ -3981,11 +4046,11 @@ class TestJudgehostService(SmokeBase):
             int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
         )
         self.assertEqual(int(run_config.get("pass_limit") or 0), 1)
-        run_output_kb = int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536)
+        compile_output_kb = int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
         aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(
             int(compare_config.get("script_filesize_limit") or 0),
-            run_output_kb,
+            compile_output_kb,
         )
         self.assertEqual(
             int(compare_config.get("script_memory_limit") or 0),
@@ -3993,8 +4058,10 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(
             int(compile_config.get("script_filesize_limit") or 0),
-            run_output_kb,
+            compile_output_kb,
         )
+        self.assertGreaterEqual(int(compare_config.get("script_filesize_limit") or 0), 1024)
+        self.assertGreaterEqual(int(compile_config.get("script_filesize_limit") or 0), 1024)
         self.assertNotEqual(
             int(compare_config.get("script_filesize_limit") or 0),
             (aux_limit_bytes + 1023) // 1024,
