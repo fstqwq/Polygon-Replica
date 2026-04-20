@@ -4,36 +4,12 @@
 {% block content %}
 <div class="page-title-inline page-title-inline-status">
   <h1 class="page-title">Verification</h1>
-  {% if cancel_available or (rerun_solution_paths and not detail_running) or detail_last_updated %}
-  <div class="verification-page-title-tools">
-    {% if detail_last_updated %}
-    <div class="muted verification-detail-meta">Last&nbsp;updated:&nbsp;{{ (detail_last_updated | local_time) | replace(' ', '&nbsp;') | safe }}</div>
-    {% endif %}
-    <div class="verification-detail-actions">
-      {% if cancel_available %}
-      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/cancel">
-        <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
-        <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
-      </form>
-      {% endif %}
-      {% if rerun_solution_paths and not detail_running %}
-      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/execute">
-        {% for p in rerun_solution_paths %}
-        <input type="hidden" name="solution_paths" value="{{ p }}" />
-        {% endfor %}
-        <input type="hidden" name="force_recompile" value="1" />
-        <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge</a>
-      </form>
-      {% endif %}
-    </div>
-  </div>
-  {% endif %}
 </div>
 {% include "_flash_message.html" %}
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 
 <section class="verification-header-section">
-  {% if detail_status or detail_task_counts or detail_running_tasks or detail_fail_flag %}
+  {% if detail_status or detail_task_counts or detail_fail_flag or detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
   <div class="preview-card verification-task-status-card">
     <div class="preview-head verification-task-status-head">
       <div class="verification-task-status-title">
@@ -48,8 +24,34 @@
           {% endif %}
         {% endif %}
       </div>
+      {% if detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
+      <div class="verification-task-status-tools">
+        {% if detail_last_updated %}
+        <div class="muted verification-detail-meta">Last&nbsp;updated:&nbsp;{{ (detail_last_updated | local_time) | replace(' ', '&nbsp;') | safe }}</div>
+        {% endif %}
+        {% if cancel_available or (rerun_solution_paths and not detail_running) %}
+        <div class="verification-detail-actions">
+          {% if cancel_available %}
+          <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/cancel">
+            <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
+            <a href="#" class="linkish danger-link" data-submit-form="1">Cancel</a>
+          </form>
+          {% endif %}
+          {% if rerun_solution_paths and not detail_running %}
+          <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/execute">
+            {% for p in rerun_solution_paths %}
+            <input type="hidden" name="solution_paths" value="{{ p }}" />
+            {% endfor %}
+            <input type="hidden" name="force_recompile" value="1" />
+            <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge</a>
+          </form>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
-    <div class="verification-task-status-grid{% if detail_running_tasks or detail_running %} verification-task-status-grid-split{% endif %}">
+    <div class="verification-task-status-grid">
       <div class="verification-task-status-main">
         {% if detail_fail_flag and detail_status == "failed" %}
         <p class="verification-task-fail">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
@@ -67,20 +69,6 @@
         </p>
         {% endif %}
       </div>
-      {% if detail_running_tasks or detail_running %}
-      <div class="verification-task-status-side">
-        <strong>Running Now</strong>
-        {% if detail_running_tasks %}
-        <ul>
-          {% for task in detail_running_tasks %}
-          <li>{{ task.label }}</li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="muted">Waiting for running-task updates.</p>
-        {% endif %}
-      </div>
-      {% endif %}
     </div>
   </div>
   {% endif %}

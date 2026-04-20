@@ -57,17 +57,6 @@
   grid-template-columns: auto minmax(0, 1fr);
 }
 
-.verification-page-title-tools {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-4);
-  white-space: nowrap;
-  min-width: 0;
-  width: 100%;
-  font-size: var(--font-size-body);
-  line-height: 1.2;
-}
-
 section.verification-header-section {
   border: 0;
   background: transparent;
@@ -91,17 +80,6 @@ section.verification-header-section {
   gap: var(--space-5);
   flex-wrap: wrap;
   margin-left: auto;
-}
-
-.verification-page-title-tools .verification-detail-actions {
-  gap: var(--space-4);
-  flex-wrap: nowrap;
-  align-items: baseline;
-}
-
-.verification-page-title-tools .verification-detail-actions .linkish {
-  display: inline-block;
-  line-height: inherit;
 }
 
 .verification-detail-topline .verification-inline-action {
@@ -133,18 +111,33 @@ section.verification-header-section {
   white-space: nowrap;
 }
 
+.verification-task-status-tools {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.verification-task-status-tools .verification-detail-actions {
+  gap: var(--space-4);
+  flex-wrap: nowrap;
+  align-items: baseline;
+  margin-left: 0;
+}
+
+.verification-task-status-tools .verification-detail-actions .linkish {
+  display: inline-block;
+  line-height: inherit;
+}
+
 .verification-task-status-grid {
   display: grid;
   gap: var(--space-4);
 }
 
-.verification-task-status-grid-split {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: start;
-}
-
-.verification-task-status-main,
-.verification-task-status-side {
+.verification-task-status-main {
   min-width: 0;
 }
 
@@ -153,9 +146,7 @@ section.verification-header-section {
   gap: var(--space-2);
 }
 
-.verification-task-status-main > p,
-.verification-task-status-side > p,
-.verification-task-status-side > ul {
+.verification-task-status-main > p {
   margin: 0;
 }
 
@@ -168,15 +159,6 @@ section.verification-header-section {
 
 .verification-task-status-link {
   white-space: nowrap;
-}
-
-.verification-task-status-side {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.verification-task-status-side > ul {
-  padding-left: var(--space-5);
 }
 
 .verification-task-note,
@@ -192,16 +174,6 @@ section.verification-header-section {
 
 .verification-task-fail {
   color: var(--danger);
-}
-
-@media (max-width: 800px) {
-  .verification-page-title-tools {
-    max-width: 100%;
-  }
-
-  .verification-task-status-grid-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 .verification-lifecycle-tabs {

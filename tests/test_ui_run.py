@@ -1970,15 +1970,16 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('class="verification-page-title-tools"', html)
+        self.assertNotIn('class="verification-page-title-tools"', html)
+        self.assertIn('class="verification-task-status-tools"', html)
         self.assertIn("Last&nbsp;updated:", html)
         self.assertRegex(
             html,
             r'Status</strong>\s*<span class="verification-task-status-state info">running</span>',
         )
         self.assertIn('class="verification-task-note">luangao.cpp: cancelled on service startup</p>', html)
-        self.assertIn("Running Now", html)
-        self.assertIn("Waiting for running-task updates.", html)
+        self.assertNotIn("Running Now", html)
+        self.assertNotIn("Waiting for running-task updates.", html)
         self.assertNotIn('class="page-title-status', html)
         self.assertNotIn('<span class="danger">running</span>', html)
 
