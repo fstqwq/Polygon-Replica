@@ -2426,6 +2426,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("001.in", html)
         self.assertIn("002.in", html)
         self.assertIn("running", html)
+        self.assertIn('class="vcell tone-running"', html)
         self.assertNotIn('class="vmeta">pending</span>', html)
 
     def test_run_details_task_graph_keeps_cancelled_solution_columns_visible_after_failed_cancel(self) -> None:
@@ -3632,6 +3633,89 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(workspace_impl._run_cell_kind("FL", "unknown"), "fail")
         self.assertEqual(workspace_impl._run_cell_kind("CE", "rejected"), "expected-nonac")
         self.assertEqual(workspace_impl._run_cell_kind("OK", "accepted"), "ok")
+
+    def test_run_details_marks_unexpected_ac_text_without_changing_neutral_cell(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"inv-unexpected-ac-text-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-unexpected-ac-text-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-unexpected-ac-text"),
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-03-24T00:00:00Z",
+            finished_at="2026-03-24T00:00:01Z",
+            runs=[
+                {
+                    "id": run_id,
+                    "status": "ok",
+                    "source_label": "solutions/wa.cpp",
+                    "expected_behavior": "wrong_answer",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/wa.cpp",
+                        "task_kind": "solution-run",
+                        "expected_behavior": "wrong_answer",
+                        "tests": [{"test": "001.in", "verdict": "OK", "time_ms": 1, "memory_kb": 0}],
+                        "tests_total": 1,
+                    },
+                },
+            ],
+            summary_extra={
+                "status": "ok",
+                "verification_id": verification_id,
+                "execution_model": "task-dag",
+                "task_graph": True,
+                "solution_count": 1,
+                "solutions": [
+                    {
+                        "source_path": "solutions/wa.cpp",
+                        "run_id": run_id,
+                        "task_kind": "solution-run",
+                        "expected_behavior": "wrong_answer",
+                    },
+                ],
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-unexpected-ac-text-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/wa.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "wrong_answer",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "runtime_sec": 0.001,
+                    "cpu_sec": 0.001,
+                    "wall_sec": 0.001,
+                    "memory_kb": 0,
+                    "run_id": run_id,
+                },
+            ],
+            edges=[],
+        )
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('<td class="vcell tone-neutral">', html)
+        self.assertIn('<span class="vcode vcode-info">AC</span>', html)
+        self.assertIn('<span class="stat-line stat-main vcode-info">AC</span>', html)
 
     def test_verification_match_uses_failed_status_set_for_tl_and_rejected(self) -> None:
         mixed_tl_re = {

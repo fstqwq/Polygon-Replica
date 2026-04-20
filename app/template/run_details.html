@@ -147,7 +147,7 @@
           </th>
           {% for col in detail_columns %}
           <th class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
-            <span class="stat-line stat-main">{{ col.got_display or col.got_short }}</span>
+            <span class="stat-line stat-main{{ ' vcode-info' if col.result_text_tone == 'info' else '' }}">{{ col.got_display or col.got_short }}</span>
             {% set expected_token = col.expected_display or '--' %}
             <span class="stat-line stat-sub">{{ expected_token }}</span>
           </th>
@@ -174,9 +174,9 @@
         {% set col = detail_columns[loop.index0] %}
         <td class="vcell tone-{{ cell.kind }}">
           {% if row.has_detail %}
-          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}</a>
+          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode{{ ' vcode-info' if cell.text_tone == 'info' else '' }}">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}</a>
           {% else %}
-          <span class="vcode">{{ cell.short }}</span>
+          <span class="vcode{{ ' vcode-info' if cell.text_tone == 'info' else '' }}">{{ cell.short }}</span>
           {% if cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
           {% endif %}
         </td>

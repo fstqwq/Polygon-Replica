@@ -96,7 +96,7 @@
         <tr>
           <td class="status-cell tone-{{ final_row.kind or 'neutral' }}">
             <div class="status-inline">
-              <span class="vcode">{{ final_row.verdict_short or '-' }}</span>
+              <span class="vcode{{ ' vcode-info' if final_row.text_tone == 'info' else '' }}">{{ final_row.verdict_short or '-' }}</span>
               {% if final_row.time_display and final_row.time_display != '-' %}
               <span class="vmeta">{{ final_row.time_display }}</span>
               {% endif %}

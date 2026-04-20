@@ -80,6 +80,13 @@ _TRANSIENT_REASON_TOKENS = {"running", "queued", "pending"}
 _YAML_SIMPLE_RE = re.compile(r"^[A-Za-z0-9_./@+=,\-() ]+$")
 
 
+def _run_cell_text_tone(verdict: str, expected_behavior: str) -> str:
+    short = run_verdict_short(verdict)
+    if short == "AC" and expected_behavior not in {"accepted", "unknown"}:
+        return "info"
+    return ""
+
+
 def _yaml_scalar(value: object) -> str:
     text = "" if value is None else str(value)
     if text == "":
@@ -517,7 +524,8 @@ def build_run_detail_context(
                 'text': '..',
                 'short': '..',
                 'metrics': 'running',
-                'kind': 'neutral',
+                'kind': 'running',
+                'text_tone': '',
                 'detail': None,
             }
         if task_status == VerificationTaskStore.TASK_FAILED:
@@ -526,6 +534,7 @@ def build_run_detail_context(
                 'short': 'FL',
                 'metrics': 'failed',
                 'kind': 'fail',
+                'text_tone': '',
                 'detail': None,
             }
         if task_status == VerificationTaskStore.TASK_CANCELLED:
@@ -534,6 +543,7 @@ def build_run_detail_context(
                 'short': '--',
                 'metrics': 'cancelled',
                 'kind': 'neutral',
+                'text_tone': '',
                 'detail': None,
             }
         return {
@@ -541,6 +551,7 @@ def build_run_detail_context(
             'short': '..',
             'metrics': '',
             'kind': 'neutral',
+            'text_tone': '',
             'detail': None,
         }
 
@@ -883,6 +894,7 @@ def build_run_detail_context(
         got_short = run_actual_short(status, summary)
         got_display = run_actual_display(status, summary)
         result_kind = _run_cell_kind(got_short, expected_behavior) if got_short else 'neutral'
+        result_text_tone = _run_cell_text_tone(got_short, expected_behavior)
         result_tone_class = f'tone-{result_kind}'
         expected_mismatch = bool(expected_is_ac_only and completed and (not matched))
         execution_skipped_from_summary = bool(summary.get('execution_skipped'))
@@ -987,7 +999,7 @@ def build_run_detail_context(
                                 feedback_rel = (feedback_items[0] or '')
                             pass_time_display = run_cpu_wall_ms_text(pass_time_user_ms, pass_time_wall_ms)
                             pass_memory_display = run_memory_mb_text(pass_memory_kb)
-                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': pass_time_display, 'memory_display': pass_memory_display, 'status_display': f'{pass_verdict_short} · {pass_time_display} · {pass_memory_display}', 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'text_tone': _run_cell_text_tone(pass_verdict, expected_behavior), 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': pass_time_display, 'memory_display': pass_memory_display, 'status_display': f'{pass_verdict_short} · {pass_time_display} · {pass_memory_display}', 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     if not pass_rows:
                         output_rel = (item.get('output_ref') or '')
                         output_task_id = str(item.get('task_id') or '')
@@ -996,7 +1008,7 @@ def build_run_detail_context(
                         if feedback_items:
                             feedback_rel = (feedback_items[0] or '')
                         time_display = run_cpu_wall_ms_text(time_user_ms, time_wall_ms)
-                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': time_display, 'memory_display': memory_mb_text, 'status_display': f'{verdict_short} · {time_display} · {memory_mb_text}', 'feedback_display': feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'text_tone': _run_cell_text_tone(verdict, expected_behavior), 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': time_display, 'memory_display': memory_mb_text, 'status_display': f'{verdict_short} · {time_display} · {memory_mb_text}', 'feedback_display': feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     final_row = dict(pass_rows[-1]) if pass_rows else {}
                     for candidate in reversed(pass_rows):
                         verdict_token = (candidate.get('verdict_short') or '')
@@ -1024,6 +1036,7 @@ def build_run_detail_context(
                     'short': verdict_short,
                     'metrics': f'{time_ms}ms/{memory_mb_text}',
                     'kind': _run_cell_kind(verdict, expected_behavior),
+                    'text_tone': _run_cell_text_tone(verdict, expected_behavior),
                     'detail': detail_payload,
                     'detail_available': True,
                 }
@@ -1070,6 +1083,7 @@ def build_run_detail_context(
                     pass_row = {
                         'pass_label': '-',
                         'verdict_short': short if short else '--',
+                        'text_tone': _run_cell_text_tone(verdict, expected_behavior),
                         'kind': _run_cell_kind(verdict, expected_behavior),
                         'time_display': run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms),
                         'memory_display': run_memory_mb_text(memory_kb),
@@ -1101,6 +1115,7 @@ def build_run_detail_context(
                     'short': short,
                     'metrics': metrics,
                     'kind': _run_cell_kind(verdict, expected_behavior) if verdict else 'neutral',
+                    'text_tone': _run_cell_text_tone(verdict, expected_behavior) if verdict else '',
                     'detail': detail_payload,
                     'detail_available': bool(detail_available),
                 }
@@ -1112,7 +1127,7 @@ def build_run_detail_context(
                         max_memory_kb = memory_kb
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
-        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
+        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_text_tone': result_text_tone, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
         if not _is_solution_column_source(source_for_display):
             if include_row_details and task_kind in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
                 pass
@@ -1257,7 +1272,8 @@ def build_run_detail_context(
                                 'text': '..' if (missing_running or missing_pending) else '--',
                                 'short': '..' if (missing_running or missing_pending) else '--',
                                 'metrics': 'running' if missing_running else '' if missing_pending else '-',
-                                'kind': 'neutral',
+                                'kind': 'running' if missing_running else 'neutral',
+                                'text_tone': '',
                                 'detail': None,
                             }
                         )
@@ -1270,6 +1286,7 @@ def build_run_detail_context(
                         'short': (cell.get('short') or cell.get('text') or '--'),
                         'metrics': (cell.get('metrics') or '-'),
                         'kind': (cell.get('kind') or 'neutral'),
+                        'text_tone': (cell.get('text_tone') or ''),
                         'detail': None,
                     }
                 )
@@ -1359,7 +1376,7 @@ def build_run_detail_context(
             for col in columns:
                 cell = col['tests_map'].get(test_name)
                 if cell is None:
-                    cells.append({'text': '--', 'short': '--', 'metrics': '-', 'kind': 'neutral', 'detail': None})
+                    cells.append({'text': '--', 'short': '--', 'metrics': '-', 'kind': 'neutral', 'text_tone': '', 'detail': None})
                     continue
                 detail_raw = cell.get('detail')
                 detail_payload = dict(detail_raw) if detail_raw is not None else None
@@ -1432,7 +1449,7 @@ def build_run_detail_context(
                     if interactive_mode and output_preview is not None:
                         final_row_payload['interactive_transcript'] = _interactive_transcript_preview(output_preview)
                     detail_payload['final_row'] = final_row_payload
-                cells.append({'text': (cell['text']), 'short': (cell.get('short') or cell.get('text') or '--'), 'metrics': (cell.get('metrics') or '-'), 'kind': (cell['kind']), 'detail': detail_payload})
+                cells.append({'text': (cell['text']), 'short': (cell.get('short') or cell.get('text') or '--'), 'metrics': (cell.get('metrics') or '-'), 'kind': (cell['kind']), 'text_tone': (cell.get('text_tone') or ''), 'detail': detail_payload})
             if detail_is_main_correct_run:
                 for cell in cells:
                     detail_payload = cell.get('detail') or {}
