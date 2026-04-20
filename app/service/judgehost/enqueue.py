@@ -527,15 +527,12 @@ class TaskEnqueue:
         workspace_resolved = workspace.resolve()
 
         run_config_text = ""
-        run_cfg_obj: dict[str, object] = {}
         verification_row = self._s.db.fetch_one(
             "SELECT run_config_json FROM verifications WHERE id=?",
             [safe_verification_id],
         )
         if verification_row is not None:
             run_config_text = TaskEnqueue._normalize_text(verification_row["run_config_json"])
-        if run_config_text:
-            run_cfg_obj = self._json_object(run_config_text)
 
         binaries: dict[str, str] = {}
 

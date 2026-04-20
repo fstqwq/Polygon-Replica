@@ -422,8 +422,6 @@ class VerificationTaskStore:
                 task_id,
             ],
         )
-        self._runtime_by_task_id.pop(task_id, None)
-
     def overwrite_task_result(
         self,
         task_id: str,
@@ -475,8 +473,6 @@ class VerificationTaskStore:
                 task_id,
             ],
         )
-        self._runtime_by_task_id.pop(task_id, None)
-
     def overwrite_fail_reason(self, verification_id: str, *, reason: str) -> None:
         safe_reason = self._normalize_display_text(reason)
         self.db.execute(

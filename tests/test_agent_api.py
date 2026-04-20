@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from fastapi.testclient import TestClient
 
 from .common import SmokeBase
+from .db_helpers import db_execute, db_fetch_one
 from .ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_proof
 from app.impl.runtime.config import config
 from app.main import app
@@ -335,12 +336,12 @@ class TestAgentAPI(SmokeBase):
             )
             self.assertEqual(disconnect.status_code, 303)
             self.assertIsNone(config.agent_service._store.session_by_id(session_id))
-            token_count_row = config.agent_service._store.db.fetch_one(
+            token_count_row = db_fetch_one(
                 "SELECT COUNT(*) AS n FROM agent_tokens WHERE agent_session_id=?",
                 [session_id],
             )
             self.assertEqual(int(token_count_row["n"]), 0)
-            request_count_row = config.agent_service._store.db.fetch_one(
+            request_count_row = db_fetch_one(
                 "SELECT COUNT(*) AS n FROM agent_access_requests WHERE agent_session_id=?",
                 [session_id],
             )
@@ -469,7 +470,7 @@ class TestAgentAPI(SmokeBase):
             self.assertTrue((workspace / "solutions/agent.txt").exists())
             self.assertEqual((workspace / "solutions/agent.txt").read_bytes(), b"hello\r\nagent\r\n")
             upload_status = workspace_service.read_workspace_status(workspace)
-            upload_row = config.db.fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
+            upload_row = db_fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
             self.assertIsNotNone(upload_row)
             self.assertEqual(int(upload_row["dirty"] or 0), int(upload_status.get("dirty") or 0))
 
@@ -533,7 +534,7 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(delete.status_code, 200, delete.text)
             self.assertFalse((workspace / "solutions/agent.txt").exists())
             delete_status = workspace_service.read_workspace_status(workspace)
-            delete_row = config.db.fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
+            delete_row = db_fetch_one("SELECT dirty FROM workspaces WHERE id=?", [workspace_id])
             self.assertIsNotNone(delete_row)
             self.assertEqual(int(delete_row["dirty"] or 0), int(delete_status.get("dirty") or 0))
 
@@ -777,7 +778,7 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(str(commit_payload.get("status") or ""), "ok")
             head = str(commit_payload.get("head") or "")
             self.assertRegex(head, r"^[0-9a-f]{40}$")
-            commit_row = config.db.fetch_one("SELECT head_commit,dirty FROM workspaces WHERE id=?", [workspace_id])
+            commit_row = db_fetch_one("SELECT head_commit,dirty FROM workspaces WHERE id=?", [workspace_id])
             self.assertIsNotNone(commit_row)
             self.assertEqual(str(commit_row["head_commit"] or ""), head)
             self.assertEqual(int(commit_row["dirty"] or 0), 0)
@@ -787,7 +788,7 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(str(commit_status.json().get("status") or ""), "published")
             self.assertNotEqual(stale_head, head)
 
-            config.db.execute(
+            db_execute(
                 "UPDATE workspaces SET head_commit=?, dirty=1 WHERE id=?",
                 [stale_head, workspace_id],
             )

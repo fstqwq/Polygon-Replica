@@ -7,9 +7,9 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import TypedDict, cast, Annotated, Annotated
+from typing import Annotated, TypedDict, cast
 
-from fastapi import File, Form, UploadFile, Depends
+from fastapi import Depends, File, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response

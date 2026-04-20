@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.db import DB, now_iso
 from app.runtime_value import RuntimeValues
-from app.service.disk.agent_store import AgentStore
+from app.service.agent.store import AgentStore
 from app.service.platform.hashing import canonical_json, sha256_hex_text
 from app.service.repository.workspace import WorkspaceService
 

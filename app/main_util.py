@@ -13,6 +13,12 @@ from app.service.platform.workspace_path import (
     safe_workspace_path,
 )
 
+__all__ = [
+    "contains_symlink_component",
+    "normalize_workspace_rel_path",
+    "safe_workspace_path",
+]
+
 
 CPP_SOURCE_EXTENSIONS: set[str] = set()
 SOLUTION_SOURCE_EXTENSIONS: set[str] = set()

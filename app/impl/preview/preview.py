@@ -30,7 +30,6 @@ from app.main_util import (
 )
 from app.service.statement.constant import (
     STATEMENT_ASSETS_DIR,
-    STATEMENT_CANONICAL_SECTION_FILES,
     STATEMENT_PROBLEM_REL,
     STATEMENT_SECTIONS_DIR,
     STATEMENT_STYLE_REL,

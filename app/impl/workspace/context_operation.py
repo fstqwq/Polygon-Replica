@@ -39,7 +39,6 @@ from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     summarize_tests_spec,
 )
-from app.service.platform.process import is_canonical_artifact_id
 from app.service.verification.runtime import coerce_int
 
 _C = config.constants

@@ -347,25 +347,27 @@ def notify_verification_case_reported(
     judgehost_task_id: str,
     test_name: str,
     result: TaskExecutionResult,
-) -> None:
+) -> bool:
     coordinator = _runtime_coordinator(verification_id)
     if coordinator is None:
-        return
+        return False
     coordinator.enqueue_case_reported(
         judgehost_task_id,
         test_name,
         {"final_result": result},
     )
+    return True
 
 
 def notify_verification_task_terminal(
     verification_id: str,
     judgehost_task_id: str,
-) -> None:
+) -> bool:
     coordinator = _runtime_coordinator(verification_id)
     if coordinator is None:
-        return
+        return False
     coordinator.enqueue_task_terminal(judgehost_task_id)
+    return True
 
 
 def notify_verification_cancelled(verification_id: str, reason: str) -> None:

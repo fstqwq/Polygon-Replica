@@ -59,14 +59,14 @@ SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
 
 class TestUIAuth(UIBaseSuite):
     def test_sudo_password_proof_flow_sets_short_lived_token(self) -> None:
-        username = f"sudo-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("sudo")
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(auth_token)
         cookie_header = f"{AUTH_COOKIE_NAME}={auth_token}"
-        next_path = f"/settings"
+        next_path = "/settings"
 
         page = sudo_page(_request_with_cookie("/sudo", cookie_header, query=f"next={next_path}"))
         self.assertEqual(page.status_code, 200)
@@ -88,7 +88,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(any("invalid password proof" in item for item in denied_messages))
 
     def test_register_login_and_password_update(self) -> None:
-        username = f"user-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("user")
         password = "StrongPass123"
         updated = "UpdatedPass456"
 
@@ -127,7 +127,7 @@ class TestUIAuth(UIBaseSuite):
 
         changed = _settings_password_update_with_proof(username, password, updated)
         self.assertEqual(changed.status_code, 303)
-        self.assertIn(f"/settings", changed.headers.get("location", ""))
+        self.assertIn("/settings", changed.headers.get("location", ""))
         changed_messages = _flash_messages_from_response(changed)
         self.assertTrue(any("password updated" in item for item in changed_messages))
         changed_set_cookie = _response_set_cookie_blob(changed)
@@ -147,7 +147,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("Secure", new_login_set_cookie)
 
     def test_auth_password_proof_flow_works_without_plaintext_submission(self) -> None:
-        username = f"proof-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("proof")
         password = "StrongPass123"
         updated = "UpdatedPass456"
 
@@ -249,7 +249,7 @@ class TestUIAuth(UIBaseSuite):
             new_password_iters=str(new_iters),
         )
         self.assertEqual(changed.status_code, 303)
-        self.assertIn(f"/settings", changed.headers.get("location", ""))
+        self.assertIn("/settings", changed.headers.get("location", ""))
         changed_messages = _flash_messages_from_response(changed)
         self.assertTrue(any("password updated" in item for item in changed_messages))
 
@@ -382,7 +382,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("I confirm the configuration paths below.", html)
 
     def test_setup_submit_creates_super_admin(self) -> None:
-        username = f"boot-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("boot")
         password = "StrongPass123"
 
         page = setup_page(_request("/setup"))
@@ -428,7 +428,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertGreater(int(row["password_iters"] or 0), 0)
 
     def test_setup_submit_requires_config_confirmation(self) -> None:
-        username = f"boot-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("boot")
         resp = _setup_with_password_proof(username, "StrongPass123", confirm_config="0", next_path="/")
         self.assertEqual(resp.status_code, 303)
         self.assertEqual("/setup", resp.headers.get("location", ""))
@@ -436,7 +436,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(any("confirm current system configuration paths" in item for item in messages))
 
     def test_register_does_not_claim_existing_passwordless_user(self) -> None:
-        username = f"claim-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("claim")
         workspace_service.ensure_user(username)
         row_before = db_fetch_one("SELECT password_hash FROM users WHERE username=?", [username])
         self.assertIsNotNone(row_before)
@@ -508,7 +508,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(any("too many failed attempts" in item for item in blocked_ok_messages))
 
     def test_auth_middleware_blocks_cross_origin_post(self) -> None:
-        username = f"csrf-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("csrf")
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
@@ -530,7 +530,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(blocked.exception.status_code, 403)
 
     def test_auth_middleware_allows_same_origin_post(self) -> None:
-        username = f"csrfok-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("csrfok")
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
@@ -551,7 +551,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(resp.status_code, 200)
 
     def test_auth_middleware_allows_userless_contest_path(self) -> None:
-        username = f"ctauth-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("ctauth")
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
@@ -973,7 +973,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(any(str(item.get("hostname") or "") == "judgehost-admin-snapshot" for item in hosts))
 
     def test_problem_id_validation_requires_lowercase_dash_format(self) -> None:
-        username = f"swauth-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("swauth")
         password = "StrongPass123"
         reg = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)

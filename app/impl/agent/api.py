@@ -505,18 +505,8 @@ async def agent_verification_detail(request: Request, verification_id: str):
 
 
 def _find_export_event(*, problem_id: int, actor_user_id: int, export_task_id: str) -> dict[str, object] | None:
-    rows = config.db.fetch_all(
-        """
-        SELECT created_at,details_json
-        FROM audit_log
-        WHERE problem_id=? AND actor_user_id=? AND action='export.create'
-        ORDER BY created_at DESC
-        LIMIT 200
-        """,
-        [int(problem_id), int(actor_user_id)],
-    )
-    for row in rows:
-        raw = str(row["details_json"] or "")
+    for row in config.export_service.export_audit_rows(int(problem_id), int(actor_user_id), limit=200):
+        raw = str(row.get("details_json") or "")
         if not raw:
             continue
         try:
@@ -527,7 +517,7 @@ def _find_export_event(*, problem_id: int, actor_user_id: int, export_task_id: s
             continue
         if str(payload.get("export_task_id") or "") != str(export_task_id or ""):
             continue
-        payload["created_at"] = str(row["created_at"] or "")
+        payload["created_at"] = str(row.get("created_at") or "")
         return payload
     return None
 

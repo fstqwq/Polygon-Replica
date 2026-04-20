@@ -83,7 +83,7 @@ def settings_judgehost_runtime_update(
 ):
     ctx = _settings_user_ctx(user)
     require_system_admin(ctx)
-    redirect_target = f"/settings"
+    redirect_target = "/settings"
     msg = "judgehost runtime settings updated"
     try:
         payload = {
@@ -135,7 +135,7 @@ def settings_judgehost_host_action(
     require_system_admin(ctx)
     safe_host = str(hostname or "").strip()
     safe_action = str(action or "").strip().lower()
-    redirect_target = f"/settings"
+    redirect_target = "/settings"
     if not safe_host:
         return redirect_response(redirect_target, status_code=303, message="judgehost hostname is required")
     if safe_action not in {"disable", "enable"}:
@@ -266,7 +266,7 @@ def settings_system_config_reset(user: Annotated[str, Depends(require_session_us
     config.system_config_service.reset()
     config.reload_runtime_values()
     audit(ctx['user']['id'], None, 'system_config.reset', {})
-    return redirect_response(f'/settings', status_code=303, message='system config reset to defaults; runtime keys reloaded, restart-marked keys need restart')
+    return redirect_response('/settings', status_code=303, message='system config reset to defaults; runtime keys reloaded, restart-marked keys need restart')
 
 def settings_password_update(user: Annotated[str, Depends(require_session_user)], current_password: str=Form(''), new_password: str=Form(''), new_password_confirm: str=Form(''), current_password_proof: str=Form(''), new_password_verifier: str=Form(''), new_password_proof: str=Form(''), csrf_token: str=Form(''), new_password_salt: str=Form(''), new_password_iters: str=Form('')):
     row = lookup_user_auth(user)
@@ -275,7 +275,7 @@ def settings_password_update(user: Annotated[str, Depends(require_session_user)]
     _ = (current_password, new_password, new_password_confirm)
     if row is None:
         msg = 'user not found'
-        return redirect_response(f'/settings', status_code=303, message=msg)
+        return redirect_response('/settings', status_code=303, message=msg)
     try:
         proof_token = form_text(csrf_token).strip()
         current_proof_value = form_text(current_password_proof).strip().lower()
@@ -307,11 +307,10 @@ def settings_password_update(user: Annotated[str, Depends(require_session_user)]
         config.auth_service.revoke_auth_sessions_for_user(int(row["id"]))
         revoke_sudo_sessions_for_user(int(row['id']))
         token = create_session_for_user(int(row['id']))
-        response = redirect_response(f'/settings', status_code=303, message=msg)
+        response = redirect_response('/settings', status_code=303, message=msg)
         response.set_cookie(_C.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
         return response
     except ValueError as exc:
         msg = str(exc)
-    return redirect_response(f'/settings', status_code=303, message=msg)
-
+    return redirect_response('/settings', status_code=303, message=msg)
 

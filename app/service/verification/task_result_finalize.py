@@ -372,6 +372,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
 
     task_status = VerificationTaskStore.TASK_DONE if result_status == Status.OK.value else VerificationTaskStore.TASK_FAILED
     fail_flag_reason = ""
+    final_error = parts.error_text
     if task_kind == TASK_MAIN_CORRECT and task_status != VerificationTaskStore.TASK_DONE:
         final_error = _final_error_text(parts, fallback=error_text or f"main correct failed on {test_name}")
         fail_flag_reason = verification_task_fail_reason(task_row, error_text=final_error)
@@ -415,7 +416,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
         memory_kb=parts.memory_kb,
         compile_log=parts.compile_log,
         diagnostics_json=parts.diagnostics_json,
-        error_text=parts.error_text,
+        error_text=final_error,
         feedback_text=parts.feedback_text,
         output_ref=materialized_output_ref,
         fail_flag_reason=fail_flag_reason,

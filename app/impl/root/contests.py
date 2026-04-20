@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import cast
 from urllib.parse import quote_plus
 
 from fastapi import File, Form, Request, UploadFile

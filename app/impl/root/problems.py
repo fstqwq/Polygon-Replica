@@ -15,7 +15,7 @@ from app.impl.run_export.import_source import (
 )
 from app.impl.runtime.config import config
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_operation import audit, user_participating_problems
+from app.impl.workspace.context_operation import user_participating_problems
 from app.impl.root.shared import _active_root_user, _count_label
 from app.main_util import read_fileobj_bytes_limited
 

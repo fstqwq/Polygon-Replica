@@ -7,7 +7,6 @@ from pathlib import Path
 
 from app.db import now_iso
 from app.impl.runtime.config import config
-from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import is_cancel_reason
 
 _C = config.constants
@@ -109,7 +108,6 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
             warnings.warn(f"startup judgehost job/case cancel failed: {exc}", RuntimeWarning)
     if not inflight_entries:
         return
-    task_store = VerificationTaskStore(config.db)
     for item in inflight_entries:
         verification_id_raw = item.get("verification_id")
         verification_id = verification_id_raw.strip() if isinstance(verification_id_raw, str) else ""
@@ -123,7 +121,7 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
         status = status_raw.strip().lower() if isinstance(status_raw, str) else ""
         if status not in {"running", "queued", "pending"}:
             continue
-        task_store.cancel_unfinished_tasks(verification_id, reason=reason)
+        config.verification_service.cancel_unfinished_tasks(verification_id, reason=reason)
         try:
             config.verification_service.update_verification_record_status(
                 verification_id=verification_id,
@@ -139,9 +137,8 @@ def _startup_cancel_judgehost_inflight(reason: str, *, now_text: str) -> None:
 
 
 def _startup_cancel_task_graph_verifications(reason: str) -> None:
-    task_store = VerificationTaskStore(config.db)
-    for verification_id in task_store.verification_ids_with_unfinished_tasks():
-        task_store.cancel_unfinished_tasks(verification_id, reason=reason)
+    for verification_id in config.verification_service.verification_ids_with_unfinished_tasks():
+        config.verification_service.cancel_unfinished_tasks(verification_id, reason=reason)
         try:
             config.verification_service.update_verification_record_status(
                 verification_id,
@@ -154,30 +151,13 @@ def _startup_cancel_task_graph_verifications(reason: str) -> None:
 
 
 def _startup_finalize_cancelled_verifications(now_text: str) -> None:
-    rows = config.db.fetch_all(
-        """
-        SELECT id,fail_reason
-        FROM verifications
-        WHERE status='failed'
-          AND (finished_at IS NULL OR finished_at='')
-        """,
-    )
-    for row in rows:
-        verification_id = str(row["id"] or "")
-        fail_reason = str(row["fail_reason"] or "")
-        if (not verification_id) or (not is_cancel_reason(fail_reason)):
-            continue
-        try:
-            config.db.execute(
-                """
-                UPDATE verifications
-                SET status='failed', fail_reason=?, finished_at=?
-                WHERE id=? AND status='failed' AND (finished_at IS NULL OR finished_at='')
-                """,
-                [fail_reason, now_text, verification_id],
-            )
-        except Exception as exc:
-            warnings.warn(f"startup cancelled verification finalization failed for {verification_id}: {exc}", RuntimeWarning)
+    try:
+        config.verification_service.finalize_cancelled_unfinished_records(
+            reason_predicate=is_cancel_reason,
+            now_text=now_text,
+        )
+    except Exception as exc:
+        warnings.warn(f"startup cancelled verification finalization failed: {exc}", RuntimeWarning)
 
 
 def _startup_clear_all_caches() -> None:

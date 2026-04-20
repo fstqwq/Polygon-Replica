@@ -108,7 +108,6 @@ class AgentStore:
             return None
 
         def _tx(conn: sqlite3.Connection) -> AgentRegistrationRow | None:
-            conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
                 SELECT c.code,c.user_id,u.username,c.created_at,c.expires_at,c.used_at
@@ -120,23 +119,27 @@ class AgentStore:
             ).fetchone()
             if row is None:
                 return None
-            used_at = str(row["used_at"] or "")
+            code_value = str(row[0] or "")
+            user_id_value = int(row[1])
+            username_value = str(row[2] or "")
+            created_at_value = str(row[3] or "")
+            expires_at = str(row[4] or "")
+            used_at = str(row[5] or "")
             if used_at:
                 return {
-                    "code": str(row["code"] or ""),
-                    "user_id": int(row["user_id"]),
-                    "username": str(row["username"] or ""),
-                    "created_at": str(row["created_at"] or ""),
-                    "expires_at": str(row["expires_at"] or ""),
+                    "code": code_value,
+                    "user_id": user_id_value,
+                    "username": username_value,
+                    "created_at": created_at_value,
+                    "expires_at": expires_at,
                     "used_at": used_at,
                 }
-            expires_at = str(row["expires_at"] or "")
             if expires_at and expires_at <= now_text:
                 return {
-                    "code": str(row["code"] or ""),
-                    "user_id": int(row["user_id"]),
-                    "username": str(row["username"] or ""),
-                    "created_at": str(row["created_at"] or ""),
+                    "code": code_value,
+                    "user_id": user_id_value,
+                    "username": username_value,
+                    "created_at": created_at_value,
                     "expires_at": expires_at,
                     "used_at": "",
                 }
@@ -145,10 +148,10 @@ class AgentStore:
                 [now_text, safe_code],
             )
             return {
-                "code": str(row["code"] or ""),
-                "user_id": int(row["user_id"]),
-                "username": str(row["username"] or ""),
-                "created_at": str(row["created_at"] or ""),
+                "code": code_value,
+                "user_id": user_id_value,
+                "username": username_value,
+                "created_at": created_at_value,
                 "expires_at": expires_at,
                 "used_at": now_text,
             }

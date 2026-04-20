@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .db_helpers import (
     db_execute,
+    db_fetch_one,
     judgehost_cases_for_run,
     judgehost_fetch_case,
     judgehost_fetch_job,
@@ -6463,6 +6464,24 @@ class TestJudgehostService(SmokeBase):
                 "compile_diagnostics": [],
                 "error": "",
             }
+        task_store = VerificationTaskStore(config.db)
+        task_store.replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": "vt-late-debug",
+                    "task_kind": "main-correct",
+                    "source_path": "solutions/ac.cpp",
+                    "logical_run_id": run_id,
+                    "test_name": "016.in",
+                    "expected_behavior": "accepted",
+                    "queue_index": 1,
+                    "status": VerificationTaskStore.TASK_PENDING,
+                }
+            ],
+            edges=[],
+        )
+        task_store.set_task_queued("vt-late-debug", run_id=run_id, judgehost_task_id=task_id)
 
         work_root = Path(tempfile.mkdtemp(prefix="polygon-late-debug-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
@@ -6534,7 +6553,6 @@ class TestJudgehostService(SmokeBase):
             test_name="016.in",
             hostname="judgehost-late-debug",
         )
-        task_store = VerificationTaskStore(config.db)
         before = next(
             row for row in task_store.list_rows(verification_id)
             if str(row["task_kind"]) == "main-correct" and str(row["test_name"]) == "016.in"
@@ -6554,7 +6572,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(str(after["error_text"] or ""), feedback_text)
         self.assertEqual(str(after["feedback_text"] or ""), feedback_text)
-        verification_row = config.db.fetch_one(
+        verification_row = db_fetch_one(
             "SELECT fail_reason FROM verifications WHERE id=?",
             [verification_id],
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -668,6 +669,40 @@ class VerificationService:
             reason=reason,
             now_text=now_text,
         )
+
+    def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
+        VerificationTaskStore(self.db).cancel_unfinished_tasks(verification_id, reason=reason)
+
+    def verification_ids_with_unfinished_tasks(self) -> list[str]:
+        return VerificationTaskStore(self.db).verification_ids_with_unfinished_tasks()
+
+    def finalize_cancelled_unfinished_records(
+        self,
+        *,
+        reason_predicate: Callable[[str], bool],
+        now_text: str,
+    ) -> None:
+        rows = self.db.fetch_all(
+            """
+            SELECT id,fail_reason
+            FROM verifications
+            WHERE status='failed'
+              AND (finished_at IS NULL OR finished_at='')
+            """,
+        )
+        for row in rows:
+            verification_id = str(row["id"] or "")
+            fail_reason = str(row["fail_reason"] or "")
+            if (not verification_id) or (not reason_predicate(fail_reason)):
+                continue
+            self.db.execute(
+                """
+                UPDATE verifications
+                SET status='failed', fail_reason=?, finished_at=?
+                WHERE id=? AND status='failed' AND (finished_at IS NULL OR finished_at='')
+                """,
+                [fail_reason, now_text, verification_id],
+            )
 
     def update_verification_record_status(
         self,

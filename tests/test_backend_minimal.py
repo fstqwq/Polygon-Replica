@@ -7,12 +7,11 @@ import shutil
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-import tempfile
 from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.db import CURRENT_SCHEMA_COLUMNS, DB
+from app.db import CURRENT_SCHEMA_COLUMNS
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
 from .common import SmokeBase
 from .ui_support import _flash_messages_from_response, _request

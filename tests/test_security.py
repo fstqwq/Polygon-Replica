@@ -165,7 +165,7 @@ class TestSecurity(SmokeBase):
         return "", artifact_root
 
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:
-        username = f"secsql-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("secsql")
         password = "StrongPass123"
         registered = _register_with_password_proof(username, password, next_path="/")
         self.assertEqual(registered.status_code, 303)

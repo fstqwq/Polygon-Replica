@@ -348,12 +348,35 @@ class ResultProcessor:
                 notify_verification_task_terminal(verification_id, task_id)
             return
         final_result = finalize_verification_task_result(verification_task_row, result=case_result)
-        notify_verification_case_reported(
+        notified = notify_verification_case_reported(
             str(verification_task_row["verification_id"] or ""),
             task_id,
             test_name,
             final_result,
         )
+        if notified is False:
+            verification_task_store.save_task_result(
+                final_result.task_id,
+                status=final_result.status,
+                verdict=final_result.verdict,
+                run_id=final_result.run_id,
+                judgehost_task_id=final_result.judgehost_task_id,
+                runtime_sec=final_result.runtime_sec,
+                cpu_sec=final_result.cpu_sec,
+                wall_sec=final_result.wall_sec,
+                memory_kb=final_result.memory_kb,
+                compile_log=final_result.compile_log,
+                diagnostics_json=final_result.diagnostics_json,
+                error_text=final_result.error_text,
+                feedback_text=final_result.feedback_text,
+                output_ref=final_result.output_ref,
+            )
+            if final_result.fail_flag_reason:
+                verification_task_store.set_fail_flag(
+                    str(verification_task_row["verification_id"] or ""),
+                    reason=final_result.fail_flag_reason,
+                )
+        notify_verification_task_terminal(str(verification_task_row["verification_id"] or ""), task_id)
 
     def _domjudge_finalize_if_ready(self, job_id: int, *, force_failed: bool = False, error_text: str = "") -> None:
         job_row = self._s.judgehost_state_store.job_finalize_row(int(job_id))

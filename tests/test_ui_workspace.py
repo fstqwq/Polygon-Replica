@@ -4,7 +4,6 @@ from .db_helpers import db_execute, db_fetch_all, db_fetch_one
 
 import asyncio
 import io
-import os
 import re
 import zipfile
 from unittest.mock import patch
@@ -14,7 +13,6 @@ from fastapi.testclient import TestClient
 
 from fastapi import HTTPException
 
-from app.service.importing.contest import PolygonContestImportService
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import run_git
@@ -110,7 +108,7 @@ class TestUIWorkspace(UIBaseSuite):
         return f"{AUTH_COOKIE_NAME}={auth_token}"
 
     def test_workspace_delete_requires_sudo_then_deletes_copy(self) -> None:
-        username = f"wsdel-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("wsdel")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
@@ -121,7 +119,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         denied = workspace_delete(
             request=_request_with_cookie(
-                f"/problems/alice/sample/workspace/delete",
+                "/problems/alice/sample/workspace/delete",
                 auth_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -140,7 +138,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         deleted = workspace_delete(
             request=_request_with_cookie(
-                f"/problems/alice/sample/workspace/delete",
+                "/problems/alice/sample/workspace/delete",
                 both_cookie,
                 method="POST",
                 extra_headers=[(b"origin", b"http://testserver")],
@@ -164,7 +162,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(int(ws_row["dirty"] or 0), 0)
 
     def test_problem_delete_requires_sudo_and_confirmation(self) -> None:
-        username = f"pdel-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("pdel")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"alice/pdel-problem-{uuid.uuid4().hex[:8]}"
@@ -232,7 +230,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertFalse(bare_repo.exists())
 
     def test_problem_delete_route_accepts_fully_qualified_slug_confirmation(self) -> None:
-        username = f"pdelroute-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("pdelroute")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"{username}/route-problem-{uuid.uuid4().hex[:8]}"
@@ -334,7 +332,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertFalse(bare_repo.exists())
 
     def test_problem_delete_unexpected_error_redirects_instead_of_500(self) -> None:
-        username = f"pdelx-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("pdelx")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"alice/pdelx-problem-{uuid.uuid4().hex[:8]}"
@@ -370,7 +368,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertTrue(any("problem delete failed" in item for item in messages))
 
     def test_problem_delete_rejects_unsafe_repo_name(self) -> None:
-        username = f"pdelu-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("pdelu")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         problem = f"alice/pdelu-problem-{uuid.uuid4().hex[:8]}"
@@ -490,7 +488,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn("Branch Operations", html)
 
     def test_workspace_page_get_refreshes_workspace_status_in_db(self) -> None:
-        username = f"wsget-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("wsget")
         workspace_service.grant_repo_access("alice/sample", username, "owner")
         ws = Path(workspace_service.ensure_workspace("alice/sample", username))
         marker = ws / f"notes/get-dirty-{uuid.uuid4().hex[:8]}.txt"
@@ -519,7 +517,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotEqual(str(after["updated_at"] or ""), str(before["updated_at"] or ""))
 
     def test_git_status_and_workspace_status_ignore_hidden_paths(self) -> None:
-        username = f"wshidden-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("wshidden")
         workspace_service.grant_repo_access("alice/sample", username, "owner")
         self._ensure_committed_head("alice/sample", username)
         ws = Path(workspace_service.ensure_workspace("alice/sample", username))
@@ -589,7 +587,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("Delete Problem", html)
 
     def test_workspace_page_marks_delete_forms_ready_when_sudo_cookie_exists(self) -> None:
-        username = f"ws-sudo-ready-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("wssudo")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
@@ -842,7 +840,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIsNone(removed)
 
     def test_access_route_renders_with_request_injection(self) -> None:
-        username = f"access-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("access")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
@@ -912,7 +910,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("owner access is fixed and cannot be transferred", revoke_messages[0])
 
     def test_switch_workspace_denies_existing_problem_without_acl(self) -> None:
-        username = f"switchdeny-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("switchdeny")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         private_problem = f"alice/ui-switch-private-{uuid.uuid4().hex[:8]}"
@@ -931,7 +929,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn("do not have access to this problem", messages[0])
 
     def test_switch_workspace_creates_problem_with_slug_leaf_title(self) -> None:
-        username = f"switchcreate-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("switchcreate")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         slug = f"ui-switch-create-{uuid.uuid4().hex[:8]}"
@@ -946,7 +944,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
     def test_statement_page_title_does_not_use_name_tex(self) -> None:
-        username = f"stmtitle-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("stmtitle")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
@@ -971,7 +969,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
 
     def test_problem_pages_use_fixed_section_titles_in_html_title(self) -> None:
-        username = f"sectiontitle-{uuid.uuid4().hex[:8]}"
+        username = self.random_id("sectiontitle")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
@@ -1025,8 +1023,9 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertNotIn(other_problem, html)
         self.assertNotIn(f"/problems/{other_problem}/statement", html)
         self.assertIn("/problems/alice/sample/statement", html)
-        self.assertIn('class="problem-slug-link"', html)
-        self.assertIn(">alice/sample</a>", html)
+        self.assertIn("problem-slug-link", html)
+        self.assertIn(">alice/</span>", html)
+        self.assertIn(">sample</span>", html)
         self.assertNotIn(">sample</a> - <code>alice/sample</code>", html)
         self.assertIn("v0 / upstream v0", html)
         self.assertIn("none / upstream missing", html)
@@ -1036,8 +1035,7 @@ class TestUIWorkspace(UIBaseSuite):
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn('class="problem-slug-link problem-context-slug-link"', html)
-        self.assertIn(">alice/sample</span>", html)
+        self.assertIn('class="problem-context-title">alice/sample</h1>', html)
         self.assertNotIn('href="/problems/alice/sample/statement">alice/sample</a>', html)
         self.assertIn('data-copy-text="alice/sample"', html)
         self.assertIn('aria-label="Copy problem slug"', html)

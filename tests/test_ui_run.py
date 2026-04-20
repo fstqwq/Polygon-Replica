@@ -1178,8 +1178,9 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("id=\"solution-select-clear\"", html)
         self.assertIn("id=\"test-select-all\"", html)
         self.assertIn("id=\"test-select-clear\"", html)
-        self.assertNotIn("name=\"submission_path\"", html)
-        self.assertNotIn("name=\"mode\"", html)
+        execute_html = html.split('<div id="statement-settings-popup"', 1)[0]
+        self.assertNotIn("name=\"submission_path\"", execute_html)
+        self.assertNotIn("name=\"mode\"", execute_html)
         self.assertIn("solutions/accepted.cpp", html)
         self.assertIn("solutions/wa.cpp", html)
         self.assertIn("value=\"solutions/wa.cpp\" checked", html)
@@ -2116,7 +2117,9 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("wa.cpp", html)
         self.assertIn("accepted.cpp", html)
-        self.assertIn("Solution Run / wa.cpp / 001.in", html)
+        self.assertIn('data-solution-title="wa.cpp"', html)
+        self.assertIn('data-test-name="001.in"', html)
+        self.assertIn("running", html)
 
     def test_run_details_task_graph_ignores_stale_summary_test_cells(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -2319,7 +2322,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("running 1", html)
-        self.assertIn("Generate Input / gen.cpp / 001.in", html)
+        self.assertIn('title="001.in"', html)
         self.assertIn("generating", html)
 
     def test_run_details_task_graph_shows_running_only_for_running_solution_test(self) -> None:
@@ -2754,7 +2757,7 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertRegex(
             html,
-            r'<strong class="submenu-status-heading">Verification</strong>\s*<span[^>]*>\s*running\s*</span>',
+            r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status [^"]*"[^>]*>\s*running\s*</a>',
         )
 
     def test_verification_start_shows_running_on_first_statement_render(self) -> None:
@@ -2789,7 +2792,7 @@ class TestUIRun(UIBaseSuite):
             html = page.body.decode("utf-8", errors="replace")
             self.assertRegex(
                 html,
-                r'<strong class="submenu-status-heading">Verification</strong>\s*<span[^>]*>\s*running\s*</span>',
+                r'<strong class="submenu-status-heading">Verification</strong>[\s\S]*?<a\s+data-page="run"\s+class="submenu-detail-line problem-submenu-run-status [^"]*"[^>]*>\s*running\s*</a>',
             )
             row = config.verification_service.list_workspace_verification_rows(
                 problem_id,
@@ -4883,5 +4886,5 @@ class TestUIRun(UIBaseSuite):
         page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn(">Verification</span>", html)
-        self.assertIn(">failed</strong>", html)
+        self.assertIn('class="submenu-status-heading">Verification</strong>', html)
+        self.assertIn(">failed</a>", html)

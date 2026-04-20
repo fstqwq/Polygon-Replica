@@ -6,7 +6,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import TypedDict, cast, Annotated, Annotated
+from typing import Annotated, TypedDict, cast
 
 from fastapi import Form, Request, Depends
 from fastapi.responses import FileResponse
