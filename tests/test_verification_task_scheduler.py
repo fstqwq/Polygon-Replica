@@ -265,25 +265,17 @@ class TestVerificationTaskScheduler(SmokeBase):
         )
 
     def test_boundary_coverage_aggregates_testlib_overview_logs(self) -> None:
-        from app.impl.workspace.boundary_coverage import (
-            TESTLIB_OVERVIEW_BEGIN,
-            TESTLIB_OVERVIEW_END,
-            boundary_coverage_from_feedback,
-        )
+        from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
 
         first = (
-            f"{TESTLIB_OVERVIEW_BEGIN}\n"
             '"n": min-value-hit\n'
             'constant-bounds "n": 1 3\n'
             'variable "n"\n'
-            f"{TESTLIB_OVERVIEW_END}\n"
         )
         second = (
-            f"{TESTLIB_OVERVIEW_BEGIN}\n"
             '"n": max-value-hit\n'
             'constant-bounds "n": 1 3\n'
             'variable "n"\n'
-            f"{TESTLIB_OVERVIEW_END}\n"
         )
         result = boundary_coverage_from_feedback(
             feedback_by_test={"001.in": first, "002.in": second},
@@ -294,14 +286,9 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.missing, [])
 
     def test_boundary_coverage_warns_for_missing_hits_and_respects_skipped_bounds(self) -> None:
-        from app.impl.workspace.boundary_coverage import (
-            TESTLIB_OVERVIEW_BEGIN,
-            TESTLIB_OVERVIEW_END,
-            boundary_coverage_from_feedback,
-        )
+        from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
 
         feedback = (
-            f"{TESTLIB_OVERVIEW_BEGIN}\n"
             '"n": min-value-hit\n'
             'constant-bounds "n": 1 3\n'
             'variable "n"\n'
@@ -310,7 +297,6 @@ class TestVerificationTaskScheduler(SmokeBase):
             'variable "~T~"\n'
             'constant-bounds "x": ? 9\n'
             'variable "x"\n'
-            f"{TESTLIB_OVERVIEW_END}\n"
         )
         result = boundary_coverage_from_feedback(
             feedback_by_test={"001.in": feedback},
@@ -320,6 +306,24 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.checked_count, 3)
         self.assertEqual(result.missing, ["n max=3", "x max=9"])
         self.assertIn("boundary coverage missing", result.error)
+
+    def test_boundary_coverage_ignores_wrapped_or_plain_messages(self) -> None:
+        from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
+
+        wrapped = (
+            "__POLYGON_TESTLIB_OVERVIEW_BEGIN__\n"
+            '"n": min-value-hit\n'
+            'constant-bounds "n": 1 3\n'
+            'variable "n"\n'
+            "__POLYGON_TESTLIB_OVERVIEW_END__\n"
+        )
+        result = boundary_coverage_from_feedback(
+            feedback_by_test={"001.in": wrapped, "002.in": "validator accepted\n"},
+            test_plans=[_sanity_test_plan(test_name="001.in"), _sanity_test_plan(test_name="002.in")],
+        )
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.checked_count, 0)
+        self.assertEqual(result.missing, [])
 
     def test_sanity_stability_probes_pass_on_non_ac_non_fl(self) -> None:
         from app.impl.workspace.sanity_checks import run_verification_sanity_checks
@@ -368,7 +372,6 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
 
     def test_sanity_boundary_coverage_warning_keeps_verification_ok(self) -> None:
-        from app.impl.workspace.boundary_coverage import TESTLIB_OVERVIEW_BEGIN, TESTLIB_OVERVIEW_END
         from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, run_verification_sanity_checks
 
         verification_id = self.random_id("ver-sanity-boundary")
@@ -381,11 +384,9 @@ class TestVerificationTaskScheduler(SmokeBase):
             return {"summary": {"tests": [{"test": test_name, "verdict": "WA", "message": "rejected"}]}}
 
         feedback = (
-            f"{TESTLIB_OVERVIEW_BEGIN}\n"
             '"n": min-value-hit\n'
             'constant-bounds "n": 1 3\n'
             'variable "n"\n'
-            f"{TESTLIB_OVERVIEW_END}\n"
         )
         with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
             config.judgehost_task_service,
@@ -794,7 +795,7 @@ class TestVerificationTaskScheduler(SmokeBase):
                 "tests": [
                     {
                         "verdict": "OK",
-                        "message": "validator ok",
+                        "message": "validator accepted",
                         "output_ref": "cache://case/output/020.out",
                         "time_ms": 7,
                         "time_user_ms": 7,

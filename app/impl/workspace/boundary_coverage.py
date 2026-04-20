@@ -5,9 +5,6 @@ from dataclasses import dataclass
 
 from app.impl.workspace.verification_dag_plan import VerificationTestPlan
 
-TESTLIB_OVERVIEW_BEGIN = "__POLYGON_TESTLIB_OVERVIEW_BEGIN__"
-TESTLIB_OVERVIEW_END = "__POLYGON_TESTLIB_OVERVIEW_END__"
-
 BOUNDARY_COVERAGE_CHECK = "boundary_coverage"
 
 _HIT_RE = re.compile(r'^"(?P<name>[^"]+)":(?P<hits>.*)$')
@@ -67,22 +64,20 @@ def _state_for(states: dict[str, _VariableCoverage], raw_name: str) -> tuple[_Va
 
 
 def extract_testlib_overview_logs(feedback_text: str) -> list[str]:
-    text = str(feedback_text or "")
-    logs: list[str] = []
-    cursor = 0
-    while True:
-        begin = text.find(TESTLIB_OVERVIEW_BEGIN, cursor)
-        if begin < 0:
-            break
-        content_start = begin + len(TESTLIB_OVERVIEW_BEGIN)
-        end = text.find(TESTLIB_OVERVIEW_END, content_start)
-        if end < 0:
-            break
-        payload = text[content_start:end].strip()
-        if payload:
-            logs.append(payload)
-        cursor = end + len(TESTLIB_OVERVIEW_END)
-    return logs
+    text = str(feedback_text or "").strip()
+    if not text:
+        return []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    if all(
+        _VARIABLE_RE.fullmatch(line) is not None
+        or _BOUNDS_RE.fullmatch(line) is not None
+        or _HIT_RE.fullmatch(line) is not None
+        for line in lines
+    ):
+        return ["\n".join(lines)]
+    return []
 
 
 def _apply_overview_log(states: dict[str, _VariableCoverage], overview_text: str) -> None:

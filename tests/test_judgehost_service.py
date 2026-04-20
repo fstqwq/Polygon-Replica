@@ -2362,9 +2362,7 @@ class TestJudgehostService(SmokeBase):
             )
             self.assertEqual(bad.returncode, 43, bad.stderr)
 
-    def test_domjudge_generate_compare_script_appends_testlib_overview_log(self) -> None:
-        from app.impl.workspace.boundary_coverage import TESTLIB_OVERVIEW_BEGIN, TESTLIB_OVERVIEW_END
-
+    def test_domjudge_generate_compare_script_writes_testlib_overview_log(self) -> None:
         service = config.judgehost_task_service
         script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
@@ -2408,10 +2406,7 @@ class TestJudgehostService(SmokeBase):
             )
             self.assertEqual(ok.returncode, 42, ok.stderr)
             judge_message = (feedback / "judgemessage.txt").read_text(encoding="utf-8", errors="replace")
-            self.assertIn(TESTLIB_OVERVIEW_BEGIN, judge_message)
-            self.assertIn('"n": min-value-hit', judge_message)
-            self.assertIn('constant-bounds "n": 1 3', judge_message)
-            self.assertIn(TESTLIB_OVERVIEW_END, judge_message)
+            self.assertEqual(judge_message, '"n": min-value-hit\nconstant-bounds "n": 1 3\nvariable "n"\n')
 
     def test_domjudge_generate_compare_script_prefers_feedback_program_out_over_stdin(self) -> None:
         service = config.judgehost_task_service
