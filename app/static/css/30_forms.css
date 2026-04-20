@@ -179,16 +179,21 @@ form {
 .metadata-system-limit-list {
   display: grid;
   gap: var(--space-1);
+  overflow-x: auto;
 }
 
 .metadata-system-limit-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content max-content;
   justify-content: space-between;
   gap: var(--space-4);
+  min-width: max-content;
+  white-space: nowrap;
 }
 
 .metadata-system-limit-row dt {
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .metadata-system-limit-row dd {
