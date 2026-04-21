@@ -523,9 +523,6 @@ section.verification-header-section {
 .verification-detail-sanity-state {
   margin-left: 3px;
   text-transform: lowercase;
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
 }
 
 .verification-detail-sanity-state.ok {
@@ -546,6 +543,24 @@ section.verification-header-section {
 .verification-detail-sanity-state.info {
   color: var(--tag-info-fg);
   font-weight: 700;
+}
+
+.verification-sanity-detail-link {
+  margin-left: var(--space-2);
+}
+
+.verification-sanity-popup .verification-sanity-task-table {
+  width: 100%;
+}
+
+.verification-sanity-popup .verification-sanity-task-table th,
+.verification-sanity-popup .verification-sanity-task-table td {
+  text-align: left;
+  vertical-align: top;
+}
+
+.verification-sanity-popup .verification-sanity-task-table p {
+  margin: 0 0 var(--space-1);
 }
 
 .verification-detail-corner-structure-cell {

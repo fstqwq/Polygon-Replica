@@ -4520,8 +4520,10 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Sanity", html)
-        self.assertIn("Sanity checks", html)
-        self.assertIn("Ran 1 of 1 sanity checks.", html)
+        self.assertIn("Sanity check", html)
+        self.assertIn("verification-sanity-detail-popup", html)
+        self.assertIn(">details</a>", html)
+        self.assertNotIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("Custom sample output", html)
         self.assertIn("validator reported mismatch", html)
 
@@ -4595,8 +4597,9 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Sanity checks", html)
-        self.assertIn("Ran 1 of 1 sanity checks.", html)
+        self.assertIn("Sanity check", html)
+        self.assertIn("verification-sanity-detail-popup", html)
+        self.assertNotIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("Boundary coverage", html)
         self.assertIn("boundary coverage missing: n max=3", html)
 
@@ -4671,7 +4674,8 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("ok (sanity failed)", html)
-        self.assertIn("Ran 1 of 1 sanity checks.", html)
+        self.assertIn("verification-sanity-detail-popup", html)
+        self.assertNotIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("empty output probe was accepted", html)
 
     def test_run_details_marks_answer_correct_runtime_threshold_times(self) -> None:

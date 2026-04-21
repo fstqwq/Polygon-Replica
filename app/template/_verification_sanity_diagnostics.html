@@ -3,24 +3,49 @@
 <div class="compile-diagnostics-card verification-sanity-diagnostics">
   <div class="compile-diagnostics-head">
     <div>
-      <strong>Sanity checks</strong>
+      <strong>Sanity check</strong>
       <span class="verification-detail-sanity-state {{ 'warn' if detail_sanity.status in ['warning', 'failed'] else 'info' }}">{{ detail_sanity.status }}</span>
+      <a href="#verification-sanity-detail-popup" data-popup-open="verification-sanity-detail-popup" class="verification-sanity-detail-link">details</a>
     </div>
   </div>
-  {% if detail_sanity.task_count %}
-  <p class="muted">Ran {{ detail_sanity.ran_count }} of {{ detail_sanity.task_count }} sanity checks.</p>
-  {% endif %}
-  {% if detail_sanity.reason and not detail_sanity.attention_tasks %}
-  <p class="{{ 'verification-task-fail' if detail_sanity.status == 'failed' else 'verification-task-warn' }}">{{ detail_sanity.reason }}</p>
-  {% endif %}
-  {% for task in detail_sanity.attention_tasks %}
-    {% if task.messages %}
-      {% for message in task.messages %}
-  <p class="{{ 'verification-task-fail' if task.status == 'failed' else 'verification-task-warn' }}"><strong>{{ task.label }}</strong>: {{ message.message }}</p>
-      {% endfor %}
-    {% elif task.detail %}
-  <p class="{{ 'verification-task-fail' if task.status == 'failed' else 'verification-task-warn' }}"><strong>{{ task.label }}</strong>: {{ task.detail }}</p>
-    {% endif %}
-  {% endfor %}
 </div>
+{% call ui_popup('verification-sanity-detail-popup', 'Sanity Check Details', dialog_class='verification-detail-popup') %}
+  <div class="verification-sanity-popup">
+    {% if detail_sanity.reason %}
+    <p class="{{ 'verification-task-fail' if detail_sanity.status == 'failed' else 'verification-task-warn' }}">{{ detail_sanity.reason }}</p>
+    {% endif %}
+    {% if detail_sanity.tasks %}
+    <table class="verification-sanity-task-table">
+      <thead>
+        <tr>
+          <th>Check</th>
+          <th>Status</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for task in detail_sanity.tasks %}
+        <tr>
+          <td>{{ task.label }}</td>
+          <td><span class="verification-detail-sanity-state {{ task.tone }}">{{ task.status }}</span></td>
+          <td>
+            {% if task.messages %}
+              {% for message in task.messages %}
+            <p class="{{ 'verification-task-fail' if message.severity == 'failed' else 'verification-task-warn' if message.severity == 'warning' else '' }}">{{ message.message }}</p>
+              {% endfor %}
+            {% elif task.detail %}
+            {{ task.detail }}
+            {% else %}
+            completed
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No sanity check details.</p>
+    {% endif %}
+  </div>
+{% endcall %}
 {% endif %}
