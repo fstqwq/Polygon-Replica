@@ -78,7 +78,18 @@ _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
 _TRANSIENT_REASON_TOKENS = {"running", "queued", "pending"}
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
-_YAML_SIMPLE_RE = re.compile(r"^[A-Za-z0-9_./@+=,\-() ]+$")
+_SANITY_CHECK_ORDER = (
+    "empty_output_stability",
+    "unicode_output_stability",
+    "custom_sample_output",
+    "boundary_coverage",
+)
+_SANITY_CHECK_LABELS = {
+    "empty_output_stability": "Empty output stability",
+    "unicode_output_stability": "Unicode output stability",
+    "custom_sample_output": "Custom sample output",
+    "boundary_coverage": "Boundary coverage",
+}
 
 
 def _run_cell_text_tone(verdict: str, expected_behavior: str) -> str:
@@ -88,24 +99,22 @@ def _run_cell_text_tone(verdict: str, expected_behavior: str) -> str:
     return ""
 
 
-def _yaml_scalar(value: object) -> str:
-    text = "" if value is None else str(value)
-    if text == "":
-        return '""'
-    if (
-        _YAML_SIMPLE_RE.fullmatch(text)
-        and text == text.strip()
-        and text.lower() not in {"null", "true", "false", "yes", "no", "on", "off"}
-    ):
-        return text
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
-    return f'"{escaped}"'
-
-
 def _sanity_checks_list(raw: object) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item or "") for item in raw if str(item or "")]
+
+
+def _sanity_check_label(check_name: str) -> str:
+    token = str(check_name or "")
+    return _SANITY_CHECK_LABELS.get(token, token.replace("_", " ") or "Sanity check")
+
+
+def _ordered_sanity_checks(checks: list[str]) -> list[str]:
+    check_set = set(checks)
+    ordered = [check for check in _SANITY_CHECK_ORDER if check in check_set]
+    ordered.extend([check for check in checks if check not in set(ordered)])
+    return ordered
 
 
 def _build_sanity_payload(verification_details: dict[str, object]) -> dict[str, object]:
@@ -128,30 +137,65 @@ def _build_sanity_payload(verification_details: dict[str, object]) -> dict[str, 
     }
 
 
-def _render_sanity_yaml(payload: dict[str, object]) -> str:
-    lines: list[str] = []
-    scalar_keys = (
-        "sanity_status",
-        "sanity_checked_count",
-        "validation_status",
-        "validated_count",
-        "failed_step",
-        "failed_check",
-        "failed_test",
-        "error",
-    )
-    for key in scalar_keys[:2]:
-        lines.append(f"{key}: {_yaml_scalar(payload.get(key))}")
-    sanity_checks = cast(list[str], payload.get("sanity_checks") or [])
-    if sanity_checks:
-        lines.append("sanity_checks:")
-        for item in sanity_checks:
-            lines.append(f"  - {_yaml_scalar(item)}")
-    else:
-        lines.append("sanity_checks: []")
-    for key in scalar_keys[2:]:
-        lines.append(f"{key}: {_yaml_scalar(payload.get(key))}")
-    return "\n".join(lines)
+def _sanity_status_tone(status: str) -> str:
+    if status == "passed":
+        return "ok"
+    if status in {"warning", "failed"}:
+        return "warn"
+    if status in {"pending", "running"}:
+        return "info"
+    return "muted"
+
+
+def _sanity_reason(payload: dict[str, object]) -> str:
+    error = bounded_display_text(str(payload.get("error") or ""))
+    if error:
+        return error
+    status = str(payload.get("sanity_status") or "")
+    failed_check = str(payload.get("failed_check") or "")
+    if status == "warning" and failed_check:
+        return f"{_sanity_check_label(failed_check)} has warning"
+    if status == "failed" and failed_check:
+        return f"{_sanity_check_label(failed_check)} failed"
+    return ""
+
+
+def _sanity_task_rows(payload: dict[str, object]) -> list[dict[str, object]]:
+    status = str(payload.get("sanity_status") or "")
+    failed_check = str(payload.get("failed_check") or "")
+    failed_test = str(payload.get("failed_test") or "")
+    reason = _sanity_reason(payload)
+    rows: list[dict[str, object]] = []
+    reached_failure = False
+    for check in _ordered_sanity_checks(cast(list[str], payload.get("sanity_checks") or [])):
+        row_status = "passed"
+        detail = "completed"
+        if status in {"pending", "running"}:
+            row_status = status
+            detail = "waiting for sanity checks" if status == "pending" else "running"
+        elif status == "skipped":
+            row_status = "skipped"
+            detail = "not run for partial verification"
+        elif status in {"warning", "failed"}:
+            if check == failed_check:
+                row_status = status
+                detail = reason
+                if failed_test and failed_test not in detail:
+                    detail = f"{detail} ({failed_test})" if detail else failed_test
+                reached_failure = True
+            elif reached_failure:
+                row_status = "skipped"
+                detail = "not reached"
+        rows.append(
+            {
+                "name": check,
+                "label": _sanity_check_label(check),
+                "status": row_status,
+                "tone": _sanity_status_tone(row_status),
+                "detail": bounded_display_text(detail),
+            }
+        )
+    return rows
 
 
 def _detail_sanity_context(verification_id: str, verification_details: dict[str, object]) -> dict[str, object]:
@@ -159,13 +203,22 @@ def _detail_sanity_context(verification_id: str, verification_details: dict[str,
         return {
             "available": False,
             "status": "unknown",
-            "dump_text": "",
+            "reason": "",
+            "tasks": [],
+            "task_count": 0,
+            "ran_count": 0,
+            "checked_count": 0,
         }
     payload = _build_sanity_payload(verification_details)
+    tasks = _sanity_task_rows(payload)
     return {
         "available": True,
         "status": str(payload["sanity_status"]),
-        "dump_text": _render_sanity_yaml(payload),
+        "reason": _sanity_reason(payload),
+        "tasks": tasks,
+        "task_count": len(tasks),
+        "ran_count": sum(1 for task in tasks if str(task.get("status") or "") in {"passed", "warning", "failed"}),
+        "checked_count": int(payload["sanity_checked_count"]),
     }
 
 

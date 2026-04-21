@@ -111,6 +111,14 @@ section.verification-header-section {
   white-space: nowrap;
 }
 
+.verification-task-status-reason {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .verification-task-status-tools {
   display: flex;
   align-items: baseline;
@@ -863,16 +871,38 @@ section.verification-header-section {
   max-height: calc(100vh - 20px);
 }
 
-.verification-sanity-dump {
+.verification-sanity-summary {
+  display: grid;
+  gap: var(--space-2);
   margin: 0;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  font-size: var(--font-size-ui-xs);
-  line-height: 1.35;
-  font-family: Consolas, "Courier New", monospace;
-  white-space: pre-wrap;
-  word-break: break-word;
+}
+
+.verification-sanity-summary > p {
+  margin: 0;
+}
+
+.verification-sanity-reason {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.verification-sanity-table {
+  width: 100%;
+  margin-top: var(--space-4);
+  font-size: var(--font-size-ui-sm);
+}
+
+.verification-sanity-table th,
+.verification-sanity-table td {
+  vertical-align: top;
+}
+
+.verification-sanity-table td:last-child {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.verification-sanity-popup .ui-popup-content {
   max-height: calc(100vh - 120px);
   overflow: auto;
 }

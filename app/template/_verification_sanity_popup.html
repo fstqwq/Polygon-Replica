@@ -1,0 +1,26 @@
+<div class="verification-sanity-summary">
+  {% if detail_sanity.task_count %}
+  <p>Ran {{ detail_sanity.ran_count }} of {{ detail_sanity.task_count }} sanity checks.</p>
+  {% else %}
+  <p>No sanity checks were run.</p>
+  {% endif %}
+  {% if detail_sanity.reason %}
+  <p class="verification-sanity-reason">{{ detail_sanity.reason }}</p>
+  {% endif %}
+</div>
+{% if detail_sanity.tasks %}
+<table class="table-base verification-sanity-table">
+  <tr>
+    <th>Check</th>
+    <th>Status</th>
+    <th>Detail</th>
+  </tr>
+  {% for task in detail_sanity.tasks %}
+  <tr>
+    <td>{{ task.label }}</td>
+    <td><span class="{{ task.tone }}">{{ task.status }}</span></td>
+    <td>{% if task.detail %}{{ task.detail }}{% else %}<span class="muted">-</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}

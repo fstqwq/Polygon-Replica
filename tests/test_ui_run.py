@@ -4456,7 +4456,7 @@ class TestUIRun(UIBaseSuite):
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("accepted solution failed on 001.in", detail_html)
 
-    def test_run_details_shows_sanity_popup_with_yaml_dump(self) -> None:
+    def test_run_details_shows_sanity_popup_with_task_summary(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -4534,14 +4534,13 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn("San check", html)
         self.assertIn('data-popup-open="verification-sanity-popup"', html)
         self.assertIn('id="verification-sanity-popup"', html)
-        self.assertIn("sanity_status: failed", html)
-        self.assertIn("sanity_checks:", html)
-        self.assertIn("- empty_output_stability", html)
-        self.assertIn("- unicode_output_stability", html)
-        self.assertIn("- custom_sample_output", html)
-        self.assertIn("failed_check: custom_sample_output", html)
-        self.assertIn("failed_test: 003.in", html)
-        self.assertIn("error: validator reported mismatch", html)
+        self.assertIn("Ran 3 of 3 sanity checks.", html)
+        self.assertIn("Empty output stability", html)
+        self.assertIn("Unicode output stability", html)
+        self.assertIn("Custom sample output", html)
+        self.assertIn("validator reported mismatch", html)
+        self.assertNotIn("sanity_status:", html)
+        self.assertNotIn("sanity_checks:", html)
 
     def test_run_details_sanity_warning_is_visible_without_failed_verification(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -4613,10 +4612,10 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("sanity_status: warning", html)
-        self.assertIn("- boundary_coverage", html)
-        self.assertIn("failed_check: boundary_coverage", html)
+        self.assertIn("Ran 3 of 3 sanity checks.", html)
+        self.assertIn("Boundary coverage", html)
         self.assertIn("boundary coverage missing: n max=3", html)
+        self.assertNotIn("sanity_status:", html)
 
     def test_run_details_sanity_failed_keeps_verification_status_ok(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -4689,8 +4688,9 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("ok (sanity failed)", html)
-        self.assertIn("sanity_status: failed", html)
+        self.assertIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("empty output probe was accepted", html)
+        self.assertNotIn("sanity_status:", html)
 
     def test_run_list_and_submenu_show_sanity_suffix_without_failed_row(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

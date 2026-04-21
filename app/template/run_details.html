@@ -24,6 +24,9 @@
           {% else %}
           <span class="verification-task-status-state info">{{ detail_status_display or detail_status }}</span>
           {% endif %}
+          {% if detail_sanity.reason %}
+          <span class="verification-task-status-reason">{{ detail_sanity.reason }}</span>
+          {% endif %}
         {% endif %}
       </div>
       {% if detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
@@ -226,7 +229,7 @@
 </section>
 {% if detail_sanity.available %}
 {% call ui_popup('verification-sanity-popup', 'Sanity checks', dialog_class='verification-sanity-popup') %}
-      <pre class="verification-sanity-dump">{{ detail_sanity.dump_text }}</pre>
+      {% include "_verification_sanity_popup.html" %}
 {% endcall %}
 {% endif %}
 {% call ui_popup('run-test-detail-popup', 'Test Details', dialog_class='verification-detail-popup', content_id='run-test-detail-popup-content') %}
@@ -321,7 +324,7 @@
 </section>
 {% if detail_sanity.available %}
 {% call ui_popup('verification-sanity-popup', 'Sanity checks', dialog_class='verification-sanity-popup') %}
-      <pre class="verification-sanity-dump">{{ detail_sanity.dump_text }}</pre>
+      {% include "_verification_sanity_popup.html" %}
 {% endcall %}
 {% endif %}
 {% endif %}
