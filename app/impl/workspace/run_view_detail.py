@@ -990,7 +990,7 @@ def build_run_detail_context(
         result_kind = _run_cell_kind(got_short, expected_behavior) if got_short else 'neutral'
         result_text_tone = _run_cell_text_tone(got_short, expected_behavior)
         result_tone_class = f'tone-{result_kind}'
-        expected_mismatch = bool(expected_is_ac_only and completed and (not matched))
+        expected_mismatch = bool(expected_behavior != 'unknown' and completed and (not matched))
         execution_skipped_from_summary = bool(summary.get('execution_skipped'))
         if not execution_skipped_from_summary and (summary.get('failure_stage') or '') == 'build':
             execution_skipped_from_summary = True

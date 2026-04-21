@@ -133,7 +133,7 @@
           </th>
           {% endif %}
           {% for col in detail_columns %}
-          <th class="{{ 'tone-fail' if col.expected_mismatch else '' }}">
+          <th class="{{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}">
             {% if col.source_href %}
             <a href="{{ col.source_href }}" class="col-link"><span class="col-title">{{ col.title }}</span></a>
             {% else %}
@@ -143,13 +143,16 @@
           {% endfor %}
         </tr>
         <tr class="verification-detail-overview-row verification-detail-result-row">
-          <th class="verification-detail-corner-structure-cell">
-            <span class="stat-line stat-main verification-detail-label-nowrap">Result</span>
+          <th class="verification-detail-corner-structure-cell verification-detail-result-label-cell">
+            <span class="stat-line stat-main verification-detail-label-nowrap">Result / Statistics</span>
             <span class="stat-line stat-sub verification-detail-label-nowrap">Expected</span>
           </th>
           {% for col in detail_columns %}
-          <th class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
-            <span class="stat-line stat-main{{ ' vcode-info' if col.result_text_tone == 'info' else '' }}">{{ col.got_display or col.got_short }}</span>
+          <th class="{{ col.result_tone_class }} {{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}{{ ' verification-detail-runtime-warn' if col.max_time_tone == 'warn' else '' }}">
+            <span class="stat-line stat-main">
+              <span class="{{ 'vcode-info' if col.result_text_tone == 'info' and not col.expected_mismatch else '' }}">{{ col.got_display or col.got_short }}</span>
+              <span class="verification-detail-inline-stats"><span class="{{ 'vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span>/{{ col.max_memory_display or '-' }}</span>
+            </span>
             {% set expected_token = col.expected_display or '--' %}
             <span class="stat-line stat-sub">{{ expected_token }}</span>
           </th>
@@ -174,11 +177,13 @@
         </td>
         {% for cell in row.cells %}
         {% set col = detail_columns[loop.index0] %}
-        <td class="vcell tone-{{ cell.kind }}">
+        <td class="vcell tone-{{ cell.kind }}{{ ' verification-detail-runtime-warn' if cell.time_tone == 'warn' else '' }}">
           {% if row.has_detail %}
-          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode{{ ' vcode-info' if cell.text_tone == 'info' else '' }}">{{ cell.short }}</span>{% if cell.time_display and cell.memory_display %}<span class="vmeta{{ ' vmeta-warn' if cell.time_tone == 'warn' else '' }}">{{ cell.time_display }}</span><span class="vmeta vmeta-join">/{{ cell.memory_display }}</span>{% elif cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}</a>
+          {% set cell_code_class = 'vcode-unexpected' if col.expected_mismatch and cell.text_tone == 'info' else 'vcode-info' if cell.text_tone == 'info' else '' %}
+          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode{{ ' ' ~ cell_code_class if cell_code_class else '' }}">{{ cell.short }}</span></a>{% if cell.time_display and cell.memory_display %}<span class="vmeta{{ ' vmeta-warn' if cell.time_tone == 'warn' else '' }}">{{ cell.time_display }}</span><span class="vmeta vmeta-join">/{{ cell.memory_display }}</span>{% elif cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
           {% else %}
-          <span class="vcode{{ ' vcode-info' if cell.text_tone == 'info' else '' }}">{{ cell.short }}</span>
+          {% set cell_code_class = 'vcode-unexpected' if col.expected_mismatch and cell.text_tone == 'info' else 'vcode-info' if cell.text_tone == 'info' else '' %}
+          <span class="vcode{{ ' ' ~ cell_code_class if cell_code_class else '' }}">{{ cell.short }}</span>
           {% if cell.time_display and cell.memory_display %}<span class="vmeta{{ ' vmeta-warn' if cell.time_tone == 'warn' else '' }}">{{ cell.time_display }}</span><span class="vmeta vmeta-join">/{{ cell.memory_display }}</span>{% elif cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
           {% endif %}
         </td>
@@ -207,20 +212,6 @@
       </tr>
       {% endif %}
       </tbody>
-      <tfoot>
-        <tr class="verification-detail-overview-row verification-detail-summary-row">
-          <th class="verification-detail-corner-structure-cell">
-            <div class="stat-line stat-main verification-detail-label-nowrap">Summary</div>
-            <div class="stat-line stat-sub verification-detail-label-nowrap">Statistics</div>
-          </th>
-          {% for col in detail_columns %}
-          <td class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
-            <div class="stat-line stat-main">{{ col.got_display or col.got_short or '-' }}</div>
-            <div class="stat-line stat-sub"><span class="{{ 'vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span> / {{ col.max_memory_display or '-' }}</div>
-          </td>
-          {% endfor %}
-        </tr>
-      </tfoot>
     </table>
   </div>
 </section>

@@ -3629,7 +3629,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(workspace_impl._run_cell_kind("CE", "rejected"), "expected-nonac")
         self.assertEqual(workspace_impl._run_cell_kind("OK", "accepted"), "ok")
 
-    def test_run_details_marks_unexpected_ac_text_without_changing_neutral_cell(self) -> None:
+    def test_run_details_marks_unexpected_ac_text(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "wa.cpp").write_text("int main(){return 1;}\n", encoding="utf-8")
@@ -3708,9 +3708,8 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('<td class="vcell tone-neutral">', html)
-        self.assertIn('<span class="vcode vcode-info">AC</span>', html)
-        self.assertIn('<span class="stat-line stat-main vcode-info">AC</span>', html)
+        self.assertIn("verification-detail-unexpected", html)
+        self.assertIn('<span class="vcode vcode-unexpected">AC</span>', html)
 
     def test_verification_match_uses_failed_status_set_for_tl_and_rejected(self) -> None:
         mixed_tl_re = {
