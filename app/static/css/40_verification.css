@@ -600,16 +600,6 @@ section.verification-header-section {
   color: var(--danger) !important;
 }
 
-.verification-detail-unexpected-cell {
-  background: var(--surface-danger);
-  color: var(--danger) !important;
-}
-
-.verification-detail-unexpected-cell .vcode,
-.verification-detail-unexpected-cell .vmeta {
-  color: var(--danger);
-}
-
 .run-details-page .verification-detail-wrap.verification-detail-wrap-regular {
   width: 100%;
   max-width: none;

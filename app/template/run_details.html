@@ -119,7 +119,7 @@
         </td>
         {% for cell in row.cells %}
         {% set col = detail_columns[loop.index0] %}
-        <td class="vcell tone-{{ cell.kind }}{{ ' verification-detail-runtime-warn' if cell.time_tone == 'warn' else '' }}{{ ' verification-detail-unexpected-cell' if cell.kind == 'fail' or (col.expected_mismatch and cell.text_tone == 'info') else '' }}">
+        <td class="vcell tone-{{ cell.kind }}{{ ' verification-detail-runtime-warn' if cell.time_tone == 'warn' else '' }}">
           {% if row.has_detail %}
           {% set cell_code_class = 'vcode-unexpected' if cell.kind == 'fail' or (col.expected_mismatch and cell.text_tone == 'info') else 'vcode-info' if cell.text_tone == 'info' else '' %}
           <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode{{ ' ' ~ cell_code_class if cell_code_class else '' }}">{{ cell.short }}</span></a>{% if cell.time_display and cell.memory_display %}<span class="vmeta{{ ' vmeta-warn' if cell.time_tone == 'warn' else '' }}">{{ cell.time_display }}</span><span class="vmeta vmeta-join">/{{ cell.memory_display }}</span>{% elif cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
