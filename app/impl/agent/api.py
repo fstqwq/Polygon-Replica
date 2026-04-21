@@ -315,6 +315,32 @@ def _append_diagnostics(lines: list[str], detail_ctx: dict[str, object], *, inde
         lines.append(f"{' ' * (indent + 2)}- {_yaml_scalar(item)}")
 
 
+def _append_sanity(lines: list[str], detail_ctx: dict[str, object]) -> None:
+    sanity = cast(dict[str, object], detail_ctx.get("detail_sanity") or {})
+    if not bool(sanity.get("available")):
+        return
+    lines.append("")
+    lines.append("sanity:")
+    _append_scalar(lines, "status", sanity.get("status") or "unknown", indent=2)
+    reason = str(sanity.get("reason") or "")
+    if reason:
+        _append_scalar(lines, "reason", reason, indent=2)
+    _append_scalar(lines, "ran", int(sanity.get("ran_count") or 0), indent=2)
+    _append_scalar(lines, "total", int(sanity.get("task_count") or 0), indent=2)
+    tasks = cast(list[dict[str, object]], sanity.get("tasks") or [])
+    if not tasks:
+        lines.append("  checks: []")
+        return
+    lines.append("  checks:")
+    for task in tasks:
+        lines.append(f"    - name: {_yaml_scalar(task.get('name') or '')}")
+        _append_scalar(lines, "label", task.get("label") or "", indent=6)
+        _append_scalar(lines, "status", task.get("status") or "", indent=6)
+        detail = str(task.get("detail") or "")
+        if detail:
+            _append_scalar(lines, "detail", detail, indent=6)
+
+
 def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, object]) -> str:
     columns = cast(list[dict[str, object]], detail_ctx.get("detail_columns") or [])
     rows = cast(list[dict[str, object]], detail_ctx.get("detail_rows") or [])
@@ -338,6 +364,7 @@ def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, o
             lines.append(f"  - {_yaml_scalar(task.get('label') or '')}")
     else:
         lines.append("running: []")
+    _append_sanity(lines, detail_ctx)
     lines.append("")
     lines.append("columns:")
     for index, col in enumerate(columns):

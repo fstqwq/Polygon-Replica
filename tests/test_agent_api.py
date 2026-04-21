@@ -856,6 +856,14 @@ class TestAgentAPI(SmokeBase):
                     "mode": "pass-fail",
                     "selected_test_names": ["001.in"],
                     "source_paths": ["solutions/ac_python.py"],
+                    "sanity_status": "warning",
+                    "sanity_checked_count": 3,
+                    "sanity_checks": ["empty_output_stability", "unicode_output_stability", "boundary_coverage"],
+                    "validation_status": "warning",
+                    "validated_count": 3,
+                    "failed_step": "sanity",
+                    "failed_check": "boundary_coverage",
+                    "error": "boundary coverage missing: n max=3",
                 },
             )
             task_store = VerificationTaskStore(config.db)
@@ -900,6 +908,16 @@ class TestAgentAPI(SmokeBase):
             self.assertIn(f"verification: {verification_id}", detail_resp.text)
             self.assertIn("status: failed", detail_resp.text)
             self.assertIn("tasks:", detail_resp.text)
+            self.assertIn("sanity:", detail_resp.text)
+            self.assertIn("status: warning", detail_resp.text)
+            self.assertIn('reason: "boundary coverage missing: n max=3"', detail_resp.text)
+            self.assertIn("ran: 3", detail_resp.text)
+            self.assertIn("total: 3", detail_resp.text)
+            self.assertIn("name: boundary_coverage", detail_resp.text)
+            self.assertIn("label: Boundary coverage", detail_resp.text)
+            self.assertIn('detail: "boundary coverage missing: n max=3"', detail_resp.text)
+            self.assertNotIn("sanity_status:", detail_resp.text)
+            self.assertNotIn("sanity_checks:", detail_resp.text)
             self.assertIn("columns:", detail_resp.text)
             self.assertIn("ac_python.py:", detail_resp.text)
             self.assertIn("source: solutions/ac_python.py", detail_resp.text)
