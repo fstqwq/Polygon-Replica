@@ -466,6 +466,7 @@ section.verification-header-section {
   table-layout: fixed;
   border-collapse: collapse;
   border-spacing: 0;
+  border: 1px solid var(--line);
 }
 
 .verification-detail-table col.verification-col-test {
@@ -486,7 +487,13 @@ section.verification-header-section {
   overflow-wrap: normal;
   font-size: var(--font-size-ui-sm);
   padding: 2px 4px;
-  border: 1px solid var(--line);
+  border: 0;
+}
+
+.verification-detail-table > thead > tr,
+.verification-detail-table > tbody > tr,
+.verification-detail-table > tfoot > tr {
+  border-bottom: 1px solid var(--line);
 }
 
 .verification-detail-table > thead > tr:first-child > th {
@@ -497,11 +504,6 @@ section.verification-header-section {
 .verification-detail-overview-row > td {
   font-size: var(--font-size-ui-xs);
   font-weight: 500;
-}
-
-.verification-detail-overview-row > td,
-.verification-detail-overview-row > th:not(.verification-detail-corner-structure-cell) {
-  background: var(--surface-alt);
 }
 
 .verification-detail-corner-status-cell {
@@ -517,17 +519,20 @@ section.verification-header-section {
 .verification-detail-sanity-link {
   display: inline-block;
   color: inherit;
+  text-decoration: none;
 }
 
 .verification-detail-sanity-cell-warning,
 .verification-detail-sanity-cell-failed {
   background: var(--surface-warning);
-  border-color: var(--warn-line);
 }
 
 .verification-detail-sanity-state {
   margin-left: 3px;
   text-transform: lowercase;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .verification-detail-sanity-cell .stat-line {
@@ -566,6 +571,10 @@ section.verification-header-section {
 
 .verification-detail-corner-structure-cell {
   background: var(--surface-subtle);
+}
+
+.verification-detail-result-row > .verification-detail-corner-structure-cell {
+  background: transparent;
 }
 
 .verification-detail-corner-structure-cell .stat-main {
@@ -612,7 +621,6 @@ section.verification-header-section {
 
 .verification-detail-runtime-warn {
   background: var(--surface-warning);
-  border-color: var(--warn-line) !important;
 }
 
 .verification-detail-unexpected,
@@ -672,6 +680,10 @@ section.verification-header-section {
 .verification-detail-table a:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+.verification-detail-table > thead > tr:first-child a {
+  text-decoration: none;
 }
 
 .vcell {
