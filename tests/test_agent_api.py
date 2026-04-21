@@ -864,6 +864,19 @@ class TestAgentAPI(SmokeBase):
                     "failed_step": "sanity",
                     "failed_check": "boundary_coverage",
                     "error": "boundary coverage missing: n max=3",
+                    "sanity_check_results": [
+                        {"name": "empty_output_stability", "status": "passed", "checked_count": 1, "messages": []},
+                        {"name": "unicode_output_stability", "status": "passed", "checked_count": 1, "messages": []},
+                        {
+                            "name": "boundary_coverage",
+                            "status": "warning",
+                            "checked_count": 1,
+                            "messages": [
+                                {"severity": "warning", "test_name": "", "message": "n max=3"},
+                                {"severity": "warning", "test_name": "", "message": "m min=1"},
+                            ],
+                        },
+                    ],
                 },
             )
             task_store = VerificationTaskStore(config.db)
@@ -915,7 +928,9 @@ class TestAgentAPI(SmokeBase):
             self.assertIn("total: 3", detail_resp.text)
             self.assertIn("name: boundary_coverage", detail_resp.text)
             self.assertIn("label: Boundary coverage", detail_resp.text)
-            self.assertIn('detail: "boundary coverage missing: n max=3"', detail_resp.text)
+            self.assertIn("messages:", detail_resp.text)
+            self.assertIn("- n max=3", detail_resp.text)
+            self.assertIn("- m min=1", detail_resp.text)
             self.assertNotIn("sanity_status:", detail_resp.text)
             self.assertNotIn("sanity_checks:", detail_resp.text)
             self.assertIn("columns:", detail_resp.text)

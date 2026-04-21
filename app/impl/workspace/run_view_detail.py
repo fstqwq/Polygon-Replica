@@ -135,6 +135,11 @@ def _build_sanity_payload(verification_details: dict[str, object]) -> dict[str, 
         "sanity_status": sanity_status,
         "sanity_checked_count": int(verification_details.get("sanity_checked_count") or 0),
         "sanity_checks": _sanity_checks_list(verification_details.get("sanity_checks")),
+        "sanity_check_results": [
+            dict(item)
+            for item in cast(list[object], verification_details.get("sanity_check_results") or [])
+            if isinstance(item, dict)
+        ],
         "validation_status": validation_status,
         "validated_count": int(verification_details.get("validated_count") or 0),
         "failed_step": str(verification_details.get("failed_step") or ""),
@@ -167,42 +172,63 @@ def _sanity_reason(payload: dict[str, object]) -> str:
     return ""
 
 
-def _sanity_task_rows(payload: dict[str, object]) -> list[dict[str, object]]:
+def _sanity_messages(raw_messages: object) -> list[dict[str, object]]:
+    messages: list[dict[str, object]] = []
+    for raw in cast(list[object], raw_messages or []):
+        if not isinstance(raw, dict):
+            continue
+        message = bounded_display_text(str(raw.get("message") or ""))
+        if not message:
+            continue
+        messages.append(
+            {
+                "severity": str(raw.get("severity") or ""),
+                "test_name": str(raw.get("test_name") or ""),
+                "message": message,
+            }
+        )
+    return messages
+
+
+def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str, object]]:
     status = str(payload.get("sanity_status") or "")
-    failed_check = str(payload.get("failed_check") or "")
-    failed_test = str(payload.get("failed_test") or "")
-    reason = _sanity_reason(payload)
+    results = [dict(item) for item in cast(list[object], payload.get("sanity_check_results") or []) if isinstance(item, dict)]
+    if not results:
+        return []
     rows: list[dict[str, object]] = []
-    reached_failure = False
-    for check in _ordered_sanity_checks(cast(list[str], payload.get("sanity_checks") or [])):
-        row_status = "passed"
-        detail = "completed"
-        if status in {"pending", "running"}:
-            row_status = status
-            detail = "waiting for sanity checks" if status == "pending" else "running"
-        elif status == "skipped":
-            row_status = "skipped"
-            detail = "not run for partial verification"
-        elif status in {"warning", "failed"}:
-            if check == failed_check:
-                row_status = status
-                detail = reason
-                if failed_test and failed_test not in detail:
-                    detail = f"{detail} ({failed_test})" if detail else failed_test
-                reached_failure = True
-            elif reached_failure:
-                row_status = "skipped"
-                detail = "not reached"
+    for item in results:
+        check_name = str(item.get("name") or item.get("check_name") or "")
+        if not check_name:
+            continue
+        row_status = str(item.get("status") or "")
+        if not row_status:
+            row_status = status if status in {"pending", "running", "skipped"} else "passed"
+        messages = _sanity_messages(item.get("messages"))
+        detail = ""
+        if not messages:
+            if row_status == "passed":
+                detail = "completed"
+            elif row_status == "pending":
+                detail = "waiting for sanity checks"
+            elif row_status == "running":
+                detail = "running"
+            elif row_status == "skipped":
+                detail = "not run"
         rows.append(
             {
-                "name": check,
-                "label": _sanity_check_label(check),
+                "name": check_name,
+                "label": _sanity_check_label(check_name),
                 "status": row_status,
                 "tone": _sanity_status_tone(row_status),
                 "detail": bounded_display_text(detail),
+                "messages": messages,
             }
         )
     return rows
+
+
+def _sanity_task_rows(payload: dict[str, object]) -> list[dict[str, object]]:
+    return _sanity_task_rows_from_results(payload)
 
 
 def _detail_sanity_context(verification_id: str, verification_details: dict[str, object]) -> dict[str, object]:

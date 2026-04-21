@@ -1113,6 +1113,22 @@ def run_workspace_verification_dag(
             updated_detail["sanity_checked_count"] = int(sanity_result.checked_count)
             updated_detail["validation_status"] = sanity_result.status
             updated_detail["validated_count"] = int(sanity_result.checked_count)
+            updated_detail["sanity_check_results"] = [
+                {
+                    "name": item.name,
+                    "status": item.status,
+                    "checked_count": int(item.checked_count),
+                    "messages": [
+                        {
+                            "severity": message.severity,
+                            "test_name": message.test_name,
+                            "message": message.message,
+                        }
+                        for message in item.messages
+                    ],
+                }
+                for item in sanity_result.check_results
+            ]
             if sanity_result.status == SANITY_PASSED:
                 updated_detail.pop("failed_step", None)
                 updated_detail.pop("failed_check", None)

@@ -4724,6 +4724,28 @@ class TestUIRun(UIBaseSuite):
                 "failed_check": "summary_runtime_threshold",
                 "failed_test": "",
                 "error": "solutions/slow.cpp: accepted solution is close to the time limit.",
+                "sanity_check_results": [
+                    {"name": "empty_output_stability", "status": "passed", "checked_count": 1, "messages": []},
+                    {"name": "unicode_output_stability", "status": "passed", "checked_count": 1, "messages": []},
+                    {
+                        "name": "summary_runtime_threshold",
+                        "status": "warning",
+                        "checked_count": 6,
+                        "messages": [
+                            {
+                                "severity": "warning",
+                                "test_name": "",
+                                "message": "solutions/slow.cpp: accepted solution is close to the time limit.",
+                            },
+                            {
+                                "severity": "warning",
+                                "test_name": "",
+                                "message": "solutions/ac_python.py: correct output in 50% extra time limit.",
+                            },
+                        ],
+                    },
+                    {"name": "boundary_coverage", "status": "passed", "checked_count": 1, "messages": []},
+                ],
                 "run_config_json": '{"time_limit_ms":1000,"memory_limit_mb":1024,"pass_limit":1}',
             },
         )
@@ -4836,6 +4858,9 @@ class TestUIRun(UIBaseSuite):
         self.assertNotIn('vmeta-warn">700ms</span>', html)
         self.assertIn("Summary runtime threshold", html)
         self.assertIn("solutions/slow.cpp: accepted solution is close to the time limit.", html)
+        self.assertIn("solutions/ac_python.py: correct output in 50% extra time limit.", html)
+        self.assertIn("Boundary coverage", html)
+        self.assertNotIn("not reached", html)
         self.assertNotIn("TL(AC)", html)
 
     def test_run_list_and_submenu_show_sanity_suffix_without_failed_row(self) -> None:

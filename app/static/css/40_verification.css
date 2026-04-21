@@ -908,6 +908,14 @@ section.verification-header-section {
   overflow-wrap: anywhere;
 }
 
+.verification-sanity-message {
+  margin: 0 0 0.25rem;
+}
+
+.verification-sanity-message:last-child {
+  margin-bottom: 0;
+}
+
 .verification-sanity-popup .ui-popup-content {
   max-height: calc(100vh - 120px);
   overflow: auto;

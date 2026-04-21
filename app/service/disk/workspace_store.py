@@ -704,6 +704,10 @@ class WorkspaceDiskStore:
                 [int(problem_id)],
             )
             conn.execute(
+                "DELETE FROM verification_sanity_check_messages WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
+                [int(problem_id)],
+            )
+            conn.execute(
                 "DELETE FROM verification_sanity_checks WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
                 [int(problem_id)],
             )

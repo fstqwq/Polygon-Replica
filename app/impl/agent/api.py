@@ -339,6 +339,11 @@ def _append_sanity(lines: list[str], detail_ctx: dict[str, object]) -> None:
         detail = str(task.get("detail") or "")
         if detail:
             _append_scalar(lines, "detail", detail, indent=6)
+        messages = cast(list[dict[str, object]], task.get("messages") or [])
+        if messages:
+            lines.append("      messages:")
+            for message in messages:
+                lines.append(f"        - {_yaml_scalar(message.get('message') or '')}")
 
 
 def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, object]) -> str:

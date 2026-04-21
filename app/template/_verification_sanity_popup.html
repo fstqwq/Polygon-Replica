@@ -19,7 +19,17 @@
   <tr>
     <td>{{ task.label }}</td>
     <td><span class="{{ task.tone }}">{{ task.status }}</span></td>
-    <td>{% if task.detail %}{{ task.detail }}{% else %}<span class="muted">-</span>{% endif %}</td>
+    <td>
+      {% if task.messages %}
+        {% for message in task.messages %}
+        <p class="verification-sanity-message">{{ message.message }}</p>
+        {% endfor %}
+      {% elif task.detail %}
+        {{ task.detail }}
+      {% else %}
+        <span class="muted">-</span>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table>

@@ -32,12 +32,28 @@ UNICODE_OUTPUT_STABILITY_CHECK = "unicode_output_stability"
 
 
 @dataclass(frozen=True)
+class VerificationSanityMessage:
+    severity: str
+    test_name: str
+    message: str
+
+
+@dataclass(frozen=True)
+class VerificationSanityCheckResult:
+    name: str
+    status: str
+    checked_count: int
+    messages: tuple[VerificationSanityMessage, ...] = ()
+
+
+@dataclass(frozen=True)
 class VerificationSanityResult:
     status: str
     check_name: str
     checked_count: int
     failed_test: str
     error: str
+    check_results: tuple[VerificationSanityCheckResult, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,20 +182,17 @@ def _run_stability_checks(
     mode: str,
     logs_dir: Path,
     test_plans: list[VerificationTestPlan],
-) -> VerificationSanityResult:
+) -> list[VerificationSanityCheckResult]:
     probe_plan = next((plan for plan in test_plans if plan.test_name), None)
     if probe_plan is None:
-        return VerificationSanityResult(
-            status=SANITY_PASSED,
-            check_name="",
-            checked_count=0,
-            failed_test="",
-            error="",
-        )
+        return [
+            VerificationSanityCheckResult(name=probe.check_name, status=SANITY_PASSED, checked_count=0)
+            for probe in _stability_probes()
+        ]
     log_path = logs_dir / "stability.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
-    checked_count = 0
+    results: list[VerificationSanityCheckResult] = []
     for probe in _stability_probes():
         try:
             verdict, message = _run_stability_probe(
@@ -193,45 +206,87 @@ def _run_stability_checks(
         except Exception as exc:
             detail = str(exc) or "judgehost stability probe failed"
             lines.append(f"{probe.check_name} {probe_plan.test_name}: failed - {detail}")
-            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            return VerificationSanityResult(
-                status=SANITY_FAILED,
-                check_name=probe.check_name,
-                checked_count=checked_count,
-                failed_test=probe_plan.test_name,
-                error=f"{probe.check_name} failed on {probe_plan.test_name}: {detail}",
+            results.append(
+                VerificationSanityCheckResult(
+                    name=probe.check_name,
+                    status=SANITY_FAILED,
+                    checked_count=0,
+                    messages=(
+                        VerificationSanityMessage(
+                            severity=SANITY_FAILED,
+                            test_name=probe_plan.test_name,
+                            message=f"{probe.check_name} failed on {probe_plan.test_name}: {detail}",
+                        ),
+                    ),
+                )
             )
+            continue
         if verdict in {"OK", "AC"}:
             detail = message or "probe was accepted"
             lines.append(f"{probe.check_name} {probe_plan.test_name}: failed - accepted ({detail})")
-            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            return VerificationSanityResult(
-                status=SANITY_FAILED,
-                check_name=probe.check_name,
-                checked_count=checked_count,
-                failed_test=probe_plan.test_name,
-                error=f"{probe.check_name} failed on {probe_plan.test_name}: got {verdict}; {detail}",
+            results.append(
+                VerificationSanityCheckResult(
+                    name=probe.check_name,
+                    status=SANITY_FAILED,
+                    checked_count=0,
+                    messages=(
+                        VerificationSanityMessage(
+                            severity=SANITY_FAILED,
+                            test_name=probe_plan.test_name,
+                            message=f"{probe.check_name} failed on {probe_plan.test_name}: got {verdict}; {detail}",
+                        ),
+                    ),
+                )
             )
+            continue
         if verdict == "FL":
             detail = message or "probe caused FL"
             lines.append(f"{probe.check_name} {probe_plan.test_name}: failed - FL ({detail})")
-            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            return VerificationSanityResult(
-                status=SANITY_FAILED,
-                check_name=probe.check_name,
-                checked_count=checked_count,
-                failed_test=probe_plan.test_name,
-                error=f"{probe.check_name} failed on {probe_plan.test_name}: got FL; {detail}",
+            results.append(
+                VerificationSanityCheckResult(
+                    name=probe.check_name,
+                    status=SANITY_FAILED,
+                    checked_count=0,
+                    messages=(
+                        VerificationSanityMessage(
+                            severity=SANITY_FAILED,
+                            test_name=probe_plan.test_name,
+                            message=f"{probe.check_name} failed on {probe_plan.test_name}: got FL; {detail}",
+                        ),
+                    ),
+                )
             )
-        checked_count += 1
+            continue
         lines.append(f"{probe.check_name} {probe_plan.test_name}: ok - {verdict or 'non-AC'}")
+        results.append(VerificationSanityCheckResult(name=probe.check_name, status=SANITY_PASSED, checked_count=1))
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return results
+
+
+def _aggregate_sanity_results(check_results: list[VerificationSanityCheckResult]) -> VerificationSanityResult:
+    checked_count = sum(int(item.checked_count) for item in check_results)
+    selected: VerificationSanityCheckResult | None = None
+    for status in (SANITY_FAILED, SANITY_WARNING):
+        selected = next((item for item in check_results if item.status == status), None)
+        if selected is not None:
+            break
+    if selected is None:
+        return VerificationSanityResult(
+            status=SANITY_PASSED,
+            check_name="",
+            checked_count=checked_count,
+            failed_test="",
+            error="",
+            check_results=tuple(check_results),
+        )
+    message = selected.messages[0] if selected.messages else None
     return VerificationSanityResult(
-        status=SANITY_PASSED,
-        check_name="",
+        status=selected.status,
+        check_name=selected.name,
         checked_count=checked_count,
-        failed_test="",
-        error="",
+        failed_test=message.test_name if message is not None else "",
+        error=message.message if message is not None else "",
+        check_results=tuple(check_results),
     )
 
 
@@ -260,7 +315,7 @@ def run_verification_sanity_checks(
             failed_test="",
             error="",
         )
-    stability_result = _run_stability_checks(
+    check_results = _run_stability_checks(
         problem=problem,
         user=user,
         verification_id=verification_id,
@@ -268,33 +323,9 @@ def run_verification_sanity_checks(
         logs_dir=logs_dir,
         test_plans=test_plans,
     )
-    if stability_result.status == SANITY_FAILED:
-        return stability_result
-    checked_count = int(stability_result.checked_count)
-    if CUSTOM_SAMPLE_OUTPUT_CHECK in checks:
-        result = validate_custom_sample_outputs(
-            problem=problem,
-            user=user,
-            verification_id=verification_id,
-            mode=mode,
-            logs_dir=logs_dir,
-            test_plans=test_plans,
-            accepted_source_label=accepted_source_label,
-            accepted_source_name=accepted_source_name,
-            accepted_source_bytes=accepted_source_bytes,
-            run_verification_payload_base=run_verification_payload_base,
-        )
-        checked_count += int(result.validated_count)
-        if result.status == SANITY_FAILED:
-            return VerificationSanityResult(
-                status=result.status,
-                check_name=CUSTOM_SAMPLE_OUTPUT_CHECK,
-                checked_count=checked_count,
-                failed_test=result.failed_test,
-                error=result.error,
-            )
     if SUMMARY_RUNTIME_THRESHOLD_CHECK in checks:
         runtime_checked_count = 0
+        runtime_messages: list[VerificationSanityMessage] = []
         runtime_log = logs_dir / "summary-runtime-threshold.log"
         runtime_log.parent.mkdir(parents=True, exist_ok=True)
         for column in list(runtime_columns or []):
@@ -308,37 +339,71 @@ def run_verification_sanity_checks(
             runtime_checked_count += int(report.checked_count)
             if report.warning_hit is not None:
                 reason = runtime_threshold_reason(report.warning_hit, summary_has_tl=bool(column.get("summary_has_tl")))
-                runtime_log.write_text(reason + "\n", encoding="utf-8")
-                return VerificationSanityResult(
-                    status=SANITY_WARNING,
-                    check_name=SUMMARY_RUNTIME_THRESHOLD_CHECK,
-                    checked_count=checked_count + runtime_checked_count,
-                    failed_test="",
-                    error=reason,
-                )
-        checked_count += runtime_checked_count
-        runtime_log.write_text("summary runtime threshold ok\n", encoding="utf-8")
+                runtime_messages.append(VerificationSanityMessage(severity=SANITY_WARNING, test_name="", message=reason))
+        if runtime_messages:
+            runtime_log.write_text("\n".join(item.message for item in runtime_messages) + "\n", encoding="utf-8")
+            runtime_status = SANITY_WARNING
+        else:
+            runtime_log.write_text("summary runtime threshold ok\n", encoding="utf-8")
+            runtime_status = SANITY_PASSED
+        check_results.append(
+            VerificationSanityCheckResult(
+                name=SUMMARY_RUNTIME_THRESHOLD_CHECK,
+                status=runtime_status,
+                checked_count=runtime_checked_count,
+                messages=tuple(runtime_messages),
+            )
+        )
     boundary_result = boundary_coverage_from_feedback(
         feedback_by_test=dict(generate_feedback_by_test or {}),
         test_plans=test_plans,
     )
-    checked_count += int(boundary_result.checked_count)
     boundary_log = logs_dir / "boundary.log"
     boundary_log.parent.mkdir(parents=True, exist_ok=True)
+    boundary_messages = tuple(
+        VerificationSanityMessage(severity=SANITY_WARNING, test_name="", message=item)
+        for item in boundary_result.missing
+    )
     if boundary_result.status == SANITY_WARNING:
         boundary_log.write_text("\n".join(boundary_result.missing) + "\n", encoding="utf-8")
-        return VerificationSanityResult(
-            status=SANITY_WARNING,
-            check_name=BOUNDARY_COVERAGE_CHECK,
-            checked_count=checked_count,
-            failed_test="",
-            error=boundary_result.error,
+    else:
+        boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
+    check_results.append(
+        VerificationSanityCheckResult(
+            name=BOUNDARY_COVERAGE_CHECK,
+            status=boundary_result.status,
+            checked_count=int(boundary_result.checked_count),
+            messages=boundary_messages,
         )
-    boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
-    return VerificationSanityResult(
-        status=SANITY_PASSED,
-        check_name="",
-        checked_count=checked_count,
-        failed_test="",
-        error="",
     )
+    if CUSTOM_SAMPLE_OUTPUT_CHECK in checks:
+        result = validate_custom_sample_outputs(
+            problem=problem,
+            user=user,
+            verification_id=verification_id,
+            mode=mode,
+            logs_dir=logs_dir,
+            test_plans=test_plans,
+            accepted_source_label=accepted_source_label,
+            accepted_source_name=accepted_source_name,
+            accepted_source_bytes=accepted_source_bytes,
+            run_verification_payload_base=run_verification_payload_base,
+        )
+        messages: tuple[VerificationSanityMessage, ...] = ()
+        if result.status == SANITY_FAILED:
+            messages = (
+                VerificationSanityMessage(
+                    severity=SANITY_FAILED,
+                    test_name=result.failed_test,
+                    message=result.error,
+                ),
+            )
+        check_results.append(
+            VerificationSanityCheckResult(
+                name=CUSTOM_SAMPLE_OUTPUT_CHECK,
+                status=result.status,
+                checked_count=int(result.validated_count),
+                messages=messages,
+            )
+        )
+    return _aggregate_sanity_results(check_results)

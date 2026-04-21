@@ -294,7 +294,20 @@ CREATE TABLE IF NOT EXISTS verification_sanity_checks (
     verification_id TEXT NOT NULL,
     ordinal INTEGER NOT NULL,
     check_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT '',
+    checked_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(verification_id, ordinal),
+    FOREIGN KEY(verification_id) REFERENCES verifications(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_sanity_check_messages (
+    verification_id TEXT NOT NULL,
+    check_name TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    severity TEXT NOT NULL,
+    test_name TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL,
+    PRIMARY KEY(verification_id, check_name, ordinal),
     FOREIGN KEY(verification_id) REFERENCES verifications(id)
 );
 
@@ -417,6 +430,7 @@ CREATE INDEX IF NOT EXISTS idx_verifications_workspace_kind_created ON verificat
 CREATE INDEX IF NOT EXISTS idx_verification_selected_tests_verification_ordinal ON verification_selected_tests(verification_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_verification_source_paths_verification_ordinal ON verification_source_paths(verification_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_verification_sanity_checks_verification_ordinal ON verification_sanity_checks(verification_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_verification_sanity_check_messages_verification_check ON verification_sanity_check_messages(verification_id, check_name, ordinal);
 CREATE INDEX IF NOT EXISTS idx_verification_tests_meta_verification_ordinal ON verification_tests_meta(verification_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_task ON verification_tasks(verification_id, task_kind, source_path, test_name, id);
 CREATE INDEX IF NOT EXISTS idx_verification_tasks_verification_predecessor ON verification_tasks(verification_id, predecessor_task_id);
@@ -553,6 +567,16 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "verification_id",
         "ordinal",
         "check_name",
+        "status",
+        "checked_count",
+    ),
+    "verification_sanity_check_messages": (
+        "verification_id",
+        "check_name",
+        "ordinal",
+        "severity",
+        "test_name",
+        "message",
     ),
     "verification_tests_meta": (
         "verification_id",

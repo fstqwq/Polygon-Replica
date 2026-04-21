@@ -450,10 +450,13 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.check_name, BOUNDARY_COVERAGE_CHECK)
         self.assertEqual(result.checked_count, 3)
         self.assertIn("n max=3", result.error)
+        boundary_result = next(item for item in result.check_results if item.name == BOUNDARY_COVERAGE_CHECK)
+        self.assertEqual(boundary_result.status, "warning")
+        self.assertEqual([message.message for message in boundary_result.messages], ["n max=3"])
         self.assertIn("n max=3", (logs_dir / "boundary.log").read_text(encoding="utf-8"))
 
     def test_sanity_runtime_threshold_warning_uses_answer_correct_summary(self) -> None:
-        from app.impl.workspace.sanity_checks import SUMMARY_RUNTIME_THRESHOLD_CHECK, run_verification_sanity_checks
+        from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, SUMMARY_RUNTIME_THRESHOLD_CHECK, run_verification_sanity_checks
 
         verification_id = self.random_id("ver-sanity-runtime")
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
@@ -486,6 +489,16 @@ class TestVerificationTaskScheduler(SmokeBase):
                                 {"test": "002.in", "verdict": "OK", "time_user_ms": 1200, "answer_correct": True},
                             ]
                         },
+                    },
+                    {
+                        "source": "solutions/tle.cpp",
+                        "summary_has_tl": True,
+                        "summary": {
+                            "tests": [
+                                {"test": "001.in", "verdict": "TL", "time_user_ms": 600, "answer_correct": True},
+                                {"test": "002.in", "verdict": "TL", "time_user_ms": 1200, "answer_correct": True},
+                            ]
+                        },
                     }
                 ],
                 time_limit_ms=1000,
@@ -494,9 +507,20 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.status, "warning")
         self.assertEqual(result.check_name, SUMMARY_RUNTIME_THRESHOLD_CHECK)
         self.assertEqual(result.error, "solutions/accepted.cpp: accepted solution is close to the time limit.")
+        runtime_result = next(item for item in result.check_results if item.name == SUMMARY_RUNTIME_THRESHOLD_CHECK)
+        self.assertEqual(runtime_result.status, "warning")
+        self.assertEqual(
+            [message.message for message in runtime_result.messages],
+            [
+                "solutions/accepted.cpp: accepted solution is close to the time limit.",
+                "solutions/tle.cpp: correct output in 50% extra time limit.",
+            ],
+        )
+        boundary_result = next(item for item in result.check_results if item.name == BOUNDARY_COVERAGE_CHECK)
+        self.assertEqual(boundary_result.status, "passed")
 
-    def test_sanity_stability_probe_fails_fast_on_ac(self) -> None:
-        from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
+    def test_sanity_stability_probe_failure_does_not_skip_later_checks(self) -> None:
+        from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
 
         verification_id = self.random_id("ver-sanity-ac")
         logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
@@ -527,7 +551,9 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.check_name, EMPTY_OUTPUT_STABILITY_CHECK)
         self.assertEqual(result.checked_count, 0)
         self.assertIn("got OK", result.error)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([item.name for item in result.check_results[:2]], [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK])
+        self.assertEqual([item.status for item in result.check_results[:2]], ["failed", "failed"])
 
     def test_sanity_stability_probe_fails_on_unicode_fl(self) -> None:
         from app.impl.workspace.sanity_checks import UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks

@@ -93,6 +93,11 @@ class TestBackendMinimal(SmokeBase):
     def test_current_verification_task_schema_has_answer_correct(self) -> None:
         self.assertIn("answer_correct", CURRENT_SCHEMA_COLUMNS["verification_tasks"])
 
+    def test_current_sanity_schema_has_per_check_messages(self) -> None:
+        self.assertIn("status", CURRENT_SCHEMA_COLUMNS["verification_sanity_checks"])
+        self.assertIn("checked_count", CURRENT_SCHEMA_COLUMNS["verification_sanity_checks"])
+        self.assertIn("verification_sanity_check_messages", CURRENT_SCHEMA_COLUMNS)
+
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -110,6 +115,20 @@ class TestBackendMinimal(SmokeBase):
                 "selected_test_names": ["001.in", "002.in"],
                 "source_paths": ["solutions/ac.cpp", "solutions/wa.cpp"],
                 "sanity_checks": ["custom_sample_output"],
+                "sanity_check_results": [
+                    {
+                        "name": "custom_sample_output",
+                        "status": "failed",
+                        "checked_count": 1,
+                        "messages": [
+                            {
+                                "severity": "failed",
+                                "test_name": "001.in",
+                                "message": "custom sample output failed on 001.in",
+                            }
+                        ],
+                    }
+                ],
                 "run_config_json": json.dumps({"checker_mode": "testlib", "pass_limit": 2}),
                 "tests_meta_rows": [
                     {"index": 1, "kind": "manual", "desc": "manual", "source": "manual_validate.cpp"},
@@ -123,6 +142,12 @@ class TestBackendMinimal(SmokeBase):
         self.assertEqual(detail.get("selected_test_names"), ["001.in", "002.in"])
         self.assertEqual(detail.get("source_paths"), ["solutions/ac.cpp", "solutions/wa.cpp"])
         self.assertEqual(detail.get("sanity_checks"), ["custom_sample_output"])
+        sanity_results = detail.get("sanity_check_results")
+        self.assertIsInstance(sanity_results, list)
+        self.assertEqual((sanity_results[0] or {}).get("status"), "failed")
+        messages = (sanity_results[0] or {}).get("messages")
+        self.assertIsInstance(messages, list)
+        self.assertEqual((messages[0] or {}).get("message"), "custom sample output failed on 001.in")
         self.assertEqual(str(detail.get("run_config_json") or ""), json.dumps({"checker_mode": "testlib", "pass_limit": 2}))
         tests_meta_rows = detail.get("tests_meta_rows")
         self.assertIsInstance(tests_meta_rows, list)

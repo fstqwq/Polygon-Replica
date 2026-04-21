@@ -220,6 +220,53 @@ class VerificationService:
             values.append(item)
         return values
 
+    def _verification_sanity_check_results(self, verification_id: str) -> list[dict[str, object]]:
+        safe_verification_id = str(verification_id or "").strip()
+        check_rows = self.db.fetch_all(
+            """
+            SELECT ordinal,check_name,status,checked_count
+            FROM verification_sanity_checks
+            WHERE verification_id=?
+            ORDER BY ordinal ASC
+            """,
+            [safe_verification_id],
+        )
+        message_rows = self.db.fetch_all(
+            """
+            SELECT check_name,ordinal,severity,test_name,message
+            FROM verification_sanity_check_messages
+            WHERE verification_id=?
+            ORDER BY check_name ASC, ordinal ASC
+            """,
+            [safe_verification_id],
+        )
+        messages_by_check: dict[str, list[dict[str, object]]] = {}
+        for row in message_rows:
+            check_name = str(row["check_name"] or "")
+            if not check_name:
+                continue
+            messages_by_check.setdefault(check_name, []).append(
+                {
+                    "severity": str(row["severity"] or ""),
+                    "test_name": str(row["test_name"] or ""),
+                    "message": str(row["message"] or ""),
+                }
+            )
+        results: list[dict[str, object]] = []
+        for row in check_rows:
+            check_name = str(row["check_name"] or "")
+            if not check_name:
+                continue
+            results.append(
+                {
+                    "name": check_name,
+                    "status": str(row["status"] or ""),
+                    "checked_count": int(row["checked_count"] or 0),
+                    "messages": list(messages_by_check.get(check_name) or []),
+                }
+            )
+        return results
+
     def verification_detail(self, verification_id: str) -> dict[str, object]:
         safe_verification_id = str(verification_id or "").strip()
         if not safe_verification_id:
@@ -235,6 +282,7 @@ class VerificationService:
         )
         if row is None:
             return {}
+        sanity_check_results = self._verification_sanity_check_results(safe_verification_id)
         return {
             "mode": str(row["mode"] or _DETAIL_SCALAR_DEFAULTS["mode"]),
             "pass_limit": int(row["pass_limit"] or _DETAIL_SCALAR_DEFAULTS["pass_limit"]),
@@ -249,7 +297,8 @@ class VerificationService:
             "validated_count": int(row["validated_count"] or 0),
             "selected_test_names": self._ordered_detail_tokens(safe_verification_id, "verification_selected_tests", "test_name"),
             "source_paths": self._ordered_detail_tokens(safe_verification_id, "verification_source_paths", "source_path"),
-            "sanity_checks": self._ordered_detail_tokens(safe_verification_id, "verification_sanity_checks", "check_name"),
+            "sanity_checks": [str(item.get("name") or "") for item in sanity_check_results if str(item.get("name") or "")],
+            "sanity_check_results": sanity_check_results,
             "tests_meta_rows": self._verification_tests_meta_rows(safe_verification_id),
         }
 
@@ -268,6 +317,94 @@ class VerificationService:
                 f"INSERT INTO {table_name}(verification_id,ordinal,{column_name}) VALUES(?,?,?)",
                 [verification_id, ordinal, token],
             )
+
+    def _normalized_sanity_check_results(self, payload: dict[str, object]) -> list[dict[str, object]]:
+        raw_results = payload.get("sanity_check_results")
+        results: list[dict[str, object]] = []
+        if isinstance(raw_results, list):
+            for raw in raw_results:
+                if not isinstance(raw, dict):
+                    continue
+                check_name = str(raw.get("name") or raw.get("check_name") or "")
+                if not check_name:
+                    continue
+                messages: list[dict[str, object]] = []
+                for message_raw in cast(list[object], raw.get("messages") or []):
+                    if not isinstance(message_raw, dict):
+                        continue
+                    message = str(message_raw.get("message") or "")
+                    if not message:
+                        continue
+                    messages.append(
+                        {
+                            "severity": str(message_raw.get("severity") or raw.get("status") or ""),
+                            "test_name": str(message_raw.get("test_name") or ""),
+                            "message": message,
+                        }
+                    )
+                results.append(
+                    {
+                        "name": check_name,
+                        "status": str(raw.get("status") or ""),
+                        "checked_count": int(raw.get("checked_count") or 0),
+                        "messages": messages,
+                    }
+                )
+            return results
+        return [
+            {"name": token, "status": "", "checked_count": 0, "messages": []}
+            for token in [str(item or "") for item in cast(list[object], payload.get("sanity_checks") or []) if str(item or "")]
+        ]
+
+    def _replace_sanity_check_results(
+        self,
+        conn,
+        verification_id: str,
+        *,
+        results: list[dict[str, object]],
+    ) -> None:
+        conn.execute("DELETE FROM verification_sanity_check_messages WHERE verification_id=?", [verification_id])
+        conn.execute("DELETE FROM verification_sanity_checks WHERE verification_id=?", [verification_id])
+        for ordinal, raw in enumerate(results, start=1):
+            item = dict(raw)
+            check_name = str(item.get("name") or "")
+            if not check_name:
+                continue
+            conn.execute(
+                """
+                INSERT INTO verification_sanity_checks(verification_id,ordinal,check_name,status,checked_count)
+                VALUES(?,?,?,?,?)
+                """,
+                [
+                    verification_id,
+                    ordinal,
+                    check_name,
+                    str(item.get("status") or ""),
+                    int(item.get("checked_count") or 0),
+                ],
+            )
+            for message_ordinal, message_raw in enumerate(cast(list[object], item.get("messages") or []), start=1):
+                if not isinstance(message_raw, dict):
+                    continue
+                message = str(message_raw.get("message") or "")
+                if not message:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO verification_sanity_check_messages(
+                        verification_id,check_name,ordinal,severity,test_name,message
+                    )
+                    VALUES(?,?,?,?,?,?)
+                    """,
+                    [
+                        verification_id,
+                        check_name,
+                        message_ordinal,
+                        str(message_raw.get("severity") or item.get("status") or ""),
+                        str(message_raw.get("test_name") or ""),
+                        message,
+                    ],
+                )
 
     def _replace_tests_meta_rows(
         self,
@@ -332,7 +469,7 @@ class VerificationService:
         }
         selected_test_names = [str(item or "") for item in cast(list[object], payload.get("selected_test_names") or []) if str(item or "")]
         source_paths = [str(item or "") for item in cast(list[object], payload.get("source_paths") or []) if str(item or "")]
-        sanity_checks = [str(item or "") for item in cast(list[object], payload.get("sanity_checks") or []) if str(item or "")]
+        sanity_check_results = self._normalized_sanity_check_results(payload)
         tests_meta_rows = [dict(item) for item in cast(list[object], payload.get("tests_meta_rows") or []) if isinstance(item, dict)]
 
         def _tx(conn) -> None:
@@ -372,12 +509,10 @@ class VerificationService:
                 column_name="source_path",
                 values=source_paths,
             )
-            self._replace_ordered_detail_tokens(
+            self._replace_sanity_check_results(
                 conn,
                 safe_verification_id,
-                table_name="verification_sanity_checks",
-                column_name="check_name",
-                values=sanity_checks,
+                results=sanity_check_results,
             )
             self._replace_tests_meta_rows(
                 conn,
