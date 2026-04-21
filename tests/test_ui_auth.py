@@ -619,8 +619,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_page_shows_system_admin_panel_for_system_admin(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
 
         resp = settings_page(_request("/settings"), user="alice")
         self.assertEqual(resp.status_code, 200)
@@ -636,8 +635,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_page_runtime_runner_hides_auth_fields_when_judgehost_disabled(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
         self.addCleanup(settings_system_config_reset, user="alice")
         admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
@@ -665,8 +663,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_page_runtime_runner_shows_auth_fields_when_judgehost_enabled(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
         self.addCleanup(settings_system_config_reset, user="alice")
         admin = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
         self.assertIsNotNone(admin)
@@ -692,8 +689,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_page_formats_judgehost_last_seen_in_user_timezone(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
 
         raw_last_seen = "2026-02-28T21:43:08.505465+00:00"
         fake_status = {
@@ -740,8 +736,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_config_category_update_and_reset(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
 
         override_value = 777
         update_resp = asyncio.run(
@@ -781,8 +776,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_config_category_update_can_revert_single_override_to_default(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
         self.addCleanup(settings_system_config_reset, user="alice")
 
         override_value = int(ADMIN_CONFIG_DEFAULTS["RUN_TEST_SELECTOR_LIMIT"]) + 123
@@ -825,8 +819,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_config_category_update_rejects_non_ascii_judgehost_token(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
 
         self.addCleanup(settings_system_config_reset, user="alice")
         bad_token = "abc_non_ascii_" + chr(0x00E9)
@@ -850,8 +843,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_config_category_update_allows_printable_ascii_compile_flags(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
 
         self.addCleanup(settings_system_config_reset, user="alice")
         flags = "-x c++ -Wall -O2 -static -pipe"
@@ -872,8 +864,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_config_category_page_and_hot_reload(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
         self.addCleanup(settings_system_config_reset, user="alice")
 
         page_resp = settings_config_category_page(
@@ -905,8 +896,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_config_category_page_renders_token_generate_button(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
 
         page_resp = settings_config_category_page(
             _request("/settings/config/judgehost"),
@@ -928,8 +918,7 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_worker_queue_snapshot_returns_metrics_for_admin(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
         future, queued, reason = config.worker_queue_service.submit(
             name="snapshot-probe",
             fn=lambda: None,
@@ -954,15 +943,14 @@ class TestUIAuth(UIBaseSuite):
     def test_settings_judgehost_snapshot_returns_hosts_for_admin(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        with workspace_service._cache_lock:
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
         service = config.judgehost_task_service
-        old_enabled = bool(service._state.enabled)
-        old_token = str(service._state.api_token or "")
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        service._state.enabled = True
-        service._state.api_token = "admin-snapshot-token"
+        old_enabled = bool(service.state.enabled)
+        old_token = str(service.state.api_token or "")
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        service.state.enabled = True
+        service.state.api_token = "admin-snapshot-token"
         service.fetch_work("judgehost-admin-snapshot")
         resp = settings_judgehost_snapshot(user="alice")
         self.assertEqual(resp.status_code, 200)

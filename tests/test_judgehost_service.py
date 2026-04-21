@@ -52,10 +52,10 @@ class TestJudgehostService(SmokeBase):
             config.constants,
             judge_fs_index_service=config.judge_fs_index_service,
         )
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
         return service
 
     def _verification_run_row(self, run_id: str, verification_id: str = "") -> dict[str, object] | None:
@@ -65,8 +65,8 @@ class TestJudgehostService(SmokeBase):
         safe_verification_id = str(verification_id or "").strip()
         task_row: dict[str, object] | None = None
         service = config.judgehost_task_service
-        with service._state.state_lock:
-            for row in service._state.tasks_by_id.values():
+        with service.state.state_lock:
+            for row in service.state.tasks_by_id.values():
                 row_run_id = str(row.get("run_id") or "")
                 if row_run_id != safe_run_id:
                     continue
@@ -77,7 +77,7 @@ class TestJudgehostService(SmokeBase):
                 break
         if task_row is not None:
             row_verification_id = str(task_row.get("verification_id") or "")
-            summary = service._queue.load_run_summary(safe_run_id, row_verification_id)
+            summary = service.queue.load_run_summary(safe_run_id, row_verification_id)
             return {
                 "status": str(task_row.get("run_status") or "").strip(),
                 "summary": dict(summary),
@@ -144,18 +144,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_add_judging_run_finalizes_matching_verification_task_immediately(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = f"ver-immediate-finalize-{uuid.uuid4().hex[:8]}"
@@ -370,12 +370,12 @@ class TestJudgehostService(SmokeBase):
     def test_set_host_enabled_preserves_host_status_shape(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        old_enabled = bool(service._state.enabled)
-        old_token = str(service._state.api_token or "")
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        service._state.enabled = True
-        service._state.api_token = "host-shape-token"
+        old_enabled = bool(service.state.enabled)
+        old_token = str(service.state.api_token or "")
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        service.state.enabled = True
+        service.state.api_token = "host-shape-token"
 
         service.fetch_work("judgehost-shape-check")
         before = service.status()
@@ -415,7 +415,7 @@ class TestJudgehostService(SmokeBase):
         )
         fetched = service.fetch_work("judgehost-nondict-summary")
         self.assertEqual(len(fetched), 1)
-        row = service._core.task_by_id(task_id)
+        row = service.core.task_by_id(task_id)
         self.assertIsNotNone(row)
         assert row is not None
         row["summary"] = "corrupted"
@@ -457,8 +457,8 @@ class TestJudgehostService(SmokeBase):
             verification_source="run.execute",
             persist_verification_run=False,
         )
-        with service._state.state_lock:
-            row = service._state.tasks_by_id.get(task_id)
+        with service.state.state_lock:
+            row = service.state.tasks_by_id.get(task_id)
             self.assertIsNotNone(row)
             assert row is not None
             row["status"] = service.STATUS_FAILED
@@ -471,7 +471,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_work_root_uses_transient_cache_root(self) -> None:
         service = config.judgehost_task_service
-        work_root = service._toolkit.work_root("jt-cache-root-check").resolve()
+        work_root = service.toolkit.work_root("jt-cache-root-check").resolve()
         expected_root = config.fs_manager.judgehost_runs_root.resolve()
         self.assertEqual(work_root.parent, expected_root)
         self.assertTrue(str(work_root).startswith(str(expected_root)))
@@ -499,8 +499,8 @@ class TestJudgehostService(SmokeBase):
             verification_source="verification.start",
             persist_verification_run=False,
         )
-        with service._state.state_lock:
-            row = service._state.tasks_by_id.get(task_id)
+        with service.state.state_lock:
+            row = service.state.tasks_by_id.get(task_id)
             self.assertIsNotNone(row)
             assert row is not None
             row["status"] = service.STATUS_COMPLETED
@@ -546,7 +546,7 @@ class TestJudgehostService(SmokeBase):
 
         # No persisted verification run exists for this task; summary must come
         # from the in-memory task row instead of recursively reloading itself.
-        summary = service._queue.load_run_summary(run_id, verification_id)
+        summary = service.queue.load_run_summary(run_id, verification_id)
         self.assertIsInstance(summary, dict)
         self.assertEqual(str(summary.get("source") or ""), "solutions/ac.cpp")
         self.assertEqual(str(summary.get("mode") or ""), "pass-fail")
@@ -571,18 +571,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_endpoints_finalize_run(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-{uuid.uuid4().hex[:8]}"
@@ -700,18 +700,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_script_ids_are_stable_across_fresh_service_instances(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id_a = f"b-jh-script-stable-a-{uuid.uuid4().hex[:8]}"
         verification_id_b = f"b-jh-script-stable-b-{uuid.uuid4().hex[:8]}"
@@ -742,7 +742,7 @@ class TestJudgehostService(SmokeBase):
         assert task_row_a is not None
         compare_script_id_a = int(task_row_a.get("compare_script_id") or 0)
         self.assertGreater(compare_script_id_a, 0)
-        job_row_a = service._state.judgehost_state_store.job_for_task(task_id_a)
+        job_row_a = service.state.judgehost_state_store.job_for_task(task_id_a)
         self.assertIsNotNone(job_row_a)
         assert job_row_a is not None
         self.assertEqual(compare_script_id_a, domjudge_script_id(str(job_row_a["compare_hash"] or "")))
@@ -773,18 +773,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_executable_files_require_live_job_memory(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-script-provider-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-script-provider-{uuid.uuid4().hex[:8]}"
@@ -818,18 +818,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_generate_prepared_payload_recomputes_domjudge_precomputed_from_final_verification_payload(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-generate-recompute-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-recompute-{uuid.uuid4().hex[:8]}"
@@ -908,21 +908,21 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_selected_tests_not_truncated_by_max_tests_per_task(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        old_max_tests_per_task = service._state.max_tests_per_task
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        self.addCleanup(setattr, service._state, "max_tests_per_task", old_max_tests_per_task)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
-        service._state.max_tests_per_task = 1
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        old_max_tests_per_task = service.state.max_tests_per_task
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        self.addCleanup(setattr, service.state, "max_tests_per_task", old_max_tests_per_task)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
+        service.state.max_tests_per_task = 1
 
         verification_id = f"b-jh-dom-notrunc-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-notrunc-{uuid.uuid4().hex[:8]}"
@@ -964,18 +964,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_reuses_script_ids_for_same_hash_payload(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-dom-cache-a-{uuid.uuid4().hex[:8]}"
@@ -1072,18 +1072,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_multi_pass_summary_keeps_single_final_pass_and_strips_protocol_output(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-mp-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-mp-{uuid.uuid4().hex[:8]}"
@@ -1219,18 +1219,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_add_judging_run_rewrites_wa_to_tl_on_double_cpu(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-wa2tl-{uuid.uuid4().hex[:8]}"
@@ -1300,18 +1300,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_reconnect_remaps_submitid_and_fetch_uses_new_value(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-dom-reconnect-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-dom-reconnect-{uuid.uuid4().hex[:8]}"
@@ -1356,22 +1356,22 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_fetch_work_skips_invalid_payload_task(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         build_bad = f"b-jh-dom-bad-{uuid.uuid4().hex[:8]}"
         run_bad = f"r-jh-dom-bad-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(build_bad)
-        service._state.include_build_payload = False
+        service.state.include_build_payload = False
         bad_task = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -1391,7 +1391,7 @@ class TestJudgehostService(SmokeBase):
         build_good = f"b-jh-dom-good-{uuid.uuid4().hex[:8]}"
         run_good = f"r-jh-dom-good-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(build_good)
-        service._state.include_build_payload = True
+        service.state.include_build_payload = True
         good_task = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -1413,7 +1413,7 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(tasks)
         self.assertEqual(str(tasks[0].get("uuid") or ""), good_task)
 
-        bad_task_row = service._core.task_by_id(bad_task)
+        bad_task_row = service.core.task_by_id(bad_task)
         self.assertIsNotNone(bad_task_row)
         self.assertEqual(str(bad_task_row.get("status") or ""), service.STATUS_FAILED)
         self.assertIn("no tests in judgehost payload", str(bad_task_row.get("error_text") or ""))
@@ -1424,18 +1424,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_reuses_cached_test_hash_but_exposes_real_test_number_as_testcase_id(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         build_a = f"b-jh-cache-a-{uuid.uuid4().hex[:8]}"
         run_a = f"r-jh-cache-a-{uuid.uuid4().hex[:8]}"
@@ -1503,18 +1503,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_testcase_files_resolve_by_host_lease_for_real_test_number(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         build_a = f"b-jh-host-a-{uuid.uuid4().hex[:8]}"
         run_a = f"r-jh-host-a-{uuid.uuid4().hex[:8]}"
@@ -1574,7 +1574,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_script_shifts_framework_args_before_checker(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script().decode("utf-8")
+        script_text = service.toolkit.compare_script().decode("utf-8")
         self.assertIn("shift 3", script_text)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1610,7 +1610,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_script_uses_testlib_arg_convention_with_stdin_team_output(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script().decode("utf-8")
+        script_text = service.toolkit.compare_script().decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -1667,7 +1667,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_script_preserves_checker_fail_exit_code(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script().decode("utf-8")
+        script_text = service.toolkit.compare_script().decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -1701,7 +1701,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_script_preserves_existing_judgemessage_on_checker_fail(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script().decode("utf-8")
+        script_text = service.toolkit.compare_script().decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -1736,7 +1736,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_script_in_main_correct_mode_uses_self_answer(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(main_correct=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(main_correct=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -1759,7 +1759,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_script_in_main_correct_mode_runs_checker(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(main_correct=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(main_correct=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_script = root / "run"
@@ -1796,9 +1796,9 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_interactive_uses_configured_pass_limit(self) -> None:
         service = config.judgehost_task_service
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.include_build_payload = True
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
@@ -1835,9 +1835,9 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_pass_fail_multi_pass_uses_configured_pass_limit(self) -> None:
         service = config.judgehost_task_service
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.include_build_payload = True
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
@@ -1868,18 +1868,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_interactor_source_overrides_host_binary_payload(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "interactors").mkdir(parents=True, exist_ok=True)
@@ -1943,9 +1943,9 @@ class TestJudgehostService(SmokeBase):
         patched["TOOLCHAIN_JUDGEHOST_PYTHON_COMPILE_FLAGS"] = "-X dev"
         config.constants.replace(patched)
 
-        cpp_script = service._toolkit.compile_script("submission.cpp").decode("utf-8")
-        java_script = service._toolkit.compile_script("submission.java").decode("utf-8")
-        py_script = service._toolkit.compile_script("submission.py").decode("utf-8")
+        cpp_script = service.toolkit.compile_script("submission.cpp").decode("utf-8")
+        java_script = service.toolkit.compile_script("submission.java").decode("utf-8")
+        py_script = service.toolkit.compile_script("submission.py").decode("utf-8")
         self.assertIn('exec clang++ -O3 -std=gnu++20 -DNDEBUG -I. "$MAIN" -o "$DEST"', cpp_script)
         self.assertIn("javac-custom --release 17", java_script)
         self.assertIn('-sourcepath . -d . "$@"', java_script)
@@ -1953,8 +1953,8 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_java_compile_script_uses_detect_main_contract(self) -> None:
         service = config.judgehost_task_service
-        java_script = service._toolkit.compile_script("submission.java").decode("utf-8")
-        java_compile_only_script = service._toolkit.compile_script(
+        java_script = service.toolkit.compile_script("submission.java").decode("utf-8")
+        java_compile_only_script = service.toolkit.compile_script(
             "submission.java",
             compile_only=True,
         ).decode("utf-8")
@@ -1966,7 +1966,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_java_compile_payload_includes_detect_main_source(self) -> None:
         service = config.judgehost_task_service
-        precomputed = service._enqueue._domjudge_precomputed_fields_from_payload(
+        precomputed = service.enqueue._domjudge_precomputed_fields_from_payload(
             {
                 "source_name": "TranslateMain.java",
                 "source_b64": base64.b64encode(
@@ -2080,10 +2080,10 @@ class TestJudgehostService(SmokeBase):
     def test_domjudge_config_uses_kib_for_script_filesize_and_bytes_for_output_storage(self) -> None:
         service = config.judgehost_task_service
         cfg = service.domjudge_config()
-        run_output_bytes = int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536) * 1024
-        compile_output_kb = int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
-        stored_log_limit_bytes = int(getattr(service._state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
-        aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
+        run_output_bytes = int(getattr(service.state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536) * 1024
+        compile_output_kb = int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
+        stored_log_limit_bytes = int(getattr(service.state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
+        aux_limit_bytes = int(getattr(service.state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(str(cfg.get("timelimit_overshoot") or ""), "1s|100%")
         self.assertEqual(
             int(cfg.get("output_storage_limit") or 0),
@@ -2106,7 +2106,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_python_compile_script_works_without_entry_point_env(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compile_script("submission.py").decode("utf-8")
+        script_text = service.toolkit.compile_script("submission.py").decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "run"
@@ -2133,7 +2133,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_interactive_run_script_uses_official_runpipe_wrapper(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(True, main_correct=False).decode("utf-8")
+        script_text = service.toolkit.run_script(True, main_correct=False).decode("utf-8")
         self.assertIn("runpipe", script_text)
         self.assertIn("runjury", script_text)
         self.assertIn("TESTOUT", script_text)
@@ -2142,7 +2142,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_cpp_executable_build_script_comes_from_asset(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.cpp_executable_build_script(
+        script_text = service.toolkit.cpp_executable_build_script(
             "interactor.cpp",
             role="interactor",
         ).decode("utf-8")
@@ -2152,7 +2152,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_run_script_executes_submission_runner_with_payload_args(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(
+        script_text = service.toolkit.run_script(
             False,
             main_correct=False,
             compile_only=False,
@@ -2181,7 +2181,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_run_script_handles_option_like_payload_args(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(
+        script_text = service.toolkit.run_script(
             False,
             main_correct=False,
             compile_only=False,
@@ -2210,7 +2210,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_run_script_preserves_wrapper_command_vector_when_appending_payload(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(
+        script_text = service.toolkit.run_script(
             False,
             main_correct=False,
             compile_only=False,
@@ -2249,7 +2249,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_run_script_supports_plain_argument_payload(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(
+        script_text = service.toolkit.run_script(
             False,
             main_correct=False,
             compile_only=False,
@@ -2278,7 +2278,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_run_script_accepts_submission_bin_only_payload(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(
+        script_text = service.toolkit.run_script(
             False,
             main_correct=False,
             compile_only=False,
@@ -2320,7 +2320,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_compare_script_runs_validator(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -2364,7 +2364,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_compare_script_writes_testlib_overview_log(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -2410,7 +2410,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_compare_script_prefers_feedback_program_out_over_stdin(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -2445,7 +2445,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_compare_script_prefers_cwd_program_out_over_stdin(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compare_script = root / "run"
@@ -2480,7 +2480,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_compare_script_prefers_program_out_next_to_feedback_over_stdin(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             scripts_dir = root / "scripts"
@@ -2518,7 +2518,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_compare_script_compiles_validator_from_readonly_script_dir(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compare_script(generate_mode=True).decode("utf-8")
+        script_text = service.toolkit.compare_script(generate_mode=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             scripts_dir = root / "scripts"
@@ -2553,18 +2553,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_verification_uses_generate_scripts_and_validator_payload(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-generate-scripts-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-scripts-{uuid.uuid4().hex[:8]}"
@@ -2613,18 +2613,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_generate_verification_interactive_mode_does_not_require_interactor_payload(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-generate-interactive-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-generate-interactive-{uuid.uuid4().hex[:8]}"
@@ -2672,13 +2672,13 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_run_script_compile_only_branch_uses_skip_run_copy(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(False, main_correct=False, compile_only=True).decode("utf-8")
+        script_text = service.toolkit.run_script(False, main_correct=False, compile_only=True).decode("utf-8")
         self.assertIn('cat "$TESTIN" >"$PROGOUT"', script_text)
         self.assertIn('"$@" </dev/null >/dev/null', script_text)
 
     def test_domjudge_run_script_manual_validate_branch_copies_input_to_output(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.run_script(
+        script_text = service.toolkit.run_script(
             False,
             main_correct=False,
             compile_only=False,
@@ -2708,7 +2708,7 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_skip_compile_creates_noop_executable(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compile_script(
+        script_text = service.toolkit.compile_script(
             "manual_validate.cpp",
             manual_validate_only=True,
         ).decode("utf-8")
@@ -2733,13 +2733,13 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_script_matches_official_wrapper_shape(self) -> None:
         service = config.judgehost_task_service
-        script_text = service._toolkit.compile_script("submission.cpp").decode("utf-8")
+        script_text = service.toolkit.compile_script("submission.cpp").decode("utf-8")
         self.assertIn('exec g++ -x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE -I. "$MAIN" -o "$DEST"', script_text)
 
     def test_domjudge_compile_only_cpp_script_compiles_then_writes_noop_program(self) -> None:
         service = config.judgehost_task_service
-        compile_text = service._toolkit.compile_script("submission.cpp", compile_only=True).decode("utf-8")
-        run_text = service._toolkit.run_script(False, main_correct=False, compile_only=True).decode("utf-8")
+        compile_text = service.toolkit.compile_script("submission.cpp", compile_only=True).decode("utf-8")
+        run_text = service.toolkit.run_script(False, main_correct=False, compile_only=True).decode("utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             compile_script = root / "compile-wrapper"
@@ -2781,18 +2781,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_only_uses_single_virtual_case_even_with_build_tests(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-virtual-{uuid.uuid4().hex[:8]}"
@@ -2857,18 +2857,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_only_multi_pass_with_interactor_stays_non_combined(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
@@ -2938,18 +2938,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_only_cache_hit_with_extra_sources(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         host = "judgehost-compile-only-extra-cache"
         verification_id = f"b-jh-compile-only-extra-cache-{uuid.uuid4().hex[:8]}"
@@ -3029,18 +3029,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_only_cache_hit_without_build_payload_tests(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         host = "judgehost-compile-only-empty-build-payload-cache"
         # save-source compile check path uses a placeholder build id and no build payload tests
@@ -3116,18 +3116,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_enqueue_task_merges_prepared_payload_with_base_payload(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prepared-merge-{uuid.uuid4().hex[:8]}"
@@ -3151,7 +3151,7 @@ class TestJudgehostService(SmokeBase):
             compile_only=True,
             prepared_payload={"extra_sources_b64": {"testlib.h": extra_testlib}},
         )
-        task = service._core.task_by_id(task_id)
+        task = service.core.task_by_id(task_id)
         self.assertIsNotNone(task)
         payload = task.get("payload") if isinstance(task, dict) else {}
         self.assertIsInstance(payload, dict)
@@ -3165,18 +3165,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_source_files_include_prepared_extra_sources(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
         self._reset_task_queue_state(service)
 
         verification_id = f"b-jh-extra-src-{uuid.uuid4().hex[:8]}"
@@ -3239,18 +3239,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_only_result_normalization_maps_success_to_ok(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-ok-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-ok-{uuid.uuid4().hex[:8]}"
@@ -3315,18 +3315,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_only_missing_output_is_normalized_to_ok(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-no-output-{uuid.uuid4().hex[:8]}"
@@ -3392,18 +3392,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_only_result_normalization_maps_compile_failure_to_ce(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-only-ce-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-only-ce-{uuid.uuid4().hex[:8]}"
@@ -3458,18 +3458,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_source_files_include_submission_extra_sources(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-extra-source-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-extra-source-{uuid.uuid4().hex[:8]}"
@@ -3532,22 +3532,22 @@ class TestJudgehostService(SmokeBase):
         service = config.judgehost_task_service
         blob = b"ok\n"
         encoded = base64.b64encode(blob).decode("ascii")
-        self.assertEqual(service._toolkit.b64_decode(encoded), blob)
-        self.assertEqual(service._toolkit.b64_decode(encoded.encode("ascii")), blob)
+        self.assertEqual(service.toolkit.b64_decode(encoded), blob)
+        self.assertEqual(service.toolkit.b64_decode(encoded.encode("ascii")), blob)
         with self.assertRaises(RuntimeError):
-            service._toolkit.b64_decode(b"binary-artifact")
+            service.toolkit.b64_decode(b"binary-artifact")
         with self.assertRaises(RuntimeError):
-            service._toolkit.b64_decode("%not-base64%")
+            service.toolkit.b64_decode("%not-base64%")
 
     def test_domjudge_payload_blob_bytes_keeps_raw_upload_contract(self) -> None:
         service = config.judgehost_task_service
         blob = b"binary-artifact"
         encoded = base64.b64encode(blob).decode("ascii")
-        self.assertEqual(service._toolkit.payload_blob_bytes(blob), blob)
-        self.assertEqual(service._toolkit.payload_blob_bytes(encoded), blob)
+        self.assertEqual(service.toolkit.payload_blob_bytes(blob), blob)
+        self.assertEqual(service.toolkit.payload_blob_bytes(encoded), blob)
 
     def test_domjudge_strip_protocol_trace_removes_runpipe_transcript_lines(self) -> None:
-        cleaned = config.judgehost_task_service._toolkit.strip_protocol_trace(
+        cleaned = config.judgehost_task_service.toolkit.strip_protocol_trace(
             b"[  0.019s/6]>: 1 100\n"
             b"hello\n"
             b"[  0.054s/4]<: ? 0\n"
@@ -3586,18 +3586,18 @@ class TestJudgehostService(SmokeBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-large-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-large-{uuid.uuid4().hex[:8]}"
@@ -3664,18 +3664,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compile-log-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compile-log-{uuid.uuid4().hex[:8]}"
@@ -3704,7 +3704,7 @@ class TestJudgehostService(SmokeBase):
         assert case_row is not None
         job_id = int(case_row["job_id"])
 
-        limit = int(getattr(service._state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
+        limit = int(getattr(service.state.constants, "JUDGEHOST_STORED_LOG_LIMIT_BYTES", 65536) or 65536)
         service.domjudge_update_judging(
             "judgehost-compile-log",
             case_id,
@@ -3729,15 +3729,15 @@ class TestJudgehostService(SmokeBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
 
         hosts_before = [str(row.get("hostname") or "") for row in service.status().get("hosts", [])]
 
@@ -3758,18 +3758,18 @@ class TestJudgehostService(SmokeBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         with TestClient(app) as client:
             verification_id = f"b-jh-peer-{uuid.uuid4().hex[:8]}"
@@ -3811,18 +3811,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_cancel_keeps_leased_case_running_and_stops_pending_case_dispatch(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"ver-cancel-dispatch-{uuid.uuid4().hex[:8]}"
         run_id = f"r-cancel-dispatch-{uuid.uuid4().hex[:8]}"
@@ -3904,7 +3904,7 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(str(job_row["status"] or ""), "failed")
         case_rows = judgehost_cases_for_run(service, run_id)
         self.assertEqual([str(row["status"] or "") for row in case_rows], ["reported", "cancelled"])
-        task_row = service._core.task_by_id(task_id)
+        task_row = service.core.task_by_id(task_id)
         self.assertIsNotNone(task_row)
         assert task_row is not None
         self.assertEqual(str(task_row["status"] or ""), service.STATUS_FAILED)
@@ -3942,7 +3942,7 @@ class TestJudgehostService(SmokeBase):
         affected = service.cancel_tasks_for_runs([run_id], reason="verification cancelled by user")
         self.assertEqual(affected, 1)
 
-        task_row = service._core.task_by_id(task_id)
+        task_row = service.core.task_by_id(task_id)
         self.assertIsNotNone(task_row)
         assert task_row is not None
         self.assertEqual(str(task_row["status"] or ""), service.STATUS_FAILED)
@@ -3952,22 +3952,22 @@ class TestJudgehostService(SmokeBase):
         from app.main import app
 
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
         old_max_part_size = int(getattr(MultiPartParser, "max_part_size", 0) or 0)
         old_max_file_size = int(getattr(MultiPartParser, "max_file_size", 0) or 0)
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
         self.addCleanup(setattr, MultiPartParser, "max_part_size", old_max_part_size)
         self.addCleanup(setattr, MultiPartParser, "max_file_size", old_max_file_size)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
         MultiPartParser.max_part_size = 1024 * 1024
         MultiPartParser.max_file_size = 1024 * 1024
 
@@ -4031,18 +4031,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_build_solve_uses_problem_limits_when_run_config_missing(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "config").mkdir(parents=True, exist_ok=True)
@@ -4092,18 +4092,18 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(int(run_config.get("memory_limit") or 0), 1024 * 1024)
         self.assertEqual(
             int(run_config.get("output_limit") or 0),
-            int(getattr(service._state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
+            int(getattr(service.state.constants, "RUN_EXEC_OUTPUT_KB", 65536) or 65536),
         )
         self.assertEqual(int(run_config.get("pass_limit") or 0), 1)
-        compile_output_kb = int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
-        aux_limit_bytes = int(getattr(service._state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
+        compile_output_kb = int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_OUTPUT_KB", 262144) or 262144)
+        aux_limit_bytes = int(getattr(service.state.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         self.assertEqual(
             int(compare_config.get("script_filesize_limit") or 0),
             compile_output_kb,
         )
         self.assertEqual(
             int(compare_config.get("script_memory_limit") or 0),
-            int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048) * 1024,
+            int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048) * 1024,
         )
         self.assertEqual(
             int(compile_config.get("script_filesize_limit") or 0),
@@ -4122,18 +4122,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_config_uses_compile_memory_when_checker_source_compiles_during_compare(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "checkers").mkdir(parents=True, exist_ok=True)
@@ -4144,7 +4144,7 @@ class TestJudgehostService(SmokeBase):
 
         compile_mem_mb = max(
             64,
-            int(getattr(service._state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048),
+            int(getattr(service.state.constants, "TOOLCHAIN_COMPILE_MEMORY_MB", 2048) or 2048),
         )
         run_mem_mb = compile_mem_mb + 1024
 
@@ -4201,18 +4201,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_main_correct_includes_checker_files_in_compare_payload(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "checkers").mkdir(parents=True, exist_ok=True)
@@ -4262,18 +4262,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_build_solve_defaults_pass_limit_from_problem_config(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         ws = Path(self._workspace_path())
         (ws / "config").mkdir(parents=True, exist_ok=True)
@@ -4319,18 +4319,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_prequeue_cache_consumes_per_case_and_leases_only_misses(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-partial-cache-{uuid.uuid4().hex[:8]}"
         run_id_seed = f"r-jh-partial-seed-{uuid.uuid4().hex[:8]}"
@@ -4432,18 +4432,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_enqueue_task_keeps_distinct_hidden_run_ids_within_one_verification(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"ver-jh-hidden-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
@@ -4484,8 +4484,8 @@ class TestJudgehostService(SmokeBase):
         )
 
         self.assertNotEqual(first_task_id, second_task_id)
-        first_row = service._core.task_by_id(first_task_id)
-        second_row = service._core.task_by_id(second_task_id)
+        first_row = service.core.task_by_id(first_task_id)
+        second_row = service.core.task_by_id(second_task_id)
         self.assertIsNotNone(first_row)
         self.assertIsNotNone(second_row)
         self.assertEqual(str(first_row["run_id"]), first_run_id)
@@ -4493,18 +4493,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_shared_pending_job_ignores_prequeue_owned_job(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
@@ -4527,7 +4527,7 @@ class TestJudgehostService(SmokeBase):
 
         task_id = f"t-jh-prequeue-owned-{uuid.uuid4().hex[:8]}"
         job_id = int(
-            service._dispatch._domjudge_prepare_job(
+            service.dispatch._domjudge_prepare_job(
                 "prequeue-cache",
                 {
                     "task_id": task_id,
@@ -4547,18 +4547,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_release_prepared_job_preserves_real_host_lease(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
@@ -4581,7 +4581,7 @@ class TestJudgehostService(SmokeBase):
 
         task_id = f"t-jh-prequeue-release-{uuid.uuid4().hex[:8]}"
         job_id = int(
-            service._dispatch._domjudge_prepare_job(
+            service.dispatch._domjudge_prepare_job(
                 "prequeue-cache",
                 {
                     "task_id": task_id,
@@ -4590,12 +4590,12 @@ class TestJudgehostService(SmokeBase):
                 },
             )
         )
-        leased = service._dispatch._domjudge_lease_cases(job_id, "judgehost-prequeue-release", 8)
+        leased = service.dispatch._domjudge_lease_cases(job_id, "judgehost-prequeue-release", 8)
         self.assertEqual(len(leased), 1)
         case_id = int(leased[0].get("judgetaskid") or 0)
         self.assertGreater(case_id, 0)
 
-        service._dispatch._domjudge_release_prepared_job_for_queue(job_id)
+        service.dispatch._domjudge_release_prepared_job_for_queue(job_id)
 
         case_row = judgehost_fetch_case(service, case_id)
         self.assertIsNotNone(case_row)
@@ -4609,18 +4609,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_cache_shortcut_requires_output_blob_for_ok_result(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-cache-blob-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-cache-blob-a-{uuid.uuid4().hex[:8]}"
@@ -4710,18 +4710,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_cache_manifest_mismatch_is_deleted_and_treated_as_miss(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-manifest-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-manifest-a-{uuid.uuid4().hex[:8]}"
@@ -4807,18 +4807,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_cache_blob_sha_mismatch_is_deleted_and_treated_as_miss(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-blobsha-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-blobsha-a-{uuid.uuid4().hex[:8]}"
@@ -4894,18 +4894,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_expected_accepted_does_not_shortcut_non_ok_cache(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-accepted-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-accepted-cache-a-{uuid.uuid4().hex[:8]}"
@@ -4986,18 +4986,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_exitcode_3_is_tagged_checker_fail(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-checker-fail-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-checker-fail-{uuid.uuid4().hex[:8]}"
@@ -5070,18 +5070,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_run_error_prefers_program_stderr_feedback(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-run-error-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-run-error-{uuid.uuid4().hex[:8]}"
@@ -5155,18 +5155,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_exitcode_negative_with_hard_tl_is_tl(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-neg-tl-{uuid.uuid4().hex[:8]}"
@@ -5241,18 +5241,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_compare_script_internal_error_fails_whole_run(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-internal-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-internal-{uuid.uuid4().hex[:8]}"
@@ -5304,18 +5304,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_internal_error_includes_debug_fail_message(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-debug-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-debug-{uuid.uuid4().hex[:8]}"
@@ -5371,18 +5371,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_internal_error_includes_payload_fail_message(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-payload-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-payload-{uuid.uuid4().hex[:8]}"
@@ -5434,18 +5434,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_internal_error_includes_job_level_debug_message(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-job-debug-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-job-debug-{uuid.uuid4().hex[:8]}"
@@ -5510,18 +5510,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_internal_error_includes_judgehostlog_compare_output(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-jhlog-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-jhlog-{uuid.uuid4().hex[:8]}"
@@ -5578,18 +5578,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_internal_error_strips_raw_base64_payload_blob(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-compare-strip-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-compare-strip-{uuid.uuid4().hex[:8]}"
@@ -5657,18 +5657,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_fl_result_is_persisted_but_never_shortcut_reused(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-fl-cache-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-fl-cache-a-{uuid.uuid4().hex[:8]}"
@@ -5758,18 +5758,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_force_recompile_bypasses_case_cache(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-recompile-{uuid.uuid4().hex[:8]}"
         run_id_a = f"r-jh-recompile-a-{uuid.uuid4().hex[:8]}"
@@ -5848,18 +5848,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_reuses_job_id_when_same_run_appends_new_tests(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-shared-job-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-shared-job-{uuid.uuid4().hex[:8]}"
@@ -5943,27 +5943,27 @@ class TestJudgehostService(SmokeBase):
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_b, case_id_a)
 
-        job_row = service._state.judgehost_state_store.job_for_task(task_id)
+        job_row = service.state.judgehost_state_store.job_for_task(task_id)
         self.assertIsNotNone(job_row)
         self.assertEqual(int(job_row["job_id"] or 0), job_id)
-        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        case_rows = service.state.judgehost_state_store.cases_for_run(run_id)
         self.assertEqual([str(row["test_name"] or "") for row in case_rows], ["001.in", "002.in"])
 
     def test_domjudge_shared_job_merges_cases_before_first_prepare(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-shared-before-prepare-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-shared-before-prepare-{uuid.uuid4().hex[:8]}"
@@ -6010,26 +6010,26 @@ class TestJudgehostService(SmokeBase):
         fetched = service.domjudge_fetch_work(host, max_batchsize=8)
         self.assertGreaterEqual(len(fetched), 1)
 
-        job_row = service._state.judgehost_state_store.job_for_task(task_id)
+        job_row = service.state.judgehost_state_store.job_for_task(task_id)
         self.assertIsNotNone(job_row)
-        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        case_rows = service.state.judgehost_state_store.cases_for_run(run_id)
         self.assertEqual([str(row["test_name"] or "") for row in case_rows], ["001.in", "002.in"])
 
     def test_domjudge_prepare_job_uses_latest_payload_after_task_leased(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-prepare-latest-{uuid.uuid4().hex[:8]}"
         run_id = f"r-jh-prepare-latest-{uuid.uuid4().hex[:8]}"
@@ -6040,7 +6040,7 @@ class TestJudgehostService(SmokeBase):
             [("001.in", "ok\n", "ok\n"), ("002.in", "ok-2\n", "ok-2\n")],
         )
 
-        with patch.object(service._dispatch, "_domjudge_try_prequeue_cache_finalize", lambda *args, **kwargs: None):
+        with patch.object(service.dispatch, "_domjudge_try_prequeue_cache_finalize", lambda *args, **kwargs: None):
             task_id = service.enqueue_task(
                 problem=self.problem,
                 username=self.user,
@@ -6077,9 +6077,9 @@ class TestJudgehostService(SmokeBase):
             )
         self.assertEqual(reused_task_id, task_id)
 
-        job_id = service._dispatch._domjudge_prepare_job(host, leased[0])
+        job_id = service.dispatch._domjudge_prepare_job(host, leased[0])
         self.assertGreater(job_id, 0)
-        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        case_rows = service.state.judgehost_state_store.cases_for_run(run_id)
         self.assertEqual([str(row["test_name"] or "") for row in case_rows], ["001.in", "002.in"])
 
     def test_poll_task_case_result_reports_missing_shared_case_explicitly(self) -> None:
@@ -6105,8 +6105,8 @@ class TestJudgehostService(SmokeBase):
             verification_source="run.execute",
             persist_verification_run=False,
         )
-        with service._state.state_lock:
-            row = service._state.tasks_by_id.get(task_id)
+        with service.state.state_lock:
+            row = service.state.tasks_by_id.get(task_id)
             self.assertIsNotNone(row)
             assert row is not None
             row["status"] = service.STATUS_FAILED
@@ -6157,8 +6157,8 @@ class TestJudgehostService(SmokeBase):
             "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
             "Please submit a full bug report."
         )
-        with service._state.state_lock:
-            row = service._state.tasks_by_id.get(task_id)
+        with service.state.state_lock:
+            row = service.state.tasks_by_id.get(task_id)
             self.assertIsNotNone(row)
             assert row is not None
             row["status"] = service.STATUS_FAILED
@@ -6171,7 +6171,7 @@ class TestJudgehostService(SmokeBase):
                 "compile_diagnostics": [{"level": "error", "message": detailed_error}],
                 "error": detailed_error,
             }
-            service._state.task_id_by_run.pop(run_id, None)
+            service.state.task_id_by_run.pop(run_id, None)
 
         result = service.poll_task_case_result(task_id, "001.in")
         self.assertIsNotNone(result)
@@ -6209,8 +6209,8 @@ class TestJudgehostService(SmokeBase):
             persist_verification_run=False,
         )
 
-        with service._state.state_lock:
-            row = service._state.tasks_by_id.get(task_id)
+        with service.state.state_lock:
+            row = service.state.tasks_by_id.get(task_id)
             self.assertIsNotNone(row)
             assert row is not None
             row["summary"] = {
@@ -6227,7 +6227,7 @@ class TestJudgehostService(SmokeBase):
         feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
         (work_root / "feedback" / "judgemessage.txt").write_text(feedback_text, encoding="utf-8")
 
-        job_id = service._state.judgehost_state_store.create_job_with_cases(
+        job_id = service.state.judgehost_state_store.create_job_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-case-feedback",
@@ -6267,10 +6267,10 @@ class TestJudgehostService(SmokeBase):
             ],
         )
         self.assertGreater(job_id, 0)
-        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        case_rows = service.state.judgehost_state_store.cases_for_run(run_id)
         self.assertEqual(len(case_rows), 1)
         case_id = int(case_rows[0]["id"])
-        updated = service._state.judgehost_state_store.report_case_result(
+        updated = service.state.judgehost_state_store.report_case_result(
             case_id,
             lease_owner="judgehost-feedback",
             runresult="checker-fail",
@@ -6327,8 +6327,8 @@ class TestJudgehostService(SmokeBase):
             persist_verification_run=False,
         )
 
-        with service._state.state_lock:
-            row = service._state.tasks_by_id.get(task_id)
+        with service.state.state_lock:
+            row = service.state.tasks_by_id.get(task_id)
             self.assertIsNotNone(row)
             assert row is not None
             row["summary"] = {
@@ -6342,7 +6342,7 @@ class TestJudgehostService(SmokeBase):
         work_root = Path(tempfile.mkdtemp(prefix="polygon-case-debug-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
 
-        job_id = service._state.judgehost_state_store.create_job_with_cases(
+        job_id = service.state.judgehost_state_store.create_job_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-case-debug",
@@ -6382,10 +6382,10 @@ class TestJudgehostService(SmokeBase):
             ],
         )
         self.assertGreater(job_id, 0)
-        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        case_rows = service.state.judgehost_state_store.cases_for_run(run_id)
         self.assertEqual(len(case_rows), 1)
         case_id = int(case_rows[0]["id"])
-        updated = service._state.judgehost_state_store.report_case_result(
+        updated = service.state.judgehost_state_store.report_case_result(
             case_id,
             lease_owner="judgehost-debug",
             runresult="checker-fail",
@@ -6405,7 +6405,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertTrue(updated)
         feedback_text = "Unexpected character #10, but ' ' expected (testdata.in)"
-        service._state.judgehost_state_store.append_debug_text(
+        service.state.judgehost_state_store.append_debug_text(
             case_id=case_id,
             job_id=job_id,
             debug_text=feedback_text,
@@ -6448,8 +6448,8 @@ class TestJudgehostService(SmokeBase):
             task_kind="main-correct",
             persist_verification_run=False,
         )
-        with service._state.state_lock:
-            row = service._state.tasks_by_id.get(task_id)
+        with service.state.state_lock:
+            row = service.state.tasks_by_id.get(task_id)
             self.assertIsNotNone(row)
             assert row is not None
             row["summary"] = {
@@ -6480,7 +6480,7 @@ class TestJudgehostService(SmokeBase):
 
         work_root = Path(tempfile.mkdtemp(prefix="polygon-late-debug-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
-        job_id = service._state.judgehost_state_store.create_job_with_cases(
+        job_id = service.state.judgehost_state_store.create_job_with_cases(
             task_id=task_id,
             run_id=run_id,
             group_key="group-late-debug",
@@ -6520,10 +6520,10 @@ class TestJudgehostService(SmokeBase):
             ],
         )
         self.assertGreater(job_id, 0)
-        case_rows = service._state.judgehost_state_store.cases_for_run(run_id)
+        case_rows = service.state.judgehost_state_store.cases_for_run(run_id)
         self.assertEqual(len(case_rows), 1)
         case_id = int(case_rows[0]["id"])
-        updated = service._state.judgehost_state_store.report_case_result(
+        updated = service.state.judgehost_state_store.report_case_result(
             case_id,
             lease_owner="judgehost-late-debug",
             runresult="checker-fail",
@@ -6543,7 +6543,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertTrue(updated)
 
-        service._result._domjudge_finalize_case_task(
+        service.result._domjudge_finalize_case_task(
             task_id=task_id,
             test_name="016.in",
             hostname="judgehost-late-debug",
@@ -6583,8 +6583,8 @@ class TestJudgehostService(SmokeBase):
         self._seed_build_verification(verification_id)
         task_id = f"jt-case-order-{uuid.uuid4().hex[:8]}"
         now_text = "2026-04-14T00:00:00+00:00"
-        with service._state.state_lock:
-            service._state.tasks_by_id[task_id] = {
+        with service.state.state_lock:
+            service.state.tasks_by_id[task_id] = {
                 "id": task_id,
                 "run_id": run_id,
                 "problem_slug": self.problem,
@@ -6608,7 +6608,7 @@ class TestJudgehostService(SmokeBase):
                 "summary": {},
                 "result": {},
             }
-            service._state.task_id_by_run[run_id] = task_id
+            service.state.task_id_by_run[run_id] = task_id
 
         task_store = VerificationTaskStore(config.db)
         task_store.replace_graph(
@@ -6660,8 +6660,8 @@ class TestJudgehostService(SmokeBase):
         notifications: list[tuple[str, str]] = []
 
         with (
-            patch.object(service._queue, "poll_task_case_result", return_value=case_result),
-            patch.object(service._queue, "report_result", return_value={}) as report_result_mock,
+            patch.object(service.queue, "poll_task_case_result", return_value=case_result),
+            patch.object(service.queue, "report_result", return_value={}) as report_result_mock,
             patch("app.service.judgehost.result.finalize_verification_task_result", return_value=final_result),
             patch(
                 "app.service.judgehost.result.notify_verification_case_reported",
@@ -6672,7 +6672,7 @@ class TestJudgehostService(SmokeBase):
                 side_effect=lambda _vid, _task_id: notifications.append(("terminal", _task_id)),
             ),
         ):
-            service._result._domjudge_finalize_case_task(
+            service.result._domjudge_finalize_case_task(
                 task_id=task_id,
                 test_name="001.in",
                 hostname="judgehost-order",
@@ -6684,18 +6684,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_cache_only_completed_job_reactivates_when_appending_new_tests(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-shared-cache-reactivate-{uuid.uuid4().hex[:8]}"
         prime_run_id = f"r-jh-shared-cache-prime-{uuid.uuid4().hex[:8]}"
@@ -6771,12 +6771,12 @@ class TestJudgehostService(SmokeBase):
         self.assertTrue(target_task_id.startswith("jt-"))
         cached_fetch = service.domjudge_fetch_work(host, max_batchsize=8)
         self.assertEqual(cached_fetch, [])
-        cached_job = service._state.judgehost_state_store.job_for_task(target_task_id)
+        cached_job = service.state.judgehost_state_store.job_for_task(target_task_id)
         self.assertIsNotNone(cached_job)
         self.assertEqual(str(cached_job["status"] or ""), "completed")
         self.assertIsNone(cached_job["compile_success"])
-        with service._state.state_lock:
-            cached_task_row = dict(service._state.tasks_by_id[target_task_id])
+        with service.state.state_lock:
+            cached_task_row = dict(service.state.tasks_by_id[target_task_id])
         self.assertEqual(str(cached_task_row["status"] or ""), service.STATUS_COMPLETED)
 
         reused_task_id = service.enqueue_task(
@@ -6796,13 +6796,13 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertEqual(reused_task_id, target_task_id)
 
-        reactivated_job = service._state.judgehost_state_store.job_for_task(target_task_id)
+        reactivated_job = service.state.judgehost_state_store.job_for_task(target_task_id)
         self.assertIsNotNone(reactivated_job)
         self.assertEqual(str(reactivated_job["status"] or ""), "queued")
         self.assertTrue(Path(str(reactivated_job["work_root"] or "")).resolve().is_dir())
         self.assertTrue(Path(str(reactivated_job["source_path"] or "")).resolve().is_file())
-        with service._state.state_lock:
-            reactivated_task_row = dict(service._state.tasks_by_id[target_task_id])
+        with service.state.state_lock:
+            reactivated_task_row = dict(service.state.tasks_by_id[target_task_id])
         self.assertEqual(str(reactivated_task_row["status"] or ""), service.STATUS_QUEUED)
 
         resumed_fetch = service.domjudge_fetch_work(host, max_batchsize=8)
@@ -6815,18 +6815,18 @@ class TestJudgehostService(SmokeBase):
     def test_domjudge_append_to_existing_job_consumes_cached_cases_immediately(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-shared-cache-append-{uuid.uuid4().hex[:8]}"
         prime_run_id = f"r-jh-shared-cache-append-prime-{uuid.uuid4().hex[:8]}"
@@ -6908,7 +6908,7 @@ class TestJudgehostService(SmokeBase):
         )
         self.assertTrue(target_task_id.startswith("jt-"))
         self.assertEqual(service.domjudge_fetch_work(host, max_batchsize=8), [])
-        target_job = service._state.judgehost_state_store.job_for_task(target_task_id)
+        target_job = service.state.judgehost_state_store.job_for_task(target_task_id)
         self.assertIsNotNone(target_job)
         self.assertEqual(str(target_job["status"] or ""), "completed")
 
@@ -6930,27 +6930,27 @@ class TestJudgehostService(SmokeBase):
         self.assertEqual(reused_task_id, target_task_id)
         self.assertEqual(service.domjudge_fetch_work(host, max_batchsize=8), [])
 
-        final_job = service._state.judgehost_state_store.job_for_task(target_task_id)
+        final_job = service.state.judgehost_state_store.job_for_task(target_task_id)
         self.assertIsNotNone(final_job)
         self.assertEqual(str(final_job["status"] or ""), "completed")
-        case_rows = service._state.judgehost_state_store.cases_for_run(target_run_id)
+        case_rows = service.state.judgehost_state_store.cases_for_run(target_run_id)
         self.assertEqual([str(row["test_name"] or "") for row in case_rows], ["001.in", "002.in"])
         self.assertTrue(all(str(row["status"] or "") == "reported" for row in case_rows))
 
     def test_domjudge_generate_input_reuses_job_id_when_same_generator_appends_new_tests(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-shared-generate-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
@@ -7137,7 +7137,7 @@ class TestJudgehostService(SmokeBase):
             },
         )
 
-        case_rows = service._state.judgehost_state_store.cases_for_job(job_id)
+        case_rows = service.state.judgehost_state_store.cases_for_job(job_id)
         self.assertEqual([str(row["test_name"] or "") for row in case_rows], ["001.in", "002.in"])
         self.assertEqual([str(row["task_id"] or "") for row in case_rows], [task_id, reused_task_id])
         self.assertEqual(
@@ -7147,18 +7147,18 @@ class TestJudgehostService(SmokeBase):
 
     def test_domjudge_grouped_job_uses_stable_uuid_across_fetches(self) -> None:
         service = config.judgehost_task_service
-        old_enabled = service._state.enabled
-        old_token = service._state.api_token
-        old_username = service._state.api_username
-        old_include_build_payload = service._state.include_build_payload
-        self.addCleanup(setattr, service._state, "enabled", old_enabled)
-        self.addCleanup(setattr, service._state, "api_token", old_token)
-        self.addCleanup(setattr, service._state, "api_username", old_username)
-        self.addCleanup(setattr, service._state, "include_build_payload", old_include_build_payload)
-        service._state.enabled = True
-        service._state.api_token = "test-token"
-        service._state.api_username = "judgehost"
-        service._state.include_build_payload = True
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
 
         verification_id = f"b-jh-grouped-batch-one-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)

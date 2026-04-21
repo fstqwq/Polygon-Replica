@@ -132,9 +132,7 @@ class SmokeBase(unittest.TestCase):
         except Exception:
             pass
         config.judgehost_task_service.reset_runtime_state()
-        with workspace_service._cache_lock:
-            workspace_service._problem_cache.clear()
-            workspace_service._user_cache.clear()
+        workspace_service.clear_identity_caches()
         _cleanup_stale_testsuite_roots(exclude=suite_root())
         _cleanup_testsuite_root()
         self.addCleanup(_cleanup_testsuite_root)

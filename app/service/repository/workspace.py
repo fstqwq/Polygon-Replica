@@ -82,6 +82,18 @@ class WorkspaceService:
         with self._cache_lock:
             cache.pop(key, None)
 
+    def clear_identity_caches(self) -> None:
+        with self._cache_lock:
+            self._problem_cache.clear()
+            self._user_cache.clear()
+
+    def set_cached_user(self, username: str, row: dict[str, object]) -> None:
+        safe_username = str(username or "").strip()
+        if not safe_username:
+            return
+        with self._cache_lock:
+            self._user_cache[safe_username] = dict(row)
+
     def _validate_identifier(self, value: str, label: str) -> str:
         ident = str(value or "").strip()
         if label == "problem":

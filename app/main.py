@@ -1,3 +1,5 @@
+"""ASGI entry point for the Polygon Replica web application."""
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -23,6 +25,8 @@ from app.route import (
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """Start and stop process-wide runtime helpers."""
+
     auth_startup()
     try:
         yield
@@ -36,15 +40,21 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    """Apply authentication and common response headers to every request."""
+
     request.state.request_started_at = monotonic()
     try:
         response = await auth_http_middleware(request, call_next)
     except HTTPException as exc:
-        response = PlainTextResponse(str(exc.detail or "request failed"), status_code=int(exc.status_code or 400))
+        response = PlainTextResponse(
+            str(exc.detail or "request failed"),
+            status_code=int(exc.status_code or 400),
+        )
         _apply_security_headers(response)
     started = getattr(request.state, "request_started_at", None)
     if started is not None:
-        response.headers["X-Backend-Render-Ms"] = str(max(0, int(round((monotonic() - started) * 1000))))
+        elapsed_ms = max(0, int(round((monotonic() - started) * 1000)))
+        response.headers["X-Backend-Render-Ms"] = str(elapsed_ms)
     return response
 
 
@@ -56,5 +66,3 @@ app.include_router(tests_route.router)
 app.include_router(preview_route.router)
 app.include_router(run_export_route.router)
 app.include_router(judgehost_route.router)
-
-

@@ -1,3 +1,5 @@
+"""Default runtime constants and admin-editable config metadata."""
+
 from __future__ import annotations
 
 import re
@@ -336,7 +338,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
 
 # Explicitly reference dynamically-consumed defaults so dead-code scanners
 # do not mark them as unused.
-(
+_DYNAMIC_DEFAULT_SENTINELS = (
     PASSWORD_MIN_LEN,
     PASSWORD_MAX_LEN,
     TOOLCHAIN_COMPILE_PROCESS_LIMIT,

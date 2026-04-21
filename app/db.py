@@ -1,3 +1,5 @@
+"""SQLite schema and connection helpers."""
+
 from __future__ import annotations
 
 import logging
@@ -656,16 +658,22 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 class IncompatibleSchemaError(RuntimeError):
-    pass
+    """Raised when an existing database cannot satisfy the current schema."""
 
 
 def now_iso() -> str:
+    """Return the current UTC timestamp as ISO 8601 text."""
+
     return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
 class DB:
+    """Small SQLite wrapper used by services and request handlers."""
+
     path: Path
+    sql_trace_enabled: bool = False
+
     LOCK_RETRY_ATTEMPTS = 3
     LOCK_RETRY_BASE_SEC = 0.05
     SQLITE_BUSY_TIMEOUT_MS = 5000
@@ -687,6 +695,8 @@ class DB:
         return bool(default)
 
     def apply_runtime_values(self, values: object) -> None:
+        """Apply runtime database tracing flags."""
+
         enabled = getattr(values, "DB_SQL_TRACE_ENABLED", self.SQL_TRACE_ENABLED)
         self.sql_trace_enabled = self._coerce_bool(enabled, default=bool(self.SQL_TRACE_ENABLED))
 
@@ -748,6 +758,8 @@ class DB:
         return "database is locked" in msg or "database table is locked" in msg
 
     def init(self) -> None:
+        """Create or validate the current database schema."""
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:
@@ -798,6 +810,8 @@ class DB:
 
     @contextmanager
     def conn(self):
+        """Open a configured SQLite connection."""
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
         self._prepare_connection(conn)
@@ -831,6 +845,8 @@ class DB:
         self,
         fn: Callable[[sqlite3.Connection], _TxResult],
     ) -> _TxResult:
+        """Run a write transaction with lock retry handling."""
+
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:
                 with self.conn() as conn:
@@ -850,6 +866,8 @@ class DB:
         raise RuntimeError("write transaction failed")
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
+        """Execute a write statement with lock retry handling."""
+
         values = tuple(params)
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:
@@ -864,6 +882,8 @@ class DB:
                 raise
 
     def fetch_one(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Row | None:
+        """Fetch one row with lock retry handling."""
+
         values = tuple(params)
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:
@@ -881,6 +901,8 @@ class DB:
         return None
 
     def fetch_all(self, sql: str, params: Iterable[Any] = ()) -> list[sqlite3.Row]:
+        """Fetch all rows with lock retry handling."""
+
         values = tuple(params)
         for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
             try:

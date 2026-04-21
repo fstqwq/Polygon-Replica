@@ -1195,8 +1195,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         package_path = Path("third_party/polygon-package-examples/run-twice-guess-the-number-46$linux.zip")
         self.assertTrue(package_path.exists(), f"missing package fixture: {package_path}")
-        with workspace_service._cache_lock:
-            workspace_service._user_cache["alice"] = {"id": 2_147_483_647, "username": "alice"}
+        workspace_service.set_cached_user("alice", {"id": 2_147_483_647, "username": "alice"})
 
         upload = _Upload(package_path)
         target_slug = f"root-import-cache-{uuid.uuid4().hex[:8]}"

@@ -57,6 +57,30 @@ class Judgehost:
     def state(self) -> JudgehostState:
         return self._state
 
+    @property
+    def toolkit(self) -> DomjudgeToolkit:
+        return self._toolkit
+
+    @property
+    def core(self) -> JudgehostCore:
+        return self._core
+
+    @property
+    def queue(self) -> TaskQueue:
+        return self._queue
+
+    @property
+    def result(self) -> ResultProcessor:
+        return self._result
+
+    @property
+    def dispatch(self) -> DispatchHandler:
+        return self._dispatch
+
+    @property
+    def enqueue(self) -> TaskEnqueue:
+        return self._enqueue
+
     # Public API delegation.
     def apply_runtime_values(self, constants: RuntimeValues) -> None:
         return self._core.apply_runtime_values(constants)

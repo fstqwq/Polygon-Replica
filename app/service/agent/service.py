@@ -40,6 +40,10 @@ class AgentService:
         self._store = AgentStore(db)
         self.apply_runtime_values(constants)
 
+    @property
+    def store(self) -> AgentStore:
+        return self._store
+
     def apply_runtime_values(self, constants: RuntimeValues) -> None:
         self._constants = constants
 

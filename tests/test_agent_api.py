@@ -198,7 +198,7 @@ class TestAgentAPI(SmokeBase):
             session_id = str(register["agent_session_id"])
             identity_hash = str(register["identity_hash"])
 
-            config.agent_service._store.touch_session(session_id, last_seen_at=stale_seen)
+            config.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             empty_status = client.get(
                 "/agent/v1/auth/status",
                 params={"agent_session_id": session_id, "identity_hash": identity_hash},
@@ -209,11 +209,11 @@ class TestAgentAPI(SmokeBase):
             self.assertEqual(str(empty_payload.get("agent_session_id") or ""), session_id)
             self.assertEqual(str(empty_payload.get("user") or ""), username)
             self.assertEqual(list(empty_payload.get("authorized_problems") or []), [])
-            touched_after_status = str(config.agent_service._store.session_by_id(session_id)["last_seen_at"])
+            touched_after_status = str(config.agent_service.store.session_by_id(session_id)["last_seen_at"])
             self.assertNotEqual(touched_after_status, stale_seen)
             self.assertEqual(touched_after_status, str(empty_payload.get("last_seen_at") or ""))
 
-            config.agent_service._store.touch_session(session_id, last_seen_at=stale_seen)
+            config.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             request_resp = client.post(
                 "/agent/v1/auth/request-access",
                 json={
@@ -226,16 +226,16 @@ class TestAgentAPI(SmokeBase):
             request_id = str(request_resp.json().get("request_id") or "")
             self.assertRegex(request_id, r"^ar-[0-9a-f]{16}$")
             self.assertEqual(int(request_resp.json().get("expires_in") or 0), 900)
-            self.assertNotEqual(str(config.agent_service._store.session_by_id(session_id)["last_seen_at"]), stale_seen)
+            self.assertNotEqual(str(config.agent_service.store.session_by_id(session_id)["last_seen_at"]), stale_seen)
 
-            config.agent_service._store.touch_session(session_id, last_seen_at=stale_seen)
+            config.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             pending_poll = client.get(
                 f"/agent/v1/auth/poll/{request_id}",
                 params={"agent_session_id": session_id, "identity_hash": identity_hash},
             )
             self.assertEqual(pending_poll.status_code, 200, pending_poll.text)
             self.assertEqual(str(pending_poll.json().get("status") or ""), "pending")
-            self.assertNotEqual(str(config.agent_service._store.session_by_id(session_id)["last_seen_at"]), stale_seen)
+            self.assertNotEqual(str(config.agent_service.store.session_by_id(session_id)["last_seen_at"]), stale_seen)
 
             approve = client.post(
                 f"/agent/approve/{request_id}",
@@ -335,7 +335,7 @@ class TestAgentAPI(SmokeBase):
                 follow_redirects=False,
             )
             self.assertEqual(disconnect.status_code, 303)
-            self.assertIsNone(config.agent_service._store.session_by_id(session_id))
+            self.assertIsNone(config.agent_service.store.session_by_id(session_id))
             token_count_row = db_fetch_one(
                 "SELECT COUNT(*) AS n FROM agent_tokens WHERE agent_session_id=?",
                 [session_id],
@@ -419,7 +419,7 @@ class TestAgentAPI(SmokeBase):
                 follow_redirects=False,
             )
             self.assertEqual(disconnect.status_code, 303)
-            self.assertIsNone(config.agent_service._store.session_by_id(session_id))
+            self.assertIsNone(config.agent_service.store.session_by_id(session_id))
 
             after_disconnect = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token2))
             self.assertEqual(after_disconnect.status_code, 401)

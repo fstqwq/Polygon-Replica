@@ -31,15 +31,15 @@ def db_connection():
 
 
 def judgehost_fetch_case(service, case_id: int):
-    return service._state.judgehost_state_store.fetch_case(int(case_id))
+    return service.state.judgehost_state_store.fetch_case(int(case_id))
 
 
 def judgehost_fetch_job(service, job_id: int):
-    return service._state.judgehost_state_store.fetch_job(int(job_id))
+    return service.state.judgehost_state_store.fetch_job(int(job_id))
 
 
 def judgehost_cases_for_run(service, run_id: str):
-    return service._state.judgehost_state_store.cases_for_run(run_id)
+    return service.state.judgehost_state_store.cases_for_run(run_id)
 
 
 def write_verification_summary(verification_id: str, summary: dict[str, object]) -> None:

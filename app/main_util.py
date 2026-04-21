@@ -1,3 +1,5 @@
+"""Shared request/file normalization helpers."""
+
 from __future__ import annotations
 
 import re
@@ -28,6 +30,8 @@ UPLOAD_MAX_BYTES = 256 * 1024 * 1024
 
 
 def _apply_runtime_values(values: RuntimeValues) -> None:
+    """Refresh module-level limits from runtime values."""
+
     global CPP_SOURCE_EXTENSIONS
     global SOLUTION_SOURCE_EXTENSIONS
     global GENERATOR_SOURCE_EXTENSIONS
@@ -43,6 +47,8 @@ def _apply_runtime_values(values: RuntimeValues) -> None:
 
 
 def configure_runtime_values(values: RuntimeValues) -> None:
+    """Apply runtime configuration to this helper module."""
+
     _apply_runtime_values(values)
 
 
@@ -56,6 +62,8 @@ _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
 )
 
 def normalize_component_source_path(raw: str | None, folder: str, default_filename: str) -> str:
+    """Normalize a required component source path under its component folder."""
+
     normalized = normalize_workspace_rel_path(raw)
     if not normalized:
         normalized = f"{folder}/{default_filename}"
@@ -77,6 +85,8 @@ def normalize_component_source_path(raw: str | None, folder: str, default_filena
 
 
 def normalize_optional_component_source_path(raw: str | None, folder: str, label: str) -> str:
+    """Normalize an optional component source path under its component folder."""
+
     normalized = normalize_workspace_rel_path(raw)
     if not normalized:
         return ""
@@ -98,6 +108,8 @@ def normalize_optional_component_source_path(raw: str | None, folder: str, label
 
 
 def normalize_optional_component_source_path_safe(raw: str | None, folder: str, label: str) -> str:
+    """Normalize an optional component source path, returning empty on invalid input."""
+
     try:
         return normalize_optional_component_source_path(raw, folder, label)
     except ValueError:
@@ -105,6 +117,8 @@ def normalize_optional_component_source_path_safe(raw: str | None, folder: str, 
 
 
 def form_text(value: str | object) -> str:
+    """Convert form defaults and values to plain text."""
+
     default = getattr(value, "default", value)
     if default is Ellipsis:
         return ""
@@ -114,6 +128,8 @@ def form_text(value: str | object) -> str:
 
 
 def problem_slug_leaf(value: str | object) -> str:
+    """Return the final path segment from a problem slug-like value."""
+
     raw = form_text(value).strip().replace("\\", "/")
     if not raw:
         return ""
@@ -124,6 +140,8 @@ def problem_slug_leaf(value: str | object) -> str:
 
 
 def normalize_form_text_newlines(value: str | object) -> str:
+    """Normalize CRLF/CR form text to LF."""
+
     return str(value).replace("\r\n", "\n").replace("\r", "\n")
 
 
@@ -133,6 +151,8 @@ def enforce_textarea_max_bytes(
     label: str,
     max_bytes: int | None = None,
 ) -> str:
+    """Validate textarea payload size after newline normalization."""
+
     safe_value = normalize_form_text_newlines(value)
     cap = TEXTAREA_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
     if len(safe_value.encode("utf-8")) > cap:
@@ -147,6 +167,8 @@ async def read_upload_bytes_limited(
     label: str = "uploaded file",
     chunk_size: int = 1024 * 1024,
 ) -> bytes:
+    """Read an UploadFile into memory with a byte cap."""
+
     chunks: list[bytes] = []
     total = 0
     cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
@@ -169,6 +191,8 @@ async def write_upload_file_limited(
     label: str = "uploaded file",
     chunk_size: int = 1024 * 1024,
 ) -> int:
+    """Stream an UploadFile to a binary handle with a byte cap."""
+
     total = 0
     cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
     while True:
@@ -189,6 +213,8 @@ def read_fileobj_bytes_limited(
     label: str = "uploaded file",
     chunk_size: int = 1024 * 1024,
 ) -> bytes:
+    """Read a binary file-like object into memory with a byte cap."""
+
     chunks: list[bytes] = []
     total = 0
     cap = UPLOAD_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
@@ -203,7 +229,13 @@ def read_fileobj_bytes_limited(
     return b"".join(chunks)
 
 
-def sanitize_log_text_for_ui(raw: str, *, path_prefixes: list[tuple[str, str]] | None = None) -> str:
+def sanitize_log_text_for_ui(
+    raw: str,
+    *,
+    path_prefixes: list[tuple[str, str]] | None = None,
+) -> str:
+    """Remove unsafe control characters and redact known path prefixes from logs."""
+
     text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
     text = _LOG_ANSI_ESCAPE_RE.sub("", text)
     text = _LOG_CONTROL_CHAR_RE.sub("", text)

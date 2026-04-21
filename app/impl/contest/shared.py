@@ -53,9 +53,10 @@ def _contest_ctx(contest_slug: str, user: str, active_page: str) -> dict:
         raise HTTPException(status_code=404, detail="contest not found")
     access = config.contest_service.access_context(int(contest_row["id"]), int(gctx["user"]["id"]))
     if not access.get("can_read"):
+        read_block_reason = access.get("read_block_reason")
         raise HTTPException(
             status_code=403,
-            detail=str(reason_obj) if (reason_obj := access.get("read_block_reason")) is not None else "contest access required",
+            detail=str(read_block_reason) if read_block_reason is not None else "contest access required",
         )
     return {
         "user": gctx["user"],
