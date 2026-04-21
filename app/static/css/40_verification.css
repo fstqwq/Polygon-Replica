@@ -481,12 +481,16 @@ section.verification-header-section {
 .verification-detail-table > tbody > tr > td,
 .verification-detail-table > tfoot > tr > th,
 .verification-detail-table > tfoot > tr > td {
-  text-align: center;
+  text-align: left;
   white-space: nowrap;
   overflow-wrap: normal;
   font-size: var(--font-size-ui-sm);
   padding: 2px 4px;
   border: 1px solid var(--line);
+}
+
+.verification-detail-table > thead > tr:first-child > th {
+  text-align: center;
 }
 
 .verification-detail-overview-row > th,
@@ -506,32 +510,19 @@ section.verification-header-section {
 
 .verification-detail-sanity-cell {
   background: var(--surface);
-  cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
 
-.verification-detail-sanity-cell:hover,
-.verification-detail-sanity-cell:focus-visible {
-  background: var(--surface-alt);
+.verification-detail-sanity-link {
+  display: inline-block;
+  color: inherit;
 }
 
 .verification-detail-sanity-cell-warning,
 .verification-detail-sanity-cell-failed {
   background: var(--surface-warning);
   border-color: var(--warn-line);
-}
-
-.verification-detail-sanity-cell-warning:hover,
-.verification-detail-sanity-cell-failed:hover,
-.verification-detail-sanity-cell-failed:focus-visible,
-.verification-detail-sanity-cell-warning:focus-visible {
-  background: #ffedd5;
-}
-
-.verification-detail-sanity-cell:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
 }
 
 .verification-detail-sanity-state {
@@ -610,10 +601,6 @@ section.verification-header-section {
   white-space: nowrap;
   overflow-wrap: normal;
   word-break: normal;
-}
-
-.verification-detail-result-label-cell {
-  text-align: right !important;
 }
 
 .verification-detail-inline-stats {
@@ -707,7 +694,7 @@ section.verification-header-section {
 }
 
 .tcell {
-  text-align: center;
+  text-align: left;
   white-space: nowrap;
   font-size: var(--font-size-ui-sm);
   font-weight: 600;
@@ -737,7 +724,7 @@ section.verification-header-section {
   display: inline;
   width: auto;
   height: auto;
-  text-align: center;
+  text-align: left;
   font-size: var(--font-size-ui-sm);
   line-height: 1.2;
   white-space: nowrap;
