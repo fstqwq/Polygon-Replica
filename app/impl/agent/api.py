@@ -307,6 +307,22 @@ def _append_diagnostics(lines: list[str], detail_ctx: dict[str, object], *, inde
         location = str(item.get("location_display") or "").strip()
         level = str(item.get("level_upper") or item.get("level") or "").strip()
         diagnostics.append("Verification: " + ": ".join(part for part in (location, level, message) if part))
+    sanity = cast(dict[str, object], detail_ctx.get("detail_sanity") or {})
+    for task in cast(list[dict[str, object]], sanity.get("attention_tasks") or []):
+        task_status = str(task.get("status") or "")
+        messages = cast(list[dict[str, object]], task.get("messages") or [])
+        for raw_message in messages:
+            severity = str(raw_message.get("severity") or task_status)
+            if severity not in {"warning", "failed"}:
+                continue
+            message = str(raw_message.get("message") or "").strip()
+            if message:
+                diagnostics.append(message)
+        if messages or task_status not in {"warning", "failed"}:
+            continue
+        detail = str(task.get("detail") or "").strip()
+        if detail:
+            diagnostics.append(detail)
     if not diagnostics:
         lines.append(f"{' ' * indent}diagnostics: []")
         return

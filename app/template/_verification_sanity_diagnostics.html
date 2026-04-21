@@ -8,6 +8,18 @@
       <a href="#verification-sanity-detail-popup" data-popup-open="verification-sanity-detail-popup" class="verification-sanity-detail-link">details</a>
     </div>
   </div>
+  {% for task in detail_sanity.attention_tasks %}
+    {% if task.messages %}
+      {% for message in task.messages %}
+        {% set message_tone = message.severity if message.severity in ['warning', 'failed'] else task.status %}
+        {% if message_tone in ['warning', 'failed'] %}
+  <p class="{{ 'verification-task-fail' if message_tone == 'failed' else 'verification-task-warn' }}">{{ message.message }}</p>
+        {% endif %}
+      {% endfor %}
+    {% elif task.detail %}
+  <p class="{{ 'verification-task-fail' if task.status == 'failed' else 'verification-task-warn' if task.status == 'warning' else '' }}">{{ task.detail }}</p>
+    {% endif %}
+  {% endfor %}
 </div>
 {% call ui_popup('verification-sanity-detail-popup', 'Sanity Check Details', dialog_class='verification-detail-popup') %}
   <div class="verification-sanity-popup">
