@@ -556,6 +556,13 @@ def _effective_verification_kind(
     return Kind.ALL.value
 
 
+def _sanity_plan_for_verification_kind(kind: str, test_plans: list[VerificationTestPlan]) -> tuple[list[str], str]:
+    if kind != Kind.ALL.value:
+        return ([], SANITY_SKIPPED)
+    checks = planned_sanity_checks(test_plans)
+    return (checks, SANITY_PENDING if checks else "")
+
+
 def _source_bytes_for_path(execution: TaskExecutionContext, source_path: str) -> tuple[str, bytes]:
     source_file = execution.source_file_by_path.get(source_path)
     if source_file is None:
@@ -872,8 +879,7 @@ def run_workspace_verification_dag(
             available_test_names=list(execution_plan.test_names),
         )
         selected_test_plans = [execution_plan.test_plan_by_name[name] for name in test_names if name in execution_plan.test_plan_by_name]
-        sanity_checks = planned_sanity_checks(selected_test_plans)
-        sanity_status = SANITY_PENDING if sanity_checks else ""
+        sanity_checks, sanity_status = _sanity_plan_for_verification_kind(effective_kind, selected_test_plans)
         graph = _build_graph(
             task_store=task_store,
             accepted_source_path=execution_plan.accepted_source_path,

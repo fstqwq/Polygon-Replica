@@ -507,6 +507,25 @@ class TestVerificationTaskScheduler(SmokeBase):
             Kind.ALL.value,
         )
 
+    def test_non_all_verification_skips_sanity_plan(self) -> None:
+        from app.impl.workspace.verification_dag import _sanity_plan_for_verification_kind
+        from app.service.verification.types import Kind
+
+        test_plans = [_sanity_test_plan(sample=True, sample_output_text="ok\n")]
+
+        checks, status = _sanity_plan_for_verification_kind(Kind.SAMPLE.value, test_plans)
+        self.assertEqual(checks, [])
+        self.assertEqual(status, "skipped")
+
+        checks, status = _sanity_plan_for_verification_kind(Kind.CUSTOM.value, test_plans)
+        self.assertEqual(checks, [])
+        self.assertEqual(status, "skipped")
+
+        checks, status = _sanity_plan_for_verification_kind(Kind.ALL.value, test_plans)
+        self.assertEqual(status, "pending")
+        self.assertIn("empty_output_stability", checks)
+        self.assertIn("custom_sample_output", checks)
+
     def test_build_graph_creates_per_source_per_test_nodes(self) -> None:
         from app.impl.workspace.verification_dag import _build_graph
         from app.impl.workspace.verification_dag_plan import VerificationTestPlan
