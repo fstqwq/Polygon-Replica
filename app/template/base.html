@@ -30,7 +30,7 @@
   {% endif %}
   {% endif %}
   <title>{% if page_title %}{{ page_title }} - {% endif %}Polygon-Replica</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260422-07" />
+  <link rel="stylesheet" href="/static/style.css?v=20260422-08" />
   <script src="/static/ui.js?v=20260419-01" defer></script>
   <link rel="stylesheet" href="/static/vendor/codemirror/lib/codemirror.min.css?v=20260410-23" />
   <script src="/static/vendor/codemirror/lib/codemirror.min.js?v=20260410-23" defer></script>
@@ -189,7 +189,7 @@
       </div>
       <div class="problem-submenu-item problem-submenu-item-run">
         <div class="problem-submenu-run-block">
-          <span class="submenu-head-line">
+          <span class="submenu-head-line" {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}>
             <a data-page="run" class="submenu-head-link" href="/problems/{{ ctx.problem.slug }}/run">
               <strong class="submenu-status-heading">Verification</strong>
             </a>

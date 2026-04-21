@@ -4,6 +4,7 @@ from pathlib import Path
 from app.impl.runtime.config import config
 from app.service.platform.error_text import bounded_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.signature import verification_signature
 from .run_display import run_actual_failed_codes, run_actual_short
 
@@ -187,6 +188,65 @@ def _verification_solution_failure_hint(source_path: str, reason: str, error_tex
         detail = 'verification mismatch'
     return bounded_display_text(f'{source_label}: {detail}')
 
+def _verification_task_run_status(rows: list[VerificationTaskRow]) -> str:
+    statuses = {row["status"] for row in rows}
+    if statuses & {
+        VerificationTaskStore.TASK_PENDING,
+        VerificationTaskStore.TASK_QUEUED,
+        VerificationTaskStore.TASK_LEASED,
+    }:
+        return "running"
+    if statuses & {VerificationTaskStore.TASK_FAILED, VerificationTaskStore.TASK_CANCELLED}:
+        return "failed"
+    return "ok"
+
+def _verification_task_rows_failure_hint(verification_id: str) -> str:
+    rows = VerificationTaskStore(config.db).list_rows(verification_id)
+    grouped: dict[str, list[VerificationTaskRow]] = {}
+    order: list[str] = []
+    for row in rows:
+        if row["task_kind"] != "solution-run":
+            continue
+        logical_run_id = row["logical_run_id"]
+        if logical_run_id not in grouped:
+            grouped[logical_run_id] = []
+            order.append(logical_run_id)
+        grouped[logical_run_id].append(row)
+    for logical_run_id in order:
+        current_rows = grouped[logical_run_id]
+        first_row = current_rows[0]
+        summary: dict[str, object] = {
+            "tests": [
+                {"test": row["test_name"], "verdict": row["verdict"]}
+                for row in current_rows
+                if row["verdict"]
+            ],
+            "error": next((row["error_text"] for row in current_rows if row["error_text"]), ""),
+        }
+        run_status = _verification_task_run_status(current_rows)
+        _matched, completed, _observed_pass, reason = _verification_solution_match(
+            first_row["expected_behavior"],
+            run_status,
+            summary,
+        )
+        if completed and reason:
+            return _verification_solution_failure_hint(first_row["source_path"], reason, "")
+        error_text = str(summary["error"])
+        if completed and error_text:
+            return _verification_solution_failure_hint(first_row["source_path"], "", error_text)
+    return ""
+
+def _verification_error_prefers_source_hint(error_text: str) -> bool:
+    if not error_text:
+        return True
+    if error_text in {"verification failed", "solution run did not complete", "verification mismatch"}:
+        return True
+    return (
+        error_text.startswith("required=[")
+        and ", allowed=[" in error_text
+        and ", got=[" in error_text
+    )
+
 def _verification_stale_reason() -> str:
     return "changed: verification inputs"
 
@@ -234,6 +294,13 @@ def _verification_status_context(
     sanity_attention = sanity_status in {"warning", "failed"}
     sanity_error = str(detail.get("error") or "") if sanity_attention else ""
     error_text = str(record.get("fail_reason") or sanity_error or detail.get("error") or "")
+    source_error_text = (
+        _verification_task_rows_failure_hint(str(verification_id or ""))
+        if last_status == "failed" or error_text
+        else ""
+    )
+    if source_error_text and _verification_error_prefers_source_hint(error_text):
+        error_text = source_error_text
     mode = 'stale' if stale else last_status
     display = "ok" if mode == "pass" else mode
     if mode == "pass" and sanity_status == "warning":

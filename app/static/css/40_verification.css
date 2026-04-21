@@ -595,13 +595,15 @@ section.verification-header-section {
   background: var(--surface-warning);
 }
 
-.verification-detail-unexpected,
-.verification-detail-unexpected .stat-main,
-.verification-detail-unexpected .stat-sub,
-.verification-detail-unexpected .vcode-info,
-.verification-detail-unexpected .vmeta {
+.verification-detail-unexpected {
   background: var(--surface-danger);
   color: var(--danger) !important;
+}
+
+.verification-detail-unexpected-cell .vcode,
+.verification-detail-unexpected-cell .vmeta {
+  background: var(--surface-danger);
+  color: var(--danger);
 }
 
 .run-details-page .verification-detail-wrap.verification-detail-wrap-regular {
@@ -730,6 +732,7 @@ section.verification-header-section {
 }
 
 .vcode-unexpected {
+  background: var(--surface-danger);
   color: var(--danger);
 }
 
@@ -746,6 +749,15 @@ section.verification-header-section {
 
 .vmeta-join {
   margin-left: 0;
+}
+
+.verification-detail-result-row .vmeta,
+.verification-detail-result-row .stat-sub {
+  color: var(--muted);
+}
+
+.verification-detail-result-row .vmeta-warn {
+  color: var(--warn);
 }
 
 .vmeta-warn {
