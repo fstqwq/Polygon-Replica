@@ -1,0 +1,26 @@
+{% if detail_sanity.available and (detail_sanity.attention_tasks or detail_sanity.reason) %}
+{% set ns.has_diag = true %}
+<div class="compile-diagnostics-card verification-sanity-diagnostics">
+  <div class="compile-diagnostics-head">
+    <div>
+      <strong>Sanity checks</strong>
+      <span class="verification-detail-sanity-state {{ 'warn' if detail_sanity.status in ['warning', 'failed'] else 'info' }}">{{ detail_sanity.status }}</span>
+    </div>
+  </div>
+  {% if detail_sanity.task_count %}
+  <p class="muted">Ran {{ detail_sanity.ran_count }} of {{ detail_sanity.task_count }} sanity checks.</p>
+  {% endif %}
+  {% if detail_sanity.reason and not detail_sanity.attention_tasks %}
+  <p class="{{ 'verification-task-fail' if detail_sanity.status == 'failed' else 'verification-task-warn' }}">{{ detail_sanity.reason }}</p>
+  {% endif %}
+  {% for task in detail_sanity.attention_tasks %}
+    {% if task.messages %}
+      {% for message in task.messages %}
+  <p class="{{ 'verification-task-fail' if task.status == 'failed' else 'verification-task-warn' }}"><strong>{{ task.label }}</strong>: {{ message.message }}</p>
+      {% endfor %}
+    {% elif task.detail %}
+  <p class="{{ 'verification-task-fail' if task.status == 'failed' else 'verification-task-warn' }}"><strong>{{ task.label }}</strong>: {{ task.detail }}</p>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}

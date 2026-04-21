@@ -9,7 +9,7 @@
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 
 <section class="verification-header-section">
-  {% if detail_status or detail_task_counts or detail_fail_flag or detail_sanity.available or detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
+  {% if detail_status or detail_task_counts or detail_fail_flag or detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
   <div class="preview-card verification-task-status-card">
     <div class="preview-head verification-task-status-head">
       <div class="verification-task-status-title">
@@ -52,34 +52,10 @@
     </div>
     <div class="verification-task-status-grid">
       <div class="verification-task-status-main">
-        {% if detail_sanity.available %}
-        {% set sanity_status = detail_sanity.status or 'no' %}
-        <p class="verification-task-sanity-line">
-          <a href="#verification-sanity-popup" data-popup-open="verification-sanity-popup" title="Open sanity checks">
-            Sanity
-            {% if sanity_status in ["passed", "ok"] %}
-            <span class="verification-detail-sanity-state ok">{{ sanity_status }}</span>
-            {% elif sanity_status == "failed" %}
-            <span class="verification-detail-sanity-state warn">{{ sanity_status }}</span>
-            {% elif sanity_status == "warning" %}
-            <span class="verification-detail-sanity-state warn">{{ sanity_status }}</span>
-            {% elif sanity_status in ["running", "pending"] %}
-            <span class="verification-detail-sanity-state info">{{ sanity_status }}</span>
-            {% elif sanity_status in ["skipped", "none", "unknown", "no"] %}
-            <span class="verification-detail-sanity-state muted">{{ sanity_status }}</span>
-            {% else %}
-            <span class="verification-detail-sanity-state">{{ sanity_status }}</span>
-            {% endif %}
-          </a>
-        </p>
-        {% endif %}
         {% if detail_fail_flag and detail_status == "failed" %}
         <p class="verification-task-fail">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
         {% elif detail_fail_flag and detail_status == "running" %}
         <p class="verification-task-note">{{ detail_fail_reason }}</p>
-        {% endif %}
-        {% if detail_sanity.reason and detail_status == "ok" %}
-        <p class="verification-task-warn">{{ detail_sanity.reason }}</p>
         {% endif %}
         {% if detail_task_counts %}
         <p class="muted">
@@ -115,7 +91,7 @@
         <tr>
           <th class="verification-detail-index-head">#</th>
           {% for col in detail_columns %}
-          <th class="{{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}">
+          <th class="{{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}" {% if col.failure_display %}title="{{ col.failure_display }}"{% endif %}>
             {% if col.source_href %}
             <a href="{{ col.source_href }}" class="col-link"><span class="col-title">{{ col.title }}</span></a>
             {% else %}
@@ -143,7 +119,7 @@
         </td>
         {% for cell in row.cells %}
         {% set col = detail_columns[loop.index0] %}
-        <td class="vcell tone-{{ cell.kind }}{{ ' verification-detail-runtime-warn' if cell.time_tone == 'warn' else '' }}">
+        <td class="vcell tone-{{ cell.kind }}{{ ' verification-detail-runtime-warn' if cell.time_tone == 'warn' else '' }}{{ ' verification-detail-unexpected' if col.expected_mismatch and cell.text_tone == 'info' else '' }}">
           {% if row.has_detail %}
           {% set cell_code_class = 'vcode-unexpected' if col.expected_mismatch and cell.text_tone == 'info' else 'vcode-info' if cell.text_tone == 'info' else '' %}
           <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode{{ ' ' ~ cell_code_class if cell_code_class else '' }}">{{ cell.short }}</span></a>{% if cell.time_display and cell.memory_display %}<span class="vmeta{{ ' vmeta-warn' if cell.time_tone == 'warn' else '' }}">{{ cell.time_display }}</span><span class="vmeta vmeta-join">/{{ cell.memory_display }}</span>{% elif cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
@@ -185,7 +161,7 @@
             <span class="stat-line stat-sub verification-detail-label-nowrap">Expected</span>
           </th>
           {% for col in detail_columns %}
-          <td class="{{ col.result_tone_class }} {{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}{{ ' verification-detail-runtime-warn' if col.max_time_tone == 'warn' else '' }}">
+          <td class="{{ col.result_tone_class }} {{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}{{ ' verification-detail-runtime-warn' if col.max_time_tone == 'warn' else '' }}" {% if col.failure_display %}title="{{ col.failure_display }}"{% endif %}>
             <span class="vcode{{ ' vcode-info' if col.result_text_tone == 'info' and not col.expected_mismatch else '' }}">{{ col.got_display or col.got_short }}</span><span class="vmeta{{ ' vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span><span class="vmeta vmeta-join">/{{ col.max_memory_display or '-' }}</span>
             {% set expected_token = col.expected_display or '--' %}
             <span class="stat-line stat-sub">{{ expected_token }}</span>
@@ -196,11 +172,6 @@
     </table>
   </div>
 </section>
-{% if detail_sanity.available %}
-{% call ui_popup('verification-sanity-popup', 'Sanity checks', dialog_class='verification-sanity-popup') %}
-      {% include "_verification_sanity_popup.html" %}
-{% endcall %}
-{% endif %}
 {% call ui_popup('run-test-detail-popup', 'Test Details', dialog_class='verification-detail-popup', content_id='run-test-detail-popup-content') %}
       <p class="muted verification-detail-loading">Click to load test details.</p>
 {% endcall %}
@@ -208,6 +179,7 @@
 <section>
   <h2>Diagnostics</h2>
   {% set ns = namespace(has_diag=false) %}
+  {% include "_verification_sanity_diagnostics.html" %}
   {% for col in detail_columns %}
   {% set entries = col.compile_diagnostics if col.compile_diagnostics else [] %}
   {% set has_error = (col.error | default('') | trim) %}
@@ -228,7 +200,7 @@
     {% if has_error %}
     <p class="compile-diagnostics-error">{{ col.error_display or col.error }}</p>
     {% elif match_reason %}
-    <p class="compile-diagnostics-error">{{ match_reason }}</p>
+    <p class="compile-diagnostics-error">{{ col.match_reason_display or match_reason }}</p>
     {% endif %}
     {% if has_entries %}
     <pre class="compile-diagnostics-log">{% for d in entries %}{{ d.location_display }}: {{ d.level_upper or (d.level | upper) }}: {{ d.message }}{% if d.message_truncated %} [truncated]{% endif %}
@@ -271,10 +243,13 @@
 </section>
 <section>
   <h2>Diagnostics</h2>
+  {% set ns = namespace(has_diag=false) %}
+  {% include "_verification_sanity_diagnostics.html" %}
   {% set verification_entries = detail_verification_logs.diagnostics if detail_verification_logs.diagnostics else [] %}
   {% set verification_error = (detail_verification_logs.error | default('') | trim) %}
   {% set verification_has_entries = (verification_entries | length) > 0 %}
   {% if verification_error or verification_has_entries %}
+  {% set ns.has_diag = true %}
   <div class="compile-diagnostics-card">
     <div class="compile-diagnostics-head">
       <div><strong>{{ detail_verification_logs.title or 'Verification' }}</strong></div>
@@ -287,15 +262,11 @@
 {% endfor %}</pre>
     {% endif %}
   </div>
-  {% else %}
+  {% endif %}
+  {% if not ns.has_diag %}
   <p class="muted">No diagnostics.</p>
   {% endif %}
 </section>
-{% if detail_sanity.available %}
-{% call ui_popup('verification-sanity-popup', 'Sanity checks', dialog_class='verification-sanity-popup') %}
-      {% include "_verification_sanity_popup.html" %}
-{% endcall %}
-{% endif %}
 {% endif %}
 </div>
 {% endblock %}

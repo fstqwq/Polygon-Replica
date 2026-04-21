@@ -4446,7 +4446,7 @@ class TestUIRun(UIBaseSuite):
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("accepted solution failed on 001.in", detail_html)
 
-    def test_run_details_shows_sanity_popup_with_task_summary(self) -> None:
+    def test_run_details_shows_sanity_diagnostics(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -4520,7 +4520,8 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Sanity", html)
-        self.assertIn("Ran 3 of 3 sanity checks.", html)
+        self.assertIn("Sanity checks", html)
+        self.assertIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("Custom sample output", html)
         self.assertIn("validator reported mismatch", html)
 
@@ -4594,7 +4595,8 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Ran 3 of 3 sanity checks.", html)
+        self.assertIn("Sanity checks", html)
+        self.assertIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("Boundary coverage", html)
         self.assertIn("boundary coverage missing: n max=3", html)
 

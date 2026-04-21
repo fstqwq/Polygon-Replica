@@ -150,10 +150,6 @@ section.verification-header-section {
   margin: 0;
 }
 
-.verification-task-sanity-line a {
-  color: inherit;
-}
-
 .verification-task-status-secondary {
   display: flex;
   align-items: center;
@@ -474,7 +470,7 @@ section.verification-header-section {
 }
 
 .verification-detail-table col.verification-col-test {
-  width: 78px;
+  width: 72px;
 }
 
 .verification-detail-table col.verification-col-solution {
@@ -514,8 +510,8 @@ section.verification-header-section {
   text-align: center;
 }
 
-.verification-detail-table > thead > tr:first-child > .verification-detail-index-head {
-  text-align: left;
+.verification-detail-index-head {
+  text-align: left !important;
 }
 
 .verification-detail-overview-row > th,
@@ -602,7 +598,9 @@ section.verification-header-section {
 .verification-detail-unexpected,
 .verification-detail-unexpected .stat-main,
 .verification-detail-unexpected .stat-sub,
-.verification-detail-unexpected .vcode-info {
+.verification-detail-unexpected .vcode-info,
+.verification-detail-unexpected .vmeta {
+  background: var(--surface-danger);
   color: var(--danger) !important;
 }
 
@@ -790,55 +788,6 @@ section.verification-header-section {
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.verification-sanity-popup {
-  width: min(960px, calc(100vw - 20px));
-  max-height: calc(100vh - 20px);
-}
-
-.verification-sanity-summary {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-}
-
-.verification-sanity-summary > p {
-  margin: 0;
-}
-
-.verification-sanity-reason {
-  color: var(--warn);
-  font-weight: 700;
-}
-
-.verification-sanity-table {
-  width: 100%;
-  margin-top: var(--space-4);
-  font-size: var(--font-size-ui-sm);
-}
-
-.verification-sanity-table th,
-.verification-sanity-table td {
-  vertical-align: top;
-}
-
-.verification-sanity-table td:last-child {
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.verification-sanity-message {
-  margin: 0 0 0.25rem;
-}
-
-.verification-sanity-message:last-child {
-  margin-bottom: 0;
-}
-
-.verification-sanity-popup .ui-popup-content {
-  max-height: calc(100vh - 120px);
-  overflow: auto;
 }
 
 .sol-list {

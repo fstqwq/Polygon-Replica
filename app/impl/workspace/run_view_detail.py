@@ -192,8 +192,36 @@ def _sanity_messages(raw_messages: object) -> list[dict[str, object]]:
 
 def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str, object]]:
     status = str(payload.get("sanity_status") or "")
-    results = [dict(item) for item in cast(list[object], payload.get("sanity_check_results") or []) if isinstance(item, dict)]
+    results = [
+        dict(item)
+        for item in cast(list[object], payload.get("sanity_check_results") or [])
+        if isinstance(item, dict)
+    ]
     if not results:
+        failed_check = str(payload.get("failed_check") or "")
+        if failed_check and status in {"warning", "failed"}:
+            message = bounded_display_text(str(payload.get("error") or _sanity_reason(payload)))
+            messages = (
+                [
+                    {
+                        "severity": status,
+                        "test_name": str(payload.get("failed_test") or ""),
+                        "message": message,
+                    }
+                ]
+                if message
+                else []
+            )
+            return [
+                {
+                    "name": failed_check,
+                    "label": _sanity_check_label(failed_check),
+                    "status": status,
+                    "tone": _sanity_status_tone(status),
+                    "detail": "" if messages else bounded_display_text(_sanity_reason(payload)),
+                    "messages": messages,
+                }
+            ]
         return []
     rows: list[dict[str, object]] = []
     for item in results:
@@ -231,26 +259,38 @@ def _sanity_task_rows(payload: dict[str, object]) -> list[dict[str, object]]:
     return _sanity_task_rows_from_results(payload)
 
 
-def _detail_sanity_context(verification_id: str, verification_details: dict[str, object]) -> dict[str, object]:
+def _detail_sanity_context(
+    verification_id: str,
+    verification_details: dict[str, object],
+) -> dict[str, object]:
     if not verification_id:
         return {
             "available": False,
             "status": "unknown",
             "reason": "",
             "tasks": [],
+            "attention_tasks": [],
             "task_count": 0,
             "ran_count": 0,
             "checked_count": 0,
         }
     payload = _build_sanity_payload(verification_details)
     tasks = _sanity_task_rows(payload)
+    attention_tasks = [
+        task
+        for task in tasks
+        if str(task.get("status") or "") in {"warning", "failed"} or bool(task.get("messages"))
+    ]
     return {
         "available": True,
         "status": str(payload["sanity_status"]),
         "reason": _sanity_reason(payload),
         "tasks": tasks,
+        "attention_tasks": attention_tasks,
         "task_count": len(tasks),
-        "ran_count": sum(1 for task in tasks if str(task.get("status") or "") in {"passed", "warning", "failed"}),
+        "ran_count": sum(
+            1 for task in tasks if str(task.get("status") or "") in {"passed", "warning", "failed"}
+        ),
         "checked_count": int(payload["sanity_checked_count"]),
     }
 
@@ -1233,7 +1273,19 @@ def build_run_detail_context(
                         max_memory_kb = memory_kb
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
+        failure_display = (
+            _verification_solution_failure_hint(source_for_display, match_reason, str(summary.get('error') or ''))
+            if (match_reason or summary.get('error'))
+            else ''
+        )
+        match_reason_display = (
+            _verification_solution_failure_hint(source_for_display, match_reason, '')
+            if match_reason
+            else ''
+        )
         column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_text_tone': result_text_tone, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_time_tone': max_time_tone, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
+        column_payload['failure_display'] = failure_display
+        column_payload['match_reason_display'] = match_reason_display
         if not _is_solution_column_source(source_for_display):
             if include_row_details and task_kind in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
                 pass
