@@ -90,6 +90,9 @@ class TestBackendMinimal(SmokeBase):
             }.issubset(workspace_columns)
         )
 
+    def test_current_verification_task_schema_has_answer_correct(self) -> None:
+        self.assertIn("answer_correct", CURRENT_SCHEMA_COLUMNS["verification_tasks"])
+
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

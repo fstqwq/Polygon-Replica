@@ -98,7 +98,7 @@
             <div class="status-inline">
               <span class="vcode{{ ' vcode-info' if final_row.text_tone == 'info' else '' }}">{{ final_row.verdict_short or '-' }}</span>
               {% if final_row.time_display and final_row.time_display != '-' %}
-              <span class="vmeta">{{ final_row.time_display }}</span>
+              <span class="vmeta{{ ' vmeta-warn' if final_row.time_tone == 'warn' else '' }}">{{ final_row.time_display }}</span>
               {% endif %}
               {% if final_row.memory_display and final_row.memory_display != '-' %}
               <span class="vmeta">{{ final_row.memory_display }}</span>

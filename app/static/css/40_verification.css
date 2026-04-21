@@ -826,6 +826,15 @@ section.verification-header-section {
   white-space: nowrap;
 }
 
+.vmeta-join {
+  margin-left: 0;
+}
+
+.vmeta-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+
 .verification-detail-table .tone-running .vmeta {
   color: #2563eb;
   font-weight: 600;

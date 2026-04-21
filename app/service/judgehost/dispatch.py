@@ -17,6 +17,7 @@ from app.service.judgehost.runtime import (
     domjudge_bool,
     domjudge_parse_float,
     domjudge_parse_int,
+    domjudge_parse_meta_text,
     domjudge_rewrite_untrusted_runresult,
     domjudge_verdict_from_runresult,
 )
@@ -736,6 +737,11 @@ class DispatchHandler:
                 output_diff_rel=domjudge_text(cached["output_diff_rel"]),
                 team_message_rel=domjudge_text(cached["team_message_rel"]),
             )
+            compare_meta_blob = self._toolkit.read_artifact_blob(work_root, domjudge_text(cached["compare_metadata_rel"]))
+            compare_exit_code = -1
+            if compare_meta_blob:
+                compare_meta = domjudge_parse_meta_text(compare_meta_blob.decode("utf-8", errors="replace"))
+                compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
             self._result._domjudge_update_verification_run_case_progress(
                 task_id=domjudge_text(cached["task_id"]),
                 source_path=domjudge_text(job_row["source_path"]),
@@ -750,6 +756,7 @@ class DispatchHandler:
                 run_status="running",
                 runresult=domjudge_text(cached["runresult"]),
                 feedback_files=feedback_files,
+                answer_correct=compare_exit_code == 42,
             )
             if grouped_job:
                 self._result._domjudge_finalize_case_task(

@@ -23,6 +23,7 @@ from app.service.verification.test_rows import build_verification_test_row
 from app.service.verification.types import Kind, Status
 from app.service.verification.types import is_cancel_reason
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
+from app.impl.workspace.run_display import run_actual_failed_codes
 
 from .context_job_helper import allocate_run_id
 from .context_operation import audit
@@ -39,6 +40,7 @@ from .sanity_checks import (
     planned_sanity_checks,
     run_verification_sanity_checks,
 )
+from .runtime_threshold import time_limit_ms_from_run_config_json
 from .verification_dag_plan import VerificationTestPlan, build_verification_execution_plan
 from .verification_payload import prepared_payload_for_uploaded_source as _prepared_payload_for_uploaded_source
 from .problem_config import read_problem_config
@@ -319,6 +321,7 @@ def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
         message=feedback_text,
         output_ref=str(row["output_ref"] or ""),
         feedback_files=[],
+        answer_correct=bool(row.get("answer_correct")),
     )
 
 
@@ -535,6 +538,38 @@ def _verification_summary_from_tasks(
         else "",
     }
     return (verification_status, summary, counts)
+
+
+def _runtime_threshold_columns_from_tasks(
+    *,
+    artifact_verification_id: str,
+    mode: str,
+    pass_limit: int,
+    logical_runs: list[LogicalRunSpec],
+    rows: list[VerificationTaskRow],
+    test_names: list[str],
+    fail_flag: bool,
+) -> list[dict[str, object]]:
+    columns: list[dict[str, object]] = []
+    for logical_run in _visible_logical_runs(logical_runs):
+        grouped_rows = [row for row in rows if str(row["logical_run_id"] or "") == logical_run.logical_run_id]
+        run_summary, run_status, _matched, _completed, _observed_pass, _reason = _logical_run_summary(
+            logical_run=logical_run,
+            rows=grouped_rows,
+            test_names=test_names,
+            mode=mode,
+            pass_limit=pass_limit,
+            artifact_verification_id=artifact_verification_id,
+            fail_flag=fail_flag,
+        )
+        columns.append(
+            {
+                "source": logical_run.source_path,
+                "summary": run_summary,
+                "summary_has_tl": "TL" in run_actual_failed_codes(run_status, run_summary),
+            }
+        )
+    return columns
 
 
 def _effective_verification_kind(
@@ -1058,6 +1093,18 @@ def run_workspace_verification_dag(
                 accepted_source_bytes=accepted_source_file.read_bytes() if accepted_source_file is not None else b"",
                 run_verification_payload_base=execution_plan.run_verification_payload_base,
                 generate_feedback_by_test=_generate_feedback_by_test(rows),
+                runtime_columns=_runtime_threshold_columns_from_tasks(
+                    artifact_verification_id=verification_id,
+                    mode=verification_mode,
+                    pass_limit=verification_pass_limit,
+                    logical_runs=graph.logical_runs,
+                    rows=rows,
+                    test_names=test_names,
+                    fail_flag=fail_flag,
+                ),
+                time_limit_ms=time_limit_ms_from_run_config_json(
+                    str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
+                ),
             )
             detail = config.verification_service.verification_detail(verification_id)
             updated_detail = dict(detail)

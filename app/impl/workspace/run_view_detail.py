@@ -71,6 +71,11 @@ from app.impl.workspace.run_display import (
     run_memory_mb_text,
     run_verdict_short,
 )
+from .runtime_threshold import (
+    SUMMARY_RUNTIME_THRESHOLD_CHECK,
+    evaluate_summary_runtime_threshold,
+    time_limit_ms_from_run_config_json,
+)
 
 _C = config.constants
 _TASK_KIND_GENERATE_INPUT = "generate-input"
@@ -82,12 +87,14 @@ _SANITY_CHECK_ORDER = (
     "empty_output_stability",
     "unicode_output_stability",
     "custom_sample_output",
+    SUMMARY_RUNTIME_THRESHOLD_CHECK,
     "boundary_coverage",
 )
 _SANITY_CHECK_LABELS = {
     "empty_output_stability": "Empty output stability",
     "unicode_output_stability": "Unicode output stability",
     "custom_sample_output": "Custom sample output",
+    SUMMARY_RUNTIME_THRESHOLD_CHECK: "Summary runtime threshold",
     "boundary_coverage": "Boundary coverage",
 }
 
@@ -517,6 +524,7 @@ def build_run_detail_context(
                             'time_user_ms': cpu_ms,
                             'time_wall_ms': wall_ms,
                             'memory_kb': memory_kb,
+                            'answer_correct': bool(row.get('answer_correct')),
                             'message': feedback_text,
                             'output_ref': str(row['output_ref'] or ''),
                             'feedback_files': [],
@@ -613,11 +621,13 @@ def build_run_detail_context(
     problem_id = int(ctx['problem']['id'])
     problem_slug = ctx['problem']['slug']
     username = ctx['user']['username']
+    fallback_time_limit_ms = 0
     fallback_timeout_ms = 0
     try:
         _payload, general_cfg, _cfg_path = read_problem_config(workspace)
+        fallback_time_limit_ms = int(general_cfg.get('time_limit_ms') or _C.GENERAL_CONFIG_DEFAULTS['time_limit_ms'])
         fallback_timeout_ms = effective_run_timeout_ms(
-            int(general_cfg.get('time_limit_ms') or _C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
+            fallback_time_limit_ms,
             mode=general_cfg.get('mode'),
             pass_limit=general_cfg.get('pass_limit'),
             default_ms=int(_C.GENERAL_CONFIG_DEFAULTS['time_limit_ms']),
@@ -628,6 +638,7 @@ def build_run_detail_context(
             interactive_slack_sec=int(_C.RUN_WALL_TIME_SLACK_INTERACTIVE_SEC),
         )
     except Exception:
+        fallback_time_limit_ms = 0
         fallback_timeout_ms = 0
     selected_ids: list[str] = []
     verification_run_rows: dict[str, dict[str, object]] = {}
@@ -687,6 +698,10 @@ def build_run_detail_context(
                     'source_label': str(run_payload.get('source_label') or run_summary.get('source') or run_id),
                     'task_kind': str(run_payload.get('task_kind') or run_summary.get('task_kind') or ''),
                 }
+    runtime_threshold_time_limit_ms = time_limit_ms_from_run_config_json(
+        str(verification_details.get('run_config_json') or ''),
+        default_ms=fallback_time_limit_ms,
+    )
     verification_created_at = ''
     if not verification_created_at and verification_record is not None:
         verification_created_at = verification_record['created_at']
@@ -955,9 +970,15 @@ def build_run_detail_context(
             execution_skipped_from_summary = True
         tests_map: dict[str, dict] = {}
         max_time_ms = 0
+        max_time_tone = ''
         max_memory_kb = 0
         has_test_metrics = False
         tests_raw = summary.get('tests') or []
+        runtime_threshold_report = evaluate_summary_runtime_threshold(
+            summary=summary,
+            source=source_for_display,
+            time_limit_ms=runtime_threshold_time_limit_ms,
+        )
         has_materialized_tests = bool(tests_raw)
         timeout_limit_ms = _run_timeout_ms_from_summary(summary)
         if timeout_limit_ms <= 0:
@@ -991,9 +1012,11 @@ def build_run_detail_context(
                 except Exception:
                     memory_kb = 0
                 memory_mb_text = run_memory_mb_text(memory_kb)
+                time_tone = 'warn' if str(test_name) in runtime_threshold_report.highlighted_tests else ''
                 has_test_metrics = True
                 if time_ms > max_time_ms:
                     max_time_ms = time_ms
+                    max_time_tone = time_tone
                 if memory_kb > max_memory_kb:
                     max_memory_kb = memory_kb
                 detail_payload: dict[str, object] | None = None
@@ -1052,7 +1075,7 @@ def build_run_detail_context(
                                 feedback_rel = (feedback_items[0] or '')
                             pass_time_display = run_cpu_wall_ms_text(pass_time_user_ms, pass_time_wall_ms)
                             pass_memory_display = run_memory_mb_text(pass_memory_kb)
-                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'text_tone': _run_cell_text_tone(pass_verdict, expected_behavior), 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': pass_time_display, 'memory_display': pass_memory_display, 'status_display': f'{pass_verdict_short} · {pass_time_display} · {pass_memory_display}', 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                            pass_rows.append({'pass_label': '-', 'verdict_short': pass_verdict_short, 'text_tone': _run_cell_text_tone(pass_verdict, expected_behavior), 'kind': _run_cell_kind(pass_verdict, expected_behavior), 'time_display': pass_time_display, 'time_tone': time_tone, 'memory_display': pass_memory_display, 'status_display': f'{pass_verdict_short} · {pass_time_display} · {pass_memory_display}', 'feedback_display': row_feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     if not pass_rows:
                         output_rel = (item.get('output_ref') or '')
                         output_task_id = str(item.get('task_id') or '')
@@ -1061,7 +1084,7 @@ def build_run_detail_context(
                         if feedback_items:
                             feedback_rel = (feedback_items[0] or '')
                         time_display = run_cpu_wall_ms_text(time_user_ms, time_wall_ms)
-                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'text_tone': _run_cell_text_tone(verdict, expected_behavior), 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': time_display, 'memory_display': memory_mb_text, 'status_display': f'{verdict_short} · {time_display} · {memory_mb_text}', 'feedback_display': feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
+                        pass_rows.append({'pass_label': '-', 'verdict_short': verdict_short, 'text_tone': _run_cell_text_tone(verdict, expected_behavior), 'kind': _run_cell_kind(verdict, expected_behavior), 'time_display': time_display, 'time_tone': time_tone, 'memory_display': memory_mb_text, 'status_display': f'{verdict_short} · {time_display} · {memory_mb_text}', 'feedback_display': feedback_display, 'output_rel': output_rel, 'output_task_id': output_task_id, 'checker_log_rel': checker_log_rel, 'feedback_rel': feedback_rel})
                     final_row = dict(pass_rows[-1]) if pass_rows else {}
                     for candidate in reversed(pass_rows):
                         verdict_token = (candidate.get('verdict_short') or '')
@@ -1072,6 +1095,7 @@ def build_run_detail_context(
                         'verdict': verdict,
                         'verdict_short': verdict_short,
                         'time_display': f'{time_ms}ms',
+                        'time_tone': time_tone,
                         'memory_display': memory_mb_text,
                         'status_display': f'{verdict_short} · {run_cpu_wall_ms_text(time_user_ms, time_wall_ms)} · {memory_mb_text}',
                         'feedback_display': feedback_display,
@@ -1088,6 +1112,9 @@ def build_run_detail_context(
                     'text': verdict_short,
                     'short': verdict_short,
                     'metrics': f'{time_ms}ms/{memory_mb_text}',
+                    'time_display': f'{time_ms}ms',
+                    'time_tone': time_tone,
+                    'memory_display': memory_mb_text,
                     'kind': _run_cell_kind(verdict, expected_behavior),
                     'text_tone': _run_cell_text_tone(verdict, expected_behavior),
                     'detail': detail_payload,
@@ -1180,7 +1207,7 @@ def build_run_detail_context(
                         max_memory_kb = memory_kb
         max_time_display = f'{max_time_ms}ms' if has_test_metrics else '-'
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else '-'
-        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_text_tone': result_text_tone, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
+        column_payload = {'id': run_id, 'artifact_verification_id': artifact_verification_id, 'title': title, 'source': source_for_display or '-', 'source_href': source_href, 'task_kind': task_kind, 'is_main_correct_run': bool(is_main_correct_run), 'status': status, 'mode': mode, 'created_at': created_at, 'finished_at': finished_at, 'summary': summary, 'has_run_row': bool(row is not None), 'tests_map': tests_map, 'compile_log': summary.get('compile_log') or '', 'compile_diagnostics': summary.get('compile_diagnostics') or [], 'error': summary.get('error') or '', 'error_display': run_error_display(summary.get('error') or ''), 'tests_total': int(summary.get('tests_total') or len(tests_map)), 'tests_truncated': bool(summary.get('tests_truncated')), 'expected_behavior': expected_behavior, 'expected_behavior_label': expected_behavior_label(expected_behavior), 'expected_display': expected_display, 'expected_is_ac_only': bool(expected_is_ac_only), 'got_short': got_short, 'got_display': got_display, 'result_kind': result_kind, 'result_text_tone': result_text_tone, 'result_tone_class': result_tone_class, 'expected_mismatch': bool(expected_mismatch), 'matched': bool(matched), 'completed': bool(completed), 'passed_all_tests': bool(observed_pass), 'match_reason': (match_reason or ''), 'execution_skipped': bool(execution_skipped), 'execution_skipped_reason': execution_skipped_reason, 'max_time_ms': int(max_time_ms), 'max_time_display': max_time_display, 'max_time_tone': max_time_tone, 'max_memory_kb': int(max_memory_kb), 'max_memory_display': max_memory_display}
         if not _is_solution_column_source(source_for_display):
             if include_row_details and task_kind in {_TASK_KIND_SOLUTION_RUN, _TASK_KIND_MAIN_CORRECT}:
                 pass
@@ -1338,6 +1365,9 @@ def build_run_detail_context(
                         'text': (cell.get('text') or '--'),
                         'short': (cell.get('short') or cell.get('text') or '--'),
                         'metrics': (cell.get('metrics') or '-'),
+                        'time_display': (cell.get('time_display') or ''),
+                        'time_tone': (cell.get('time_tone') or ''),
+                        'memory_display': (cell.get('memory_display') or ''),
                         'kind': (cell.get('kind') or 'neutral'),
                         'text_tone': (cell.get('text_tone') or ''),
                         'detail': None,
@@ -1502,7 +1532,19 @@ def build_run_detail_context(
                     if interactive_mode and output_preview is not None:
                         final_row_payload['interactive_transcript'] = _interactive_transcript_preview(output_preview)
                     detail_payload['final_row'] = final_row_payload
-                cells.append({'text': (cell['text']), 'short': (cell.get('short') or cell.get('text') or '--'), 'metrics': (cell.get('metrics') or '-'), 'kind': (cell['kind']), 'text_tone': (cell.get('text_tone') or ''), 'detail': detail_payload})
+                cells.append(
+                    {
+                        'text': (cell['text']),
+                        'short': (cell.get('short') or cell.get('text') or '--'),
+                        'metrics': (cell.get('metrics') or '-'),
+                        'time_display': (cell.get('time_display') or ''),
+                        'time_tone': (cell.get('time_tone') or ''),
+                        'memory_display': (cell.get('memory_display') or ''),
+                        'kind': (cell['kind']),
+                        'text_tone': (cell.get('text_tone') or ''),
+                        'detail': detail_payload,
+                    }
+                )
             if detail_is_main_correct_run:
                 for cell in cells:
                     detail_payload = cell.get('detail') or {}

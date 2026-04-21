@@ -179,10 +179,10 @@
         {% set col = detail_columns[loop.index0] %}
         <td class="vcell tone-{{ cell.kind }}">
           {% if row.has_detail %}
-          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode{{ ' vcode-info' if cell.text_tone == 'info' else '' }}">{{ cell.short }}</span>{% if cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}</a>
+          <a href="#run-test-detail-popup" data-popup-open="run-test-detail-popup" data-test-name="{{ row.test_name }}" data-run-id="{{ col.id }}" data-solution-title="{{ col.title }}"><span class="vcode{{ ' vcode-info' if cell.text_tone == 'info' else '' }}">{{ cell.short }}</span>{% if cell.time_display and cell.memory_display %}<span class="vmeta{{ ' vmeta-warn' if cell.time_tone == 'warn' else '' }}">{{ cell.time_display }}</span><span class="vmeta vmeta-join">/{{ cell.memory_display }}</span>{% elif cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}</a>
           {% else %}
           <span class="vcode{{ ' vcode-info' if cell.text_tone == 'info' else '' }}">{{ cell.short }}</span>
-          {% if cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
+          {% if cell.time_display and cell.memory_display %}<span class="vmeta{{ ' vmeta-warn' if cell.time_tone == 'warn' else '' }}">{{ cell.time_display }}</span><span class="vmeta vmeta-join">/{{ cell.memory_display }}</span>{% elif cell.metrics and cell.metrics != '-' %}<span class="vmeta">{{ cell.metrics }}</span>{% endif %}
           {% endif %}
         </td>
         {% endfor %}
@@ -219,7 +219,7 @@
           {% for col in detail_columns %}
           <td class="{{ col.result_tone_class }} {{ 'tone-fail' if col.expected_mismatch else '' }}">
             <div class="stat-line stat-main">{{ col.got_display or col.got_short or '-' }}</div>
-            <div class="stat-line stat-sub">{{ col.max_time_display or '-' }} / {{ col.max_memory_display or '-' }}</div>
+            <div class="stat-line stat-sub"><span class="{{ 'vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span> / {{ col.max_memory_display or '-' }}</div>
           </td>
           {% endfor %}
         </tr>

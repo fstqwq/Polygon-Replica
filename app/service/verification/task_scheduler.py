@@ -34,6 +34,7 @@ class TaskExecutionResult:
     feedback_text: str
     output_ref: str
     fail_flag_reason: str = ""
+    answer_correct: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,7 @@ def _save_result(
         error_text=result.error_text,
         feedback_text=result.feedback_text,
         output_ref=result.output_ref,
+        answer_correct=result.answer_correct,
     )
     if result.fail_flag_reason:
         task_store.set_fail_flag(verification_id, reason=result.fail_flag_reason)

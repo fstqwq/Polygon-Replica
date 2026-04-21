@@ -114,6 +114,7 @@ class _InMemoryTaskStore:
         error_text: str,
         feedback_text: str,
         output_ref: str,
+        answer_correct: bool = False,
     ) -> None:
         with self._lock:
             for row in self._rows:
@@ -129,6 +130,7 @@ class _InMemoryTaskStore:
                 row["error_text"] = error_text
                 row["feedback_text"] = feedback_text
                 row["output_ref"] = output_ref
+                row["answer_correct"] = bool(answer_correct)
                 return
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
@@ -251,18 +253,59 @@ class TestVerificationTaskScheduler(SmokeBase):
             BOUNDARY_COVERAGE_CHECK,
             CUSTOM_SAMPLE_OUTPUT_CHECK,
             EMPTY_OUTPUT_STABILITY_CHECK,
+            SUMMARY_RUNTIME_THRESHOLD_CHECK,
             UNICODE_OUTPUT_STABILITY_CHECK,
             planned_sanity_checks,
         )
 
         self.assertEqual(
             planned_sanity_checks([_sanity_test_plan()]),
-            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, BOUNDARY_COVERAGE_CHECK],
+            [
+                EMPTY_OUTPUT_STABILITY_CHECK,
+                UNICODE_OUTPUT_STABILITY_CHECK,
+                SUMMARY_RUNTIME_THRESHOLD_CHECK,
+                BOUNDARY_COVERAGE_CHECK,
+            ],
         )
         self.assertEqual(
             planned_sanity_checks([_sanity_test_plan(sample=True, sample_output_text="ok\n")]),
-            [EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, BOUNDARY_COVERAGE_CHECK, CUSTOM_SAMPLE_OUTPUT_CHECK],
+            [
+                EMPTY_OUTPUT_STABILITY_CHECK,
+                UNICODE_OUTPUT_STABILITY_CHECK,
+                SUMMARY_RUNTIME_THRESHOLD_CHECK,
+                BOUNDARY_COVERAGE_CHECK,
+                CUSTOM_SAMPLE_OUTPUT_CHECK,
+            ],
         )
+
+    def test_summary_runtime_threshold_marks_answer_correct_points(self) -> None:
+        from app.impl.workspace.runtime_threshold import evaluate_summary_runtime_threshold
+
+        report = evaluate_summary_runtime_threshold(
+            summary={
+                "tests": [
+                    {"test": "001.in", "verdict": "OK", "time_user_ms": 600, "answer_correct": True},
+                    {"test": "002.in", "verdict": "TL", "time_user_ms": 1200, "answer_correct": True},
+                    {"test": "003.in", "verdict": "WA", "time_user_ms": 700, "answer_correct": False},
+                ]
+            },
+            source="solutions/slow.cpp",
+            time_limit_ms=1000,
+        )
+        self.assertEqual(report.highlighted_tests, frozenset({"001.in", "002.in"}))
+        self.assertIsNone(report.warning_hit)
+
+        all_correct_report = evaluate_summary_runtime_threshold(
+            summary={
+                "tests": [
+                    {"test": "001.in", "verdict": "OK", "time_user_ms": 600, "answer_correct": True},
+                    {"test": "002.in", "verdict": "OK", "time_user_ms": 1200, "answer_correct": True},
+                ]
+            },
+            source="solutions/accepted.cpp",
+            time_limit_ms=1000,
+        )
+        self.assertIsNotNone(all_correct_report.warning_hit)
 
     def test_boundary_coverage_aggregates_testlib_overview_logs(self) -> None:
         from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
@@ -408,6 +451,49 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.checked_count, 3)
         self.assertIn("n max=3", result.error)
         self.assertIn("n max=3", (logs_dir / "boundary.log").read_text(encoding="utf-8"))
+
+    def test_sanity_runtime_threshold_warning_uses_answer_correct_summary(self) -> None:
+        from app.impl.workspace.sanity_checks import SUMMARY_RUNTIME_THRESHOLD_CHECK, run_verification_sanity_checks
+
+        verification_id = self.random_id("ver-sanity-runtime")
+        logs_dir = config.fs_manager.prepare_verification_root(verification_id).resolve() / "logs"
+
+        def _fake_enqueue_task(**kwargs: object) -> str:
+            return "jt-runtime"
+
+        def _fake_wait_for_task_case_result(_task_id: str, test_name: str) -> dict[str, object]:
+            return {"summary": {"tests": [{"test": test_name, "verdict": "WA", "message": "rejected"}]}}
+
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
+            config.judgehost_task_service,
+            "wait_for_task_case_result",
+            side_effect=_fake_wait_for_task_case_result,
+        ):
+            result = run_verification_sanity_checks(
+                problem=self.problem,
+                user=self.user,
+                verification_id=verification_id,
+                mode="pass-fail",
+                logs_dir=logs_dir,
+                test_plans=[_sanity_test_plan(test_name="001.in"), _sanity_test_plan(test_name="002.in")],
+                runtime_columns=[
+                    {
+                        "source": "solutions/accepted.cpp",
+                        "summary_has_tl": False,
+                        "summary": {
+                            "tests": [
+                                {"test": "001.in", "verdict": "OK", "time_user_ms": 600, "answer_correct": True},
+                                {"test": "002.in", "verdict": "OK", "time_user_ms": 1200, "answer_correct": True},
+                            ]
+                        },
+                    }
+                ],
+                time_limit_ms=1000,
+            )
+
+        self.assertEqual(result.status, "warning")
+        self.assertEqual(result.check_name, SUMMARY_RUNTIME_THRESHOLD_CHECK)
+        self.assertEqual(result.error, "solutions/accepted.cpp: accepted solution is close to the time limit.")
 
     def test_sanity_stability_probe_fails_fast_on_ac(self) -> None:
         from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
@@ -1327,8 +1413,10 @@ class TestVerificationTaskScheduler(SmokeBase):
             error_text=oversized,
             feedback_text=oversized,
             output_ref="",
+            answer_correct=True,
         )
         row = task_store.list_rows(verification_id)[0]
+        self.assertTrue(bool(row["answer_correct"]))
         limit = int(getattr(config.constants, "AUX_DISPLAY_TEXT_LIMIT_BYTES", 2048) or 2048)
         for key in ("compile_log", "error_text", "feedback_text"):
             value = str(row[key] or "")

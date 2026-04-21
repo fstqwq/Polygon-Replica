@@ -38,6 +38,7 @@ class _TaskSummaryParts:
     error_text: str
     feedback_text: str
     output_ref: str
+    answer_correct: bool
 
 
 def _normalized_error_text(value: str) -> str:
@@ -166,6 +167,7 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
     tests = cast(list[dict[str, object]], summary.get("tests") or [])
     feedback_source = ""
     output_ref = ""
+    answer_correct = False
     runtime_sec: float | None = None
     cpu_sec: float | None = None
     wall_sec: float | None = None
@@ -174,6 +176,7 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
         test_row = dict(tests[-1])
         feedback_source = str(test_row.get("message") or "")
         output_ref = str(test_row.get("output_ref") or "")
+        answer_correct = bool(test_row.get("answer_correct"))
         cpu_ms = int(test_row.get("time_user_ms") or test_row.get("time_ms") or 0)
         wall_ms = int(test_row.get("time_wall_ms") or cpu_ms)
         runtime_ms = int(test_row.get("time_ms") or cpu_ms)
@@ -196,6 +199,7 @@ def _summary_parts(summary: dict[str, object], *, run_status: str, error_text: s
         error_text=final_error_text,
         feedback_text=feedback_text,
         output_ref=output_ref,
+        answer_correct=answer_correct,
     )
 
 
@@ -233,6 +237,7 @@ def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
         message=feedback_text,
         output_ref=str(row["output_ref"] or ""),
         feedback_files=[],
+        answer_correct=bool(row.get("answer_correct")),
     )
 
 
@@ -281,6 +286,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 if task_kind == TASK_MAIN_CORRECT
                 else ""
             ),
+            answer_correct=False,
         )
 
     if task_kind == TASK_GENERATE_INPUT:
@@ -306,6 +312,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 feedback_text=parts.feedback_text,
                 output_ref=materialized_output_ref,
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_reason),
+                answer_correct=parts.answer_correct,
             )
         output_blob = materialized_output_blob
         if output_blob is None:
@@ -326,6 +333,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 feedback_text=parts.feedback_text,
                 output_ref=materialized_output_ref,
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
+                answer_correct=parts.answer_correct,
             )
         if _generated_input_truncated(output_blob):
             fail_message = f"generated input output was truncated for {test_name}"
@@ -345,6 +353,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 feedback_text=fail_message,
                 output_ref=materialized_output_ref,
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
+                answer_correct=parts.answer_correct,
             )
         _persist_verification_artifact(
             verification_id=verification_id,
@@ -368,6 +377,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
             error_text=parts.error_text,
             feedback_text=parts.feedback_text,
             output_ref=materialized_output_ref,
+            answer_correct=parts.answer_correct,
         )
 
     task_status = VerificationTaskStore.TASK_DONE if result_status == Status.OK.value else VerificationTaskStore.TASK_FAILED
@@ -396,6 +406,7 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
                 feedback_text=parts.feedback_text,
                 output_ref=materialized_output_ref,
                 fail_flag_reason=verification_task_fail_reason(task_row, error_text=fail_message),
+                answer_correct=parts.answer_correct,
             )
         _persist_verification_artifact(
             verification_id=verification_id,
@@ -420,4 +431,5 @@ def finalize_verification_task_result(task_row: VerificationTaskRow, *, result: 
         feedback_text=parts.feedback_text,
         output_ref=materialized_output_ref,
         fail_flag_reason=fail_flag_reason,
+        answer_correct=parts.answer_correct,
     )

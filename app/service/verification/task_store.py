@@ -29,6 +29,7 @@ class VerificationTaskRow(TypedDict):
     cpu_sec: float | None
     wall_sec: float | None
     memory_kb: int | None
+    answer_correct: bool
     compile_log: str
     diagnostics_json: str
     error_text: str
@@ -161,9 +162,9 @@ class VerificationTaskStore:
                     """
                     INSERT INTO verification_tasks(
                         id,verification_id,predecessor_task_id,task_kind,source_path,logical_run_id,test_name,expected_behavior,
-                        final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,compile_log,diagnostics_json,error_text,feedback_text,output_ref,finished_at,created_at
+                        final_status,verdict,runtime_sec,cpu_sec,wall_sec,memory_kb,answer_correct,compile_log,diagnostics_json,error_text,feedback_text,output_ref,finished_at,created_at
                     )
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     [
                         task_id,
@@ -180,6 +181,7 @@ class VerificationTaskStore:
                         cpu_sec,
                         wall_sec,
                         memory_kb,
+                        1 if bool(item.get("answer_correct")) else 0,
                         self._normalize_display_text(str(item.get("compile_log") or "")),
                         normalize_diagnostics_json_text(
                             str(item.get("diagnostics_json") or "[]"),
@@ -253,6 +255,7 @@ class VerificationTaskStore:
             "cpu_sec": cast(float | None, row["cpu_sec"]),
             "wall_sec": cast(float | None, row["wall_sec"]),
             "memory_kb": cast(int | None, row["memory_kb"]),
+            "answer_correct": bool(row["answer_correct"]),
             "compile_log": str(row["compile_log"] or ""),
             "diagnostics_json": str(row["diagnostics_json"] or "[]"),
             "error_text": str(row["error_text"] or ""),
@@ -388,6 +391,7 @@ class VerificationTaskStore:
         error_text: str,
         feedback_text: str,
         output_ref: str,
+        answer_correct: bool = False,
     ) -> None:
         logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
         finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
@@ -402,7 +406,7 @@ class VerificationTaskStore:
         self.db.execute(
             """
             UPDATE verification_tasks
-            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=?
+            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, answer_correct=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=?
             WHERE id=? AND final_status=''
             """,
             [
@@ -412,6 +416,7 @@ class VerificationTaskStore:
                 cpu_sec,
                 wall_sec,
                 memory_kb,
+                1 if bool(answer_correct) else 0,
                 logical_run_id,
                 safe_compile_log,
                 safe_diagnostics_json,
@@ -439,6 +444,7 @@ class VerificationTaskStore:
         error_text: str,
         feedback_text: str,
         output_ref: str,
+        answer_correct: bool = False,
     ) -> None:
         logical_run_id = self._logical_run_id_by_task_id.get(task_id, run_id)
         finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
@@ -453,7 +459,7 @@ class VerificationTaskStore:
         self.db.execute(
             """
             UPDATE verification_tasks
-            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=COALESCE(?, finished_at)
+            SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?, answer_correct=?, logical_run_id=?, compile_log=?, diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?, finished_at=COALESCE(?, finished_at)
             WHERE id=?
             """,
             [
@@ -463,6 +469,7 @@ class VerificationTaskStore:
                 cpu_sec,
                 wall_sec,
                 memory_kb,
+                1 if bool(answer_correct) else 0,
                 logical_run_id,
                 safe_compile_log,
                 safe_diagnostics_json,

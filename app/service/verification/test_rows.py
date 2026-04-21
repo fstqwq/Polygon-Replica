@@ -17,6 +17,7 @@ def build_verification_test_pass_row(
     output_ref: str = "",
     runresult: str = "",
     pass_number: int = 1,
+    answer_correct: bool = False,
 ) -> VerificationTestPassRow:
     resolved_time_ms = max(0, int(0 if time_ms is None else time_ms))
     resolved_time_user_ms = max(0, int(resolved_time_ms if time_user_ms is None else time_user_ms))
@@ -31,6 +32,7 @@ def build_verification_test_pass_row(
         "memory_kb": resolved_memory_kb,
         "feedback": feedback or "",
         "output_ref": output_ref or "",
+        "answer_correct": bool(answer_correct),
     }
     if runresult:
         row["runresult"] = runresult
@@ -50,6 +52,7 @@ def build_verification_test_row(
     feedback_files: list[str] | None = None,
     passes: list[VerificationTestPassRow] | None = None,
     runresult: str = "",
+    answer_correct: bool = False,
 ) -> VerificationTestRow:
     canonical_passes = list(passes or [])
     if not canonical_passes:
@@ -63,6 +66,7 @@ def build_verification_test_row(
                 feedback=message,
                 output_ref=output_ref,
                 runresult=runresult,
+                answer_correct=answer_correct,
             )
         ]
     final_pass = canonical_passes[-1]
@@ -96,6 +100,7 @@ def build_verification_test_row(
         "output_ref": resolved_output_ref,
         "feedback_files": list(feedback_files or []),
         "passes": canonical_passes,
+        "answer_correct": bool(answer_correct or final_pass.get("answer_correct")),
     }
     if runresult:
         row["runresult"] = runresult
@@ -127,6 +132,7 @@ def canonicalize_verification_test_rows(raw_tests: list[dict[str, object]]) -> l
                     ),
                     runresult=str(pass_item.get("runresult") or ""),
                     pass_number=index,
+                    answer_correct=bool(pass_item.get("answer_correct")),
                 )
             )
         rows.append(
@@ -142,6 +148,7 @@ def canonicalize_verification_test_rows(raw_tests: list[dict[str, object]]) -> l
                 feedback_files=list(cast(list[str], item.get("feedback_files") or [])),
                 passes=passes,
                 runresult=str(item.get("runresult") or ""),
+                answer_correct=bool(item.get("answer_correct")),
             )
         )
     rows.sort(key=lambda item: str(item.get("test") or ""))

@@ -4694,6 +4694,150 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("empty output probe was accepted", html)
         self.assertNotIn("sanity_status:", html)
 
+    def test_run_details_marks_answer_correct_runtime_threshold_times(self) -> None:
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        verification_id = f"ver-runtime-threshold-{uuid.uuid4().hex[:8]}"
+        slow_run_id = f"run-runtime-threshold-{uuid.uuid4().hex[:8]}"
+        mixed_run_id = f"run-runtime-mixed-{uuid.uuid4().hex[:8]}"
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            build_id=self.random_id("b-runtime-threshold"),
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-04-17T00:00:00Z",
+            finished_at="2026-04-17T00:00:02Z",
+            runs=[],
+            summary_extra={
+                "mode": "pass-fail",
+                "selected_test_names": ["001.in", "002.in", "003.in"],
+                "source_paths": ["solutions/slow.cpp", "solutions/mixed.cpp"],
+                "sanity_status": "warning",
+                "sanity_checked_count": 8,
+                "sanity_checks": ["empty_output_stability", "unicode_output_stability", "summary_runtime_threshold", "boundary_coverage"],
+                "validation_status": "warning",
+                "validated_count": 8,
+                "failed_step": "sanity",
+                "failed_check": "summary_runtime_threshold",
+                "failed_test": "",
+                "error": "solutions/slow.cpp: accepted solution is close to the time limit.",
+                "run_config_json": '{"time_limit_ms":1000,"memory_limit_mb":1024,"pass_limit":1}',
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-runtime-1-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/slow.cpp",
+                    "logical_run_id": slow_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "cpu_sec": 0.6,
+                    "runtime_sec": 0.6,
+                    "wall_sec": 0.6,
+                    "memory_kb": 1024,
+                    "answer_correct": True,
+                },
+                {
+                    "id": f"vt-runtime-2-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/slow.cpp",
+                    "logical_run_id": slow_run_id,
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "cpu_sec": 1.2,
+                    "runtime_sec": 1.2,
+                    "wall_sec": 1.2,
+                    "memory_kb": 1024,
+                    "answer_correct": True,
+                },
+                {
+                    "id": f"vt-runtime-3-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/slow.cpp",
+                    "logical_run_id": slow_run_id,
+                    "test_name": "003.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "cpu_sec": 0.2,
+                    "runtime_sec": 0.2,
+                    "wall_sec": 0.2,
+                    "memory_kb": 1024,
+                    "answer_correct": True,
+                },
+                {
+                    "id": f"vt-runtime-4-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/mixed.cpp",
+                    "logical_run_id": mixed_run_id,
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "cpu_sec": 0.4,
+                    "runtime_sec": 0.4,
+                    "wall_sec": 0.4,
+                    "memory_kb": 1024,
+                    "answer_correct": True,
+                },
+                {
+                    "id": f"vt-runtime-5-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/mixed.cpp",
+                    "logical_run_id": mixed_run_id,
+                    "test_name": "002.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "TL",
+                    "cpu_sec": 1.2,
+                    "runtime_sec": 1.2,
+                    "wall_sec": 1.2,
+                    "memory_kb": 1024,
+                    "answer_correct": False,
+                },
+                {
+                    "id": f"vt-runtime-6-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/mixed.cpp",
+                    "logical_run_id": mixed_run_id,
+                    "test_name": "003.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "WA",
+                    "cpu_sec": 0.7,
+                    "runtime_sec": 0.7,
+                    "wall_sec": 0.7,
+                    "memory_kb": 1024,
+                    "answer_correct": False,
+                },
+            ],
+            edges=[],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('vmeta-warn">600ms</span>', html)
+        self.assertIn('vmeta-warn">1200ms</span>', html)
+        self.assertNotIn('vmeta-warn">700ms</span>', html)
+        self.assertIn("Summary runtime threshold", html)
+        self.assertIn("solutions/slow.cpp: accepted solution is close to the time limit.", html)
+        self.assertNotIn("TL(AC)", html)
+
     def test_run_list_and_submenu_show_sanity_suffix_without_failed_row(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])

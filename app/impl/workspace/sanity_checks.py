@@ -13,6 +13,11 @@ from .boundary_coverage import (
     boundary_coverage_from_feedback,
 )
 from .sample_output_validation import _result_verdict, validate_custom_sample_outputs
+from .runtime_threshold import (
+    SUMMARY_RUNTIME_THRESHOLD_CHECK,
+    evaluate_summary_runtime_threshold,
+    runtime_threshold_reason,
+)
 from .verification_dag_plan import VerificationTestPlan
 
 SANITY_PENDING = "pending"
@@ -45,7 +50,14 @@ class _StabilityProbe:
 def planned_sanity_checks(test_plans: list[VerificationTestPlan]) -> list[str]:
     checks: list[str] = []
     if test_plans:
-        checks.extend([EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, BOUNDARY_COVERAGE_CHECK])
+        checks.extend(
+            [
+                EMPTY_OUTPUT_STABILITY_CHECK,
+                UNICODE_OUTPUT_STABILITY_CHECK,
+                SUMMARY_RUNTIME_THRESHOLD_CHECK,
+                BOUNDARY_COVERAGE_CHECK,
+            ]
+        )
     for plan in test_plans:
         if plan.sample and plan.sample_output_text and plan.sample_output_validate:
             checks.append(CUSTOM_SAMPLE_OUTPUT_CHECK)
@@ -236,6 +248,8 @@ def run_verification_sanity_checks(
     accepted_source_bytes: bytes = b"",
     run_verification_payload_base: dict[str, object] | None = None,
     generate_feedback_by_test: dict[str, str] | None = None,
+    runtime_columns: list[dict[str, object]] | None = None,
+    time_limit_ms: int = 0,
 ) -> VerificationSanityResult:
     checks = planned_sanity_checks(test_plans)
     if not checks:
@@ -279,6 +293,31 @@ def run_verification_sanity_checks(
                 failed_test=result.failed_test,
                 error=result.error,
             )
+    if SUMMARY_RUNTIME_THRESHOLD_CHECK in checks:
+        runtime_checked_count = 0
+        runtime_log = logs_dir / "summary-runtime-threshold.log"
+        runtime_log.parent.mkdir(parents=True, exist_ok=True)
+        for column in list(runtime_columns or []):
+            summary = dict(column.get("summary") or {})
+            source = str(column.get("source") or summary.get("source") or "")
+            report = evaluate_summary_runtime_threshold(
+                summary=summary,
+                source=source,
+                time_limit_ms=int(time_limit_ms),
+            )
+            runtime_checked_count += int(report.checked_count)
+            if report.warning_hit is not None:
+                reason = runtime_threshold_reason(report.warning_hit, summary_has_tl=bool(column.get("summary_has_tl")))
+                runtime_log.write_text(reason + "\n", encoding="utf-8")
+                return VerificationSanityResult(
+                    status=SANITY_WARNING,
+                    check_name=SUMMARY_RUNTIME_THRESHOLD_CHECK,
+                    checked_count=checked_count + runtime_checked_count,
+                    failed_test="",
+                    error=reason,
+                )
+        checked_count += runtime_checked_count
+        runtime_log.write_text("summary runtime threshold ok\n", encoding="utf-8")
     boundary_result = boundary_coverage_from_feedback(
         feedback_by_test=dict(generate_feedback_by_test or {}),
         test_plans=test_plans,

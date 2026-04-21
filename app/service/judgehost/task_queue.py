@@ -8,6 +8,8 @@ from app.db import now_iso
 from app.service.judgehost.runtime import (
     domjudge_feedback_text_and_files,
     domjudge_feedback_text_from_text,
+    domjudge_parse_int,
+    domjudge_parse_meta_text,
     domjudge_verdict_from_runresult,
     now_iso_after,
     parse_iso_utc,
@@ -305,6 +307,18 @@ class TaskQueue:
             return debug_text, feedback_files
         return "", feedback_files
 
+    def _case_answer_correct(self, case_row: dict[str, object]) -> bool:
+        work_root_token = str(case_row.get("work_root") or "")
+        compare_metadata_rel = str(case_row.get("compare_metadata_rel") or "")
+        if not work_root_token or not compare_metadata_rel:
+            return False
+        work_root = Path(work_root_token).resolve()
+        compare_meta_blob = self._toolkit.read_artifact_blob(work_root, compare_metadata_rel)
+        if not compare_meta_blob:
+            return False
+        compare_meta = domjudge_parse_meta_text(compare_meta_blob.decode("utf-8", errors="replace"))
+        return domjudge_parse_int(compare_meta.get("exitcode"), -1) == 42
+
     def report_result(
         self,
         *,
@@ -488,6 +502,7 @@ class TaskQueue:
                         selected_test_row = dict(item)
                         break
             if selected_test_row is None:
+                answer_correct = self._case_answer_correct(case_row)
                 cpu_ms = max(0, int(round(float(case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
                 wall_ms = max(0, int(round(float(case_row["wall_sec"] or case_row["cpu_sec"] or case_row["runtime_sec"] or 0.0) * 1000.0)))
                 memory_kb = max(0, int(case_row["memory_kb"] or 0))
@@ -512,12 +527,17 @@ class TaskQueue:
                             feedback=feedback_text,
                             output_ref=str(case_row["output_run_rel"] or ""),
                             runresult=str(case_row["runresult"] or ""),
+                            answer_correct=answer_correct,
                         )
                     ],
                     runresult=str(case_row["runresult"] or ""),
+                    answer_correct=answer_correct,
                 )
                 recovered_error = feedback_text
             else:
+                selected_test_row["answer_correct"] = bool(
+                    selected_test_row.get("answer_correct") or self._case_answer_correct(case_row)
+                )
                 recovered_error = str(selected_test_row.get("message") or "")
                 if not recovered_error:
                     feedback_text, feedback_files = self._case_feedback_text_and_files(case_row)

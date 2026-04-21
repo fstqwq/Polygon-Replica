@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 _diag_logger = logging.getLogger("uvicorn.error")
 
 
+def _answer_correct_from_compare_exit_code(compare_exit_code: int) -> bool:
+    return int(compare_exit_code) == 42
+
+
 class ResultProcessor:
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
@@ -105,6 +109,7 @@ class ResultProcessor:
         run_status: str = "running",
         runresult: str = "",
         feedback_files: list[str] | None = None,
+        answer_correct: bool = False,
     ) -> None:
         if not task_id:
             return
@@ -138,9 +143,11 @@ class ResultProcessor:
                     feedback=feedback_text,
                     output_ref=output_ref,
                     runresult=runresult,
+                    answer_correct=answer_correct,
                 )
             ],
             runresult=runresult,
+            answer_correct=answer_correct,
         )
         upsert_verification_test_row(
             summary,
@@ -370,6 +377,7 @@ class ResultProcessor:
                 error_text=final_result.error_text,
                 feedback_text=final_result.feedback_text,
                 output_ref=final_result.output_ref,
+                answer_correct=final_result.answer_correct,
             )
             if final_result.fail_flag_reason:
                 verification_task_store.set_fail_flag(
@@ -468,6 +476,12 @@ class ResultProcessor:
                 team_message_rel=row["team_message_rel"],
             )
             output_ref = domjudge_text(row["output_run_rel"])
+            compare_meta_blob = self._toolkit.read_artifact_blob(work_root, domjudge_text(row["compare_metadata_rel"]))
+            compare_exit_code = -1
+            if compare_meta_blob:
+                compare_meta = domjudge_parse_meta_text(compare_meta_blob.decode("utf-8", errors="replace"))
+                compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
+            answer_correct = _answer_correct_from_compare_exit_code(compare_exit_code)
             tests.append(
                 build_verification_test_row(
                     test_name=test_name,
@@ -489,9 +503,11 @@ class ResultProcessor:
                             feedback=feedback_text,
                             output_ref=output_ref,
                             runresult=runresult,
+                            answer_correct=answer_correct,
                         )
                     ],
                     runresult=runresult,
+                    answer_correct=answer_correct,
                 )
             )
             if (
@@ -708,6 +724,7 @@ class ResultProcessor:
                 compare_meta_blob.decode("utf-8", errors="replace")
             )
             compare_exit_code = domjudge_parse_int(compare_meta.get("exitcode"), -1)
+        answer_correct = _answer_correct_from_compare_exit_code(compare_exit_code)
 
         score_text = domjudge_text(payload.get("score"))
 
@@ -892,6 +909,7 @@ class ResultProcessor:
                     run_status="running",
                     runresult=runresult,
                     feedback_files=feedback_files,
+                    answer_correct=answer_correct,
                 )
             except Exception:
                 logger.exception(
@@ -1207,6 +1225,7 @@ class ResultProcessor:
                                 error_text=final_result.error_text,
                                 feedback_text=final_result.feedback_text,
                                 output_ref=final_result.output_ref,
+                                answer_correct=final_result.answer_correct,
                             )
                             verification_id = str(verification_task_row["verification_id"] or "")
                             if verification_id and final_result.fail_flag_reason:
