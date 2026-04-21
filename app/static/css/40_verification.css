@@ -150,6 +150,10 @@ section.verification-header-section {
   margin: 0;
 }
 
+.verification-task-sanity-line a {
+  color: inherit;
+}
+
 .verification-task-status-secondary {
   display: flex;
   align-items: center;
@@ -505,6 +509,8 @@ section.verification-header-section {
 }
 
 .verification-detail-table > thead > tr:first-child > th {
+  background: var(--surface-info);
+  color: var(--tag-info-fg);
   text-align: center;
 }
 
@@ -514,40 +520,12 @@ section.verification-header-section {
   font-weight: 500;
 }
 
-.verification-detail-corner-status-cell {
-  background: var(--surface);
-}
-
-.verification-detail-sanity-cell {
-  background: var(--surface);
-  user-select: none;
-  white-space: nowrap;
-}
-
-.verification-detail-sanity-link {
-  display: inline-block;
-  color: inherit;
-  text-decoration: none;
-}
-
-.verification-detail-sanity-cell-warning,
-.verification-detail-sanity-cell-failed {
-  background: var(--surface-warning);
-}
-
 .verification-detail-sanity-state {
   margin-left: 3px;
   text-transform: lowercase;
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
-}
-
-.verification-detail-sanity-cell .stat-line {
-  display: inline;
-  white-space: nowrap;
-  overflow-wrap: normal;
-  word-break: normal;
 }
 
 .verification-detail-sanity-state.ok {
@@ -568,13 +546,6 @@ section.verification-header-section {
 .verification-detail-sanity-state.info {
   color: var(--tag-info-fg);
   font-weight: 700;
-}
-
-.verification-detail-corner-status {
-  display: inline-block;
-  font-weight: 700;
-  line-height: 1.15;
-  text-transform: lowercase;
 }
 
 .verification-detail-corner-structure-cell {

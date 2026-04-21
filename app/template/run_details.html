@@ -9,7 +9,7 @@
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 
 <section class="verification-header-section">
-  {% if detail_status or detail_task_counts or detail_fail_flag or detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
+  {% if detail_status or detail_task_counts or detail_fail_flag or detail_sanity.available or detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
   <div class="preview-card verification-task-status-card">
     <div class="preview-head verification-task-status-head">
       <div class="verification-task-status-title">
@@ -52,6 +52,27 @@
     </div>
     <div class="verification-task-status-grid">
       <div class="verification-task-status-main">
+        {% if detail_sanity.available %}
+        {% set sanity_status = detail_sanity.status or 'no' %}
+        <p class="verification-task-sanity-line">
+          <a href="#verification-sanity-popup" data-popup-open="verification-sanity-popup" title="Open sanity checks">
+            Sanity
+            {% if sanity_status in ["passed", "ok"] %}
+            <span class="verification-detail-sanity-state ok">{{ sanity_status }}</span>
+            {% elif sanity_status == "failed" %}
+            <span class="verification-detail-sanity-state warn">{{ sanity_status }}</span>
+            {% elif sanity_status == "warning" %}
+            <span class="verification-detail-sanity-state warn">{{ sanity_status }}</span>
+            {% elif sanity_status in ["running", "pending"] %}
+            <span class="verification-detail-sanity-state info">{{ sanity_status }}</span>
+            {% elif sanity_status in ["skipped", "none", "unknown", "no"] %}
+            <span class="verification-detail-sanity-state muted">{{ sanity_status }}</span>
+            {% else %}
+            <span class="verification-detail-sanity-state">{{ sanity_status }}</span>
+            {% endif %}
+          </a>
+        </p>
+        {% endif %}
         {% if detail_fail_flag and detail_status == "failed" %}
         <p class="verification-task-fail">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
         {% elif detail_fail_flag and detail_status == "running" %}
@@ -92,42 +113,7 @@
       </colgroup>
       <thead>
         <tr>
-          {% if detail_sanity.available %}
-          {% set sanity_status = detail_sanity.status or 'no' %}
-          <th class="verification-detail-corner-status-cell verification-detail-sanity-cell verification-detail-sanity-cell-{{ sanity_status }}">
-            <a href="#verification-sanity-popup" class="verification-detail-sanity-link" data-popup-open="verification-sanity-popup" title="Open sanity checks">
-            <span class="stat-line stat-main">Sanity</span>
-            {% if sanity_status in ["passed", "ok"] %}
-            <span class="stat-line stat-sub verification-detail-sanity-state ok">{{ sanity_status }}</span>
-            {% elif sanity_status == "failed" %}
-            <span class="stat-line stat-sub verification-detail-sanity-state warn">{{ sanity_status }}</span>
-            {% elif sanity_status == "warning" %}
-            <span class="stat-line stat-sub verification-detail-sanity-state warn">{{ sanity_status }}</span>
-            {% elif sanity_status in ["running", "pending"] %}
-            <span class="stat-line stat-sub verification-detail-sanity-state info">{{ sanity_status }}</span>
-            {% elif sanity_status in ["skipped", "none", "unknown", "no"] %}
-            <span class="stat-line stat-sub verification-detail-sanity-state muted">{{ sanity_status }}</span>
-            {% else %}
-            <span class="stat-line stat-sub verification-detail-sanity-state">{{ sanity_status }}</span>
-            {% endif %}
-            </a>
-          </th>
-          {% else %}
-          <th class="verification-detail-corner-status-cell">
-            {% set corner_status = detail_status or 'no' %}
-            {% if corner_status == "ok" %}
-            <span class="verification-detail-corner-status ok">{{ corner_status }}</span>
-            {% elif corner_status == "failed" %}
-            <span class="verification-detail-corner-status danger">{{ corner_status }}</span>
-            {% elif corner_status in ["running", "queued", "pending"] %}
-            <span class="verification-detail-corner-status info">{{ corner_status }}</span>
-            {% elif corner_status in ["cancelled", "skipped", "none", "unknown", "no"] %}
-            <span class="verification-detail-corner-status muted">{{ corner_status }}</span>
-            {% else %}
-            <span class="verification-detail-corner-status">{{ corner_status }}</span>
-            {% endif %}
-          </th>
-          {% endif %}
+          <th class="verification-detail-index-head">#</th>
           {% for col in detail_columns %}
           <th class="{{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}">
             {% if col.source_href %}
@@ -135,22 +121,6 @@
             {% else %}
             <span class="col-title">{{ col.title }}</span>
             {% endif %}
-          </th>
-          {% endfor %}
-        </tr>
-        <tr class="verification-detail-overview-row verification-detail-result-row">
-          <th class="verification-detail-corner-structure-cell">
-            <span class="stat-line stat-main verification-detail-label-nowrap">Result</span>
-            <span class="stat-line stat-sub verification-detail-label-nowrap">Expected</span>
-          </th>
-          {% for col in detail_columns %}
-          <th class="{{ col.result_tone_class }} {{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}{{ ' verification-detail-runtime-warn' if col.max_time_tone == 'warn' else '' }}">
-            <span class="stat-line stat-main">
-              <span class="{{ 'vcode-info' if col.result_text_tone == 'info' and not col.expected_mismatch else '' }}">{{ col.got_display or col.got_short }}</span>
-              <span class="verification-detail-inline-stats"><span class="{{ 'vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span>/{{ col.max_memory_display or '-' }}</span>
-            </span>
-            {% set expected_token = col.expected_display or '--' %}
-            <span class="stat-line stat-sub">{{ expected_token }}</span>
           </th>
           {% endfor %}
         </tr>
@@ -208,6 +178,24 @@
       </tr>
       {% endif %}
       </tbody>
+      <tfoot>
+        <tr class="verification-detail-overview-row verification-detail-result-row">
+          <th class="verification-detail-corner-structure-cell">
+            <span class="stat-line stat-main verification-detail-label-nowrap">Result</span>
+            <span class="stat-line stat-sub verification-detail-label-nowrap">Expected</span>
+          </th>
+          {% for col in detail_columns %}
+          <td class="{{ col.result_tone_class }} {{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}{{ ' verification-detail-runtime-warn' if col.max_time_tone == 'warn' else '' }}">
+            <span class="stat-line stat-main">
+              <span class="{{ 'vcode-info' if col.result_text_tone == 'info' and not col.expected_mismatch else '' }}">{{ col.got_display or col.got_short }}</span>
+              <span class="verification-detail-inline-stats"><span class="{{ 'vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span>/{{ col.max_memory_display or '-' }}</span>
+            </span>
+            {% set expected_token = col.expected_display or '--' %}
+            <span class="stat-line stat-sub">{{ expected_token }}</span>
+          </td>
+          {% endfor %}
+        </tr>
+      </tfoot>
     </table>
   </div>
 </section>
