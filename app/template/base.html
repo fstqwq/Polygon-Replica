@@ -57,6 +57,7 @@
     {% set verification_status = ctx.verification_status.display if ctx.verification_status is defined else "none" %}
     {% set verification_mode = ctx.verification_status.mode if ctx.verification_status is defined else verification_status %}
     {% set verification_error = ctx.verification_status.error if ctx.verification_status is defined else "" %}
+    {% set verification_warn = ctx.verification_status.warn if ctx.verification_status is defined else false %}
     {% set verification_stale_reason = ctx.verification_status.stale_reason if ctx.verification_status is defined else "" %}
     {% set verification_tooltip = verification_stale_reason if verification_mode == 'stale' else verification_error %}
     {% if verification_mode == 'failed' and (not verification_tooltip) %}
@@ -199,7 +200,7 @@
           </span>
           <a
             data-page="run"
-            class="submenu-detail-line problem-submenu-run-status {{ 'submenu-status-danger' if verification_mode in ['none', 'failed'] else 'submenu-status-warn' if verification_mode == 'stale' else '' }}"
+            class="submenu-detail-line problem-submenu-run-status {{ 'submenu-status-danger' if verification_mode in ['none', 'failed'] else 'submenu-status-warn' if verification_mode == 'stale' or verification_warn else '' }}"
             href="/problems/{{ ctx.problem.slug }}/run"
             {% if verification_tooltip %}data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}
           >{{ verification_status }}</a>

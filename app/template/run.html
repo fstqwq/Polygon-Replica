@@ -29,7 +29,9 @@
     </td>
     <td class="verification-list-kind-cell">{{ r.kind }}</td>
     <td class="verification-list-status-cell">
-      {% if r.status == "ok" %}
+      {% if r.status_tone == "warn" %}
+      <span class="warn">{{ r.status_display or r.status }}</span>
+      {% elif r.status == "ok" %}
       <span class="ok">{{ r.status_display or r.status }}</span>
       {% elif r.status == "running" %}
       <span class="info">{{ r.status_display or r.status }}</span>

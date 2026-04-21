@@ -511,24 +511,17 @@ section.verification-header-section {
   background: var(--surface-alt);
 }
 
-.verification-detail-sanity-cell-warning {
+.verification-detail-sanity-cell-warning,
+.verification-detail-sanity-cell-failed {
   background: var(--surface-warning);
   border-color: var(--warn-line);
 }
 
 .verification-detail-sanity-cell-warning:hover,
+.verification-detail-sanity-cell-failed:hover,
+.verification-detail-sanity-cell-failed:focus-visible,
 .verification-detail-sanity-cell-warning:focus-visible {
   background: #ffedd5;
-}
-
-.verification-detail-sanity-cell-failed {
-  background: var(--surface-danger);
-  border-color: var(--tag-fail-border);
-}
-
-.verification-detail-sanity-cell-failed:hover,
-.verification-detail-sanity-cell-failed:focus-visible {
-  background: #fee2e2;
 }
 
 .verification-detail-sanity-cell:focus-visible {

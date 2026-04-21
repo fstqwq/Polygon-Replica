@@ -11,13 +11,12 @@ from app.service.verification.runtime import coerce_int, normalize_problem_mode
 
 from .context_verification import _verification_solution_match
 from .run_display import run_verdict_short
-from .sanity_display import normalized_sanity_status, sanity_status_attention, verification_status_display
-
 
 _C = config.constants
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TEST_NAME_NUM_RE = re.compile(r"^(\d+)\.in$")
 _RUN_LIST_REASON_LIMIT_BYTES = 180
+_SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
 
 
 def _latest_iso_timestamp(values: list[str] | tuple[str, ...]) -> str:
@@ -149,12 +148,19 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
     if not verification_id:
         return None
     status = _normalized_verification_status(str(row.get("status") or ""))
-    sanity_status = normalized_sanity_status(row.get("sanity_status"))
+    sanity_status = str(row.get("sanity_status") or "").strip().lower()
+    if sanity_status not in _SANITY_STATUS_TOKENS:
+        sanity_status = "unknown"
+    sanity_attention = sanity_status in {"warning", "failed"}
     reason_source = row.get("fail_reason") or ""
-    if status == "ok" and sanity_status_attention(sanity_status):
+    if status == "ok" and sanity_attention:
         reason_source = row.get("error") or ""
     fail_reason_display, fail_reason_title = _list_reason_display(reason_source)
-    status_display = verification_status_display(status, sanity_status)
+    status_display = status
+    if status == "ok" and sanity_status == "warning":
+        status_display = "ok (has warning)"
+    elif status == "ok" and sanity_status == "failed":
+        status_display = "ok (sanity failed)"
     return {
         "index": 0,
         "id": verification_id,
@@ -164,6 +170,7 @@ def _verification_row_to_list_item(row: dict[str, object]) -> dict[str, object] 
         "finished_at": str(row.get("finished_at") or ""),
         "status": status,
         "status_display": status_display,
+        "status_tone": "warn" if status == "ok" and sanity_attention else status,
         "sanity_status": sanity_status,
         "fail_reason": str(reason_source or ""),
         "fail_reason_display": fail_reason_display,

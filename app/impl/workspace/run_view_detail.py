@@ -63,7 +63,6 @@ from app.impl.workspace.run_view_list import (
     _run_test_sort_key,
     _run_timeout_ms_from_summary,
 )
-from app.impl.workspace.sanity_display import normalized_sanity_status, verification_status_display
 from app.impl.workspace.run_display import (
     run_actual_display,
     run_actual_short,
@@ -78,6 +77,7 @@ _TASK_KIND_GENERATE_INPUT = "generate-input"
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
 _TRANSIENT_REASON_TOKENS = {"running", "queued", "pending"}
+_SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
 _YAML_SIMPLE_RE = re.compile(r"^[A-Za-z0-9_./@+=,\-() ]+$")
 
 
@@ -102,10 +102,6 @@ def _yaml_scalar(value: object) -> str:
     return f'"{escaped}"'
 
 
-def _normalized_sanity_status(raw: object) -> str:
-    return normalized_sanity_status(raw)
-
-
 def _sanity_checks_list(raw: object) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -113,11 +109,17 @@ def _sanity_checks_list(raw: object) -> list[str]:
 
 
 def _build_sanity_payload(verification_details: dict[str, object]) -> dict[str, object]:
+    sanity_status = str(verification_details.get("sanity_status") or "").strip().lower()
+    if sanity_status not in _SANITY_STATUS_TOKENS:
+        sanity_status = "unknown"
+    validation_status = str(verification_details.get("validation_status") or "").strip().lower()
+    if validation_status not in _SANITY_STATUS_TOKENS:
+        validation_status = "unknown"
     return {
-        "sanity_status": _normalized_sanity_status(verification_details.get("sanity_status")),
+        "sanity_status": sanity_status,
         "sanity_checked_count": int(verification_details.get("sanity_checked_count") or 0),
         "sanity_checks": _sanity_checks_list(verification_details.get("sanity_checks")),
-        "validation_status": _normalized_sanity_status(verification_details.get("validation_status")),
+        "validation_status": validation_status,
         "validated_count": int(verification_details.get("validated_count") or 0),
         "failed_step": str(verification_details.get("failed_step") or ""),
         "failed_check": str(verification_details.get("failed_check") or ""),
@@ -1518,7 +1520,13 @@ def build_run_detail_context(
     detail_fail_flag = bool(detail_fail_reason)
     detail_sanity = _detail_sanity_context(verification_id, verification_details)
     detail_status = str(status_summary['status'])
-    detail_status_display = verification_status_display(detail_status, str(detail_sanity.get('status') or ''))
+    detail_sanity_status = str(detail_sanity.get('status') or '')
+    detail_status_display = detail_status
+    if detail_status == "ok" and detail_sanity_status == "warning":
+        detail_status_display = "ok (has warning)"
+    elif detail_status == "ok" and detail_sanity_status == "failed":
+        detail_status_display = "ok (sanity failed)"
+    detail_status_tone = "warn" if detail_status == "ok" and detail_sanity_status in {"warning", "failed"} else detail_status
     stage_results = verification_details.get('stage_results') if isinstance(verification_details.get('stage_results'), dict) else {}
     verification_logs: dict[str, object] = {
         'available': False,
@@ -1601,6 +1609,7 @@ def build_run_detail_context(
         'all_matched': bool(columns) and all((bool(col.get('matched')) for col in columns)),
         'detail_status': detail_status,
         'detail_status_display': detail_status_display,
+        'detail_status_tone': detail_status_tone,
         'detail_is_main_correct_run': bool(detail_is_main_correct_run),
         'detail_running': bool(status_summary['has_running']),
         'detail_last_updated': last_updated,

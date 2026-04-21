@@ -5,8 +5,9 @@ from app.impl.runtime.config import config
 from app.service.platform.error_text import bounded_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.signature import verification_signature
-from .sanity_display import normalized_sanity_status, sanity_status_attention, verification_status_display
 from .run_display import run_actual_failed_codes, run_actual_short
+
+_SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
 _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     # Each expected behavior is evaluated by:
     # 1) required: at least one code from this list must appear.
@@ -227,15 +228,23 @@ def _verification_status_context(
             current_signature = ''
     stale = bool(recorded_signature and current_signature and (recorded_signature != current_signature))
     record = config.verification_service.verification_record(verification_id) or {}
-    sanity_status = normalized_sanity_status(detail.get("sanity_status"))
-    sanity_error = str(detail.get("error") or "") if sanity_status_attention(sanity_status) else ""
+    sanity_status = str(detail.get("sanity_status") or "").strip().lower()
+    if sanity_status not in _SANITY_STATUS_TOKENS:
+        sanity_status = "unknown"
+    sanity_attention = sanity_status in {"warning", "failed"}
+    sanity_error = str(detail.get("error") or "") if sanity_attention else ""
     error_text = str(record.get("fail_reason") or sanity_error or detail.get("error") or "")
     mode = 'stale' if stale else last_status
-    display = mode if mode == 'stale' else verification_status_display(mode, sanity_status)
+    display = "ok" if mode == "pass" else mode
+    if mode == "pass" and sanity_status == "warning":
+        display = "ok (has warning)"
+    elif mode == "pass" and sanity_status == "failed":
+        display = "ok (sanity failed)"
     stale_reason = _verification_stale_reason() if stale else ''
     return {
         'mode': mode,
         'display': display,
+        'warn': bool((not stale) and mode == "pass" and sanity_attention),
         'last_status': last_status,
         'run_id': run_id,
         'run_ids': ','.join(run_ids),

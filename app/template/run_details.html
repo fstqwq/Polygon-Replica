@@ -15,7 +15,9 @@
       <div class="verification-task-status-title">
         <strong>Status</strong>
         {% if detail_status %}
-          {% if detail_status == "ok" %}
+          {% if detail_status_tone == "warn" %}
+          <span class="verification-task-status-state warn">{{ detail_status_display or detail_status }}</span>
+          {% elif detail_status == "ok" %}
           <span class="verification-task-status-state ok">{{ detail_status_display or detail_status }}</span>
           {% elif detail_status == "failed" %}
           <span class="verification-task-status-state danger">{{ detail_status_display or detail_status }}</span>
@@ -100,10 +102,10 @@
             title="Open sanity checks"
           >
             <span class="stat-line stat-main">Sanity</span>
-            {% if sanity_status == "passed" %}
+            {% if sanity_status in ["passed", "ok"] %}
             <span class="stat-line stat-sub verification-detail-sanity-state ok">{{ sanity_status }}</span>
             {% elif sanity_status == "failed" %}
-            <span class="stat-line stat-sub verification-detail-sanity-state danger">{{ sanity_status }}</span>
+            <span class="stat-line stat-sub verification-detail-sanity-state warn">{{ sanity_status }}</span>
             {% elif sanity_status == "warning" %}
             <span class="stat-line stat-sub verification-detail-sanity-state warn">{{ sanity_status }}</span>
             {% elif sanity_status in ["running", "pending"] %}
