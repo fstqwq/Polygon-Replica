@@ -15,7 +15,7 @@ from app.impl.workspace.context_operation import audit, normalize_contest_slug_r
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_verification import latest_workspace_signature_verification
 from app.impl.workspace.access import workspace_access_context
-from app.impl.workspace.revision import workspace_revision_info
+from app.service.repository.revision import workspace_revision_info
 from app.service.sandbox.base import ExecResult
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.platform.git_process import run_git

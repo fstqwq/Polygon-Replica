@@ -19,6 +19,7 @@ from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.platform.workspace_path import is_hidden_workspace_path
 from app.setting import Settings
 from app.service.platform.git_process import run_git
+from app.service.repository.revision import workspace_revision_info
 
 PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
 USERNAME_RULE_MESSAGE: str = "invalid username"
@@ -440,7 +441,26 @@ class WorkspaceService:
         branch = branch if isinstance(branch := status.get("branch"), str) and branch else "main"
         head = head if isinstance(head := status.get("head_commit"), str) else ""
         dirty = 1 if bool(status.get("dirty")) else 0
-        self._store.update_workspace_status(problem_id, user_id, branch=branch, head_commit=head, dirty=dirty)
+        revision = workspace_revision_info(
+            workspace,
+            branch,
+            workspace_head=head,
+            workspace_dirty=bool(dirty),
+        )
+        self._store.update_workspace_status(
+            problem_id,
+            user_id,
+            branch=branch,
+            head_commit=head,
+            dirty=dirty,
+            revision_local=revision["local"],
+            revision_upstream=revision["upstream"],
+            revision_missing=1 if revision["missing"] else 0,
+            revision_highlight=1 if revision["highlight"] else 0,
+            revision_upstream_higher=1 if revision["upstream_higher"] else 0,
+            revision_ahead_count=revision["ahead_count"],
+            revision_behind_count=revision["behind_count"],
+        )
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
     def refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:

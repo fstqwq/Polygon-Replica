@@ -135,6 +135,13 @@ CREATE TABLE IF NOT EXISTS workspaces (
     branch TEXT,
     head_commit TEXT,
     dirty INTEGER NOT NULL DEFAULT 0,
+    revision_local INTEGER,
+    revision_upstream INTEGER,
+    revision_missing INTEGER NOT NULL DEFAULT 1,
+    revision_highlight INTEGER NOT NULL DEFAULT 1,
+    revision_upstream_higher INTEGER NOT NULL DEFAULT 0,
+    revision_ahead_count INTEGER,
+    revision_behind_count INTEGER,
     recent_verification_status TEXT,
     updated_at TEXT NOT NULL,
     UNIQUE(problem_id, user_id),
@@ -382,6 +389,7 @@ CREATE TABLE IF NOT EXISTS system_config (
 
 SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_workspaces_problem_user ON workspaces(problem_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_repo_acl_user_problem ON repo_acl(user_id, problem_id);
 CREATE INDEX IF NOT EXISTS idx_contests_slug ON contests(slug);
 CREATE INDEX IF NOT EXISTS idx_contests_owner ON contests(owner_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_members_user ON contest_members(user_id, created_at DESC);
@@ -485,6 +493,13 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "branch",
         "head_commit",
         "dirty",
+        "revision_local",
+        "revision_upstream",
+        "revision_missing",
+        "revision_highlight",
+        "revision_upstream_higher",
+        "revision_ahead_count",
+        "revision_behind_count",
         "recent_verification_status",
         "updated_at",
     ),

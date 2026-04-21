@@ -38,6 +38,13 @@ class WorkspaceRow(TypedDict):
     branch: str
     head_commit: str
     dirty: int
+    revision_local: int | None
+    revision_upstream: int | None
+    revision_missing: int
+    revision_highlight: int
+    revision_upstream_higher: int
+    revision_ahead_count: int | None
+    revision_behind_count: int | None
     updated_at: str
 
 
@@ -63,6 +70,13 @@ class UserProblemRow(TypedDict):
     branch: str
     head_commit: str
     dirty: int
+    revision_local: int | None
+    revision_upstream: int | None
+    revision_missing: int
+    revision_highlight: int
+    revision_upstream_higher: int
+    revision_ahead_count: int | None
+    revision_behind_count: int | None
     updated_at: str
     last_updated_at: str
 
@@ -83,6 +97,12 @@ class UserContestOverviewRow(TypedDict):
 class WorkspaceDiskStore:
     def __init__(self, db: DB):
         self.db = db
+
+    @staticmethod
+    def _optional_int(value: object) -> int | None:
+        if value is None:
+            return None
+        return int(value)
 
     def problem_id_by_slug(self, slug: str) -> int | None:
         row = self.db.fetch_one("SELECT id FROM problems WHERE slug=?", [slug])
@@ -271,6 +291,8 @@ class WorkspaceDiskStore:
             """
             SELECT p.slug,a.role AS role,
                    w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,
+                   w.revision_local,w.revision_upstream,w.revision_missing,w.revision_highlight,
+                   w.revision_upstream_higher,w.revision_ahead_count,w.revision_behind_count,
                    COALESCE(NULLIF(w.updated_at, ''), p.created_at) AS last_updated_at
             FROM repo_acl a
             JOIN problems p ON p.id=a.problem_id
@@ -295,6 +317,13 @@ class WorkspaceDiskStore:
                     "branch": str(row["branch"] or ""),
                     "head_commit": str(row["head_commit"] or ""),
                     "dirty": int(row["dirty"] or 0),
+                    "revision_local": self._optional_int(row["revision_local"]),
+                    "revision_upstream": self._optional_int(row["revision_upstream"]),
+                    "revision_missing": int(row["revision_missing"] if row["revision_missing"] is not None else 1),
+                    "revision_highlight": int(row["revision_highlight"] if row["revision_highlight"] is not None else 1),
+                    "revision_upstream_higher": int(row["revision_upstream_higher"] or 0),
+                    "revision_ahead_count": self._optional_int(row["revision_ahead_count"]),
+                    "revision_behind_count": self._optional_int(row["revision_behind_count"]),
                     "updated_at": str(row["updated_at"] or ""),
                     "last_updated_at": str(row["last_updated_at"] or ""),
                 }
@@ -387,7 +416,10 @@ class WorkspaceDiskStore:
     def workspace_row(self, problem_id: int, user_id: int) -> WorkspaceRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,problem_id,user_id,path,branch,head_commit,dirty,updated_at
+            SELECT id,problem_id,user_id,path,branch,head_commit,dirty,
+                   revision_local,revision_upstream,revision_missing,revision_highlight,
+                   revision_upstream_higher,revision_ahead_count,revision_behind_count,
+                   updated_at
             FROM workspaces
             WHERE problem_id=? AND user_id=?
             """,
@@ -403,6 +435,13 @@ class WorkspaceDiskStore:
             "branch": str(row["branch"] or ""),
             "head_commit": str(row["head_commit"] or ""),
             "dirty": int(row["dirty"] or 0),
+            "revision_local": self._optional_int(row["revision_local"]),
+            "revision_upstream": self._optional_int(row["revision_upstream"]),
+            "revision_missing": int(row["revision_missing"] if row["revision_missing"] is not None else 1),
+            "revision_highlight": int(row["revision_highlight"] if row["revision_highlight"] is not None else 1),
+            "revision_upstream_higher": int(row["revision_upstream_higher"] or 0),
+            "revision_ahead_count": self._optional_int(row["revision_ahead_count"]),
+            "revision_behind_count": self._optional_int(row["revision_behind_count"]),
             "updated_at": str(row["updated_at"] or ""),
         }
 
@@ -436,20 +475,96 @@ class WorkspaceDiskStore:
             [path, now_iso(), int(problem_id), int(user_id), path],
         )
 
-    def update_workspace_status(self, problem_id: int, user_id: int, *, branch: str, head_commit: str, dirty: int) -> None:
+    def update_workspace_status(
+        self,
+        problem_id: int,
+        user_id: int,
+        *,
+        branch: str,
+        head_commit: str,
+        dirty: int,
+        revision_local: int | None,
+        revision_upstream: int | None,
+        revision_missing: int,
+        revision_highlight: int,
+        revision_upstream_higher: int,
+        revision_ahead_count: int | None,
+        revision_behind_count: int | None,
+    ) -> None:
+        now_text = now_iso()
         self.db.execute(
             """
             UPDATE workspaces
-            SET branch=?, head_commit=?, dirty=?, updated_at=?
+            SET branch=?,
+                head_commit=?,
+                dirty=?,
+                revision_local=?,
+                revision_upstream=?,
+                revision_missing=?,
+                revision_highlight=?,
+                revision_upstream_higher=?,
+                revision_ahead_count=?,
+                revision_behind_count=?,
+                updated_at=?
             WHERE problem_id=? AND user_id=?
-              AND (branch IS NOT ? OR head_commit IS NOT ? OR dirty IS NOT ?)
+              AND (
+                branch IS NOT ?
+                OR head_commit IS NOT ?
+                OR dirty IS NOT ?
+                OR revision_local IS NOT ?
+                OR revision_upstream IS NOT ?
+                OR revision_missing IS NOT ?
+                OR revision_highlight IS NOT ?
+                OR revision_upstream_higher IS NOT ?
+                OR revision_ahead_count IS NOT ?
+                OR revision_behind_count IS NOT ?
+              )
             """,
-            [branch, head_commit, int(dirty), now_iso(), int(problem_id), int(user_id), branch, head_commit, int(dirty)],
+            [
+                branch,
+                head_commit,
+                int(dirty),
+                revision_local,
+                revision_upstream,
+                int(revision_missing),
+                int(revision_highlight),
+                int(revision_upstream_higher),
+                revision_ahead_count,
+                revision_behind_count,
+                now_text,
+                int(problem_id),
+                int(user_id),
+                branch,
+                head_commit,
+                int(dirty),
+                revision_local,
+                revision_upstream,
+                int(revision_missing),
+                int(revision_highlight),
+                int(revision_upstream_higher),
+                revision_ahead_count,
+                revision_behind_count,
+            ],
         )
 
     def reset_workspace_row(self, workspace_id: int, path: str) -> None:
         self.db.execute(
-            "UPDATE workspaces SET path=?, branch=NULL, head_commit=NULL, dirty=0, updated_at=? WHERE id=?",
+            """
+            UPDATE workspaces
+            SET path=?,
+                branch=NULL,
+                head_commit=NULL,
+                dirty=0,
+                revision_local=NULL,
+                revision_upstream=NULL,
+                revision_missing=1,
+                revision_highlight=1,
+                revision_upstream_higher=0,
+                revision_ahead_count=NULL,
+                revision_behind_count=NULL,
+                updated_at=?
+            WHERE id=?
+            """,
             [path, now_iso(), int(workspace_id)],
         )
 

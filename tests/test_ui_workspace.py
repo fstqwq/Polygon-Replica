@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import run_git
+from app.service.repository.revision import workspace_revision_info
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
 
@@ -499,21 +500,54 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_id = int(ctx["workspace"]["id"])
         sentinel_updated_at = "2026-03-05T00:00:00Z"
         db_execute(
-            "UPDATE workspaces SET branch=?, head_commit=?, dirty=?, updated_at=? WHERE id=?",
-            ["main", "sentinel-head", 0, sentinel_updated_at, workspace_id],
+            """
+            UPDATE workspaces
+            SET branch=?,
+                head_commit=?,
+                dirty=?,
+                revision_local=?,
+                revision_upstream=?,
+                revision_missing=?,
+                revision_highlight=?,
+                revision_upstream_higher=?,
+                revision_ahead_count=?,
+                revision_behind_count=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            ["main", "sentinel-head", 0, 999, 998, 1, 1, 1, 997, 996, sentinel_updated_at, workspace_id],
         )
-        before = db_fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
+        before = db_fetch_one(
+            "SELECT branch,head_commit,dirty,revision_local,revision_upstream,revision_missing,revision_highlight,revision_upstream_higher,revision_ahead_count,revision_behind_count,updated_at FROM workspaces WHERE id=?",
+            [workspace_id],
+        )
         self.assertIsNotNone(before)
 
         resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", username)
         self.assertEqual(resp.status_code, 200)
 
-        after = db_fetch_one("SELECT branch,head_commit,dirty,updated_at FROM workspaces WHERE id=?", [workspace_id])
+        after = db_fetch_one(
+            "SELECT branch,head_commit,dirty,revision_local,revision_upstream,revision_missing,revision_highlight,revision_upstream_higher,revision_ahead_count,revision_behind_count,updated_at FROM workspaces WHERE id=?",
+            [workspace_id],
+        )
         self.assertIsNotNone(after)
         live_status = workspace_service.read_workspace_status(ws)
+        live_revision = workspace_revision_info(
+            ws,
+            str(live_status.get("branch") or "main"),
+            workspace_head=str(live_status.get("head_commit") or ""),
+            workspace_dirty=bool(live_status.get("dirty")),
+        )
         self.assertEqual(str(after["branch"] or ""), str(live_status.get("branch") or ""))
         self.assertEqual(str(after["head_commit"] or ""), str(live_status.get("head_commit") or ""))
         self.assertEqual(int(after["dirty"] or 0), int(live_status.get("dirty") or 0))
+        self.assertEqual(after["revision_local"], live_revision["local"])
+        self.assertEqual(after["revision_upstream"], live_revision["upstream"])
+        self.assertEqual(int(after["revision_missing"] or 0), 1 if live_revision["missing"] else 0)
+        self.assertEqual(int(after["revision_highlight"] or 0), 1 if live_revision["highlight"] else 0)
+        self.assertEqual(int(after["revision_upstream_higher"] or 0), 1 if live_revision["upstream_higher"] else 0)
+        self.assertEqual(after["revision_ahead_count"], live_revision["ahead_count"])
+        self.assertEqual(after["revision_behind_count"], live_revision["behind_count"])
         self.assertNotEqual(str(after["updated_at"] or ""), str(before["updated_at"] or ""))
 
     def test_git_status_and_workspace_status_ignore_hidden_paths(self) -> None:
@@ -1014,7 +1048,8 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_service.ensure_problem(other_problem)
         workspace_service.ensure_workspace(other_problem, "bob")
 
-        resp = problems_root_page(_request("/problems"), "alice")
+        with patch("app.service.platform.git_process.subprocess.run", side_effect=AssertionError("/problems must not run git")):
+            resp = problems_root_page(_request("/problems"), "alice")
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("My Problems", html)

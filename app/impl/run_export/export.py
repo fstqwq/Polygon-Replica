@@ -15,7 +15,7 @@ from starlette.background import BackgroundTask
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.artifact import git_commit_count
+from app.service.repository.revision import git_commit_count
 from app.impl.workspace.context_job import start_export_job
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import audit

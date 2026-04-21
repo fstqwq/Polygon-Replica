@@ -76,6 +76,20 @@ class TestBackendMinimal(SmokeBase):
     def test_current_problem_schema_has_no_name_column(self) -> None:
         self.assertNotIn("name", CURRENT_SCHEMA_COLUMNS["problems"])
 
+    def test_current_workspace_schema_has_revision_summary_columns(self) -> None:
+        workspace_columns = set(CURRENT_SCHEMA_COLUMNS["workspaces"])
+        self.assertTrue(
+            {
+                "revision_local",
+                "revision_upstream",
+                "revision_missing",
+                "revision_highlight",
+                "revision_upstream_higher",
+                "revision_ahead_count",
+                "revision_behind_count",
+            }.issubset(workspace_columns)
+        )
+
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -940,5 +954,11 @@ class TestBackendMinimal(SmokeBase):
     def test_db_schema_has_verifications_kind_status_index(self) -> None:
         row = db_fetch_one(
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_verifications_kind_status'"
+        )
+        self.assertIsNotNone(row)
+
+    def test_db_schema_has_repo_acl_user_problem_index(self) -> None:
+        row = db_fetch_one(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_repo_acl_user_problem'"
         )
         self.assertIsNotNone(row)

@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from app.impl.runtime.config import config
 from app.main_util import contains_symlink_component
 from app.service.platform.process import is_canonical_artifact_id
-from .revision import git_commit_count
+from app.service.repository.revision import git_commit_count
 
 
 def artifact_version_number(artifact_id: str | None) -> int | None:

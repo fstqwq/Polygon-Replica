@@ -38,7 +38,7 @@ from .context_component_status import (
 )
 from .context_verification import _verification_status_context
 from .problem_config import read_problem_config
-from .revision import git_commit_count, workspace_revision_info
+from app.service.repository.revision import git_commit_count, workspace_revision_info
 
 _C = config.constants
 
@@ -73,7 +73,7 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
         access = workspace_access_context(problem_id, user_id)
         require_read_access({'access': access})
         if refresh_status:
-            # Refresh context status from git without persisting workspace status into DB.
+            # Provision without the lock-side refresh; the explicit refresh below updates DB once.
             config.workspace_service.ensure_workspace(problem, user, refresh_status=False)
         ctx = config.workspace_service.workspace_context(problem, user, include_recent=include_recent)
     except ValueError as exc:
@@ -88,8 +88,14 @@ def page_ctx(problem: str, user: str, include_branches: bool=True, refresh_statu
     if refresh_status:
         live_status: dict[str, object] | None = None
         try:
-            with config.workspace_service.workspace_lock(workspace_path):
-                live_status = cast(dict[str, object], config.workspace_service.read_workspace_status(workspace_path))
+            live_status = cast(
+                dict[str, object],
+                config.workspace_service.refresh_workspace_status_with_ids(
+                    workspace_path,
+                    int(ctx['problem']['id']),
+                    int(ctx['user']['id']),
+                ),
+            )
         except Exception:
             live_status = None
         if live_status is not None:

@@ -3,11 +3,23 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from typing import TypedDict
 
 from app.service.platform.git_process import run_git
 
 _WORKSPACE_ORIGIN_CACHE_TTL_SEC = 10.0
 _WORKSPACE_ORIGIN_CACHE: dict[str, tuple[float, Path | None]] = {}
+
+
+class WorkspaceRevisionInfo(TypedDict):
+    local: int | None
+    upstream: int | None
+    display: str
+    highlight: bool
+    upstream_higher: bool
+    missing: bool
+    ahead_count: int | None
+    behind_count: int | None
 
 
 def git_commit_count(workspace: Path, rev: str) -> int | None:
@@ -102,7 +114,7 @@ def workspace_revision_info(
     fetch_remote: bool = False,
     workspace_head: str | None = None,
     workspace_dirty: bool | None = None,
-) -> dict:
+) -> WorkspaceRevisionInfo:
     safe_branch = str(branch or "main").strip() or "main"
     if any((ch.isspace() for ch in safe_branch)):
         safe_branch = "main"
