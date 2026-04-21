@@ -100,9 +100,7 @@ _SANITY_CHECK_LABELS = {
 
 
 def _run_cell_text_tone(verdict: str, expected_behavior: str) -> str:
-    short = run_verdict_short(verdict)
-    if short == "AC" and expected_behavior not in {"accepted", "unknown"}:
-        return "info"
+    _ = verdict, expected_behavior
     return ""
 
 
