@@ -1,9 +1,9 @@
 :root {
   --layout-max-width: 1400px;
   --bg: #ffffff;
-  --bg-topbar: #ffffff;
+  --bg-topbar: #fffafd;
   --bg-topbar-hover: #f4e6ef;
-  --surface: #ffffff;
+  --surface: #fffdfd;
   --surface-alt: #fbf5fa;
   --surface-subtle: #f6edf4;
   --surface-hover: #efe3eb;
@@ -58,7 +58,7 @@
   --transcript-left-bg: #ecfeff;
   --transcript-right-bg: #eef2ff;
   --table-row-alt: #faf3f8;
-  --btn-bg: #ffffff;
+  --btn-bg: #fffdfd;
   --btn-bg-hover: #f3e7ef;
   --btn-border: #b79caf;
   --btn-text: #0f172a;
