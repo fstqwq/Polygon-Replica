@@ -36,6 +36,7 @@ from .ui_support import (
     run_details_page,
     run_details_test_fragment,
     run_execute,
+    run_rejudge,
     run_export_impl,
     run_new_page,
     run_page,
@@ -1185,7 +1186,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("solutions/wa.cpp", html)
         self.assertIn("value=\"solutions/wa.cpp\" checked", html)
 
-    def test_run_list_rejudge_link_uses_verification_id_and_run_new_resolves_paths(self) -> None:
+    def test_rejudge_uses_verification_id_endpoint_and_forces_recompile(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
@@ -1272,18 +1273,32 @@ class TestUIRun(UIBaseSuite):
         list_page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(list_page.status_code, 200)
         list_html = list_page.body.decode("utf-8", errors="replace")
-        self.assertIn(f"/run/new?rerun_verification_id={verification_id}&force_recompile=1", list_html)
-        self.assertNotIn("/run/new?solution_paths=", list_html)
+        self.assertIn('method="post" action="/problems/alice/sample/run/rejudge"', list_html)
+        self.assertIn(f'name="verification_id" value="{verification_id}"', list_html)
+        self.assertNotIn("/run/new?rerun_verification_id=", list_html)
 
-        new_page = run_new_page(
-            _request("/problems/alice/sample/run/new", f"rerun_verification_id={verification_id}"),
+        details_page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
             "alice/sample",
             "alice",
         )
-        self.assertEqual(new_page.status_code, 200)
-        new_html = new_page.body.decode("utf-8", errors="replace")
-        self.assertIn('name="solution_paths" value="solutions/accepted.cpp" checked', new_html)
-        self.assertIn('name="solution_paths" value="solutions/wa.cpp" checked', new_html)
+        self.assertEqual(details_page.status_code, 200)
+        detail_html = details_page.body.decode("utf-8", errors="replace")
+        self.assertIn('method="post" action="/problems/alice/sample/run/rejudge"', detail_html)
+        self.assertIn(f'name="verification_id" value="{verification_id}"', detail_html)
+        self.assertNotIn('name="solution_paths"', detail_html)
+
+        with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_job:
+            response = run_rejudge("alice/sample", "alice", verification_id=verification_id)
+
+        self.assertEqual(response.status_code, 303)
+        call_kwargs = start_job.call_args.kwargs
+        self.assertTrue(call_kwargs["force_recompile"])
+        self.assertEqual(call_kwargs["selected_test_names"], [])
+        self.assertEqual(
+            [target["path"] for target in call_kwargs["targets"]],
+            ["solutions/accepted.cpp", "solutions/wa.cpp"],
+        )
 
     def test_run_page_defaults_all_tests_checked_when_available(self) -> None:
         problem = f"alice/run-default-tests-{uuid.uuid4().hex[:8]}"

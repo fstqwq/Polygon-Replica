@@ -36,7 +36,7 @@ from app.impl.run_export.query import (
 )
 from app.service.verification.task_scheduler import notify_verification_cancelled
 from app.service.verification.task_store import VerificationTaskStore
-from app.service.verification.types import Status
+from app.service.verification.types import ACTIVE, Status
 
 _C = config.constants
 
@@ -50,6 +50,11 @@ def _upload_filename_token(raw: str) -> str:
 
 def _uploaded_target_path(run_id: str, upload_filename: str) -> str:
     return f"uploads/{run_id}/{_upload_filename_token(upload_filename)}"
+
+
+def _truthy_form_token(value: str) -> bool:
+    return value.lower() in {'1', 'true', 'yes', 'on'}
+
 
 def _cancel_judgehost_tasks(run_ids: list[str], reason: str) -> int:
     safe_ids: list[str] = []
@@ -115,20 +120,6 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
         if normalized:
             selected_solution_paths.append(normalized)
     selected_solution_paths = dedupe_preserve_order(selected_solution_paths)
-    rerun_verification_id_value = request.query_params.get("verification_id")
-    if not rerun_verification_id_value:
-        rerun_verification_id_value = request.query_params.get("rerun_verification_id")
-    rerun_verification_id = normalize_run_id_token(rerun_verification_id_value)
-    force_recompile_param = request.query_params.get("force_recompile", "")
-    force_recompile = force_recompile_param.lower() in {"1", "true", "yes", "on"}
-    if (not selected_solution_paths) and rerun_verification_id:
-        selected_solution_paths = _rerun_solution_paths_from_verification(
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=workspace_id,
-            actor_user_id=int(ctx["user"]["id"]),
-            workspace=workspace,
-            verification_id=rerun_verification_id,
-        )
     if not selected_solution_paths and default_submission_path:
         selected_solution_paths = [default_submission_path]
     selected_test_names_raw = request.query_params.getlist('test_names')
@@ -149,7 +140,6 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'test_options_truncated': test_options_truncated,
             'test_options_source': test_options_source,
             'selected_test_names': selected_test_names,
-            'force_recompile': force_recompile,
         },
     )
 
@@ -266,6 +256,198 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
         msg = "verification cancelled"
     return redirect_response(details_url, status_code=303, message=msg)
 
+
+def _build_dag_targets(
+    *,
+    solution_options: list[dict[str, object]],
+    accepted_solution_path: str,
+    selected_solution_paths: list[str],
+    uploaded: bool,
+    upload_filename: str,
+    upload_content: bytes,
+) -> tuple[list[str], list[str], list[dict[str, object]]]:
+    if not accepted_solution_path:
+        raise ValueError("main correct solution is required")
+    solution_expected_map = {
+        str(row["path"]): str(row["expected_behavior"])
+        for row in solution_options
+    }
+    run_ids: list[str] = []
+    resolved_submission_paths: list[str] = []
+    dag_targets: list[dict[str, object]] = []
+    target_paths = list(selected_solution_paths)
+    if accepted_solution_path not in target_paths:
+        target_paths = [accepted_solution_path, *target_paths]
+    for target_path in target_paths:
+        run_id = allocate_run_id()
+        run_ids.append(run_id)
+        expected_behavior = solution_expected_map.get(target_path, "unknown")
+        if target_path == accepted_solution_path:
+            expected_behavior = "accepted"
+        if expected_behavior == "unknown":
+            expected_behavior = infer_expected_behavior_from_name(target_path)
+        dag_targets.append(
+            {
+                "path": target_path,
+                "expected_behavior": normalize_expected_behavior(expected_behavior),
+                "run_id": run_id,
+            }
+        )
+        resolved_submission_paths.append(target_path)
+    if uploaded:
+        uploaded_run_id = allocate_run_id()
+        run_ids.append(uploaded_run_id)
+        dag_targets.append(
+            {
+                "path": _uploaded_target_path(uploaded_run_id, upload_filename),
+                "expected_behavior": normalize_expected_behavior(infer_expected_behavior_from_name(upload_filename)),
+                "run_id": uploaded_run_id,
+                "upload_filename": _upload_filename_token(upload_filename),
+                "upload_content": upload_content,
+            }
+        )
+    return (run_ids, resolved_submission_paths, dag_targets)
+
+
+def _start_run_verification(
+    *,
+    problem: str,
+    user: str,
+    ctx: dict[str, object],
+    workspace: Path,
+    run_mode: str,
+    selected_solution_paths: list[str],
+    selected_test_names: list[str],
+    uploaded: bool = False,
+    upload_filename: str = "",
+    upload_content: bytes = b"",
+    force_recompile_flag: bool = False,
+    audit_action: str = "run.execute",
+    verification_source: str = "verification.start",
+):
+    if (not selected_solution_paths) and (not uploaded):
+        msg = 'select at least one solution or upload source file'
+        return redirect_response(f'/problems/{problem}/run/new', status_code=303, message=msg)
+    solution_options, accepted_solution_path, _ = run_solution_options_context(workspace)
+    verification_id = allocate_verification_id()
+    run_ids, resolved_submission_paths, dag_targets = _build_dag_targets(
+        solution_options=solution_options,
+        accepted_solution_path=accepted_solution_path,
+        selected_solution_paths=selected_solution_paths,
+        uploaded=uploaded,
+        upload_filename=upload_filename,
+        upload_content=upload_content,
+    )
+    primary_run_id = run_ids[0]
+    workspace_head = str(ctx["workspace"].get("head_commit") or "")
+    workspace_dirty = bool(ctx["workspace"].get("dirty"))
+    details: dict[str, object] = {
+        "verification_id": verification_id,
+        "run_id": primary_run_id,
+        "run_ids": run_ids,
+        "run_count": len(run_ids),
+        "artifact_verification_id": verification_id,
+        "submission_paths": resolved_submission_paths,
+        "solution_paths": selected_solution_paths,
+        "selected_test_names": selected_test_names,
+        "uploaded": uploaded,
+        "upload_filename": _upload_filename_token(upload_filename) if uploaded else "",
+        "mode": run_mode,
+        "execution_model": "task-dag",
+        "async": True,
+        "status": Status.QUEUED.value,
+        "force_recompile": force_recompile_flag,
+        "task_graph": True,
+        "verification_source": verification_source,
+        "steps": ["gen", "val", "run", "check"],
+    }
+    audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, details)
+    try:
+        started = start_verification_job(
+            problem,
+            user,
+            actor_user_id=int(ctx["user"]["id"]),
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            workspace_head=workspace_head,
+            workspace_dirty=workspace_dirty,
+            targets=dag_targets,
+            verification_id=verification_id,
+            initial_details=details,
+            initial_summary=details,
+            workspace_path=workspace,
+            selected_test_names=selected_test_names,
+            force_recompile=force_recompile_flag,
+        )
+    except Exception as exc:
+        failed_details = dict(details)
+        failed_details["status"] = Status.FAILED.value
+        failed_details["error"] = str(exc)
+        audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, failed_details)
+        return redirect_response(f"/problems/{problem}/run", status_code=303, message=str(exc))
+    if not started:
+        failed_details = dict(details)
+        failed_details["status"] = Status.FAILED.value
+        failed_details["error"] = "verification already running"
+        audit(ctx["user"]["id"], ctx["problem"]["id"], audit_action, failed_details)
+        return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification already running")
+    message_parts: list[str] = []
+    if selected_test_names:
+        message_parts.append(f'tests selected ({len(selected_test_names)})')
+    message_parts.append(f'verification running ({len(run_ids)} programs)')
+    message_text = '; '.join(message_parts)
+    return redirect_response(
+        f'/problems/{problem}/run/details?verification_id={quote_plus(verification_id)}',
+        status_code=303,
+        message=message_text,
+    )
+
+
+def run_rejudge(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    verification_id: Annotated[str, Form()] = "",
+):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
+    require_write_access(ctx)
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if not safe_verification_id:
+        return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification id is required")
+    details_url = f"/problems/{problem}/run/details?verification_id={quote_plus(safe_verification_id)}"
+    record = config.verification_service.verification_record(safe_verification_id)
+    if record is None:
+        return redirect_response(details_url, status_code=303, message="verification not found")
+    problem_id = int(ctx["problem"]["id"])
+    workspace_id = int(ctx["workspace"]["id"])
+    if int(record.get("problem_id") or 0) != problem_id or int(record.get("workspace_id") or 0) != workspace_id:
+        return redirect_response(details_url, status_code=303, message="verification not found")
+    if str(record.get("status") or "") in ACTIVE:
+        return redirect_response(details_url, status_code=303, message="rejudge unavailable: verification still running")
+    workspace = Path(ctx['workspace']['path'])
+    selected_solution_paths = _rerun_solution_paths_from_verification(
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        actor_user_id=int(ctx["user"]["id"]),
+        workspace=workspace,
+        verification_id=safe_verification_id,
+    )
+    if not selected_solution_paths:
+        return redirect_response(details_url, status_code=303, message="rejudge unavailable: no reusable solution sources")
+    _, general_cfg, _ = read_problem_config(workspace)
+    return _start_run_verification(
+        problem=problem,
+        user=user,
+        ctx=ctx,
+        workspace=workspace,
+        run_mode=general_cfg['mode'],
+        selected_solution_paths=selected_solution_paths,
+        selected_test_names=[],
+        force_recompile_flag=True,
+        audit_action="run.rejudge",
+        verification_source="verification.rejudge",
+    )
+
+
 def run_execute(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
@@ -280,15 +462,10 @@ def run_execute(
     workspace = Path(ctx['workspace']['path'])
     _, general_cfg, _ = read_problem_config(workspace)
     run_mode = general_cfg['mode']
-    solution_options, accepted_solution_path, _ = run_solution_options_context(workspace)
-    solution_expected_map = {
-        row["path"]: row["expected_behavior"]
-        for row in solution_options
-    }
     upload_content = None
     upload_filename = ''
     uploaded = False
-    force_recompile_flag = force_recompile.lower() in {'1', 'true', 'yes', 'on'}
+    force_recompile_flag = _truthy_form_token(force_recompile)
     try:
         if submission_upload is not None:
             normalized_name = (submission_upload.filename or '').strip()
@@ -319,107 +496,24 @@ def run_execute(
                 continue
             seen_targets.add(key)
             deduped_targets.append((target_submission_path, target_is_upload))
-        execution_targets = deduped_targets
-        run_ids: list[str] = []
-        resolved_submission_paths: list[str] = []
-        verification_id = allocate_verification_id()
-        if not accepted_solution_path:
-            raise ValueError("main correct solution is required")
-        dag_targets: list[dict[str, object]] = []
-        target_paths = list(selected_solution_paths)
-        if accepted_solution_path not in target_paths:
-            target_paths = [accepted_solution_path, *target_paths]
-        for target_path in target_paths:
-            run_id = allocate_run_id()
-            run_ids.append(run_id)
-            expected_behavior = solution_expected_map.get(target_path, "unknown")
-            if target_path == accepted_solution_path:
-                expected_behavior = "accepted"
-            if expected_behavior == "unknown":
-                expected_behavior = infer_expected_behavior_from_name(target_path)
-            dag_targets.append(
-                {
-                    "path": target_path,
-                    "expected_behavior": normalize_expected_behavior(expected_behavior),
-                    "run_id": run_id,
-                }
-            )
-            resolved_submission_paths.append(target_path)
-        if uploaded:
-            uploaded_run_id = allocate_run_id()
-            run_ids.append(uploaded_run_id)
-            dag_targets.append(
-                {
-                    "path": _uploaded_target_path(uploaded_run_id, upload_filename),
-                    "expected_behavior": normalize_expected_behavior(infer_expected_behavior_from_name(upload_filename)),
-                    "run_id": uploaded_run_id,
-                    "upload_filename": _upload_filename_token(upload_filename),
-                    "upload_content": bytes(upload_content or b""),
-                }
-            )
-        primary_run_id = run_ids[0]
-        workspace_head = str(ctx["workspace"].get("head_commit") or "")
-        workspace_dirty = bool(ctx["workspace"].get("dirty"))
-        run_execute_details: dict[str, object] = {
-            "verification_id": verification_id,
-            "run_id": primary_run_id,
-            "run_ids": run_ids,
-            "run_count": len(run_ids),
-            "artifact_verification_id": verification_id,
-            "submission_paths": resolved_submission_paths,
-            "solution_paths": selected_solution_paths,
-            "selected_test_names": selected_test_names,
-            "uploaded": uploaded,
-            "upload_filename": _upload_filename_token(upload_filename) if uploaded else "",
-            "mode": run_mode,
-            "execution_model": "task-dag",
-            "async": True,
-            "status": Status.QUEUED.value,
-            "force_recompile": force_recompile_flag,
-            "task_graph": True,
-            "verification_source": "verification.start",
-            "steps": ["gen", "val", "run", "check"],
-        }
-        audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", run_execute_details)
-        try:
-            started = start_verification_job(
-                problem,
-                user,
-                actor_user_id=int(ctx["user"]["id"]),
-                problem_id=int(ctx["problem"]["id"]),
-                workspace_id=int(ctx["workspace"]["id"]),
-                workspace_head=workspace_head,
-                workspace_dirty=workspace_dirty,
-                targets=dag_targets,
-                verification_id=verification_id,
-                initial_details=run_execute_details,
-                initial_summary=run_execute_details,
-                workspace_path=workspace,
-                selected_test_names=selected_test_names,
-            )
-        except Exception as exc:
-            failed_details = dict(run_execute_details)
-            failed_details["status"] = Status.FAILED.value
-            failed_details["error"] = str(exc)
-            audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", failed_details)
-            return redirect_response(f"/problems/{problem}/run", status_code=303, message=str(exc))
-        if not started:
-            failed_details = dict(run_execute_details)
-            failed_details["status"] = Status.FAILED.value
-            failed_details["error"] = "verification already running"
-            audit(ctx["user"]["id"], ctx["problem"]["id"], "run.execute", failed_details)
-            return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification already running")
-        message_parts: list[str] = []
-        if selected_test_names:
-            message_parts.append(f'tests selected ({len(selected_test_names)})')
-        message_parts.append(f'verification running ({len(run_ids)} programs)')
-        message_text = '; '.join(message_parts)
-        return redirect_response(
-            f'/problems/{problem}/run/details?verification_id={quote_plus(verification_id)}',
-            status_code=303,
-            message=message_text,
+        selected_solution_paths = [
+            target_submission_path
+            for target_submission_path, target_is_upload in deduped_targets
+            if (not target_is_upload) and target_submission_path is not None
+        ]
+        return _start_run_verification(
+            problem=problem,
+            user=user,
+            ctx=ctx,
+            workspace=workspace,
+            run_mode=run_mode,
+            selected_solution_paths=selected_solution_paths,
+            selected_test_names=selected_test_names,
+            uploaded=uploaded,
+            upload_filename=upload_filename,
+            upload_content=bytes(upload_content or b""),
+            force_recompile_flag=force_recompile_flag,
         )
     finally:
         if submission_upload is not None:
             submission_upload.file.close()
-

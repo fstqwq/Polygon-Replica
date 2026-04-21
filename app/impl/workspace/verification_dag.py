@@ -84,6 +84,7 @@ class TaskExecutionContext:
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
+    force_recompile: bool
 
 
 def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
@@ -664,7 +665,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             expected_behavior="accepted",
             verification_source=TASK_GENERATE_INPUT,
             task_kind=TASK_GENERATE_INPUT,
-            force_recompile=False,
+            force_recompile=execution.force_recompile,
             compile_only=False,
             persist_verification_run=False,
             prepared_payload=prepared,
@@ -743,7 +744,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             expected_behavior=expected_behavior,
             verification_source=verification_source,
             task_kind=task_kind,
-            force_recompile=False,
+            force_recompile=execution.force_recompile,
             compile_only=False,
             persist_verification_run=False,
             prepared_payload=prepared,
@@ -815,6 +816,7 @@ def run_workspace_verification_dag(
     sample_only: bool = False,
     snapshot_root_override: Path | None = None,
     selected_test_names: list[str] | None = None,
+    force_recompile: bool = False,
 ) -> None:
     workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
     if not workspace_path_text:
@@ -858,6 +860,7 @@ def run_workspace_verification_dag(
                 "pass_limit": verification_pass_limit,
                 "source_paths": [str(item.get("path") or "") for item in targets if str(item.get("path") or "")],
                 "selected_test_names": list(selected_test_names or []),
+                "force_recompile": bool(force_recompile),
                 "error": str(exc),
             },
         )
@@ -938,6 +941,7 @@ def run_workspace_verification_dag(
                 "pass_limit": verification_pass_limit,
                 "source_paths": [item.source_path for item in visible_logical_runs],
                 "selected_test_names": list(test_names),
+                "force_recompile": bool(force_recompile),
                 "sanity_checks": list(sanity_checks),
                 "sanity_status": sanity_status,
                 "run_config_json": str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
@@ -957,6 +961,7 @@ def run_workspace_verification_dag(
             test_plan_by_name=execution_plan.test_plan_by_name,
             run_verification_payload_base=execution_plan.run_verification_payload_base,
             generate_verification_payload_base=execution_plan.generate_verification_payload_base,
+            force_recompile=bool(force_recompile),
         )
 
         def _refresh_state() -> dict[str, object]:

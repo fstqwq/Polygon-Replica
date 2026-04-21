@@ -40,11 +40,8 @@
           </form>
           {% endif %}
           {% if rerun_solution_paths and not detail_running %}
-          <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/execute">
-            {% for p in rerun_solution_paths %}
-            <input type="hidden" name="solution_paths" value="{{ p }}" />
-            {% endfor %}
-            <input type="hidden" name="force_recompile" value="1" />
+          <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/rejudge">
+            <input type="hidden" name="verification_id" value="{{ cancel_verification_id }}" />
             <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge</a>
           </form>
           {% endif %}

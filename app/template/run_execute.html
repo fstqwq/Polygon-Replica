@@ -7,9 +7,6 @@
 <section>
   <h2>Execute</h2>
   <form class="form-stack" method="post" enctype="multipart/form-data" action="/problems/{{ ctx.problem.slug }}/run/execute">
-    {% if force_recompile %}
-    <input type="hidden" name="force_recompile" value="1" />
-    {% endif %}
     <div class="run-execute-grid">
       <div class="form-row form-row-column">
         <label for="solution-paths">Solutions</label>
@@ -66,9 +63,6 @@
   {% endif %}
   {% if test_options_truncated %}
   <p class="muted">Showing first available tests only.</p>
-  {% endif %}
-  {% if force_recompile %}
-  <p class="muted">This execution will force refresh cache for selected solutions/tests.</p>
   {% endif %}
   <p class="muted solution-pick-help">Select one or more solutions. Select tests only when you need partial runs; leave tests empty to run all tests.</p>
 </section>

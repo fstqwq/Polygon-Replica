@@ -1723,7 +1723,6 @@ def build_run_detail_context(
         'detail_rows': detail_rows,
         'selected_run_ids': selected_ids,
         'rerun_solution_paths': rerun_paths,
-        'rerun_solution_query': (rejudge_context.get('query') or ''),
         'rerun_unavailable_reason': (rejudge_context.get('unavailable_reason') or ''),
         'matched_count': int(status_summary['matched_count']),
         'match_total': int(status_summary['total_count']),

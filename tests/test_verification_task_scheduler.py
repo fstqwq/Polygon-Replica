@@ -278,6 +278,67 @@ class TestVerificationTaskScheduler(SmokeBase):
             ],
         )
 
+    def test_task_publish_forwards_force_recompile_to_judgehost(self) -> None:
+        from app.impl.workspace.verification_dag import (
+            TASK_GENERATE_INPUT,
+            TASK_MAIN_CORRECT,
+            TaskExecutionContext,
+            _publish_generate_task,
+            _publish_run_task,
+        )
+
+        verification_id = self.random_id("ver-force-recompile")
+        layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
+        source_path = layout.root / "std.cpp"
+        source_path.write_text("int main(){return 0;}\n", encoding="utf-8")
+        execution = TaskExecutionContext(
+            problem=self.problem,
+            user=self.user,
+            verification_id=verification_id,
+            mode="pass-fail",
+            pass_limit=1,
+            snapshot_root=layout.root,
+            uploaded_sources_root=layout.uploaded_sources,
+            source_file_by_path={"solutions/std.cpp": source_path},
+            test_plan_by_name={"001.in": _sanity_test_plan()},
+            run_verification_payload_base={},
+            generate_verification_payload_base={},
+            force_recompile=True,
+        )
+        calls: list[dict[str, object]] = []
+
+        def _fake_enqueue_task(**kwargs: object) -> str:
+            calls.append(dict(kwargs))
+            return f"jt-force-{len(calls)}"
+
+        with patch.object(config.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch(
+            "app.impl.workspace.verification_dag._verification_required_blob",
+            return_value=b"1\n",
+        ):
+            _publish_generate_task(
+                _task_row(
+                    "vt-generate",
+                    task_kind=TASK_GENERATE_INPUT,
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=1,
+                ),
+                execution=execution,
+                test_plan=_sanity_test_plan(),
+            )
+            _publish_run_task(
+                _task_row(
+                    "vt-main",
+                    task_kind=TASK_MAIN_CORRECT,
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=2,
+                    source_path="solutions/std.cpp",
+                    logical_run_id="main",
+                ),
+                execution=execution,
+            )
+
+        self.assertEqual([call["force_recompile"] for call in calls], [True, True])
+
     def test_summary_runtime_threshold_marks_answer_correct_points(self) -> None:
         from app.impl.workspace.runtime_threshold import evaluate_summary_runtime_threshold
 

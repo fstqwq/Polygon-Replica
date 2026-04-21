@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import TypedDict, cast
-from urllib.parse import quote_plus
 
 from fastapi import Request
 
@@ -380,13 +379,13 @@ def _summarize_rejudge_unavailable_reason(reasons: list[str]) -> str:
 
 def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace: Path) -> dict[str, str | list[str]]:
     if not entries:
-        return {'paths': [], 'query': '', 'unavailable_reason': 'no reusable solutions source'}
+        return {'paths': [], 'unavailable_reason': 'no reusable solutions source'}
     statuses = [
         cast(str | None, item.get("status")) if item.get("status") is not None else ""
         for item in entries
     ]
     if any((status == 'running' for status in statuses)):
-        return {'paths': [], 'query': '', 'unavailable_reason': 'verification still running'}
+        return {'paths': [], 'unavailable_reason': 'verification still running'}
     reusable_paths: list[str] = []
     unavailable_reasons: list[str] = []
     all_reusable = True
@@ -403,12 +402,10 @@ def _run_rejudge_context_for_entries(entries: list[dict[str, object]], workspace
     if all_reusable and deduped_paths:
         return {
             'paths': deduped_paths,
-            'query': '&'.join((f'solution_paths={quote_plus(path)}' for path in deduped_paths)),
             'unavailable_reason': '',
         }
     return {
         'paths': [],
-        'query': '',
         'unavailable_reason': _summarize_rejudge_unavailable_reason(unavailable_reasons),
     }
 
@@ -431,5 +428,4 @@ def _verification_status_summary(entries: list[dict[str, object]]) -> dict[str, 
         'matched_count': matched_count,
         'total_count': total_count,
     }
-
 

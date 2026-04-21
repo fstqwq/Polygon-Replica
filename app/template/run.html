@@ -57,7 +57,10 @@
       </form>
       {% endif %}
       {% if not r.has_running %}
-      <a class="verification-inline-action linkish danger-link" href="/problems/{{ ctx.problem.slug }}/run/new?rerun_verification_id={{ r.id }}&force_recompile=1">Rejudge</a>
+      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/rejudge">
+        <input type="hidden" name="verification_id" value="{{ r.id }}" />
+        <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge</a>
+      </form>
       {% endif %}
     </td>
   </tr>
