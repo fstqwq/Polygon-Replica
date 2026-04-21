@@ -186,10 +186,7 @@
           </th>
           {% for col in detail_columns %}
           <td class="{{ col.result_tone_class }} {{ 'verification-detail-unexpected' if col.expected_mismatch else '' }}{{ ' verification-detail-runtime-warn' if col.max_time_tone == 'warn' else '' }}">
-            <span class="stat-line stat-main">
-              <span class="{{ 'vcode-info' if col.result_text_tone == 'info' and not col.expected_mismatch else '' }}">{{ col.got_display or col.got_short }}</span>
-              <span class="verification-detail-inline-stats"><span class="{{ 'vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span>/{{ col.max_memory_display or '-' }}</span>
-            </span>
+            <span class="vcode{{ ' vcode-info' if col.result_text_tone == 'info' and not col.expected_mismatch else '' }}">{{ col.got_display or col.got_short }}</span><span class="vmeta{{ ' vmeta-warn' if col.max_time_tone == 'warn' else '' }}">{{ col.max_time_display or '-' }}</span><span class="vmeta vmeta-join">/{{ col.max_memory_display or '-' }}</span>
             {% set expected_token = col.expected_display or '--' %}
             <span class="stat-line stat-sub">{{ expected_token }}</span>
           </td>

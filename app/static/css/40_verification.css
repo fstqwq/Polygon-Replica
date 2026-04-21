@@ -474,7 +474,7 @@ section.verification-header-section {
 }
 
 .verification-detail-table col.verification-col-test {
-  width: 92px;
+  width: 78px;
 }
 
 .verification-detail-table col.verification-col-solution {
@@ -512,6 +512,10 @@ section.verification-header-section {
   background: var(--surface-info);
   color: var(--tag-info-fg);
   text-align: center;
+}
+
+.verification-detail-table > thead > tr:first-child > .verification-detail-index-head {
+  text-align: left;
 }
 
 .verification-detail-overview-row > th,
@@ -589,13 +593,6 @@ section.verification-header-section {
   white-space: nowrap;
   overflow-wrap: normal;
   word-break: normal;
-}
-
-.verification-detail-inline-stats {
-  margin-left: var(--space-1);
-  font-size: var(--font-size-ui-xs);
-  font-weight: 400;
-  color: var(--muted);
 }
 
 .verification-detail-runtime-warn {
