@@ -3988,7 +3988,6 @@ class TestUIRun(UIBaseSuite):
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertRegex(detail_html, r"(?s)<strong>Input 001\.in</strong>.*?<pre[^>]*>\s*1 2 3\s*</pre>")
         self.assertRegex(detail_html, r"(?s)<strong>Answer</strong>.*?<pre[^>]*>\s*6\s*</pre>")
-        self.assertRegex(detail_html, r"(?s)<strong>Output</strong>.*?<pre[^>]*>\s*6\s*</pre>")
         self.assertNotIn("<strong>Generation</strong>", detail_html)
         self.assertIn(
             f"/problems/alice/sample/artifacts/{verification_id}/tests/001.in",

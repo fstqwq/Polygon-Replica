@@ -81,7 +81,9 @@ def ensure_local_env() -> None:
     os.environ["POLYGON_REPLICA_BARE_ROOT"] = str(root / "srv" / "git")
     os.environ["POLYGON_REPLICA_WORKSPACE_ROOT"] = str(root / "srv" / "workspaces")
     os.environ["POLYGON_REPLICA_RUN_ROOT"] = str(root / "srv" / "runs")
-    os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"] = str(root / "var" / "lib" / "polygon-replica" / "artifacts")
+    os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"] = str(
+        root / "var" / "lib" / "polygon-replica" / "artifacts"
+    )
     os.environ["POLYGON_REPLICA_CACHE_ROOT"] = str(root / "var" / "cache" / "polygon-replica")
     os.environ["POLYGON_REPLICA_AUTH_COOKIE_SECURE"] = "1"
 
@@ -121,6 +123,25 @@ preview_service = config.preview_service
 workspace_service = config.workspace_service
 
 
+def _quote_sql_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _clear_metadata_tables_for_test() -> None:
+    with db.conn() as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        table_names = [str(row[0]) for row in rows]
+        for table_name in table_names:
+            if table_name.startswith("sqlite_"):
+                continue
+            conn.execute(f"DELETE FROM {_quote_sql_identifier(table_name)}")
+        if "sqlite_sequence" in table_names:
+            conn.execute("DELETE FROM sqlite_sequence")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.commit()
+
+
 class SmokeBase(unittest.TestCase):
     def setUp(self) -> None:
         try:
@@ -137,6 +158,7 @@ class SmokeBase(unittest.TestCase):
         _cleanup_testsuite_root()
         self.addCleanup(_cleanup_testsuite_root)
         db.init()
+        _clear_metadata_tables_for_test()
         self.test_id = uuid.uuid4().hex[:8]
         self.user = self.random_id("alice")
         self.problem = f"{self.user}/{self.random_id('sample')}"
@@ -178,7 +200,8 @@ class SmokeBase(unittest.TestCase):
         statement_problem = ws / "statement/problem.tex"
         if not statement_problem.exists():
             statement_problem.write_text(
-                "\\begin{problem}{${problem.name}}{}{${problem.inputFile}}{${problem.outputFile}}{${problem.timeLimit}}\n"
+                "\\begin{problem}{${problem.name}}{}"
+                "{${problem.inputFile}}{${problem.outputFile}}{${problem.timeLimit}}\n"
                 "${problem.legend}\n"
                 "\\InputFile\n${problem.input}\n"
                 "\\OutputFile\n${problem.output}\n"
@@ -199,33 +222,24 @@ class SmokeBase(unittest.TestCase):
             if not path.exists():
                 path.write_text(content, encoding="utf-8")
         problem_cfg = ws / "config/problem.json"
-        problem_cfg_payload: dict[str, object] = {}
-        if problem_cfg.exists():
-            try:
-                loaded = json.loads(problem_cfg.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    problem_cfg_payload = dict(loaded)
-            except Exception:
-                problem_cfg_payload = {}
-        if "mode" not in problem_cfg_payload:
-            problem_cfg_payload["mode"] = "pass-fail"
-        if "pass_limit" not in problem_cfg_payload:
-            problem_cfg_payload["pass_limit"] = 1
-        if "time_limit_ms" not in problem_cfg_payload:
-            problem_cfg_payload["time_limit_ms"] = 2000
-        if "memory_limit_mb" not in problem_cfg_payload:
-            problem_cfg_payload["memory_limit_mb"] = 1024
-        if "input_file" not in problem_cfg_payload:
-            problem_cfg_payload["input_file"] = "stdin"
-        if "output_file" not in problem_cfg_payload:
-            problem_cfg_payload["output_file"] = "stdout"
+        problem_cfg_payload: dict[str, object] = {
+            "input_file": "stdin",
+            "memory_limit_mb": 1024,
+            "mode": "pass-fail",
+            "output_file": "stdout",
+            "pass_limit": 1,
+            "time_limit_ms": 2000,
+        }
         problem_cfg.write_text(
             json.dumps(problem_cfg_payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         testlib = ws / "third_party/testlib/testlib.h"
         if not testlib.exists():
-            testlib.write_bytes(maintained_testlib_header(repo_root=Path(__file__).resolve().parents[1]).read_bytes())
+            source = maintained_testlib_header(
+                repo_root=Path(__file__).resolve().parents[1]
+            )
+            testlib.write_bytes(source.read_bytes())
         return ws
 
     def random_id(self, prefix: str) -> str:
