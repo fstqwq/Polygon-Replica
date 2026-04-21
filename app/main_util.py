@@ -29,21 +29,27 @@ TEXTAREA_MAX_BYTES = 256 * 1024
 UPLOAD_MAX_BYTES = 256 * 1024 * 1024
 
 
+def _runtime_global_values(values: RuntimeValues) -> dict[str, object]:
+    """Build the module-level runtime values consumed by existing imports."""
+
+    solution_source_extensions = {
+        str(item).strip().lower() for item in values.SOLUTION_SOURCE_EXTENSIONS
+    }
+    return {
+        "CPP_SOURCE_EXTENSIONS": {
+            str(item).strip().lower() for item in values.CPP_SOURCE_EXTENSIONS
+        },
+        "SOLUTION_SOURCE_EXTENSIONS": solution_source_extensions,
+        "GENERATOR_SOURCE_EXTENSIONS": set(solution_source_extensions),
+        "TEXTAREA_MAX_BYTES": int(values.TEXTAREA_MAX_BYTES),
+        "UPLOAD_MAX_BYTES": int(values.UPLOAD_MAX_BYTES),
+    }
+
+
 def _apply_runtime_values(values: RuntimeValues) -> None:
     """Refresh module-level limits from runtime values."""
 
-    global CPP_SOURCE_EXTENSIONS
-    global SOLUTION_SOURCE_EXTENSIONS
-    global GENERATOR_SOURCE_EXTENSIONS
-    global TEXTAREA_MAX_BYTES
-    global UPLOAD_MAX_BYTES
-    CPP_SOURCE_EXTENSIONS = {str(item).strip().lower() for item in values.CPP_SOURCE_EXTENSIONS}
-    SOLUTION_SOURCE_EXTENSIONS = {
-        str(item).strip().lower() for item in values.SOLUTION_SOURCE_EXTENSIONS
-    }
-    GENERATOR_SOURCE_EXTENSIONS = set(SOLUTION_SOURCE_EXTENSIONS)
-    TEXTAREA_MAX_BYTES = int(values.TEXTAREA_MAX_BYTES)
-    UPLOAD_MAX_BYTES = int(values.UPLOAD_MAX_BYTES)
+    globals().update(_runtime_global_values(values))
 
 
 def configure_runtime_values(values: RuntimeValues) -> None:

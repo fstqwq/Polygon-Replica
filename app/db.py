@@ -464,8 +464,23 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "is_system_admin",
         "created_at",
     ),
-    "auth_sessions": ("id", "user_id", "token_hash", "created_at", "expires_at", "revoked_at"),
-    "sudo_sessions": ("id", "user_id", "scope", "token_hash", "created_at", "expires_at", "revoked_at"),
+    "auth_sessions": (
+        "id",
+        "user_id",
+        "token_hash",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+    ),
+    "sudo_sessions": (
+        "id",
+        "user_id",
+        "scope",
+        "token_hash",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+    ),
     "agent_registration_codes": ("code", "user_id", "created_at", "expires_at", "used_at"),
     "agent_sessions": (
         "id",
@@ -523,7 +538,15 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     "contests": ("id", "slug", "title", "owner_user_id", "created_at"),
     "contest_members": ("id", "contest_id", "user_id", "role", "created_at"),
     "contest_problems": ("id", "contest_id", "idx", "problem_id", "added_by_user_id", "created_at"),
-    "contest_jobs": ("id", "contest_id", "actor_user_id", "job_type", "status", "created_at", "finished_at"),
+    "contest_jobs": (
+        "id",
+        "contest_id",
+        "actor_user_id",
+        "job_type",
+        "status",
+        "created_at",
+        "finished_at",
+    ),
     "contest_artifacts": (
         "id",
         "contest_id",
@@ -534,8 +557,22 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "size_bytes",
         "created_at",
     ),
-    "contest_properties": ("id", "contest_id", "key", "value_json", "updated_at", "updated_by_user_id"),
-    "contest_attachments": ("id", "contest_id", "key", "rel_path", "created_at", "created_by_user_id"),
+    "contest_properties": (
+        "id",
+        "contest_id",
+        "key",
+        "value_json",
+        "updated_at",
+        "updated_by_user_id",
+    ),
+    "contest_attachments": (
+        "id",
+        "contest_id",
+        "key",
+        "rel_path",
+        "created_at",
+        "created_by_user_id",
+    ),
     "previews": (
         "id",
         "problem_id",
@@ -739,15 +776,23 @@ class DB:
         table = cls._trace_sql_table(text)
         json_fields = [field for field in cls.SQL_TRACE_JSON_FIELDS if field in lowered]
         if json_fields:
-            field_positions = [lowered.find(field) for field in json_fields if lowered.find(field) >= 0]
+            field_positions = [
+                lowered.find(field) for field in json_fields if lowered.find(field) >= 0
+            ]
             prefix_end = min(field_positions) if field_positions else len(text)
             prefix = text[:prefix_end].rstrip(" ,")
             if not prefix:
                 prefix = f"{verb} {table}".strip()
-            prefix = cls._truncate_trace_text(prefix, limit=max(96, cls.SQL_TRACE_TEXT_LIMIT // 2))
+            prefix = cls._truncate_trace_text(
+                prefix,
+                limit=max(96, cls.SQL_TRACE_TEXT_LIMIT // 2),
+            )
             table_part = table or "?"
             fields_part = ",".join(json_fields)
-            return f"{verb} {table_part} [json_fields={fields_part} len={len(text)}] {prefix} <redacted-json>"
+            return (
+                f"{verb} {table_part} [json_fields={fields_part} len={len(text)}] "
+                f"{prefix} <redacted-json>"
+            )
         return cls._truncate_trace_text(text)
 
     @staticmethod
@@ -796,7 +841,10 @@ class DB:
             if table_name not in tables:
                 missing_tables.append(table_name)
                 continue
-            actual_columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+            actual_columns = {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            }
             for column_name in expected_columns:
                 if column_name not in actual_columns:
                     missing_columns.append(f"{table_name}.{column_name}")
