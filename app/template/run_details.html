@@ -61,7 +61,7 @@
         <p class="verification-task-note">{{ detail_fail_reason }}</p>
         {% endif %}
         {% if detail_sanity.reason and detail_status == "ok" %}
-        <p class="verification-task-fail">{{ detail_sanity.reason }}</p>
+        <p class="verification-task-warn">{{ detail_sanity.reason }}</p>
         {% endif %}
         {% if detail_task_counts %}
         <p class="muted">

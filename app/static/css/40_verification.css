@@ -162,6 +162,7 @@ section.verification-header-section {
 }
 
 .verification-task-note,
+.verification-task-warn,
 .verification-task-fail {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -170,6 +171,10 @@ section.verification-header-section {
 
 .verification-task-note {
   color: var(--tag-info-fg);
+}
+
+.verification-task-warn {
+  color: var(--warn);
 }
 
 .verification-task-fail {

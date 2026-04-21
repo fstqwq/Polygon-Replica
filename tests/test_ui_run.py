@@ -4614,7 +4614,7 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Ran 3 of 3 sanity checks.", html)
         self.assertIn("Boundary coverage", html)
-        self.assertIn('<p class="verification-task-fail">boundary coverage missing: n max=3</p>', html)
+        self.assertIn('<p class="verification-task-warn">boundary coverage missing: n max=3</p>', html)
         self.assertIn("boundary coverage missing: n max=3", html)
         self.assertNotIn("sanity_status:", html)
 
@@ -4690,7 +4690,7 @@ class TestUIRun(UIBaseSuite):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("ok (sanity failed)", html)
         self.assertIn("Ran 1 of 1 sanity checks.", html)
-        self.assertIn('<p class="verification-task-fail">empty output probe was accepted</p>', html)
+        self.assertIn('<p class="verification-task-warn">empty output probe was accepted</p>', html)
         self.assertIn("empty output probe was accepted", html)
         self.assertNotIn("sanity_status:", html)
 
