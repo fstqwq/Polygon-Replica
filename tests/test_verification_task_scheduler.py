@@ -519,6 +519,97 @@ class TestVerificationTaskScheduler(SmokeBase):
         boundary_result = next(item for item in result.check_results if item.name == BOUNDARY_COVERAGE_CHECK)
         self.assertEqual(boundary_result.status, "passed")
 
+    def test_runtime_threshold_columns_include_main_correct_source(self) -> None:
+        from app.impl.workspace.runtime_threshold import evaluate_summary_runtime_threshold
+        from app.impl.workspace.verification_dag import (
+            TASK_MAIN_CORRECT,
+            TASK_SOLUTION_RUN,
+            LogicalRunSpec,
+            _runtime_threshold_columns_from_tasks,
+        )
+
+        def row(
+            *,
+            task_id: str,
+            task_kind: str,
+            source_path: str,
+            logical_run_id: str,
+        ) -> dict[str, object]:
+            return {
+                "id": task_id,
+                "verification_id": "ver-runtime-columns",
+                "predecessor_task_id": "",
+                "task_kind": task_kind,
+                "source_path": source_path,
+                "logical_run_id": logical_run_id,
+                "test_name": "001.in",
+                "expected_behavior": "accepted",
+                "queue_index": 1,
+                "status": VerificationTaskStore.TASK_DONE,
+                "verdict": "OK",
+                "run_id": "",
+                "judgehost_task_id": "",
+                "runtime_sec": 0.6,
+                "cpu_sec": 0.6,
+                "wall_sec": 0.6,
+                "memory_kb": 1024,
+                "answer_correct": True,
+                "compile_log": "",
+                "diagnostics_json": "[]",
+                "error_text": "",
+                "feedback_text": "",
+                "output_ref": "",
+                "started_at": "",
+                "finished_at": "",
+                "created_at": "",
+                "updated_at": "",
+            }
+
+        columns = _runtime_threshold_columns_from_tasks(
+            artifact_verification_id="ver-runtime-columns",
+            mode="pass-fail",
+            pass_limit=1,
+            logical_runs=[
+                LogicalRunSpec(
+                    logical_run_id="main",
+                    source_path="solutions/std.cpp",
+                    expected_behavior="accepted",
+                    task_kind=TASK_MAIN_CORRECT,
+                ),
+                LogicalRunSpec(
+                    logical_run_id="solution",
+                    source_path="solutions/other.cpp",
+                    expected_behavior="accepted",
+                    task_kind=TASK_SOLUTION_RUN,
+                ),
+            ],
+            rows=[
+                row(
+                    task_id="vt-main",
+                    task_kind=TASK_MAIN_CORRECT,
+                    source_path="solutions/std.cpp",
+                    logical_run_id="main",
+                ),
+                row(
+                    task_id="vt-solution",
+                    task_kind=TASK_SOLUTION_RUN,
+                    source_path="solutions/other.cpp",
+                    logical_run_id="solution",
+                ),
+            ],
+            test_names=["001.in"],
+            fail_flag=False,
+        )
+
+        by_source = {str(column["source"]): column for column in columns}
+        self.assertIn("solutions/std.cpp", by_source)
+        report = evaluate_summary_runtime_threshold(
+            summary=dict(by_source["solutions/std.cpp"]["summary"]),
+            source="solutions/std.cpp",
+            time_limit_ms=1000,
+        )
+        self.assertIsNotNone(report.warning_hit)
+
     def test_sanity_stability_probe_failure_does_not_skip_later_checks(self) -> None:
         from app.impl.workspace.sanity_checks import EMPTY_OUTPUT_STABILITY_CHECK, UNICODE_OUTPUT_STABILITY_CHECK, run_verification_sanity_checks
 

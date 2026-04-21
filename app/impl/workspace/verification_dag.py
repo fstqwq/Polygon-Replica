@@ -551,7 +551,7 @@ def _runtime_threshold_columns_from_tasks(
     fail_flag: bool,
 ) -> list[dict[str, object]]:
     columns: list[dict[str, object]] = []
-    for logical_run in _visible_logical_runs(logical_runs):
+    for logical_run in logical_runs:
         grouped_rows = [row for row in rows if str(row["logical_run_id"] or "") == logical_run.logical_run_id]
         run_summary, run_status, _matched, _completed, _observed_pass, _reason = _logical_run_summary(
             logical_run=logical_run,
