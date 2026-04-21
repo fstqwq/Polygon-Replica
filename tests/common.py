@@ -9,11 +9,14 @@ import unittest
 import uuid
 from pathlib import Path
 
-from app.service.platform.testlib_source import maintained_testlib_header
-
-
 _TESTSUITE_BASE = Path("/tmp/polygon-replica")
-_TESTSUITE_ROOT = _TESTSUITE_BASE / f"testsuite-{uuid.uuid4().hex[:8]}"
+_TESTSUITE_ROOT = Path(
+    os.environ.get(
+        "POLYGON_REPLICA_TESTSUITE_ROOT",
+        str(_TESTSUITE_BASE / f"testsuite-{uuid.uuid4().hex[:8]}"),
+    )
+).resolve()
+os.environ["POLYGON_REPLICA_TESTSUITE_ROOT"] = str(_TESTSUITE_ROOT)
 _DEFAULT_TESTSUITE_STALE_TTL_SEC = 3600.0
 
 
@@ -91,6 +94,25 @@ def ensure_local_env() -> None:
 ensure_local_env()
 
 from app.impl.runtime.config import config  # noqa: E402
+from app.service.platform.testlib_source import maintained_testlib_header  # noqa: E402
+
+
+def _expected_test_db_path() -> Path:
+    return Path(os.environ["POLYGON_REPLICA_DB"]).resolve()
+
+
+def _assert_test_runtime_paths() -> None:
+    db_path = Path(config.db.path).resolve()
+    expected_db_path = _expected_test_db_path()
+    if db_path != expected_db_path:
+        raise RuntimeError(
+            f"test DB path mismatch: config={db_path}, expected={expected_db_path}"
+        )
+    if suite_root().resolve() not in db_path.parents:
+        raise RuntimeError(f"test DB must stay inside testsuite root: {db_path}")
+
+
+_assert_test_runtime_paths()
 
 
 def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float = 300.0) -> None:
@@ -128,6 +150,7 @@ def _quote_sql_identifier(name: str) -> str:
 
 
 def _clear_metadata_tables_for_test() -> None:
+    _assert_test_runtime_paths()
     with db.conn() as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
