@@ -1076,17 +1076,6 @@
     });
   }
 
-  function initVerificationCellLinks() {
-    document.querySelectorAll(".verification-detail-table td, .verification-detail-table th").forEach(function (cell) {
-      var link = cell.querySelector(":scope > a[href], :scope > [data-popup-open]");
-      if (!link) return;
-      cell.addEventListener("click", function (ev) {
-        if (ev.target && ev.target.closest && ev.target.closest("a, button, input, select, textarea, label")) return;
-        link.click();
-      });
-    });
-  }
-
   function initLifecycleTabs() {
     var groups = document.querySelectorAll("[data-lifecycle-tabs='1']");
     if (!groups.length) return;
@@ -2899,7 +2888,6 @@
     initDataTooltips();
     initNetworkEstimateProfile();
     initRunDetailsToggle();
-    initVerificationCellLinks();
     initLifecycleTabs();
     initRunExecuteSelectors();
     initTestsSampleForms();

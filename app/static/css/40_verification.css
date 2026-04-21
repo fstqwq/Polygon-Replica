@@ -600,9 +600,13 @@ section.verification-header-section {
   color: var(--danger) !important;
 }
 
+.verification-detail-unexpected-cell {
+  background: var(--surface-danger);
+  color: var(--danger) !important;
+}
+
 .verification-detail-unexpected-cell .vcode,
 .verification-detail-unexpected-cell .vmeta {
-  background: var(--surface-danger);
   color: var(--danger);
 }
 
@@ -732,7 +736,6 @@ section.verification-header-section {
 }
 
 .vcode-unexpected {
-  background: var(--surface-danger);
   color: var(--danger);
 }
 
