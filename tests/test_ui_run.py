@@ -4033,7 +4033,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(answer_download.status_code, 200)
         self.assertEqual(answer_download.body, b"6\n")
 
-    def test_run_test_detail_fragment_shows_generation_validation_details(self) -> None:
+    def test_run_test_detail_fragment_hides_ok_generation_validation_details(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         workspace_id = int(ctx["workspace"]["id"])
@@ -4143,10 +4143,9 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("<strong>Generation of 001.in: random_tree 10 20</strong>", detail_html)
-        self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics generation-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
-        self.assertRegex(detail_html, r"(?s)<td class=\"status-cell tone-ok\">.*?<span class=\"vcode\">OK</span>")
-        self.assertRegex(detail_html, r"(?s)<td class=\"fb-cell\">tree is valid</td>")
+        self.assertNotIn("Generation of 001.in", detail_html)
+        self.assertNotIn("generation-metrics", detail_html)
+        self.assertNotIn("tree is valid", detail_html)
         self.assertNotIn("<th>Source</th>", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
         self.assertNotIn("<th>Validator</th>", detail_html)
@@ -4314,7 +4313,7 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(detail.status_code, 200)
         detail_html = detail.body.decode("utf-8", errors="replace")
-        self.assertIn("<strong>Generation of 001.in: manual</strong>", detail_html)
+        self.assertNotIn("Generation of 001.in", detail_html)
         self.assertNotIn("manual_validate.cpp", detail_html)
         self.assertNotIn("<th>Command</th>", detail_html)
         self.assertNotIn("<th>Source</th>", detail_html)

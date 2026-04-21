@@ -405,6 +405,9 @@ def _generate_detail_from_task_row(
         'feedback_display': bounded_display_text(str(row['feedback_text'] or '')) or '-',
     }
 
+def _generate_detail_is_visible(row: VerificationTaskRow) -> bool:
+    return str(row['status'] or '') == VerificationTaskStore.TASK_FAILED
+
 def build_run_detail_context(
     ctx: dict,
     execute_mode: str,
@@ -1406,7 +1409,10 @@ def build_run_detail_context(
         for idx, actual_test_name, display_name, is_placeholder in row_entries:
             cells: list[dict] = []
             has_detail = False
-            has_generate_detail = bool(actual_test_name and generate_task_by_test_name.get(actual_test_name))
+            generate_task_row = generate_task_by_test_name.get(actual_test_name) if actual_test_name else None
+            has_generate_detail = bool(
+                generate_task_row is not None and _generate_detail_is_visible(generate_task_row)
+            )
             for col in columns:
                 cell = col['tests_map'].get(actual_test_name) if actual_test_name else None
                 if cell is None:
@@ -1517,7 +1523,7 @@ def build_run_detail_context(
                     generate_task_row,
                     tests_meta_row=tests_meta_by_test_name.get(test_name),
                 )
-                if generate_task_row is not None
+                if generate_task_row is not None and _generate_detail_is_visible(generate_task_row)
                 else None
             )
             input_rel = f'tests/{test_name}'
