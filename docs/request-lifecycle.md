@@ -2,7 +2,7 @@
 
 ## Entry Point
 
-`app/main.py` creates the FastAPI application, mounts static files at `/static`, and includes seven routers.
+`app/main.py` creates the FastAPI application, mounts static files at `/static`, and includes eight routers.
 
 Current startup and shutdown hooks call:
 - `app.impl.auth.internal.runtime.startup()`
@@ -76,29 +76,37 @@ Current judgehost auth accepts configured credentials for DOMjudge-compatible cl
 - import entry points for problems and contests
 
 ### Problem workspace
-- `/problems/{problem}/{user}/...`
+- `/problems/{problem:path}/...`
 - statement, generators, checker, validator, interactor, solutions, files, workspace, history, access
 - git operations and settings pages
 
 ### Contest
-- `/contests/{contest}/{user}/...`
+- `/contests/{contest}/...`
 - overview, problems, properties, access, packages
+
+### Agent
+- `/agent/sessions`, `/agent/connect`, approval, revoke, and disconnect pages
+- `/agent/v1/*` registration, auth, workspace, verification, export, and commit APIs
 
 ### Preview
 - statement preview pages and compile/recompile actions
 - statement language add action under `/statement/languages/add`
 
 ### Run and export
-- `/problems/{problem}/{user}/run`
-- `/run/new`
-- `/run/details`
-- `/run/execute`
-- `/run/cancel`
-- `/export`
-- `/export/create`
-- `/export/import`
-- `/artifacts/{verification_id}/{rel_path}`
-- `/exports/{export_id}/{filename}`
+- `/problems/{problem:path}/run`
+- `/problems/{problem:path}/run/new`
+- `/problems/{problem:path}/run/details`
+- `/problems/{problem:path}/run/details/test-fragment`
+- `/problems/{problem:path}/run/execute`
+- `/problems/{problem:path}/run/rejudge`
+- `/problems/{problem:path}/run/cancel`
+- `/problems/{problem:path}/export`
+- `/problems/{problem:path}/export/create`
+- `/problems/{problem:path}/export/snapshot`
+- `/problems/{problem:path}/export/import`
+- `/problems/{problem:path}/export/import/slug-hint`
+- `/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}`
+- `/problems/{problem:path}/exports/{export_id}/{filename}`
 
 There is no current `/runs/{run_id}/artifacts/...` route.
 
@@ -108,10 +116,17 @@ There is no current `/runs/{run_id}/artifacts/...` route.
 ### Judgehost API
 - `/api/v4/config`
 - `/api/v4/languages`
+- `/api/v4/judgehosts`
 - `/api/v4/judgehosts/fetch-work`
-- `/api/v4/judgehosts/update-judging/{hostname}/{task_id}`
-- `/api/v4/judgehosts/add-judging-run/{hostname}/{task_id}`
-- `/api/v4/judgehosts/get_files/*`
+- `/api/v4/judgehosts/get_files/source/{item_id}`
+- `/api/v4/judgehosts/get_files/source/{contest_id}/{item_id}`
+- `/api/v4/judgehosts/get_files/{file_type}/{item_id}`
+- `/api/v4/judgehosts/get_version_commands/{judgetask_id}`
+- `/api/v4/judgehosts/check_versions/{judgetask_id}`
+- `/api/v4/judgehosts/update-judging/{hostname}/{judgetask_id}`
+- `/api/v4/judgehosts/add-judging-run/{hostname}/{judgetask_id}`
+- `/api/v4/judgehosts/add-debug-info/{hostname}/{judgetask_id}`
+- `/api/v4/judgehosts/internal-error`
 
 ## Sync vs Async Work
 

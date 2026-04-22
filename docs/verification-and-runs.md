@@ -89,13 +89,8 @@ Current verification results are ref-based.
 ### Stored in SQLite
 - `verifications`
 - `verification_tasks.output_ref`
-
-### Stored in verification metadata
-- `artifact_refs` in `<cache_root>/artifacts/verifications/<verification_id>/metadata.json`
-
-Per-test refs currently include:
-- `input_ref`
-- `answer_ref`
+- `verification_artifact_refs.input_ref`
+- `verification_artifact_refs.answer_ref`
 
 ### Stored in the blob store
 Blob payloads live in `judge-fs-index` and are addressed by `cache://...` tokens.
@@ -107,7 +102,7 @@ Current roles:
 
 ## Download and Preview Paths
 
-Fresh run and verification detail pages use only `/artifacts/{verification_id}/...`.
+Fresh run and verification detail pages use only `/problems/{problem:path}/artifacts/{verification_id}/...`.
 
 Current paths:
 - `tests/{test_name}` -> resolves `input_ref`
@@ -127,12 +122,12 @@ There is no fresh `/runs/{run_id}/artifacts/...` path anymore.
 
 ### `generate-input`
 - output bytes are resolved from the execution result
-- verification stores an `input_ref` for the test in `metadata.json`
+- verification stores an `input_ref` for the test in `verification_artifact_refs`
 - the detail page and preview sample sync read input through `input_ref`
 
 ### `main-correct`
 - main runs through compare/checker; it does not skip compare
-- on success, verification stores an `answer_ref` in `metadata.json`
+- on success, verification stores an `answer_ref` in `verification_artifact_refs`
 - the detail page and preview sample sync read answer through `answer_ref`
 
 ## Judgehost Integration
@@ -142,10 +137,18 @@ The judgehost adapter exposes the DOMjudge-compatible API at `/api/v4/*`.
 Current important endpoints:
 - `GET /api/v4/config`
 - `GET /api/v4/languages`
+- `GET /api/v4/judgehosts`
+- `POST /api/v4/judgehosts`
 - `POST /api/v4/judgehosts/fetch-work`
-- `PUT /api/v4/judgehosts/update-judging/{hostname}/{task_id}`
-- `POST /api/v4/judgehosts/add-judging-run/{hostname}/{task_id}`
-- `GET /api/v4/judgehosts/get_files/*`
+- `GET /api/v4/judgehosts/get_files/source/{item_id}`
+- `GET /api/v4/judgehosts/get_files/source/{contest_id}/{item_id}`
+- `GET /api/v4/judgehosts/get_files/{file_type}/{item_id}`
+- `GET /api/v4/judgehosts/get_version_commands/{judgetask_id}`
+- `PUT /api/v4/judgehosts/check_versions/{judgetask_id}`
+- `PUT /api/v4/judgehosts/update-judging/{hostname}/{judgetask_id}`
+- `POST /api/v4/judgehosts/add-judging-run/{hostname}/{judgetask_id}`
+- `POST /api/v4/judgehosts/add-debug-info/{hostname}/{judgetask_id}`
+- `POST /api/v4/judgehosts/internal-error`
 
 Authentication is separate from session auth and uses judgehost credentials.
 
@@ -170,7 +173,6 @@ Current facts:
 ## Current Filesystem Touch Points During Verification
 
 A single verification can write to these places:
-- `artifacts/verifications/<verification_id>/metadata.json`
 - `artifacts/verifications/<verification_id>/tests/`, `ans/`, `logs/`, `bin/`, `uploaded-sources/`
 - `runtime/snapshots/<snapshot_id>/src`
 - `runtime/judgehost-runs/<judgehost_task_id>/...`

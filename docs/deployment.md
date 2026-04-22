@@ -20,7 +20,8 @@ Assume:
 - the target DNS name points to the host
 - ports `80` and `443` are reachable
 - the operator has `sudo`
-- the web app will listen on `127.0.0.1:8001` behind nginx
+- the `judgehost` Unix user and group exist
+- the web app listens on `127.0.0.1:8001`; nginx is the public TLS entrypoint
 
 The bundled systemd unit expects the code checkout at:
 
@@ -42,18 +43,18 @@ The bundled installer prepares runtime state under:
 sudo mkdir -p /opt
 cd /opt
 sudo git clone <repo-url> polygon-replica
-sudo chown -R "$USER":"$USER" polygon-replica
+sudo chown -R judgehost:judgehost polygon-replica
 cd polygon-replica
 ```
 
-If deploy keys are not available, copy a repository snapshot to the same checkout path.
-
 ## Run The Host Installer
 
-From the repository root:
+Run the installer as the same Unix user that will run the service. With the bundled
+systemd unit, that user is `judgehost`. The installer uses `sudo` for system changes,
+so the runtime user must be allowed to use `sudo` during installation.
 
 ```bash
-./scripts/install_host.sh
+sudo -H -u judgehost bash -lc 'cd /opt/polygon-replica && ./scripts/install_host.sh'
 ```
 
 The installer:
@@ -185,6 +186,9 @@ http://host.docker.internal:8001/
 For multiple judgehosts, assign separate container names, hostnames, and CPU sets. Keep the
 `JUDGEDAEMON_USERNAME` and `JUDGEDAEMON_PASSWORD` values aligned with Settings.
 
+For consistent judgedaemon performance, consider isolating judgehost CPU cores with
+`isolcpus` and disabling turbo boost on hosts dedicated to judging.
+
 ## Smoke Checks
 
 Check the service stack:
@@ -215,15 +219,11 @@ ls -ld /srv/polygon-replica /var/lib/polygon-replica /tmp/polygon-replica
 
 ## Upgrade
 
-For a git-based deployment:
-
 ```bash
 cd /opt/polygon-replica
 git pull
 .venv/bin/pip install -r requirements.txt
 sudo systemctl restart polygon-replica.service
 ```
-
-For a snapshot deployment, replace the checkout contents and restart the service.
 
 Do not store production runtime data inside the repository checkout.
