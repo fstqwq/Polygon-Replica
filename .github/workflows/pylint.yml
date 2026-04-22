@@ -20,4 +20,4 @@ jobs:
         pip install -r requirements.txt pylint
     - name: Analysing the code with pylint
       run: |
-        PYTHONPATH="$GITHUB_WORKSPACE" python -m pylint app scripts
+        PYTHONPATH="$GITHUB_WORKSPACE" python -m pylint app

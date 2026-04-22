@@ -71,6 +71,8 @@ SQL_TRACE_JSON_FIELDS = ("details_json", "value_json")
 
 
 def coerce_bool(value: object, default: bool = False) -> bool:
+    """Parse a permissive external boolean value into a canonical bool."""
+
     if value is True:
         return True
     if value is False:
@@ -84,11 +86,15 @@ def coerce_bool(value: object, default: bool = False) -> bool:
 
 
 def trace_sql_verb(text: str) -> str:
+    """Return the leading SQL verb for compact trace diagnostics."""
+
     match = re.match(r"^\s*([A-Za-z]+)", str(text or ""))
     return str(match.group(1) if match else "SQL").upper()
 
 
 def trace_sql_table(text: str) -> str:
+    """Best-effort table extraction for SQL trace diagnostics."""
+
     raw = str(text or "")
     patterns = (
         r"^\s*UPDATE\s+([A-Za-z_][A-Za-z0-9_\.]*)",
@@ -105,6 +111,8 @@ def trace_sql_table(text: str) -> str:
 
 
 def truncate_trace_text(text: str, *, limit: int) -> str:
+    """Truncate trace text while preserving its original length in the marker."""
+
     safe_text = str(text or "").strip()
     cap = max(64, int(limit))
     if len(safe_text) <= cap:
@@ -113,6 +121,8 @@ def truncate_trace_text(text: str, *, limit: int) -> str:
 
 
 def summarize_traced_sql(statement: str, *, text_limit: int) -> str:
+    """Summarize SQL trace output without dumping JSON payload columns."""
+
     text = " ".join(str(statement or "").strip().split())
     if not text:
         return ""
@@ -139,10 +149,12 @@ def summarize_traced_sql(statement: str, *, text_limit: int) -> str:
 
 
 def is_sqlite_locked_error(exc: sqlite3.OperationalError) -> bool:
+    """Return whether a sqlite operational error is a lock contention error."""
+
     msg = str(exc or "").strip().lower()
     if not msg:
         return False
-    return "database is locked" in msg or "database table is locked"
+    return "database is locked" in msg or "database table is locked" in msg
 
 def normalize_component_source_path(raw: str | None, folder: str, default_filename: str) -> str:
     """Normalize a required component source path under its component folder."""
