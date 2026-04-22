@@ -136,6 +136,57 @@
             <textarea id="judgehost_gen_script_output" rows="10" readonly spellcheck="false" data-gen-script-output="1"></textarea>
           </div>
     {% endcall %}
+    {% set smtp = smtp_config if smtp_config else {} %}
+    <section class="info-card settings-smtp-card">
+      <div class="settings-card-head">
+        <h3>SMTP Mailbox</h3>
+      </div>
+      <p class="{% if smtp.get('encryption_key_ready') %}muted{% else %}danger{% endif %}">
+        Encryption key: {{ smtp.get('encryption_key_label', 'missing') }}.
+        {{ smtp.get('encryption_key_message', '') }}
+      </p>
+      <p class="muted">
+        password={{ 'configured' if smtp.get('password_configured') else 'missing' }},
+        security={{ smtp.get('security_mode', 'STARTTLS') }}
+      </p>
+      <form class="form-stack" method="post" action="/settings/smtp">
+        <div class="settings-inline-fields">
+          <div class="form-field-stack">
+            <label for="smtp_host">SMTP Host</label>
+            <input id="smtp_host" name="smtp_host" type="text" value="{{ smtp.get('host', '') }}" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="form-field-stack">
+            <label for="smtp_port">SMTP Port</label>
+            <input id="smtp_port" name="smtp_port" type="number" min="1" max="65535" value="{{ smtp.get('port', 587) }}" />
+          </div>
+          <div class="form-field-stack">
+            <label for="smtp_username">SMTP Username</label>
+            <input id="smtp_username" name="smtp_username" type="text" value="{{ smtp.get('username', '') }}" autocomplete="username" spellcheck="false" />
+          </div>
+        </div>
+        <div class="form-field-stack">
+          <label for="smtp_password">SMTP Password</label>
+          <input id="smtp_password" name="smtp_password" type="password" value="" autocomplete="new-password" />
+          <p class="muted">Leave blank to keep the stored encrypted password.</p>
+        </div>
+        <label class="settings-inline-toggle">
+          <input type="checkbox" name="smtp_clear_password" value="1" />
+          Clear stored password
+        </label>
+        <div class="form-row form-row-actions">
+          <button class="btn" type="submit">Save SMTP Settings</button>
+        </div>
+      </form>
+      <form class="form-stack" method="post" action="/settings/smtp/test">
+        <div class="form-field-stack">
+          <label for="smtp_test_recipient">Test Recipient</label>
+          <input id="smtp_test_recipient" name="smtp_test_recipient" type="email" autocomplete="email" />
+        </div>
+        <div class="form-row form-row-actions">
+          <button class="btn" type="submit">Send Test Email</button>
+        </div>
+      </form>
+    </section>
     <h3>Judgehost Status</h3>
     <p class="muted">
       enabled=<code>{{ 'true' if jh.get('enabled') else 'false' }}</code>,

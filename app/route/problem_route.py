@@ -31,7 +31,19 @@ from app.impl.problem.interactor import (
     interactor_rename_source,
     interactor_save_source,
 )
-from app.impl.problem.setting import settings_config_category_page, settings_config_category_update, settings_judgehost_host_action, settings_judgehost_runtime_update, settings_judgehost_snapshot, settings_page, settings_password_update, settings_system_config_reset, settings_worker_queue_snapshot
+from app.impl.problem.setting import (
+    settings_config_category_page,
+    settings_config_category_update,
+    settings_judgehost_host_action,
+    settings_judgehost_runtime_update,
+    settings_judgehost_snapshot,
+    settings_page,
+    settings_password_update,
+    settings_smtp_test,
+    settings_smtp_update,
+    settings_system_config_reset,
+    settings_worker_queue_snapshot,
+)
 from app.impl.problem.solution import solutions_create_template, solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
 from app.impl.problem.validator import (
     validator_create_template,
@@ -202,6 +214,16 @@ router.add_api_route(
     methods=["POST"],
 )
 router.add_api_route(
+    "/settings/smtp",
+    settings_smtp_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/settings/smtp/test",
+    settings_smtp_test,
+    methods=["POST"],
+)
+router.add_api_route(
     "/settings/judgehost/runtime",
     settings_judgehost_runtime_update,
     methods=["POST"],
@@ -356,4 +378,3 @@ router.add_api_route(
     git_rebase_abort,
     methods=["POST"],
 )
-

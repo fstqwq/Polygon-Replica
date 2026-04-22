@@ -42,6 +42,7 @@ def settings_page(request: Request, user: Annotated[str, Depends(require_session
     judgehost_status: dict[str, object] = {}
     admin_runtime_controls: dict[str, dict[str, object]] = {}
     admin_default_category_slug = ""
+    smtp_config: dict[str, object] = {}
     default_problem = default_problem if isinstance(default_problem := ctx.get('default_problem'), str) else ''
     if (not default_problem) and problems:
         first_problem_slug = problems[0].get('slug')
@@ -73,7 +74,92 @@ def settings_page(request: Request, user: Annotated[str, Depends(require_session
                 "impact": impact,
             }
         judgehost_status = config.judgehost_task_service.status()
-    return template_response(request, 'settings.html', {'user': user_row, 'default_problem': default_problem, 'active_main': 'settings', 'problems': problems, 'password_csrf_token': issue_password_form_csrf_token('settings-password'), 'current_password_salt': current_salt, 'current_password_iters': current_iters, 'new_password_salt': secrets.token_hex(16), 'new_password_iters': int(_C.PASSWORD_HASH_ITERS), 'is_system_admin': is_system_admin, 'admin_config_sections': admin_sections, 'admin_config_changed_total': admin_changed_total, 'admin_default_category_slug': admin_default_category_slug, 'judgehost_status': judgehost_status, 'admin_runtime_controls': admin_runtime_controls})
+        smtp_config = config.smtp_config_service.snapshot().__dict__
+    return template_response(
+        request,
+        'settings.html',
+        {
+            'user': user_row,
+            'default_problem': default_problem,
+            'active_main': 'settings',
+            'problems': problems,
+            'password_csrf_token': issue_password_form_csrf_token('settings-password'),
+            'current_password_salt': current_salt,
+            'current_password_iters': current_iters,
+            'new_password_salt': secrets.token_hex(16),
+            'new_password_iters': int(_C.PASSWORD_HASH_ITERS),
+            'is_system_admin': is_system_admin,
+            'admin_config_sections': admin_sections,
+            'admin_config_changed_total': admin_changed_total,
+            'admin_default_category_slug': admin_default_category_slug,
+            'judgehost_status': judgehost_status,
+            'admin_runtime_controls': admin_runtime_controls,
+            'smtp_config': smtp_config,
+        },
+    )
+
+def settings_smtp_update(
+    user: Annotated[str, Depends(require_session_user)],
+    smtp_host: str = Form(""),
+    smtp_port: str = Form("587"),
+    smtp_username: str = Form(""),
+    smtp_password: str = Form(""),
+    smtp_clear_password: str = Form("0"),
+):
+    ctx = _settings_user_ctx(user)
+    require_system_admin(ctx)
+    redirect_target = "/settings"
+    try:
+        config.smtp_config_service.save_from_form(
+            host=smtp_host,
+            port=smtp_port,
+            username=smtp_username,
+            password=smtp_password,
+            clear_password=_as_bool_form_value(smtp_clear_password),
+            actor_user_id=int(ctx["user"]["id"]),
+        )
+        audit(
+            ctx["user"]["id"],
+            None,
+            "smtp_config.update",
+            {
+                "host": form_text(smtp_host).strip(),
+                "port": form_text(smtp_port).strip(),
+                "username": form_text(smtp_username).strip(),
+                "password_changed": bool(form_text(smtp_password)),
+                "password_cleared": _as_bool_form_value(smtp_clear_password),
+            },
+        )
+        msg = "SMTP settings updated"
+    except ValueError as exc:
+        msg = str(exc)
+    return redirect_response(redirect_target, status_code=303, message=msg)
+
+def settings_smtp_test(
+    user: Annotated[str, Depends(require_session_user)],
+    smtp_test_recipient: str = Form(""),
+):
+    ctx = _settings_user_ctx(user)
+    require_system_admin(ctx)
+    redirect_target = "/settings"
+    try:
+        config.smtp_config_service.send_test_email(recipient=smtp_test_recipient)
+        audit(
+            ctx["user"]["id"],
+            None,
+            "smtp_config.test_email",
+            {"recipient": form_text(smtp_test_recipient).strip(), "status": "ok"},
+        )
+        msg = "SMTP test email sent"
+    except ValueError as exc:
+        audit(
+            ctx["user"]["id"],
+            None,
+            "smtp_config.test_email",
+            {"recipient": form_text(smtp_test_recipient).strip(), "status": "failed"},
+        )
+        msg = str(exc)
+    return redirect_response(redirect_target, status_code=303, message=msg)
 
 def settings_judgehost_runtime_update(
     user: Annotated[str, Depends(require_session_user)],
@@ -313,4 +399,3 @@ def settings_password_update(user: Annotated[str, Depends(require_session_user)]
     except ValueError as exc:
         msg = str(exc)
     return redirect_response('/settings', status_code=303, message=msg)
-

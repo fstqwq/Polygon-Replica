@@ -88,6 +88,15 @@ export POLYGON_REPLICA_ARTIFACTS_ROOT=/srv/polygon-replica/export
 export POLYGON_REPLICA_CACHE_ROOT=/tmp/polygon-replica
 ```
 
+SMTP password storage uses reversible authenticated encryption. If administrators will configure
+SMTP in Settings, set a stable 32-byte base64url key:
+
+```bash
+export POLYGON_REPLICA_ENCRYPTION_KEY="$(python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="))')"
+```
+
+Keep this value stable across restarts. Changing it requires re-entering the SMTP password.
+
 ## Service Management
 
 ```bash

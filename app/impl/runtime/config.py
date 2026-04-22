@@ -22,6 +22,7 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.preview import PreviewService
 from app.service.platform.system_config import SystemConfigService
+from app.service.mail.smtp_config import SmtpConfigService
 from app.service.workspace.archive import WorkspaceArchiveService
 from app.service.workspace.files import WorkspaceFileService
 from app.service.workspace.mutation import WorkspaceMutationService
@@ -57,6 +58,7 @@ class RuntimeConfig:
     judge_fs_index_service: JudgeFsIndexService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
     system_config_service: SystemConfigService = field(init=False)
+    smtp_config_service: SmtpConfigService = field(init=False)
     runtime_state_service: RuntimeStateService = field(init=False)
     workspace_archive_service: WorkspaceArchiveService = field(init=False)
     workspace_file_service: WorkspaceFileService = field(init=False)
@@ -106,6 +108,7 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         self.db = DB(self.settings.db_path)
         self.system_config_service = SystemConfigService(self.db)
+        self.smtp_config_service = SmtpConfigService(self.db)
         self.judge_fs_index_service = JudgeFsIndexService(self.settings.cache_root)
         runtime_overrides = self.system_config_service.refresh()
         self.constants = build_runtime_values(runtime_overrides)

@@ -401,6 +401,17 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_by_user_id INTEGER,
     FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS smtp_config (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    host TEXT NOT NULL DEFAULT '',
+    port INTEGER NOT NULL DEFAULT 587,
+    username TEXT NOT NULL DEFAULT '',
+    password_ciphertext TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    updated_by_user_id INTEGER,
+    FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
+);
 """
 
 SCHEMA_INDEXES = """
@@ -692,6 +703,15 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "audit_log": ("id", "actor_user_id", "problem_id", "action", "details_json", "created_at"),
     "system_config": ("key", "value_json", "updated_at", "updated_by_user_id"),
+    "smtp_config": (
+        "id",
+        "host",
+        "port",
+        "username",
+        "password_ciphertext",
+        "updated_at",
+        "updated_by_user_id",
+    ),
 }
 
 class IncompatibleSchemaError(RuntimeError):
