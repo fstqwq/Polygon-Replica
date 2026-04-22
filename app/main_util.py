@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from pathlib import Path
 from typing import BinaryIO
 
@@ -66,6 +67,82 @@ _LOG_BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
     r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
 )
+SQL_TRACE_JSON_FIELDS = ("details_json", "value_json")
+
+
+def coerce_bool(value: object, default: bool = False) -> bool:
+    if value is True:
+        return True
+    if value is False:
+        return False
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on", "y"}:
+        return True
+    if text in {"0", "false", "no", "off", "n"}:
+        return False
+    return bool(default)
+
+
+def trace_sql_verb(text: str) -> str:
+    match = re.match(r"^\s*([A-Za-z]+)", str(text or ""))
+    return str(match.group(1) if match else "SQL").upper()
+
+
+def trace_sql_table(text: str) -> str:
+    raw = str(text or "")
+    patterns = (
+        r"^\s*UPDATE\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+        r"^\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+        r"^\s*DELETE\s+FROM\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+        r"^\s*SELECT\b.*?\bFROM\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+        r"^\s*PRAGMA\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match is not None:
+            return str(match.group(1) or "").strip()
+    return ""
+
+
+def truncate_trace_text(text: str, *, limit: int) -> str:
+    safe_text = str(text or "").strip()
+    cap = max(64, int(limit))
+    if len(safe_text) <= cap:
+        return safe_text
+    return f"{safe_text[:cap].rstrip()}... [truncated; len={len(safe_text)}]"
+
+
+def summarize_traced_sql(statement: str, *, text_limit: int) -> str:
+    text = " ".join(str(statement or "").strip().split())
+    if not text:
+        return ""
+    lowered = text.lower()
+    verb = trace_sql_verb(text)
+    table = trace_sql_table(text)
+    json_fields = [field for field in SQL_TRACE_JSON_FIELDS if field in lowered]
+    if not json_fields:
+        return truncate_trace_text(text, limit=text_limit)
+    field_positions = [
+        lowered.find(field) for field in json_fields if lowered.find(field) >= 0
+    ]
+    prefix_end = min(field_positions) if field_positions else len(text)
+    prefix = text[:prefix_end].rstrip(" ,")
+    if not prefix:
+        prefix = f"{verb} {table}".strip()
+    prefix = truncate_trace_text(prefix, limit=max(96, text_limit // 2))
+    table_part = table or "?"
+    fields_part = ",".join(json_fields)
+    return (
+        f"{verb} {table_part} [json_fields={fields_part} len={len(text)}] "
+        f"{prefix} <redacted-json>"
+    )
+
+
+def is_sqlite_locked_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc or "").strip().lower()
+    if not msg:
+        return False
+    return "database is locked" in msg or "database table is locked"
 
 def normalize_component_source_path(raw: str | None, folder: str, default_filename: str) -> str:
     """Normalize a required component source path under its component folder."""

@@ -143,6 +143,10 @@ def _registration_verify_url(request: Request, token: str) -> str:
     return f"{base_url}/register/verify?token={quote_plus(token)}"
 
 
+def _registration_expiry_minutes() -> int:
+    return max(1, int(round(int(_C.AUTH_REGISTER_PENDING_TTL_SEC) / 60.0)))
+
+
 def setup_page(request: Request):
     user = session_user(request)
     next_path = safe_next_path(request.query_params.get('next'), '/')
@@ -368,6 +372,7 @@ def register_submit(
             config.smtp_config_service.send_registration_email(
                 recipient=safe_email,
                 verification_url=_registration_verify_url(request, verification_token),
+                expires_in_sec=int(_C.AUTH_REGISTER_PENDING_TTL_SEC),
             )
         except ValueError as exc:
             _auth_audit(
@@ -378,7 +383,11 @@ def register_submit(
         _auth_audit("auth.register.email_sent", {**audit_base, "pending_id": pending_id})
     except ValueError as exc:
         return redirect_response('/register', status_code=303, message=str(exc))
-    return redirect_response('/login', status_code=303, message='registration email sent; check your inbox')
+    return redirect_response(
+        '/login',
+        status_code=303,
+        message=f'registration email sent; check your inbox within {_registration_expiry_minutes()} minutes',
+    )
 
 
 def register_verify(request: Request, token: str = ""):

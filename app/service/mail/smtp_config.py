@@ -50,6 +50,17 @@ def smtp_security_mode_for_port(port: int) -> str:
     return "Plain SMTP"
 
 
+def _format_expiry_text(expires_in_sec: int) -> str:
+    safe_seconds = max(1, int(expires_in_sec))
+    if safe_seconds % 3600 == 0:
+        hours = safe_seconds // 3600
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    if safe_seconds % 60 == 0:
+        minutes = safe_seconds // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    return f"{safe_seconds} seconds"
+
+
 def _reject_control_text(value: str, *, label: str) -> str:
     if any(ch in value for ch in ("\x00", "\r", "\n")):
         raise ValueError(f"{label} must not contain control characters")
@@ -171,11 +182,18 @@ class SmtpConfigService:
         row = self._store.get()
         return bool(row.host and row.username and row.password_ciphertext)
 
-    def send_registration_email(self, *, recipient: object, verification_url: str) -> None:
+    def send_registration_email(
+        self,
+        *,
+        recipient: object,
+        verification_url: str,
+        expires_in_sec: int,
+    ) -> None:
         safe_recipient = _normalize_recipient(recipient)
         safe_url = _reject_control_text(form_text(verification_url).strip(), label="verification URL")
         if not safe_url:
             raise ValueError("verification URL is required")
+        expiry_text = _format_expiry_text(expires_in_sec)
         credentials = self.credentials()
         sender = (
             credentials.username
@@ -189,6 +207,7 @@ class SmtpConfigService:
         message.set_content(
             "Confirm your Polygon-Replica registration by opening this link:\n\n"
             f"{safe_url}\n\n"
+            f"This link expires in {expiry_text}.\n\n"
             "If you did not request this account, ignore this email.\n"
         )
         try:

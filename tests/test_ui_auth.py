@@ -419,9 +419,11 @@ class TestUIAuth(UIBaseSuite):
 
         with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
             with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
-                send_mail.side_effect = lambda *, recipient, verification_url: sent_urls.append(
-                    str(verification_url)
-                )
+                def _capture_registration_email(*, recipient, verification_url, expires_in_sec):
+                    del recipient, expires_in_sec
+                    sent_urls.append(str(verification_url))
+
+                send_mail.side_effect = _capture_registration_email
                 resp = register_submit(
                     request=_post_request("/register"),
                     username=username,
@@ -455,6 +457,58 @@ class TestUIAuth(UIBaseSuite):
         self.assertIsNotNone(user_row)
         self.assertEqual(str(user_row["email_normalized"]), f"{username}@gmail.com")
         self.assertTrue(str(user_row["email_verified_at"] or ""))
+
+    def test_register_verification_link_expires(self) -> None:
+        username = self.random_id("expiry")
+        password = "StrongPass123"
+        page = register_page(_request("/register"))
+        html = page.body.decode("utf-8", errors="replace")
+        csrf = _extract_hidden_input_value(html, "csrf_token")
+        salt = _extract_hidden_input_value(html, "password_salt")
+        iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
+        verifier = _password_verifier_hex(password, salt, iters)
+        proof = _sha256_hex(csrf + verifier)
+        password_hash = _sha256_hex(csrf + password)
+        sent_urls: list[str] = []
+
+        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+                def _capture_registration_email(*, recipient, verification_url, expires_in_sec):
+                    del recipient, expires_in_sec
+                    sent_urls.append(str(verification_url))
+
+                send_mail.side_effect = _capture_registration_email
+                resp = register_submit(
+                    request=_post_request("/register"),
+                    username=username,
+                    email=f"{username}@gmail.com",
+                    password=password_hash,
+                    password_confirm=password_hash,
+                    password_verifier=verifier,
+                    password_proof=proof,
+                    csrf_token=csrf,
+                    password_salt=salt,
+                    password_iters=str(iters),
+                    next="/",
+                    terms_accepted="yes",
+                )
+
+        self.assertEqual(resp.status_code, 303)
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(any("within" in item.lower() for item in messages))
+        self.assertEqual(len(sent_urls), 1)
+        token = sent_urls[0].split("token=", 1)[1]
+        db_execute(
+            "UPDATE pending_registrations SET expires_at=? WHERE username=?",
+            ["2000-01-01T00:00:00+00:00", username],
+        )
+
+        expired = register_verify(_request("/register/verify", query=f"token={token}"), token=token)
+        self.assertEqual(expired.status_code, 303)
+        self.assertEqual(expired.headers.get("location", ""), "/register")
+        expired_messages = _flash_messages_from_response(expired)
+        self.assertTrue(any("expired" in item.lower() for item in expired_messages))
+        self.assertIsNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))
 
     def test_setup_page_shows_config_when_no_registered_users(self) -> None:
         count = db_fetch_one(

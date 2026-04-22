@@ -25,9 +25,7 @@ class TestDBSqlTrace(TestCase):
         with db.conn() as conn:
             cursor = conn.execute(sql, params)
             row = cursor.fetchone()
-        if row is None:
-            return None
-        return sqlite3.Row(cursor, row)
+        return row
 
     @staticmethod
     def _execute(db: DB, sql: str, params: tuple[object, ...] = ()) -> None:

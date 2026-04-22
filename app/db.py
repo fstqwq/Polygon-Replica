@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import sqlite3
 import threading
 import time
@@ -14,6 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, TypeVar
+
+from app.main_util import coerce_bool, is_sqlite_locked_error, summarize_traced_sql
 
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
@@ -792,91 +793,11 @@ class DB:
     SQLITE_BUSY_TIMEOUT_MS = 5000
     SQL_TRACE_ENABLED = False
     SQL_TRACE_TEXT_LIMIT = 256
-    SQL_TRACE_JSON_FIELDS = ("details_json", "value_json")
-
-    @staticmethod
-    def _coerce_bool(value: object, default: bool = False) -> bool:
-        if value is True:
-            return True
-        if value is False:
-            return False
-        text = str(value or "").strip().lower()
-        if text in {"1", "true", "yes", "on", "y"}:
-            return True
-        if text in {"0", "false", "no", "off", "n"}:
-            return False
-        return bool(default)
-
     def apply_runtime_values(self, values: object) -> None:
         """Apply runtime database tracing flags."""
 
         enabled = getattr(values, "DB_SQL_TRACE_ENABLED", self.SQL_TRACE_ENABLED)
-        self.sql_trace_enabled = self._coerce_bool(enabled, default=bool(self.SQL_TRACE_ENABLED))
-
-    @staticmethod
-    def _trace_sql_verb(text: str) -> str:
-        match = re.match(r"^\s*([A-Za-z]+)", str(text or ""))
-        return str(match.group(1) if match else "SQL").upper()
-
-    @staticmethod
-    def _trace_sql_table(text: str) -> str:
-        raw = str(text or "")
-        patterns = (
-            r"^\s*UPDATE\s+([A-Za-z_][A-Za-z0-9_\.]*)",
-            r"^\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_\.]*)",
-            r"^\s*DELETE\s+FROM\s+([A-Za-z_][A-Za-z0-9_\.]*)",
-            r"^\s*SELECT\b.*?\bFROM\s+([A-Za-z_][A-Za-z0-9_\.]*)",
-            r"^\s*PRAGMA\s+([A-Za-z_][A-Za-z0-9_\.]*)",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, raw, flags=re.IGNORECASE)
-            if match is not None:
-                return str(match.group(1) or "").strip()
-        return ""
-
-    @classmethod
-    def _truncate_trace_text(cls, text: str, *, limit: int | None = None) -> str:
-        safe_text = str(text or "").strip()
-        cap = max(64, int(limit or cls.SQL_TRACE_TEXT_LIMIT))
-        if len(safe_text) <= cap:
-            return safe_text
-        return f"{safe_text[:cap].rstrip()}... [truncated; len={len(safe_text)}]"
-
-    @classmethod
-    def _summarize_traced_sql(cls, statement: str) -> str:
-        text = " ".join(str(statement or "").strip().split())
-        if not text:
-            return ""
-        lowered = text.lower()
-        verb = cls._trace_sql_verb(text)
-        table = cls._trace_sql_table(text)
-        json_fields = [field for field in cls.SQL_TRACE_JSON_FIELDS if field in lowered]
-        if json_fields:
-            field_positions = [
-                lowered.find(field) for field in json_fields if lowered.find(field) >= 0
-            ]
-            prefix_end = min(field_positions) if field_positions else len(text)
-            prefix = text[:prefix_end].rstrip(" ,")
-            if not prefix:
-                prefix = f"{verb} {table}".strip()
-            prefix = cls._truncate_trace_text(
-                prefix,
-                limit=max(96, cls.SQL_TRACE_TEXT_LIMIT // 2),
-            )
-            table_part = table or "?"
-            fields_part = ",".join(json_fields)
-            return (
-                f"{verb} {table_part} [json_fields={fields_part} len={len(text)}] "
-                f"{prefix} <redacted-json>"
-            )
-        return cls._truncate_trace_text(text)
-
-    @staticmethod
-    def _is_locked_error(exc: sqlite3.OperationalError) -> bool:
-        msg = str(exc or "").strip().lower()
-        if not msg:
-            return False
-        return "database is locked" in msg or "database table is locked" in msg
+        self.sql_trace_enabled = coerce_bool(enabled, default=bool(self.SQL_TRACE_ENABLED))
 
     def init(self) -> None:
         """Create or validate the current database schema."""
@@ -887,7 +808,7 @@ class DB:
                 self._init_current_schema()
                 return
             except sqlite3.OperationalError as exc:
-                if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
                 raise
@@ -953,7 +874,7 @@ class DB:
         pid = os.getpid()
 
         def _trace(statement: str) -> None:
-            text = self._summarize_traced_sql(statement)
+            text = summarize_traced_sql(statement, text_limit=self.SQL_TRACE_TEXT_LIMIT)
             if not text:
                 return
             logger.info(
@@ -984,7 +905,7 @@ class DB:
                     conn.commit()
                     return result
             except sqlite3.OperationalError as exc:
-                if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
                 raise
@@ -1001,7 +922,7 @@ class DB:
                     conn.commit()
                     return
             except sqlite3.OperationalError as exc:
-                if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
                 raise
@@ -1019,7 +940,7 @@ class DB:
                         return None
                     return row
             except sqlite3.OperationalError as exc:
-                if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
                 raise
@@ -1035,7 +956,7 @@ class DB:
                     cursor = conn.execute(sql, values)
                     return list(cursor.fetchall())
             except sqlite3.OperationalError as exc:
-                if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
+                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
                     continue
                 raise

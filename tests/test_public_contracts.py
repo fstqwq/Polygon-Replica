@@ -259,6 +259,7 @@ class TestPublicContracts(unittest.TestCase):
             ROOT / "app" / "service" / "export" / "service.py",
             ROOT / "app" / "service" / "judgehost" / "dispatch.py",
             ROOT / "app" / "service" / "judgehost" / "state.py",
+            ROOT / "app" / "service" / "mail" / "smtp_config.py",
             ROOT / "app" / "service" / "repository" / "workspace.py",
             ROOT / "app" / "service" / "runtime" / "state_service.py",
             ROOT / "app" / "service" / "statement" / "preview.py",
