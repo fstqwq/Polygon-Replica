@@ -224,7 +224,7 @@ def _rerun_solution_paths_from_verification(
 
 def _run_detail_use_compact_layout(detail_ctx: dict[str, object]) -> bool:
     columns = detail_ctx.get("detail_columns") or []
-    return len(columns) >= 12
+    return len(columns) >= 11
 
 def _bare_repo_head_commit(bare_repo: Path) -> str:
     try:

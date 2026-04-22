@@ -3543,12 +3543,14 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("No verification selected.", html)
         self.assertNotIn("page-grid-wide", html)
 
-    def test_run_detail_compact_layout_only_depends_on_twelve_columns(self) -> None:
+    def test_run_detail_compact_layout_only_depends_on_eleven_columns(self) -> None:
         short_columns = [{"title": f"s{i}.py"} for i in range(9)]
         self.assertFalse(run_export_impl._run_detail_use_compact_layout({"detail_columns": short_columns}))
         long_columns = [{"title": ("very-long-solution-name-" + ("x" * 30))} for _ in range(9)]
         self.assertFalse(run_export_impl._run_detail_use_compact_layout({"detail_columns": long_columns}))
-        many_columns = [{"title": f"s{i}.py"} for i in range(12)]
+        ten_columns = [{"title": f"s{i}.py"} for i in range(10)]
+        self.assertFalse(run_export_impl._run_detail_use_compact_layout({"detail_columns": ten_columns}))
+        many_columns = [{"title": f"s{i}.py"} for i in range(11)]
         self.assertTrue(run_export_impl._run_detail_use_compact_layout({"detail_columns": many_columns}))
 
     def test_run_details_transcript_preview_shows_download_link(self) -> None:
