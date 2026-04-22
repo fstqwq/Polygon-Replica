@@ -61,14 +61,14 @@ This keeps authored problem files versioned while keeping generated PDFs, verifi
 For production-style deployment, see:
 
 ```text
-../DEPLOY.md
+DEPLOY.md
 ```
 
 The standard production setup uses Linux, systemd, nginx, Python 3, Git, TeX Live, bubblewrap / seccomp, and DOMjudge judgedaemon workers.
 
-## Local Development
+## Local Startup
 
-For local development on Linux or WSL:
+For a non-production process runner:
 
 ```bash
 ./scripts/start_local.sh
@@ -105,4 +105,4 @@ Useful references:
 - `docs/data-model.md`
 - `docs/request-lifecycle.md`
 - `docs/verification-and-runs.md`
-- `../DEPLOY.md`
+- `DEPLOY.md`
