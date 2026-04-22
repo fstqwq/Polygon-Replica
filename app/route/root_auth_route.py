@@ -11,6 +11,7 @@ from app.impl.root.auth_pages import (
     logout,
     register_page,
     register_submit,
+    register_verify,
     setup_page,
     setup_submit,
     sudo_page,
@@ -61,6 +62,12 @@ router.add_api_route(
     "/register",
     register_submit,
     methods=["POST"],
+)
+
+router.add_api_route(
+    "/register/verify",
+    register_verify,
+    methods=["GET"],
 )
 
 router.add_api_route(

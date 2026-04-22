@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import ipaddress
+import re
 import secrets
 
 from fastapi import Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from urllib.parse import quote_plus
 
+from app.service.platform.hashing import sha256_hex_text
 from app.impl.auth.shared import (
     bootstrap_super_admin_with_password_verifier,
     create_user_with_password_verifier,
@@ -54,6 +57,90 @@ def _setup_config_rows() -> list[dict[str, str]]:
         {'name': 'POLYGON_REPLICA_ARTIFACTS_ROOT', 'value': str(config.settings.artifacts_root)},
         {'name': 'POLYGON_REPLICA_CACHE_ROOT', 'value': str(config.settings.cache_root)},
     ]
+
+
+def _auth_audit(action: str, details: dict[str, object], actor_user_id: int | None = None) -> None:
+    config.workspace_service.record_audit_event(
+        actor_user_id=actor_user_id,
+        problem_id=None,
+        action=action,
+        details=details,
+    )
+
+
+def _client_ip_for_auth_rate_limit(request: Request | None) -> str:
+    if request is None:
+        return "unknown"
+    client = request.client
+    client_host = str(client.host).strip() if client is not None and client.host else ""
+    trusted_proxy = False
+    try:
+        trusted_proxy = ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        trusted_proxy = False
+    if trusted_proxy:
+        forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
+        if forwarded:
+            return forwarded.split(",", 1)[0].strip() or client_host or "unknown"
+    return client_host or "unknown"
+
+
+def _request_user_agent(request: Request | None) -> str:
+    if request is None:
+        return ""
+    return str(request.headers.get("user-agent") or "").strip()[:512]
+
+
+def _normalize_registration_email(value: str) -> tuple[str, str]:
+    email = form_text(value).strip()
+    if any(ch in email for ch in ("\x00", "\r", "\n")):
+        raise ValueError("registration failed; invalid email")
+    normalized = email.lower()
+    pattern = str(_C.AUTH_EMAIL_ALLOW_REGEX or "").strip()
+    try:
+        allowed = re.compile(pattern)
+    except re.error as exc:
+        raise ValueError("registration failed; email allow regex is invalid") from exc
+    if not allowed.fullmatch(normalized):
+        raise ValueError("registration failed; email is not allowed")
+    return email, normalized
+
+
+def _hit_auth_rate_limit(bucket_key: str, *, limit: int, window_sec: int) -> dict[str, object]:
+    return config.auth_service.hit_rate_limit(
+        bucket_key,
+        limit=int(limit),
+        window_sec=int(window_sec),
+    )
+
+
+def _enforce_auth_rate_limit(
+    *,
+    bucket_key: str,
+    limit: int,
+    window_sec: int,
+    audit_action: str,
+    details: dict[str, object],
+) -> None:
+    hit = _hit_auth_rate_limit(bucket_key, limit=limit, window_sec=window_sec)
+    if bool(hit["allowed"]):
+        return
+    audit_details = dict(details)
+    audit_details.update(
+        {
+            "rate_limit_bucket": bucket_key,
+            "rate_limit_count": int(hit["count"]),
+            "rate_limit_limit": int(hit["limit"]),
+            "retry_after_sec": int(hit["retry_after_sec"]),
+        }
+    )
+    _auth_audit(audit_action, audit_details)
+    raise ValueError(f"too many registration attempts; retry in {int(hit['retry_after_sec'])}s")
+
+
+def _registration_verify_url(request: Request, token: str) -> str:
+    base_url = str(request.base_url).rstrip("/")
+    return f"{base_url}/register/verify?token={quote_plus(token)}"
 
 
 def setup_page(request: Request):
@@ -172,11 +259,43 @@ def register_page(request: Request):
         return redirect_response(target, status_code=303)
     return template_response(request, 'register.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('register-password'), 'password_salt': secrets.token_hex(16), 'password_iters': int(_C.PASSWORD_HASH_ITERS)})
 
-def register_submit(request: Request, username: str=Form(...), password: str=Form(''), password_confirm: str=Form(''), password_verifier: str=Form(''), password_proof: str=Form(''), csrf_token: str=Form(''), password_salt: str=Form(''), password_iters: str=Form(''), next: str=Form('/'), terms_accepted: str=Form('')):
+def register_submit(
+    request: Request,
+    username: str=Form(...),
+    email: str=Form(''),
+    password: str=Form(''),
+    password_confirm: str=Form(''),
+    password_verifier: str=Form(''),
+    password_proof: str=Form(''),
+    csrf_token: str=Form(''),
+    password_salt: str=Form(''),
+    password_iters: str=Form(''),
+    next: str=Form('/'),
+    terms_accepted: str=Form(''),
+):
     enforce_same_origin_state_change(request)
     _ = (password, password_confirm)
+    request_ip = _client_ip_for_auth_rate_limit(request)
+    user_agent = _request_user_agent(request)
+    audit_base: dict[str, object] = {"ip": request_ip, "user_agent": user_agent}
     try:
+        _enforce_auth_rate_limit(
+            bucket_key=f"register:ip:{request_ip}",
+            limit=int(_C.AUTH_REGISTER_RATE_LIMIT_IP_MAX),
+            window_sec=int(_C.AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC),
+            audit_action="auth.register.rate_limited",
+            details=audit_base,
+        )
         safe_user = normalize_username_required(form_text(username))
+        safe_email, email_normalized = _normalize_registration_email(form_text(email))
+        audit_base.update({"username": safe_user, "email": email_normalized})
+        _enforce_auth_rate_limit(
+            bucket_key=f"register:email:{email_normalized}",
+            limit=int(_C.AUTH_REGISTER_RATE_LIMIT_EMAIL_MAX),
+            window_sec=int(_C.AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC),
+            audit_action="auth.register.rate_limited",
+            details=audit_base,
+        )
         proof_token = form_text(csrf_token).strip()
         proof_value = form_text(password_proof).strip().lower()
         verifier_value = form_text(password_verifier).strip().lower()
@@ -184,32 +303,124 @@ def register_submit(request: Request, username: str=Form(...), password: str=For
         iter_value = form_text(password_iters)
         next_path = form_text(next)
         terms_value = form_text(terms_accepted)
-        existing = lookup_user_auth(safe_user)
-        if existing is not None:
+        conflict = config.auth_service.registration_conflict(safe_user, email_normalized)
+        if conflict == "username":
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "username_unavailable"})
             raise ValueError('registration failed; username is unavailable')
+        if conflict == "email":
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "email_unavailable"})
+            raise ValueError('registration failed; email is unavailable')
         if terms_value != 'yes':
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "terms_not_accepted"})
             raise ValueError('registration failed; terms of use must be accepted')
         if not verify_password_form_csrf_token(proof_token, 'register-password'):
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_csrf"})
             raise ValueError('registration failed; invalid csrf token')
         verifier = normalize_password_verifier_hex(verifier_value)
         if not _C.HEX_64_RE.fullmatch(proof_value):
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_proof_format"})
             raise ValueError('registration failed; invalid password proof')
         salt_hex = normalize_password_salt_hex(salt_value)
         iters = normalize_password_iters(iter_value)
         if iters != int(_C.PASSWORD_HASH_ITERS):
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_iterations"})
             raise ValueError('registration failed; invalid password iterations')
         expected_proof = password_proof_from_verifier(proof_token, verifier)
         if not secrets.compare_digest(expected_proof, proof_value):
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_proof"})
             raise ValueError('registration failed; invalid password proof')
-        user_id = create_user_with_password_verifier(safe_user, verifier, salt_hex, iters)
-        token = create_session_for_user(int(user_id))
+        if not config.smtp_config_service.delivery_configured():
+            user_id = create_user_with_password_verifier(
+                safe_user,
+                verifier,
+                salt_hex,
+                iters,
+                email=safe_email,
+                email_normalized=email_normalized,
+            )
+            token = create_session_for_user(int(user_id))
+            _auth_audit(
+                "auth.register.user_created",
+                {**audit_base, "user_id": int(user_id), "email_verification": "skipped_no_smtp"},
+                actor_user_id=int(user_id),
+            )
+            target = safe_next_path(next_path, '/problems')
+            if target in {'/', '/login', '/register'}:
+                target = '/problems'
+            response = redirect_response(target, status_code=303)
+            response.set_cookie(_C.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
+            return response
+        verification_token = secrets.token_urlsafe(32)
+        token_hash = sha256_hex_text(verification_token)
+        pending_id = config.auth_service.create_pending_registration(
+            username=safe_user,
+            email=safe_email,
+            email_normalized=email_normalized,
+            verifier_hex=verifier,
+            salt_hex=salt_hex,
+            iterations=iters,
+            token_hash=token_hash,
+            request_ip=request_ip,
+            user_agent=user_agent,
+            ttl_sec=int(_C.AUTH_REGISTER_PENDING_TTL_SEC),
+        )
+        try:
+            config.smtp_config_service.send_registration_email(
+                recipient=safe_email,
+                verification_url=_registration_verify_url(request, verification_token),
+            )
+        except ValueError as exc:
+            _auth_audit(
+                "auth.register.email_failed",
+                {**audit_base, "pending_id": pending_id, "error": str(exc)},
+            )
+            raise ValueError("registration failed; verification email could not be sent") from exc
+        _auth_audit("auth.register.email_sent", {**audit_base, "pending_id": pending_id})
     except ValueError as exc:
         return redirect_response('/register', status_code=303, message=str(exc))
-    target = safe_next_path(next_path, '/problems')
-    if target in {'/', '/login', '/register'}:
-        target = '/problems'
-    response = redirect_response(target, status_code=303)
-    response.set_cookie(_C.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
+    return redirect_response('/login', status_code=303, message='registration email sent; check your inbox')
+
+
+def register_verify(request: Request, token: str = ""):
+    request_ip = _client_ip_for_auth_rate_limit(request)
+    user_agent = _request_user_agent(request)
+    audit_base: dict[str, object] = {"ip": request_ip, "user_agent": user_agent}
+    try:
+        raw_token = form_text(token).strip()
+        if not _C.SESSION_TOKEN_RE.fullmatch(raw_token):
+            raise ValueError("registration verification failed")
+        token_hash = sha256_hex_text(raw_token)
+        pending = config.auth_service.pending_registration_by_token_hash(token_hash)
+        if pending is not None:
+            audit_base.update(
+                {
+                    "pending_id": str(pending["id"]),
+                    "username": str(pending["username"]),
+                    "email": str(pending["email_normalized"]),
+                }
+            )
+        user_id = config.auth_service.activate_pending_registration(token_hash)
+        auth_token = create_session_for_user(int(user_id))
+        _auth_audit(
+            "auth.register.verify_success",
+            {**audit_base, "user_id": int(user_id)},
+            actor_user_id=int(user_id),
+        )
+    except ValueError as exc:
+        try:
+            _enforce_auth_rate_limit(
+                bucket_key=f"register-verify-fail:ip:{request_ip}",
+                limit=int(_C.AUTH_REGISTER_VERIFY_FAIL_IP_MAX),
+                window_sec=int(_C.AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC),
+                audit_action="auth.register.verify_rate_limited",
+                details={**audit_base, "reason": str(exc)},
+            )
+        except ValueError as rate_exc:
+            return redirect_response('/register', status_code=303, message=str(rate_exc))
+        _auth_audit("auth.register.verify_failed", {**audit_base, "reason": str(exc)})
+        return redirect_response('/register', status_code=303, message=str(exc))
+    response = redirect_response('/problems', status_code=303, message='registration verified')
+    response.set_cookie(_C.AUTH_COOKIE_NAME, auth_token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
     return response
 
 def logout(request: Request):

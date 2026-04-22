@@ -26,6 +26,12 @@ SOLUTION_NOTE_CHAR_LIMIT = 4096
 AUTH_COOKIE_NAME = "polygonlike_session"
 AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 AUTH_COOKIE_SECURE = True
+AUTH_EMAIL_ALLOW_REGEX = r"^[a-z0-9_-]+@(?:gmail\.com|(?:[a-z0-9-]+\.)*sjtu\.edu\.cn)$"
+AUTH_REGISTER_PENDING_TTL_SEC = 30 * 60
+AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC = 60 * 60
+AUTH_REGISTER_RATE_LIMIT_IP_MAX = 20
+AUTH_REGISTER_RATE_LIMIT_EMAIL_MAX = 5
+AUTH_REGISTER_VERIFY_FAIL_IP_MAX = 20
 SUDO_COOKIE_NAME = "polygonlike_sudo_session"
 SUDO_COOKIE_MAX_AGE = 5 * 60
 SUDO_SCOPE_DESTRUCTIVE = "destructive"
@@ -373,6 +379,43 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
     "AUTH_COOKIE_SECURE": {
         "type": "bool",
         "description": "Require HTTPS-only auth cookies.",
+    },
+    "AUTH_EMAIL_ALLOW_REGEX": {
+        "type": "str",
+        "min": 1,
+        "max": 512,
+        "ascii": "visible",
+        "description": "Full-match regex for allowed registration email addresses.",
+    },
+    "AUTH_REGISTER_PENDING_TTL_SEC": {
+        "type": "int",
+        "min": 60,
+        "max": 86400,
+        "description": "Pending email verification lifetime in seconds.",
+    },
+    "AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC": {
+        "type": "int",
+        "min": 60,
+        "max": 86400,
+        "description": "Registration rate-limit window in seconds.",
+    },
+    "AUTH_REGISTER_RATE_LIMIT_IP_MAX": {
+        "type": "int",
+        "min": 1,
+        "max": 10000,
+        "description": "Max registration attempts per IP in one window.",
+    },
+    "AUTH_REGISTER_RATE_LIMIT_EMAIL_MAX": {
+        "type": "int",
+        "min": 1,
+        "max": 10000,
+        "description": "Max registration attempts per email in one window.",
+    },
+    "AUTH_REGISTER_VERIFY_FAIL_IP_MAX": {
+        "type": "int",
+        "min": 1,
+        "max": 10000,
+        "description": "Max failed registration verification attempts per IP in one window.",
     },
     "SUDO_COOKIE_MAX_AGE": {
         "type": "int",

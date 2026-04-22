@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS problems (
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    email_normalized TEXT NOT NULL DEFAULT '',
+    email_verified_at TEXT,
     password_hash TEXT,
     password_salt TEXT,
     password_iters INTEGER,
@@ -63,6 +66,30 @@ CREATE TABLE IF NOT EXISTS sudo_sessions (
     expires_at TEXT NOT NULL,
     revoked_at TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS pending_registrations (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    email TEXT NOT NULL,
+    email_normalized TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    password_iters INTEGER NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    request_ip TEXT NOT NULL,
+    user_agent TEXT NOT NULL,
+    terms_accepted INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+    bucket_key TEXT PRIMARY KEY,
+    count INTEGER NOT NULL,
+    window_expires_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS agent_registration_codes (
@@ -452,10 +479,14 @@ CREATE INDEX IF NOT EXISTS idx_verification_artifact_refs_verification_updated O
 CREATE INDEX IF NOT EXISTS idx_exports_problem_created ON exports(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exports_verification_created ON exports(verification_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_problem_created ON audit_log(problem_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized_unique ON users(email_normalized) WHERE email_normalized <> '';
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_created ON auth_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sudo_sessions_user_created ON sudo_sessions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sudo_sessions_expires ON sudo_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_pending_registrations_token ON pending_registrations(token_hash);
+CREATE INDEX IF NOT EXISTS idx_pending_registrations_expires ON pending_registrations(expires_at);
+CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_expires ON auth_rate_limits(window_expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_registration_codes_expires ON agent_registration_codes(expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_user_revoked_seen ON agent_sessions(user_id, revoked_at, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_access_requests_session_status_created ON agent_access_requests(agent_session_id, status, created_at DESC);
@@ -468,6 +499,9 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     "users": (
         "id",
         "username",
+        "email",
+        "email_normalized",
+        "email_verified_at",
         "password_hash",
         "password_salt",
         "password_iters",
@@ -491,6 +525,28 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "created_at",
         "expires_at",
         "revoked_at",
+    ),
+    "pending_registrations": (
+        "id",
+        "username",
+        "email",
+        "email_normalized",
+        "password_hash",
+        "password_salt",
+        "password_iters",
+        "token_hash",
+        "request_ip",
+        "user_agent",
+        "terms_accepted",
+        "created_at",
+        "expires_at",
+        "used_at",
+    ),
+    "auth_rate_limits": (
+        "bucket_key",
+        "count",
+        "window_expires_at",
+        "updated_at",
     ),
     "agent_registration_codes": ("code", "user_id", "created_at", "expires_at", "used_at"),
     "agent_sessions": (
@@ -848,6 +904,7 @@ class DB:
         return self.path.exists() and self.path.stat().st_size > 0
 
     def _prepare_connection(self, conn: sqlite3.Connection) -> None:
+        conn.row_factory = sqlite3.Row
         self._install_sql_trace(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
@@ -960,7 +1017,7 @@ class DB:
                     row = cursor.fetchone()
                     if row is None:
                         return None
-                    return sqlite3.Row(cursor, row)
+                    return row
             except sqlite3.OperationalError as exc:
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
@@ -976,7 +1033,7 @@ class DB:
             try:
                 with self.conn() as conn:
                     cursor = conn.execute(sql, values)
-                    return [sqlite3.Row(cursor, row) for row in cursor.fetchall()]
+                    return list(cursor.fetchall())
             except sqlite3.OperationalError as exc:
                 if self._is_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
                     time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))

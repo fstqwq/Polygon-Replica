@@ -241,13 +241,13 @@ class WorkspaceService:
     def record_audit_event(
         self,
         *,
-        actor_user_id: int,
+        actor_user_id: int | None,
         problem_id: int | None,
         action: str,
         details: dict[str, object],
     ) -> None:
         self._store.append_audit_event(
-            actor_user_id=int(actor_user_id),
+            actor_user_id=actor_user_id,
             problem_id=problem_id,
             action=action,
             details=details,

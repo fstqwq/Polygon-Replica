@@ -39,6 +39,7 @@ from .ui_support import (
     login_submit,
     register_page,
     register_submit,
+    register_verify,
     settings_page,
     settings_judgehost_snapshot,
     settings_config_category_page,
@@ -160,6 +161,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(register_csrf)
         self.assertRegex(register_salt, r"^[0-9a-f]{32}$")
         self.assertGreater(register_iters, 0)
+        self.assertIn('name="email"', register_html)
         self.assertIn('name="terms_accepted"', register_html)
         self.assertIn("I have read and agree to the Terms of Use.", register_html)
         self.assertIn("Review Terms of Use", register_html)
@@ -179,6 +181,7 @@ class TestUIAuth(UIBaseSuite):
         reg = register_submit(
             request=_post_request("/register"),
             username=username,
+            email=f"{username}@gmail.com",
             password=register_password_hash,
             password_confirm=register_password_hash,
             password_verifier=register_verifier,
@@ -219,8 +222,13 @@ class TestUIAuth(UIBaseSuite):
 
         settings_csrf = issue_password_form_csrf_token("settings-password")
         self.assertTrue(settings_csrf)
-        auth_row = db_fetch_one("SELECT password_salt,password_iters FROM users WHERE username=?", [username])
+        auth_row = db_fetch_one(
+            "SELECT email_normalized,email_verified_at,password_salt,password_iters FROM users WHERE username=?",
+            [username],
+        )
         self.assertIsNotNone(auth_row)
+        self.assertEqual(str(auth_row["email_normalized"]), f"{username}@gmail.com")
+        self.assertFalse(str(auth_row["email_verified_at"] or ""))
         current_salt = str(auth_row["password_salt"] or "").strip().lower()
         current_iters = int(auth_row["password_iters"] or 0)
         new_salt = uuid.uuid4().hex
@@ -299,6 +307,7 @@ class TestUIAuth(UIBaseSuite):
         invalid = register_submit(
             request=_post_request("/register"),
             username="Alice_1",
+            email="alice@gmail.com",
             password="StrongPass123",
             password_confirm="StrongPass123",
             next="/",
@@ -313,6 +322,7 @@ class TestUIAuth(UIBaseSuite):
         too_short = register_submit(
             request=_post_request("/register"),
             username="ab",
+            email="ab@gmail.com",
             password="StrongPass123",
             password_confirm="StrongPass123",
             next="/",
@@ -325,6 +335,7 @@ class TestUIAuth(UIBaseSuite):
         too_long = register_submit(
             request=_post_request("/register"),
             username="abcdefghijklmnopq",
+            email="abcdefghijklmnopq@gmail.com",
             password="StrongPass123",
             password_confirm="StrongPass123",
             next="/",
@@ -349,6 +360,7 @@ class TestUIAuth(UIBaseSuite):
         resp = register_submit(
             request=_post_request("/register"),
             username=username,
+            email=f"{username}@gmail.com",
             password=password_hash,
             password_confirm=password_hash,
             password_verifier=verifier,
@@ -364,6 +376,85 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(resp.headers.get("location", ""), "/register")
         messages = _flash_messages_from_response(resp)
         self.assertTrue(any("terms of use" in item.lower() for item in messages))
+
+    def test_register_rejects_disallowed_email(self) -> None:
+        resp = register_submit(
+            request=_post_request("/register"),
+            username=self.random_id("email"),
+            email="has.dot@gmail.com",
+            password="StrongPass123",
+            password_confirm="StrongPass123",
+            next="/",
+            terms_accepted="yes",
+        )
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.headers.get("location", ""), "/register")
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(any("email is not allowed" in item.lower() for item in messages))
+
+        plus = register_submit(
+            request=_post_request("/register"),
+            username=self.random_id("email"),
+            email="plus+tag@sjtu.edu.cn",
+            password="StrongPass123",
+            password_confirm="StrongPass123",
+            next="/",
+            terms_accepted="yes",
+        )
+        plus_messages = _flash_messages_from_response(plus)
+        self.assertTrue(any("email is not allowed" in item.lower() for item in plus_messages))
+
+    def test_register_uses_pending_email_verification_when_smtp_configured(self) -> None:
+        username = self.random_id("verify")
+        password = "StrongPass123"
+        page = register_page(_request("/register"))
+        html = page.body.decode("utf-8", errors="replace")
+        csrf = _extract_hidden_input_value(html, "csrf_token")
+        salt = _extract_hidden_input_value(html, "password_salt")
+        iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
+        verifier = _password_verifier_hex(password, salt, iters)
+        proof = _sha256_hex(csrf + verifier)
+        password_hash = _sha256_hex(csrf + password)
+        sent_urls: list[str] = []
+
+        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+                send_mail.side_effect = lambda *, recipient, verification_url: sent_urls.append(
+                    str(verification_url)
+                )
+                resp = register_submit(
+                    request=_post_request("/register"),
+                    username=username,
+                    email=f"{username}@gmail.com",
+                    password=password_hash,
+                    password_confirm=password_hash,
+                    password_verifier=verifier,
+                    password_proof=proof,
+                    csrf_token=csrf,
+                    password_salt=salt,
+                    password_iters=str(iters),
+                    next="/",
+                    terms_accepted="yes",
+                )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(resp.headers.get("location", ""), "/login")
+        self.assertFalse(_cookie_value_from_response(resp, AUTH_COOKIE_NAME))
+        self.assertIsNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))
+        self.assertEqual(len(sent_urls), 1)
+
+        token = sent_urls[0].split("token=", 1)[1]
+        verified = register_verify(_request("/register/verify", query=f"token={token}"), token=token)
+        self.assertEqual(verified.status_code, 303)
+        self.assertEqual(verified.headers.get("location", ""), "/problems")
+        self.assertTrue(_cookie_value_from_response(verified, AUTH_COOKIE_NAME))
+        user_row = db_fetch_one(
+            "SELECT email_normalized,email_verified_at FROM users WHERE username=?",
+            [username],
+        )
+        self.assertIsNotNone(user_row)
+        self.assertEqual(str(user_row["email_normalized"]), f"{username}@gmail.com")
+        self.assertTrue(str(user_row["email_verified_at"] or ""))
 
     def test_setup_page_shows_config_when_no_registered_users(self) -> None:
         count = db_fetch_one(

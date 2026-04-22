@@ -657,14 +657,14 @@ class WorkspaceDiskStore:
     def append_audit_event(
         self,
         *,
-        actor_user_id: int,
+        actor_user_id: int | None,
         problem_id: int | None,
         action: str,
         details: dict[str, object],
     ) -> None:
         self.db.execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [int(actor_user_id), problem_id, action, json.dumps(details), now_iso()],
+            [None if actor_user_id is None else int(actor_user_id), problem_id, action, json.dumps(details), now_iso()],
         )
 
     def delete_problem_metadata(self, problem_id: int) -> list[str]:

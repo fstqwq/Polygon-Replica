@@ -171,6 +171,7 @@ preview_status = _api_attr("preview_status")
 preview_save = _api_attr("preview_save")
 register_submit = _api_attr("register_submit")
 register_page = _api_attr("register_page")
+register_verify = _api_attr("register_verify")
 run_page = _api_attr("run_page")
 run_new_page = _api_attr("run_new_page")
 run_details_page = _api_attr("run_details_page")
@@ -426,6 +427,7 @@ def _register_with_password_proof(username: str, password: str, *, next_path: st
     return register_submit(
         request=_post_request("/register"),
         username=username,
+        email=f"{username}@gmail.com",
         password=password_hash,
         password_confirm=password_hash,
         password_verifier=verifier,

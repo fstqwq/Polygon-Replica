@@ -349,6 +349,12 @@ class SystemConfigService:
             maximum = float(spec["max"])
             if float(value) > maximum:
                 raise ValueError(f"{key} must be <= {self._display_bound(spec['max'])}")
+        if ("min" in spec) and kind == "str":
+            if len(str(value)) < int(spec["min"]):
+                raise ValueError(f"{key} length must be >= {self._display_bound(spec['min'])}")
+        if ("max" in spec) and kind == "str":
+            if len(str(value)) > int(spec["max"]):
+                raise ValueError(f"{key} length must be <= {self._display_bound(spec['max'])}")
         choices = spec.get("choices")
         if choices:
             if value not in set(choices):

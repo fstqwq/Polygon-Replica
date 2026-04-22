@@ -167,6 +167,37 @@ class SmtpConfigService:
             raise ValueError("SMTP password cannot be decrypted; re-enter it") from exc
         return SmtpCredentials(row.host, row.port, row.username, password)
 
+    def delivery_configured(self) -> bool:
+        row = self._store.get()
+        return bool(row.host and row.username and row.password_ciphertext)
+
+    def send_registration_email(self, *, recipient: object, verification_url: str) -> None:
+        safe_recipient = _normalize_recipient(recipient)
+        safe_url = _reject_control_text(form_text(verification_url).strip(), label="verification URL")
+        if not safe_url:
+            raise ValueError("verification URL is required")
+        credentials = self.credentials()
+        sender = (
+            credentials.username
+            if "@" in credentials.username
+            else "polygon-replica@localhost"
+        )
+        message = EmailMessage()
+        message["Subject"] = "Polygon-Replica email verification"
+        message["From"] = sender
+        message["To"] = safe_recipient
+        message.set_content(
+            "Confirm your Polygon-Replica registration by opening this link:\n\n"
+            f"{safe_url}\n\n"
+            "If you did not request this account, ignore this email.\n"
+        )
+        try:
+            self._send_message(credentials, message)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"registration email failed: {exc}") from exc
+
     def send_test_email(self, *, recipient: object) -> None:
         safe_recipient = _normalize_recipient(recipient)
         credentials = self.credentials()

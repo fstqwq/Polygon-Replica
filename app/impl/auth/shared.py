@@ -412,7 +412,16 @@ def set_user_password_verifier(user_id: int, verifier_hex: str, salt_hex: str, i
     )
 
 
-def create_user_with_password_verifier(username: str, verifier_hex: str, salt_hex: str, iterations: int) -> int:
+def create_user_with_password_verifier(
+    username: str,
+    verifier_hex: str,
+    salt_hex: str,
+    iterations: int,
+    *,
+    email: str = "",
+    email_normalized: str = "",
+    email_verified_at: str = "",
+) -> int:
     safe_user = normalize_username_required(username)
     safe_verifier = normalize_password_verifier_hex(verifier_hex)
     safe_salt = normalize_password_salt_hex(salt_hex)
@@ -422,6 +431,9 @@ def create_user_with_password_verifier(username: str, verifier_hex: str, salt_he
         verifier_hex=safe_verifier,
         salt_hex=safe_salt,
         iterations=safe_iters,
+        email=email,
+        email_normalized=email_normalized,
+        email_verified_at=email_verified_at,
     )
 
 
