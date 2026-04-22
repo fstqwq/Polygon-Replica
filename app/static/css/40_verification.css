@@ -26,15 +26,13 @@
 }
 
 .verification-list-reason-text {
-  display: -webkit-box;
-  max-inline-size: min(34rem, 40vw);
+  display: block;
+  width: 34rem;
+  max-width: 34rem;
   overflow: hidden;
-  text-overflow: ellipsis;
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
 .verification-actions {
