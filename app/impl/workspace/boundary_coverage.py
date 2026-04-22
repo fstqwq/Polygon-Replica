@@ -30,6 +30,10 @@ class _VariableCoverage:
     max_hit: bool = False
 
 
+def boundary_coverage_missing_message(missing_item: str) -> str:
+    return f"Test data did not hit: {missing_item}"
+
+
 def _prepared_variable_name(raw_name: str) -> tuple[str, bool, bool]:
     name = str(raw_name or "")
     if len(name) >= 2 and name != "~~":
@@ -143,7 +147,7 @@ def boundary_coverage_from_feedback(
         return BoundaryCoverageResult(
             status="warning",
             checked_count=checked_count,
-            error=f"boundary coverage missing: {shown}{suffix}",
+            error=boundary_coverage_missing_message(f"{shown}{suffix}"),
             missing=missing,
         )
     return BoundaryCoverageResult(

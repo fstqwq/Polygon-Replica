@@ -10,6 +10,7 @@ from app.service.verification.types import Status
 
 from .boundary_coverage import (
     BOUNDARY_COVERAGE_CHECK,
+    boundary_coverage_missing_message,
     boundary_coverage_from_feedback,
 )
 from .sample_output_validation import _result_verdict, validate_custom_sample_outputs
@@ -361,11 +362,18 @@ def run_verification_sanity_checks(
     boundary_log = logs_dir / "boundary.log"
     boundary_log.parent.mkdir(parents=True, exist_ok=True)
     boundary_messages = tuple(
-        VerificationSanityMessage(severity=SANITY_WARNING, test_name="", message=item)
+        VerificationSanityMessage(
+            severity=SANITY_WARNING,
+            test_name="",
+            message=boundary_coverage_missing_message(item),
+        )
         for item in boundary_result.missing
     )
     if boundary_result.status == SANITY_WARNING:
-        boundary_log.write_text("\n".join(boundary_result.missing) + "\n", encoding="utf-8")
+        boundary_log.write_text(
+            "\n".join(item.message for item in boundary_messages) + "\n",
+            encoding="utf-8",
+        )
     else:
         boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
     check_results.append(

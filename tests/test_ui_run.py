@@ -4565,7 +4565,7 @@ class TestUIRun(UIBaseSuite):
                 "failed_step": "sanity",
                 "failed_check": "boundary_coverage",
                 "failed_test": "",
-                "error": "boundary coverage missing: n max=3",
+                "error": "Test data did not hit: n max=3",
             },
         )
         VerificationTaskStore(config.db).replace_graph(
@@ -4601,7 +4601,7 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("verification-sanity-detail-popup", html)
         self.assertNotIn("Ran 1 of 1 sanity checks.", html)
         self.assertIn("Boundary coverage", html)
-        self.assertIn("boundary coverage missing: n max=3", html)
+        self.assertIn("Test data did not hit: n max=3", html)
 
     def test_run_details_sanity_failed_keeps_verification_status_ok(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -4865,7 +4865,7 @@ class TestUIRun(UIBaseSuite):
                 "validated_count": 3,
                 "failed_step": "sanity",
                 "failed_check": "boundary_coverage",
-                "error": "boundary coverage missing: n max=3",
+                "error": "Test data did not hit: n max=3",
             },
         )
 
@@ -4880,14 +4880,14 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(str(row.get("status")), "ok")
         self.assertEqual(str(row.get("status_display")), "ok (has warning)")
         self.assertEqual(str(row.get("status_tone")), "warn")
-        self.assertEqual(str(row.get("fail_reason")), "boundary coverage missing: n max=3")
+        self.assertEqual(str(row.get("fail_reason")), "Test data did not hit: n max=3")
         self.assertFalse(bool(row.get("is_failed")))
 
         page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(page.status_code, 200)
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("ok (has warning)", html)
-        self.assertIn("boundary coverage missing: n max=3", html)
+        self.assertIn("Test data did not hit: n max=3", html)
 
     def test_workflow_pages_emit_files_source_context_links(self) -> None:
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

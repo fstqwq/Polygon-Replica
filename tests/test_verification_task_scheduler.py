@@ -409,7 +409,7 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.status, "warning")
         self.assertEqual(result.checked_count, 3)
         self.assertEqual(result.missing, ["n max=3", "x max=9"])
-        self.assertIn("boundary coverage missing", result.error)
+        self.assertEqual(result.error, "Test data did not hit: n max=3, x max=9")
 
     def test_boundary_coverage_ignores_wrapped_or_plain_messages(self) -> None:
         from app.impl.workspace.boundary_coverage import boundary_coverage_from_feedback
@@ -510,11 +510,11 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(result.status, "warning")
         self.assertEqual(result.check_name, BOUNDARY_COVERAGE_CHECK)
         self.assertEqual(result.checked_count, 3)
-        self.assertIn("n max=3", result.error)
+        self.assertEqual(result.error, "Test data did not hit: n max=3")
         boundary_result = next(item for item in result.check_results if item.name == BOUNDARY_COVERAGE_CHECK)
         self.assertEqual(boundary_result.status, "warning")
-        self.assertEqual([message.message for message in boundary_result.messages], ["n max=3"])
-        self.assertIn("n max=3", (logs_dir / "boundary.log").read_text(encoding="utf-8"))
+        self.assertEqual([message.message for message in boundary_result.messages], ["Test data did not hit: n max=3"])
+        self.assertIn("Test data did not hit: n max=3", (logs_dir / "boundary.log").read_text(encoding="utf-8"))
 
     def test_sanity_runtime_threshold_warning_uses_answer_correct_summary(self) -> None:
         from app.impl.workspace.sanity_checks import BOUNDARY_COVERAGE_CHECK, SUMMARY_RUNTIME_THRESHOLD_CHECK, run_verification_sanity_checks
