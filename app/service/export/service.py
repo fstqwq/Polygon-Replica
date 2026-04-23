@@ -7,6 +7,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
+from typing import Callable
 
 from app.db import DB
 from app.service.disk.export_store import ExportStore
@@ -37,12 +38,20 @@ class ExportService:
         "run_time_error",
         "rejected",
     )
-    def __init__(self, db: DB, artifacts_root: Path, workspace_root: Path, tex_compile_service: TexCompileService):
+    def __init__(
+        self,
+        db: DB,
+        artifacts_root: Path,
+        workspace_root: Path,
+        tex_compile_service: TexCompileService,
+        artifact_blob_resolver: Callable[[str], bytes | None],
+    ):
         self.db = db
         self._store = ExportStore(db)
         self.artifacts_root = artifacts_root
         self.workspace_root = workspace_root
         self.tex_compile_service = tex_compile_service
+        self.artifact_blob_resolver = artifact_blob_resolver
 
     def latest_workspace_source_commit(self, problem_id: int, workspace_id: int) -> str:
         return self._store.latest_workspace_source_commit(problem_id, workspace_id)
@@ -533,13 +542,37 @@ class ExportService:
             compiled_any = True
         return compiled_any
 
-    def _copy_required_answer(self, snapshot: Path, test_id: str, target: Path) -> None:
+    def _verification_answer_blob(self, verification_id: str, test_id: str) -> bytes | None:
+        safe_verification_id = str(verification_id or "").strip()
+        safe_test_id = str(test_id or "").strip()
+        if not safe_verification_id or not safe_test_id:
+            return None
+        row = self.db.fetch_one(
+            """
+            SELECT answer_ref
+            FROM verification_artifact_refs
+            WHERE verification_id=? AND test_name=?
+            """,
+            [safe_verification_id, f"{safe_test_id}.in"],
+        )
+        if row is None:
+            return None
+        answer_ref = str(row["answer_ref"] or "")
+        if not answer_ref:
+            return None
+        return self.artifact_blob_resolver(answer_ref)
+
+    def _copy_required_answer(self, snapshot: Path, test_id: str, target: Path, *, verification_id: str) -> None:
+        answer_blob = self._verification_answer_blob(verification_id, test_id)
+        if answer_blob is not None:
+            target.write_bytes(answer_blob)
+            return
         answer_file = snapshot / "tests" / "answers" / f"{test_id}.ans"
         if not self._is_safe_regular_file(snapshot, answer_file):
             raise ValueError(f"export missing test answer: tests/answers/{test_id}.ans")
         shutil.copy2(answer_file, target)
 
-    def _copy_secret_and_sample_data(self, snapshot: Path, package_root: Path) -> None:
+    def _copy_secret_and_sample_data(self, snapshot: Path, package_root: Path, *, verification_id: str) -> None:
         secret_dir = package_root / "data" / "secret"
         sample_dir = package_root / "data" / "sample"
         secret_dir.mkdir(parents=True, exist_ok=True)
@@ -555,14 +588,24 @@ class ExportService:
                 raise ValueError(f"export missing test input: {source_rel}")
             if not bool(row["sample"]):
                 shutil.copy2(input_file, secret_dir / f"{test_id}.in")
-                self._copy_required_answer(snapshot, test_id, secret_dir / f"{test_id}.ans")
+                self._copy_required_answer(
+                    snapshot,
+                    test_id,
+                    secret_dir / f"{test_id}.ans",
+                    verification_id=verification_id,
+                )
                 continue
             shutil.copy2(input_file, sample_dir / f"{test_id}.in")
             sample_output = str(row["sample_output"] or "")
             if sample_output:
                 (sample_dir / f"{test_id}.ans").write_text(sample_output, encoding="utf-8")
                 continue
-            self._copy_required_answer(snapshot, test_id, sample_dir / f"{test_id}.ans")
+            self._copy_required_answer(
+                snapshot,
+                test_id,
+                sample_dir / f"{test_id}.ans",
+                verification_id=verification_id,
+            )
 
     def _copy_output_validator_component(self, source: Path | None, dst_dir: Path, subdir: str) -> None:
         if source is None:
@@ -590,6 +633,7 @@ class ExportService:
         snapshot: Path,
         problem_name: str,
         problem_slug: str,
+        verification_id: str,
         mode: str,
         pass_limit: int,
     ) -> None:
@@ -610,7 +654,7 @@ class ExportService:
             self._build_domjudge_problem_ini(slug=self._public_problem_slug(problem_slug), snapshot=snapshot),
             encoding="utf-8",
         )
-        self._copy_secret_and_sample_data(snapshot, package_root)
+        self._copy_secret_and_sample_data(snapshot, package_root, verification_id=verification_id)
         self._try_compile_statement_pdf(snapshot, package_root / "statement", problem_name=problem_name)
         self._copy_output_validator_component(
             interactor_source if mode == "interactive" else checker_source,
@@ -786,6 +830,7 @@ class ExportService:
                     snapshot=snapshot,
                     problem_name=problem_row["name"],
                     problem_slug=str(problem_row["slug"]),
+                    verification_id=resolved_verification_id,
                     mode=mode,
                     pass_limit=pass_limit,
                 )

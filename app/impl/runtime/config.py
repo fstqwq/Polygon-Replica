@@ -162,6 +162,7 @@ class RuntimeConfig:
             self.settings.artifacts_root,
             self.settings.workspace_root,
             self.tex_compile_service,
+            artifact_blob_resolver=self.judgehost_task_service.resolve_artifact_blob,
         )
         durable_log_raw = str(self.constants.WORKER_QUEUE_DURABLE_LOG or "").strip()
         durable_log_path = self.settings.cache_root / "runtime" / "worker-queue-events.jsonl"

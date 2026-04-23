@@ -644,6 +644,57 @@ class TestExport(SmokeBase):
                 source_commit=head,
             )
 
+    def test_icpc_export_uses_verification_answer_artifacts(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_artifact_ans_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "tests" / "manual" / "001.in").write_text("1\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps({"tests": [{"id": "001", "kind": "manual", "sample": False}]}, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", "tests/manual/001.in", "tests/spec.json"],
+            f"test icpc artifact answer {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-answer-{token}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature=head,
+            source_commit=head,
+            kind="all",
+            status="ok",
+            detail={"sanity_status": "passed", "validation_status": "passed"},
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"artifact answer\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"answer_ref": answer_ref},
+        )
+        archive = export_service.create_export(
+            self.problem,
+            verification_id,
+            "icpc",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
+        with zipfile.ZipFile(archive, "r") as zf:
+            self.assertEqual(zf.read("data/secret/001.ans"), b"artifact answer\n")
+
     def test_icpc_export_emits_domjudge_reference_metadata(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
