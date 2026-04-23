@@ -6,6 +6,7 @@ from app.service.platform.error_text import bounded_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.signature import verification_signature
+from app.service.verification.types import Kind
 from .run_display import run_actual_failed_codes, run_actual_short
 
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
@@ -158,7 +159,11 @@ def _status_rule_match(expected_behavior: str, run_status: str, summary: dict | 
     return (False, reason)
 
 
-def _verification_solution_match(expected_behavior: str, run_status: str, summary: dict | None) -> tuple[bool, bool, bool, str]:
+def _verification_solution_match(
+    expected_behavior: str,
+    run_status: str,
+    summary: dict | None,
+) -> tuple[bool, bool, bool, str]:
     if run_status in {'running', 'queued', 'pending'}:
         return (False, False, False, 'running')
     completed = _verification_run_completed(run_status, summary)
@@ -250,6 +255,22 @@ def _verification_error_prefers_source_hint(error_text: str) -> bool:
 def _verification_stale_reason() -> str:
     return "changed: verification inputs"
 
+
+def _empty_verification_status_context() -> dict[str, object]:
+    return {
+        'mode': 'none',
+        'display': 'none',
+        'last_status': 'none',
+        'run_id': '',
+        'run_ids': '',
+        'verification_id': '',
+        'error': '',
+        'created_at': '',
+        'stale': False,
+        'stale_reason': '',
+    }
+
+
 def _verification_status_context(
     problem_id: int,
     actor_user_id: int,
@@ -261,11 +282,23 @@ def _verification_status_context(
     rows = config.verification_service._verification_store.workspace_verification_rows(
         int(problem_id),
         int(workspace_id),
-        limit=1,
+        limit=40,
+        kinds=(Kind.ALL.value,),
     )
-    row = rows[0] if rows else None
+    if not rows:
+        return _empty_verification_status_context()
+    current_signature = ''
+    if workspace_path:
+        try:
+            workspace_obj = Path(workspace_path)
+            current_signature = _verification_sources_signature(workspace_obj)
+        except Exception:
+            current_signature = ''
+    row = None
+    if current_signature:
+        row = next((item for item in rows if item["signature"] == current_signature), None)
     if row is None:
-        return {'mode': 'none', 'display': 'none', 'last_status': 'none', 'run_id': '', 'run_ids': '', 'verification_id': '', 'error': '', 'created_at': '', 'stale': False, 'stale_reason': ''}
+        row = rows[0]
     verification_id = row['id']
     detail = config.verification_service.verification_detail(verification_id)
     status_token = row['status']
@@ -279,13 +312,6 @@ def _verification_status_context(
     run_id = ''
     verification_created_at = row['created_at']
     recorded_signature = str(row.get("signature") or "")
-    current_signature = ''
-    if workspace_path:
-        try:
-            workspace_obj = Path(workspace_path)
-            current_signature = _verification_sources_signature(workspace_obj)
-        except Exception:
-            current_signature = ''
     stale = bool(recorded_signature and current_signature and (recorded_signature != current_signature))
     record = config.verification_service.verification_record(verification_id) or {}
     sanity_status = str(detail.get("sanity_status") or "").strip().lower()

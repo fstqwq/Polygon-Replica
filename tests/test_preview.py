@@ -10,6 +10,7 @@ from .db_helpers import (
 import base64
 import json
 import fcntl
+import os
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -400,6 +401,24 @@ class TestPreview(SmokeBase):
         )
         digest_after_validator = verification_signature(ws)
         self.assertNotEqual(digest_after_testlib, digest_after_validator)
+
+    def test_verification_signature_ignores_mtime_when_content_is_unchanged(self) -> None:
+        ws = self._workspace_path()
+        target = ws / "config" / "build.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}\n", encoding="utf-8")
+        digest_before = verification_signature(ws)
+
+        stat_obj = target.stat()
+        os.utime(
+            target,
+            ns=(
+                int(stat_obj.st_atime_ns) + 5_000_000_000,
+                int(stat_obj.st_mtime_ns) + 5_000_000_000,
+            ),
+        )
+
+        self.assertEqual(digest_before, verification_signature(ws))
 
     def test_preview_sample_sync_builds_manual_and_generator_from_verification(self) -> None:
         ws = self._workspace_path()

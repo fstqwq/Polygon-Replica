@@ -1164,6 +1164,46 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertIn("changed: verification inputs", html)
 
+    def test_verification_sidebar_prefers_current_workspace_signature_over_export_verification(self) -> None:
+        problem = f"alice/verify-export-not-stale-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        user_id = int(ctx["user"]["id"])
+        current_signature = workspace_impl._verification_sources_signature(ws)
+        workspace_verification_id = f"ver-workspace-{uuid.uuid4().hex[:8]}"
+        export_verification_id = f"ver-export-{uuid.uuid4().hex[:8]}"
+
+        self._insert_stage_verification(
+            verification_id=workspace_verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=current_signature,
+            status="ok",
+            created_at="2026-02-23T00:00:00Z",
+        )
+        self._insert_stage_verification(
+            verification_id=export_verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=f"snapshot-{uuid.uuid4().hex}",
+            status="ok",
+            source_commit="0123456789abcdef",
+            created_at="2026-02-23T00:00:01Z",
+        )
+
+        status = workspace_verification_module._verification_status_context(
+            problem_id,
+            user_id,
+            workspace_id,
+            False,
+            workspace_path=ws,
+        )
+        self.assertEqual(status["mode"], "pass")
+        self.assertEqual(status["verification_id"], workspace_verification_id)
+        self.assertFalse(status["stale"])
+
     def test_run_page_shows_multi_solution_selector_without_mode_select(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)

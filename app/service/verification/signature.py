@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from app.service.platform.hashing import quick_fp_digest
+from app.service.platform.hashing import quick_fp_digest, sha256_file
 
 
 _VERIFICATION_SIGNATURE_FILE_TARGETS: tuple[str, ...] = (
@@ -21,10 +21,6 @@ _VERIFICATION_SIGNATURE_DIR_TARGETS: tuple[str, ...] = (
     "tests/generator",
     "third_party/testlib",
 )
-
-
-def _stat_mtime_ns(stat_obj: os.stat_result) -> int:
-    return int(getattr(stat_obj, "st_mtime_ns", int(float(stat_obj.st_mtime) * 1_000_000_000)))
 
 
 def verification_signature(workspace: Path) -> str:
@@ -62,7 +58,7 @@ def verification_signature(workspace: Path) -> str:
                     "target": rel_path,
                     "state": "ok",
                     "size": int(stat_obj.st_size),
-                    "mtime_ns": _stat_mtime_ns(stat_obj),
+                    "sha256": sha256_file(target),
                 }
             )
         except OSError:
@@ -129,7 +125,7 @@ def verification_signature(workspace: Path) -> str:
                         "path": rel,
                         "state": "ok",
                         "size": int(stat_obj.st_size),
-                        "mtime_ns": _stat_mtime_ns(stat_obj),
+                        "sha256": sha256_file(path),
                     }
                 )
             except OSError:
