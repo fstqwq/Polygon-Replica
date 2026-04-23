@@ -528,6 +528,19 @@ class ICPCPackageImportService:
             return (0, int(stem), rel_path)
         return (1, 0, rel_path)
 
+    def _test_id_from_data_path(self, rel_path: str) -> str:
+        stem = Path(rel_path).stem
+        if stem.isdigit():
+            return stem.zfill(max(3, len(stem)))
+        return ""
+
+    def _unique_imported_test_id(self, preferred: str, used_ids: set[str], fallback_index: int) -> str:
+        candidate = preferred or f"{fallback_index:03d}"
+        while candidate in used_ids:
+            fallback_index += 1
+            candidate = f"{fallback_index:03d}"
+        return candidate
+
     def _import_tests(
         self,
         zf: zipfile.ZipFile,
@@ -546,6 +559,16 @@ class ICPCPackageImportService:
         gen_dir.mkdir(parents=True, exist_ok=True)
         answers_dir.mkdir(parents=True, exist_ok=True)
 
+        sample_inputs = sorted(
+            [
+                rel
+                for rel in entries
+                if rel.startswith("data/sample/")
+                and rel.endswith(".in")
+                and Path(rel).name.lower() != ".ds_store"
+            ],
+            key=self._secret_input_sort_key,
+        )
         secret_inputs = sorted(
             [
                 rel
@@ -556,48 +579,59 @@ class ICPCPackageImportService:
             ],
             key=self._secret_input_sort_key,
         )
-        if not secret_inputs:
-            raise ValueError("data/secret/*.in not found in ICPC package")
+        if not sample_inputs and not secret_inputs:
+            raise ValueError("data/sample/*.in or data/secret/*.in not found in ICPC package")
 
-        sample_payload = b""
-        sample_info = entries.get("data/sample/1.in")
-        if sample_info is not None:
-            sample_payload = _read_bytes_from_zip(zf, sample_info)
-            if normalize_test_data_newlines:
-                sample_payload = _normalize_text_newlines_bytes(sample_payload)
-
+        used_ids: set[str] = set()
+        entry_by_id: dict[str, dict[str, object]] = {}
+        answer_ids: set[str] = set()
         spec_entries: list[dict[str, object]] = []
-        sample_index = 0
         answer_count = 0
-        answer_text_by_index: dict[int, str] = {}
-        for idx, rel in enumerate(secret_inputs, start=1):
+
+        def _read_input_payload(rel: str) -> bytes:
             info = entries[rel]
             payload = _read_bytes_from_zip(zf, info)
             if normalize_test_data_newlines:
                 payload = _normalize_text_newlines_bytes(payload)
-            if sample_payload and sample_index <= 0 and payload == sample_payload:
-                sample_index = idx
-            test_id = f"{idx:03d}"
-            text = payload.decode("utf-8", errors="replace")
-            self._write_text(workspace, Path("tests") / "manual" / f"{test_id}.in", text)
+            return payload
 
+        def _import_answer(rel: str, test_id: str, spec_row: dict[str, object]) -> None:
+            nonlocal answer_count
             ans_rel = rel[:-len(".in")] + ".ans"
             ans_info = entries.get(ans_rel)
-            if ans_info is not None:
-                ans_payload = _read_bytes_from_zip(zf, ans_info)
-                if normalize_test_data_newlines:
-                    ans_payload = _normalize_text_newlines_bytes(ans_payload)
-                self._write_bytes(workspace, Path("tests") / "answers" / f"{test_id}.ans", ans_payload)
-                answer_text_by_index[idx] = ans_payload.decode("utf-8", errors="replace")
-                answer_count += 1
+            if ans_info is None or test_id in answer_ids:
+                return
+            ans_payload = _read_bytes_from_zip(zf, ans_info)
+            if normalize_test_data_newlines:
+                ans_payload = _normalize_text_newlines_bytes(ans_payload)
+            self._write_bytes(workspace, Path("tests") / "answers" / f"{test_id}.ans", ans_payload)
+            answer_ids.add(test_id)
+            answer_count += 1
+            if bool(spec_row.get("sample")) and not str(spec_row.get("sample_output") or ""):
+                spec_row["sample_output"] = ans_payload.decode("utf-8", errors="replace")
 
-            spec_entries.append({"id": test_id, "kind": "manual", "sample": False})
+        def _import_input(rel: str, *, sample: bool, fallback_index: int) -> dict[str, object]:
+            preferred_id = self._test_id_from_data_path(rel)
+            test_id = self._unique_imported_test_id(preferred_id, used_ids, fallback_index)
+            payload = _read_input_payload(rel)
+            text = payload.decode("utf-8", errors="replace")
+            self._write_text(workspace, Path("tests") / "manual" / f"{test_id}.in", text)
+            spec_row: dict[str, object] = {"id": test_id, "kind": "manual", "sample": sample}
+            used_ids.add(test_id)
+            entry_by_id[test_id] = spec_row
+            spec_entries.append(spec_row)
+            _import_answer(rel, test_id, spec_row)
+            return spec_row
 
-        if sample_index > 0 and sample_index <= len(spec_entries):
-            spec_entries[sample_index - 1]["sample"] = True
-            sample_answer_text = answer_text_by_index.get(sample_index, "")
-            if sample_answer_text:
-                spec_entries[sample_index - 1]["sample_output"] = sample_answer_text
+        for idx, rel in enumerate(sample_inputs, start=1):
+            _import_input(rel, sample=True, fallback_index=idx)
+
+        for idx, rel in enumerate(secret_inputs, start=len(spec_entries) + 1):
+            preferred_id = self._test_id_from_data_path(rel)
+            if preferred_id and preferred_id in entry_by_id:
+                _import_answer(rel, preferred_id, entry_by_id[preferred_id])
+                continue
+            _import_input(rel, sample=False, fallback_index=idx)
 
         self._write_text(workspace, Path("tests/spec.json"), dumps_tests_spec(spec_entries))
         return {
@@ -605,7 +639,7 @@ class ICPCPackageImportService:
             "manual": len(spec_entries),
             "gen": 0,
             "answers": answer_count,
-            "sample": 1 if sample_index > 0 else 0,
+            "sample": sum(1 for row in spec_entries if bool(row.get("sample"))),
         }
 
     def _import_solutions(self, zf: zipfile.ZipFile, entries: dict[str, zipfile.ZipInfo], workspace: Path) -> SolutionsSummary:

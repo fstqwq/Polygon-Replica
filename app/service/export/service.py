@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
 
 from app.db import DB
@@ -14,7 +15,6 @@ from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
-from app.service.statement.constant import STATEMENT_ASSETS_DIR
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.platform.git_process import run_git
@@ -82,6 +82,10 @@ class ExportService:
         token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(slug or "").strip())
         token = token.strip("-.")
         return token or "problem"
+
+    def _public_problem_slug(self, slug: str) -> str:
+        token = str(slug or "").replace("\\", "/").strip("/").rsplit("/", 1)[-1].strip()
+        return self._archive_filename_slug(token)
 
     def _is_safe_regular_file(self, root: Path, p: Path, root_resolved: Path | None = None) -> bool:
         if p.is_symlink() or not p.exists() or not p.is_file():
@@ -262,17 +266,6 @@ class ExportService:
         if source_path.is_symlink() or not source_path.exists() or not source_path.is_file():
             raise ValueError(f"configured source does not exist: {source_rel}")
         return source_path
-
-    def _effective_validator_source(self, snapshot: Path, strict: bool) -> Path | None:
-        configured = validator_source.strip() if isinstance(validator_source := self._load_build_config(snapshot).get("validator_source"), str) else ""
-        if configured:
-            try:
-                return self._resolve_snapshot_source(snapshot, configured)
-            except ValueError:
-                if strict:
-                    raise ValueError("validator_source is configured but invalid")
-                return None
-        return self._find_first_source(snapshot / "validators")
 
     def _effective_checker_source(self, snapshot: Path, strict: bool) -> Path | None:
         build_cfg = self._load_build_config(snapshot)
@@ -520,27 +513,8 @@ class ExportService:
             return "zh"
         return language
 
-    def _copy_statement_tree(self, snapshot: Path, dst_statement: Path, *, problem_name: str) -> None:
-        dst_statement.mkdir(parents=True, exist_ok=True)
-        src_statement = snapshot / "statement"
-        if src_statement.exists() and src_statement.is_dir() and not src_statement.is_symlink():
-            self._copy_dir_contents(src_statement, dst_statement)
-
-        src_sections = snapshot / "statement-sections"
-        if src_sections.exists() and src_sections.is_dir() and not src_sections.is_symlink():
-            self._copy_dir_contents(src_sections, dst_statement.parent / "statement-sections")
-        src_assets = snapshot / STATEMENT_ASSETS_DIR
-        if src_assets.exists() and src_assets.is_dir() and not src_assets.is_symlink():
-            self._copy_dir_contents(src_assets, dst_statement.parent / STATEMENT_ASSETS_DIR)
-
-        for language in self._statement_export_languages(snapshot):
-            rendered = render_statement_main(snapshot / "statement", problem_title=problem_name, language=language)
-            suffix = self._statement_export_suffix(language)
-            shutil.copy2(rendered, dst_statement / f"problem.{suffix}.tex")
-
     def _try_compile_statement_pdf(self, snapshot: Path, dst_statement: Path, *, problem_name: str) -> bool:
         compiled_any = False
-        dst_statement.mkdir(parents=True, exist_ok=True)
         for language in self._statement_export_languages(snapshot):
             try:
                 rendered = render_statement_main(snapshot / "statement", problem_title=problem_name, language=language)
@@ -554,9 +528,16 @@ class ExportService:
             if not pdf_path.exists() or not pdf_path.is_file():
                 continue
             suffix = self._statement_export_suffix(language)
+            dst_statement.mkdir(parents=True, exist_ok=True)
             shutil.copy2(pdf_path, dst_statement / f"problem.{suffix}.pdf")
             compiled_any = True
         return compiled_any
+
+    def _copy_required_answer(self, snapshot: Path, test_id: str, target: Path) -> None:
+        answer_file = snapshot / "tests" / "answers" / f"{test_id}.ans"
+        if not self._is_safe_regular_file(snapshot, answer_file):
+            raise ValueError(f"export missing test answer: tests/answers/{test_id}.ans")
+        shutil.copy2(answer_file, target)
 
     def _copy_secret_and_sample_data(self, snapshot: Path, package_root: Path) -> None:
         secret_dir = package_root / "data" / "secret"
@@ -566,32 +547,22 @@ class ExportService:
         entries = load_tests_spec(snapshot / "tests" / "spec.json")
         if not entries:
             raise ValueError("export requires tests/spec.json entries")
-        sample_written = False
         for row in entries:
             test_id = row["id"]
             source_rel = payload_rel_path_for_test(test_id, row["kind"])
             input_file = snapshot / source_rel
             if not self._is_safe_regular_file(snapshot, input_file):
                 raise ValueError(f"export missing test input: {source_rel}")
-            shutil.copy2(input_file, secret_dir / f"{test_id}.in")
-            answer_file = snapshot / "tests" / "answers" / f"{test_id}.ans"
-            if self._is_safe_regular_file(snapshot, answer_file):
-                shutil.copy2(answer_file, secret_dir / f"{test_id}.ans")
-            if (not bool(row["sample"])) or sample_written:
+            if not bool(row["sample"]):
+                shutil.copy2(input_file, secret_dir / f"{test_id}.in")
+                self._copy_required_answer(snapshot, test_id, secret_dir / f"{test_id}.ans")
                 continue
-            shutil.copy2(input_file, sample_dir / "1.in")
+            shutil.copy2(input_file, sample_dir / f"{test_id}.in")
             sample_output = str(row["sample_output"] or "")
             if sample_output:
-                (sample_dir / "1.ans").write_text(sample_output, encoding="utf-8")
-            elif self._is_safe_regular_file(snapshot, answer_file):
-                shutil.copy2(answer_file, sample_dir / "1.ans")
-            sample_written = True
-
-    def _copy_named_component(self, source: Path | None, dst_dir: Path) -> None:
-        if source is None:
-            return
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, dst_dir / source.name)
+                (sample_dir / f"{test_id}.ans").write_text(sample_output, encoding="utf-8")
+                continue
+            self._copy_required_answer(snapshot, test_id, sample_dir / f"{test_id}.ans")
 
     def _copy_output_validator_component(self, source: Path | None, dst_dir: Path, subdir: str) -> None:
         if source is None:
@@ -636,15 +607,11 @@ class ExportService:
             encoding="utf-8",
         )
         (package_root / "domjudge-problem.ini").write_text(
-            self._build_domjudge_problem_ini(slug=problem_slug, snapshot=snapshot),
+            self._build_domjudge_problem_ini(slug=self._public_problem_slug(problem_slug), snapshot=snapshot),
             encoding="utf-8",
         )
         self._copy_secret_and_sample_data(snapshot, package_root)
-        statement_dir = package_root / "statement"
-        self._copy_statement_tree(snapshot, statement_dir, problem_name=problem_name)
-        self._try_compile_statement_pdf(snapshot, statement_dir, problem_name=problem_name)
-        validator_source = self._effective_validator_source(snapshot, strict=False)
-        self._copy_named_component(validator_source, package_root / "input_validators")
+        self._try_compile_statement_pdf(snapshot, package_root / "statement", problem_name=problem_name)
         self._copy_output_validator_component(
             interactor_source if mode == "interactive" else checker_source,
             package_root / "output_validators",
@@ -652,6 +619,35 @@ class ExportService:
         )
         self._copy_solutions(snapshot, package_root)
         self._copy_attachments(snapshot, package_root)
+
+    def _make_archive_from_dir_contents(self, archive_target: Path, root: Path) -> Path:
+        archive_target.parent.mkdir(parents=True, exist_ok=True)
+        root_resolved = root.resolve()
+        with zipfile.ZipFile(archive_target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+                dir_root = Path(dirpath)
+                dirnames[:] = sorted(
+                    name
+                    for name in dirnames
+                    if not (dir_root / name).is_symlink()
+                )
+                try:
+                    dir_root_resolved = dir_root.resolve()
+                except OSError:
+                    dirnames[:] = []
+                    continue
+                if root_resolved not in dir_root_resolved.parents and root_resolved != dir_root_resolved:
+                    dirnames[:] = []
+                    continue
+                rel_dir = dir_root.relative_to(root)
+                if rel_dir.parts:
+                    zf.writestr(rel_dir.as_posix().rstrip("/") + "/", b"")
+                for filename in sorted(filenames):
+                    source = dir_root / filename
+                    if not self._is_safe_regular_file(root, source, root_resolved=root_resolved):
+                        continue
+                    zf.write(source, source.relative_to(root).as_posix())
+        return archive_target
 
     def _copy_attachments(self, snapshot: Path, package_root: Path) -> None:
         src = snapshot / "attachments"
@@ -808,16 +804,19 @@ class ExportService:
             if resolved_export_type == "native":
                 preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-native-{revision_token}.zip"
             else:
-                preferred_filename = f"{self._archive_filename_slug(str(problem_row['slug']))}-{revision_token}.zip"
+                preferred_filename = f"{self._public_problem_slug(str(problem_row['slug']))}-{revision_token}.zip"
             archive_target = self._export_path(str(problem_row["slug"]), export_id, preferred_filename)
-            archive_prefix = archive_target.with_suffix("")
-            archive = shutil.make_archive(
-                str(archive_prefix),
-                "zip",
-                root_dir=tmp_root,
-                base_dir=package_root.name,
-            )
-            out = Path(archive)
+            if resolved_export_type == "icpc":
+                out = self._make_archive_from_dir_contents(archive_target, package_root)
+            else:
+                archive_prefix = archive_target.with_suffix("")
+                archive = shutil.make_archive(
+                    str(archive_prefix),
+                    "zip",
+                    root_dir=tmp_root,
+                    base_dir=package_root.name,
+                )
+                out = Path(archive)
             digest = sha256_file(out)
 
             self._store.insert_export_record(

@@ -425,7 +425,7 @@ class TestExport(SmokeBase):
         self.assertEqual((imported_ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "1\n")
         self.assertEqual((imported_ws / "tests" / "answers" / "001.ans").read_bytes(), b"1\n")
         self.assertTrue((imported_ws / "statement" / "statements.ftl").is_file())
-        self.assertEqual((imported_ws / files["statement_asset"]).read_bytes(), b"PNG")
+        self.assertFalse((imported_ws / files["statement_asset"]).exists())
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertIn(str(imported_problem_cfg.get("mode") or ""), {"pass-fail", "interactive"})
         self.assertGreaterEqual(int(imported_problem_cfg.get("pass_limit") or 0), 1)
@@ -512,6 +512,138 @@ class TestExport(SmokeBase):
         self.assertEqual(imported_problem_cfg.get("pass_limit"), 2)
         self.assertEqual(run_git(["git", "-C", str(imported_ws), "status", "--short"]).stdout.strip(), "")
 
+    def test_icpc_export_uses_domjudge_root_layout_and_separated_samples(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        files = {
+            "accepted": f"solutions/ac_icpc_layout_{token}.cpp",
+            "validator": f"validators/validator_layout_{token}.cpp",
+            "checker": f"checkers/checker_layout_{token}.cpp",
+            "asset": f"statement-assets/layout_{token}.png",
+            "build": "config/build.json",
+        }
+        (ws / files["accepted"]).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{files['accepted']}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / files["validator"]).write_text("#include \"testlib.h\"\nint main(){return 0;}\n", encoding="utf-8")
+        (ws / files["checker"]).write_text("#include \"testlib.h\"\nint main(){return 0;}\n", encoding="utf-8")
+        (ws / files["asset"]).parent.mkdir(parents=True, exist_ok=True)
+        (ws / files["asset"]).write_bytes(b"PNG")
+        (ws / "tests" / "manual" / "001.in").write_text("sample input\n", encoding="utf-8")
+        (ws / "tests" / "manual" / "002.in").write_text("secret input\n", encoding="utf-8")
+        (ws / "tests" / "answers" / "001.ans").write_text("answer file should not win\n", encoding="utf-8")
+        (ws / "tests" / "answers" / "002.ans").write_text("secret answer\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {
+                            "id": "001",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_output": "sample answer\n",
+                        },
+                        {"id": "002", "kind": "manual", "sample": False},
+                    ]
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / files["build"]).write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": files["accepted"],
+                    "validator_source": files["validator"],
+                    "checker_source": files["checker"],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [
+                files["accepted"],
+                f"{files['accepted']}.desc",
+                files["validator"],
+                files["checker"],
+                files["asset"],
+                files["build"],
+                "tests/manual/001.in",
+                "tests/manual/002.in",
+                "tests/answers/001.ans",
+                "tests/answers/002.ans",
+                "tests/spec.json",
+            ],
+            f"test icpc root layout {token}",
+        )
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+            source_commit=head,
+        )
+
+        public_slug = Path(self.problem).name
+        self.assertTrue(archive.name.startswith(f"{public_slug}-v"))
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+            self.assertIn("problem.yaml", names)
+            self.assertIn("domjudge-problem.ini", names)
+            self.assertFalse(any(name.startswith(f"{public_slug}/") for name in names))
+            self.assertFalse(any(name.startswith("input_validators/") for name in names))
+            self.assertFalse(any(name.endswith(".tex") for name in names))
+            self.assertFalse(any(name.startswith("statement-sections/") for name in names))
+            self.assertFalse(any(name.startswith("statement-assets/") for name in names))
+            self.assertIn("data/sample/001.in", names)
+            self.assertIn("data/sample/001.ans", names)
+            self.assertNotIn("data/secret/001.in", names)
+            self.assertNotIn("data/secret/001.ans", names)
+            self.assertIn("data/secret/002.in", names)
+            self.assertIn("data/secret/002.ans", names)
+            self.assertEqual(zf.read("data/sample/001.ans").decode("utf-8"), "sample answer\n")
+            self.assertEqual(zf.read("data/secret/002.ans").decode("utf-8"), "secret answer\n")
+            self.assertIn(f"output_validators/checker/{Path(files['checker']).name}", names)
+            domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
+            self.assertIn(f"short-name = {public_slug[:32]}", domjudge_ini)
+            self.assertIn(f"externalid = {public_slug}", domjudge_ini)
+        export_row = db_fetch_one("SELECT id FROM exports WHERE filename=?", [archive.name])
+        self.assertIsNotNone(export_row)
+        summary = export_page_module._export_archive_summary(self.problem, str(export_row["id"]), archive.name)
+        self.assertEqual(int(summary.get("tests_total") or 0), 2)
+        self.assertEqual(int(summary.get("solutions_total") or 0), 1)
+
+    def test_icpc_export_requires_answers_for_secret_tests(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_missing_ans_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "tests" / "manual" / "001.in").write_text("1\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps({"tests": [{"id": "001", "kind": "manual", "sample": False}]}, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", "tests/manual/001.in", "tests/spec.json"],
+            f"test icpc missing answer {token}",
+        )
+        with self.assertRaisesRegex(ValueError, "export missing test answer"):
+            export_service.create_export(
+                self.problem,
+                "",
+                "icpc",
+                workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+                source_commit=head,
+            )
+
     def test_icpc_export_emits_domjudge_reference_metadata(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
@@ -570,14 +702,14 @@ class TestExport(SmokeBase):
             source_commit=head,
         )
         with zipfile.ZipFile(archive, "r") as zf:
-            problem_yaml_name = next(name for name in zf.namelist() if name.endswith("/problem.yaml"))
-            package_root = problem_yaml_name.split("/", 1)[0]
-            problem_yaml = zf.read(problem_yaml_name).decode("utf-8", errors="replace")
-            domjudge_ini = zf.read(f"{package_root}/domjudge-problem.ini").decode("utf-8", errors="replace")
+            problem_yaml = zf.read("problem.yaml").decode("utf-8", errors="replace")
+            domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
             self.assertIn("validation: custom interactive multi-pass", problem_yaml)
             self.assertIn("validation_passes: 2", problem_yaml)
             self.assertIn("timelimit = 2", domjudge_ini)
-            self.assertTrue(any(name.endswith("/output_validators/interactor/interactor_" + token + ".cpp") for name in zf.namelist()))
+            self.assertIn(f"externalid = {Path(self.problem).name}", domjudge_ini)
+            self.assertIn(f"output_validators/interactor/interactor_{token}.cpp", zf.namelist())
+        self.assertTrue(archive.name.startswith(f"{Path(self.problem).name}-v"))
 
     def test_native_import_rejects_git_metadata_paths(self) -> None:
         ws = Path(self._workspace_path())
@@ -1241,20 +1373,12 @@ class TestExport(SmokeBase):
 
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
-            problem_yaml = ""
-            for name in names:
-                if name.endswith("/problem.yaml"):
-                    problem_yaml = name
-                    break
-            self.assertTrue(problem_yaml)
-            package_root = problem_yaml.split("/", 1)[0]
+            self.assertIn("problem.yaml", names)
+            self.assertFalse(any(name.startswith("input_validators/") for name in names))
+            self.assertIn(f"output_validators/checker/{Path(files['checker_selected']).name}", names)
+            self.assertNotIn(f"output_validators/checker/{Path(files['checker_other']).name}", names)
 
-            self.assertIn(f"{package_root}/input_validators/{Path(files['validator_selected']).name}", names)
-            self.assertNotIn(f"{package_root}/input_validators/{Path(files['validator_other']).name}", names)
-            self.assertIn(f"{package_root}/output_validators/checker/{Path(files['checker_selected']).name}", names)
-            self.assertNotIn(f"{package_root}/output_validators/checker/{Path(files['checker_other']).name}", names)
-
-            content = zf.read(problem_yaml).decode("utf-8", errors="replace")
+            content = zf.read("problem.yaml").decode("utf-8", errors="replace")
             self.assertIn("problem_format_version:", content)
 
     def test_export_keeps_only_latest_record_per_revision(self) -> None:
@@ -1333,13 +1457,8 @@ class TestExport(SmokeBase):
         compile_mock.assert_called_once()
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
-        package_root = ""
-        for name in names:
-            if name.endswith("/problem.yaml"):
-                package_root = name.split("/", 1)[0]
-                break
-        self.assertTrue(package_root)
-        self.assertIn(f"{package_root}/statement/problem.en.pdf", names)
+        self.assertIn("problem.yaml", names)
+        self.assertIn("statement/problem.en.pdf", names)
 
     def test_export_statement_pdf_compilation_uses_shared_tex_compile_service(self) -> None:
         ws = Path(self._workspace_path())
@@ -1388,13 +1507,8 @@ class TestExport(SmokeBase):
         self.assertTrue(calls)
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
-        package_root = ""
-        for name in names:
-            if name.endswith("/problem.yaml"):
-                package_root = name.split("/", 1)[0]
-                break
-        self.assertTrue(package_root)
-        self.assertIn(f"{package_root}/statement/problem.en.pdf", names)
+        self.assertIn("problem.yaml", names)
+        self.assertIn("statement/problem.en.pdf", names)
 
     def test_export_emits_multilanguage_statement_tex_and_pdf_names(self) -> None:
         ws = Path(self._workspace_path())
@@ -1441,18 +1555,13 @@ class TestExport(SmokeBase):
 
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
-        package_root = ""
-        for name in names:
-            if name.endswith("/problem.yaml"):
-                package_root = name.split("/", 1)[0]
-                break
-        self.assertTrue(package_root)
-        self.assertIn(f"{package_root}/statement/problem.en.tex", names)
-        self.assertIn(f"{package_root}/statement/problem.zh.tex", names)
-        self.assertIn(f"{package_root}/statement/problem.japanese.tex", names)
-        self.assertIn(f"{package_root}/statement/problem.en.pdf", names)
-        self.assertIn(f"{package_root}/statement/problem.zh.pdf", names)
-        self.assertIn(f"{package_root}/statement/problem.japanese.pdf", names)
+        self.assertIn("problem.yaml", names)
+        self.assertNotIn("statement/problem.en.tex", names)
+        self.assertNotIn("statement/problem.zh.tex", names)
+        self.assertNotIn("statement/problem.japanese.tex", names)
+        self.assertIn("statement/problem.en.pdf", names)
+        self.assertIn("statement/problem.zh.pdf", names)
+        self.assertIn("statement/problem.japanese.pdf", names)
 
     def test_export_skips_statement_pdf_when_export_compile_fails(self) -> None:
         ws = Path(self._workspace_path())
@@ -1479,11 +1588,6 @@ class TestExport(SmokeBase):
         compile_mock.assert_called_once()
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
-        package_root = ""
-        for name in names:
-            if name.endswith("/problem.yaml"):
-                package_root = name.split("/", 1)[0]
-                break
-        self.assertTrue(package_root)
-        self.assertNotIn(f"{package_root}/statement/problem.en.pdf", names)
-        self.assertIn(f"{package_root}/statement/problem.en.tex", names)
+        self.assertIn("problem.yaml", names)
+        self.assertNotIn("statement/problem.en.pdf", names)
+        self.assertNotIn("statement/problem.en.tex", names)

@@ -203,31 +203,39 @@ def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict
         return result
     if not names:
         return result
-    package_root = ""
-    for name in names:
-        if name.endswith("/problem.yaml"):
-            package_root = name.split("/", 1)[0]
-            break
-    if not package_root:
-        package_root = names[0].split("/", 1)[0]
-    if not package_root:
+    if "problem.yaml" in names:
+        prefix = ""
+    else:
+        package_root = ""
+        for name in names:
+            if name.endswith("/problem.yaml"):
+                package_root = name.split("/", 1)[0]
+                break
+        if not package_root:
+            package_root = names[0].split("/", 1)[0]
+        if not package_root:
+            return result
+        prefix = f"{package_root}/"
+    if prefix and (not any(name.startswith(prefix) for name in names)):
         return result
-    prefix = f"{package_root}/"
     has_pdf = any(
-        name.startswith(f"{package_root}/statement/problem.") and name.endswith(".pdf")
+        name.startswith(f"{prefix}statement/problem.") and name.endswith(".pdf")
         for name in names
     )
     solutions_total = 0
     solutions_correct = 0
     tests_total = 0
     for name in names:
-        if not name.startswith(prefix):
+        if prefix and not name.startswith(prefix):
             continue
-        if name.startswith(f"{package_root}/submissions/"):
+        if name.startswith(f"{prefix}submissions/"):
             solutions_total += 1
-            if name.startswith(f"{package_root}/submissions/accepted/"):
+            if name.startswith(f"{prefix}submissions/accepted/"):
                 solutions_correct += 1
-        if name.startswith(f"{package_root}/data/secret/") and name.endswith(".in"):
+        if (
+            name.startswith(f"{prefix}data/secret/")
+            or name.startswith(f"{prefix}data/sample/")
+        ) and name.endswith(".in"):
             tests_total += 1
     result["available"] = True
     result["has_pdf"] = bool(has_pdf)

@@ -15,12 +15,12 @@ class TestICPCPackageImport(SmokeBase):
         service = ICPCPackageImportService()
         package_dir = Path("third_party/icpc-package-examples")
         expected = {
-            "ecf50-prac-a.zip": ("interactive", 2, 2000),
-            "ecf50-prac-b.zip": ("interactive", 1, 6000),
-            "ecf50-prac-c.zip": ("pass-fail", 1, 2000),
-            "ecf50-prac-d.zip": ("pass-fail", 1, 2000),
+            "ecf50-prac-a.zip": ("interactive", 2, 2000, 0),
+            "ecf50-prac-b.zip": ("interactive", 1, 6000, 0),
+            "ecf50-prac-c.zip": ("pass-fail", 1, 2000, 4),
+            "ecf50-prac-d.zip": ("pass-fail", 1, 2000, 2),
         }
-        for package_name, (mode, pass_limit, time_limit_ms) in expected.items():
+        for package_name, (mode, pass_limit, time_limit_ms, sample_count) in expected.items():
             package = package_dir / package_name
             self.assertTrue(package.is_file(), f"missing ICPC package fixture: {package}")
             with tempfile.TemporaryDirectory(prefix=f"icpc-import-{package.stem}-") as td:
@@ -32,6 +32,7 @@ class TestICPCPackageImport(SmokeBase):
                 self.assertEqual(problem_cfg.get("time_limit_ms"), time_limit_ms, package_name)
                 self.assertTrue((ws / "tests" / "spec.json").is_file(), package_name)
                 self.assertGreater(int(result.get("tests", {}).get("total") or 0), 0, package_name)
+                self.assertEqual(int(result.get("tests", {}).get("sample") or 0), sample_count, package_name)
 
     def test_import_icpc_package_basic_layout(self) -> None:
         ws = self._workspace_path()
@@ -222,4 +223,3 @@ class TestICPCPackageImport(SmokeBase):
         self.assertTrue(any("statement-sections/chinese/diagram.png" in item for item in warnings))
         self.assertTrue(any("statement-assets/diagram-zh.png" in item for item in warnings))
         self.assertFalse(any("shared.png" in item for item in warnings))
-
