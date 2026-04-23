@@ -628,6 +628,7 @@ class TestExport(SmokeBase):
             self.assertNotIn("data/secret/001.ans", names)
             self.assertIn("data/secret/002.in", names)
             self.assertIn("data/secret/002.ans", names)
+            self.assertEqual(zf.read("data/sample/001.in").decode("utf-8"), "sample input\n")
             self.assertEqual(zf.read("data/sample/001.ans").decode("utf-8"), "sample answer\n")
             self.assertEqual(zf.read("data/secret/002.ans").decode("utf-8"), "secret answer\n")
             self.assertIn(f"output_validators/checker/{Path(files['checker']).name}", names)
@@ -720,6 +721,124 @@ class TestExport(SmokeBase):
         )
         with zipfile.ZipFile(archive, "r") as zf:
             self.assertEqual(zf.read("data/secret/001.ans"), b"artifact answer\n")
+
+    def test_icpc_export_uses_verification_input_artifacts_for_generated_tests(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_artifact_input_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "tests" / "generator" / "001.in").write_text(
+            "gen_team random 2 20 101\n",
+            encoding="utf-8",
+        )
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps({"tests": [{"id": "001", "kind": "gen", "sample": False}]}, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", "tests/generator/001.in", "tests/spec.json"],
+            f"test icpc artifact input {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-input-{token}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature=head,
+            source_commit=head,
+            kind="all",
+            status="ok",
+            detail={"sanity_status": "passed", "validation_status": "passed"},
+        )
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="input",
+            file_name="001.in",
+            payload=b"2\n0 0 0\n0 0 0\n0 0 0\n",
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"0\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": input_ref, "answer_ref": answer_ref},
+        )
+        archive = export_service.create_export(
+            self.problem,
+            verification_id,
+            "icpc",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
+        with zipfile.ZipFile(archive, "r") as zf:
+            self.assertEqual(zf.read("data/secret/001.in"), b"2\n0 0 0\n0 0 0\n0 0 0\n")
+            self.assertEqual(zf.read("data/secret/001.ans"), b"0\n")
+
+    def test_icpc_export_requires_generated_input_artifact(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_missing_gen_input_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "tests" / "generator" / "001.in").write_text(
+            "gen_team random 2 20 101\n",
+            encoding="utf-8",
+        )
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps({"tests": [{"id": "001", "kind": "gen", "sample": False}]}, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", "tests/generator/001.in", "tests/spec.json"],
+            f"test icpc missing generated input {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-missing-input-{token}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature=head,
+            source_commit=head,
+            kind="all",
+            status="ok",
+            detail={"sanity_status": "passed", "validation_status": "passed"},
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"0\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"answer_ref": answer_ref},
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "export missing verification input artifact: 001\\.in",
+        ):
+            export_service.create_export(
+                self.problem,
+                verification_id,
+                "icpc",
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+            )
 
     def test_icpc_export_emits_domjudge_reference_metadata(self) -> None:
         ws = Path(self._workspace_path())

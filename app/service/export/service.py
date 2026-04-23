@@ -568,14 +568,17 @@ class ExportService:
             compiled_any = True
         return compiled_any
 
-    def _verification_answer_blob(self, verification_id: str, test_id: str) -> bytes | None:
+    def _verification_blob(self, verification_id: str, test_id: str, ref_key: str) -> bytes | None:
         safe_verification_id = str(verification_id or "").strip()
         safe_test_id = str(test_id or "").strip()
+        safe_ref_key = str(ref_key or "").strip()
+        if safe_ref_key not in {"input_ref", "answer_ref"}:
+            raise ValueError(f"invalid verification artifact ref: {safe_ref_key}")
         if not safe_verification_id or not safe_test_id:
             return None
         row = self.db.fetch_one(
-            """
-            SELECT answer_ref
+            f"""
+            SELECT {safe_ref_key}
             FROM verification_artifact_refs
             WHERE verification_id=? AND test_name=?
             """,
@@ -583,26 +586,93 @@ class ExportService:
         )
         if row is None:
             return None
-        answer_ref = str(row["answer_ref"] or "")
-        if not answer_ref:
+        artifact_ref = str(row[safe_ref_key] or "")
+        if not artifact_ref:
             return None
-        return self.artifact_blob_resolver(answer_ref)
+        return self.artifact_blob_resolver(artifact_ref)
 
-    def _copy_required_answer(self, snapshot: Path, test_id: str, target: Path, *, verification_id: str) -> None:
+    def _verification_input_blob(self, verification_id: str, test_id: str) -> bytes | None:
+        return self._verification_blob(verification_id, test_id, "input_ref")
+
+    def _verification_answer_blob(self, verification_id: str, test_id: str) -> bytes | None:
+        return self._verification_blob(verification_id, test_id, "answer_ref")
+
+    def _copy_workspace_payload_input(
+        self,
+        snapshot: Path,
+        test_id: str,
+        kind: str,
+        target: Path,
+    ) -> None:
+        source_rel = payload_rel_path_for_test(test_id, kind)
+        input_file = snapshot / source_rel
+        if not self._is_safe_regular_file(snapshot, input_file):
+            raise ValueError(f"export missing test input: {source_rel}")
+        shutil.copy2(input_file, target)
+
+    def _copy_required_test_input(
+        self,
+        snapshot: Path,
+        row: dict,
+        target: Path,
+        *,
+        verification_id: str,
+    ) -> None:
+        test_id = row["id"]
+        if row["kind"] == "manual":
+            self._copy_workspace_payload_input(snapshot, test_id, row["kind"], target)
+            return
+        input_blob = self._verification_input_blob(verification_id, test_id)
+        if input_blob is None:
+            raise ValueError(f"export missing verification input artifact: {test_id}.in")
+        target.write_bytes(input_blob)
+
+    def _copy_sample_input(
+        self,
+        snapshot: Path,
+        row: dict,
+        target: Path,
+        *,
+        verification_id: str,
+    ) -> None:
+        sample_input = row["sample_input"]
+        if sample_input:
+            target.write_text(sample_input, encoding="utf-8")
+            return
+        self._copy_required_test_input(snapshot, row, target, verification_id=verification_id)
+
+    def _copy_required_answer(
+        self,
+        snapshot: Path,
+        test_id: str,
+        target: Path,
+        *,
+        verification_id: str,
+    ) -> None:
         answer_blob = self._verification_answer_blob(verification_id, test_id)
         if answer_blob is not None:
             target.write_bytes(answer_blob)
             return
         raise ValueError(f"export missing verification answer artifact: {test_id}.ans")
 
-    def _materialize_export_sample_outputs(self, snapshot: Path, *, verification_id: str) -> None:
+    def _materialize_export_sample_display_payloads(
+        self,
+        snapshot: Path,
+        *,
+        verification_id: str,
+    ) -> None:
         spec_path = snapshot / "tests" / "spec.json"
         entries = load_tests_spec(spec_path)
         changed = False
         for row in entries:
             if not bool(row["sample"]):
                 continue
-            if str(row["sample_output"] or ""):
+            if row["kind"] == "gen" and not row["sample_input"]:
+                input_blob = self._verification_input_blob(verification_id, row["id"])
+                if input_blob is not None:
+                    row["sample_input"] = input_blob.decode("utf-8", errors="replace")
+                    changed = True
+            if row["sample_output"]:
                 continue
             answer_blob = self._verification_answer_blob(verification_id, row["id"])
             if answer_blob is None:
@@ -612,7 +682,13 @@ class ExportService:
         if changed:
             spec_path.write_text(dumps_tests_spec(entries), encoding="utf-8")
 
-    def _copy_secret_and_sample_data(self, snapshot: Path, package_root: Path, *, verification_id: str) -> None:
+    def _copy_secret_and_sample_data(
+        self,
+        snapshot: Path,
+        package_root: Path,
+        *,
+        verification_id: str,
+    ) -> None:
         secret_dir = package_root / "data" / "secret"
         sample_dir = package_root / "data" / "sample"
         secret_dir.mkdir(parents=True, exist_ok=True)
@@ -622,12 +698,13 @@ class ExportService:
             raise ValueError("export requires tests/spec.json entries")
         for row in entries:
             test_id = row["id"]
-            source_rel = payload_rel_path_for_test(test_id, row["kind"])
-            input_file = snapshot / source_rel
-            if not self._is_safe_regular_file(snapshot, input_file):
-                raise ValueError(f"export missing test input: {source_rel}")
             if not bool(row["sample"]):
-                shutil.copy2(input_file, secret_dir / f"{test_id}.in")
+                self._copy_required_test_input(
+                    snapshot,
+                    row,
+                    secret_dir / f"{test_id}.in",
+                    verification_id=verification_id,
+                )
                 self._copy_required_answer(
                     snapshot,
                     test_id,
@@ -635,8 +712,13 @@ class ExportService:
                     verification_id=verification_id,
                 )
                 continue
-            shutil.copy2(input_file, sample_dir / f"{test_id}.in")
-            sample_output = str(row["sample_output"] or "")
+            self._copy_sample_input(
+                snapshot,
+                row,
+                sample_dir / f"{test_id}.in",
+                verification_id=verification_id,
+            )
+            sample_output = row["sample_output"]
             if sample_output:
                 (sample_dir / f"{test_id}.ans").write_text(sample_output, encoding="utf-8")
                 continue
@@ -719,7 +801,7 @@ class ExportService:
             self._build_domjudge_problem_ini(slug=self._public_problem_slug(problem_slug), snapshot=snapshot),
             encoding="utf-8",
         )
-        self._materialize_export_sample_outputs(snapshot, verification_id=verification_id)
+        self._materialize_export_sample_display_payloads(snapshot, verification_id=verification_id)
         self._copy_secret_and_sample_data(snapshot, package_root, verification_id=verification_id)
         self._try_compile_statement_pdf(
             snapshot,
