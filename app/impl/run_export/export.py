@@ -224,7 +224,7 @@ def _export_archive_summary(problem: str, export_id: str, filename: str) -> dict
     if prefix and (not any(name.startswith(prefix) for name in names)):
         return result
     has_pdf = any(
-        name.startswith(f"{prefix}statement/problem.") and name.endswith(".pdf")
+        name.startswith(f"{prefix}problem_statement/problem.") and name.endswith(".pdf")
         for name in names
     )
     solutions_total = 0

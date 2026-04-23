@@ -1716,6 +1716,19 @@ class TestExport(SmokeBase):
         self.assertIn("problem.yaml", names)
         self.assertIn("problem_statement/problem.en.pdf", names)
 
+    def test_export_archive_summary_detects_icpc_statement_pdf(self) -> None:
+        archive_root = Path(config.settings.artifacts_root) / "exports" / self.problem.replace("/", "-") / "e-summary-pdf"
+        archive_root.mkdir(parents=True, exist_ok=True)
+        archive = archive_root / "summary-pdf.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("problem.yaml", "name: Summary\n")
+            zf.writestr("problem_statement/problem.en.pdf", b"%PDF-1.4\n%%EOF\n")
+
+        summary = export_page_module._export_archive_summary(self.problem, "e-summary-pdf", archive.name)
+
+        self.assertTrue(summary["available"])
+        self.assertTrue(summary["has_pdf"])
+
     def test_export_statement_pdf_compilation_uses_shared_tex_compile_service(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
