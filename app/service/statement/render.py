@@ -21,7 +21,6 @@ from app.service.statement.constant import (
     STATEMENT_SECTIONS_DIR,
     STATEMENT_STYLE_REL,
     STATEMENT_TEMPLATE_REL,
-    TESTS_ANSWERS_DIR_REL,
     _read_required_text,
 )
 from app.service.statement.context import normalize_statement_language
@@ -102,12 +101,10 @@ def _collect_sample_tests(workspace: Path, rendered_lang_root: Path) -> list[dic
             input_rel = Path(payload_rel_path_for_test(test_id, kind))
         except Exception:
             continue
-        answer_rel = TESTS_ANSWERS_DIR_REL / f"{test_id}.ans"
         input_source = None if sample_input_text else _safe_workspace_regular_file(workspace, input_rel)
-        answer_source = None if sample_output_text else _safe_workspace_regular_file(workspace, answer_rel)
         if (not sample_input_text) and (input_source is None):
             continue
-        if (not sample_output_text) and (answer_source is None):
+        if not sample_output_text:
             continue
         input_name = f"sample.{test_id}.in"
         output_name = f"sample.{test_id}.ans"
@@ -120,8 +117,6 @@ def _collect_sample_tests(workspace: Path, rendered_lang_root: Path) -> list[dic
                 shutil.copy2(input_source, input_target)
             if sample_output_text:
                 output_target.write_text(sample_output_text, encoding="utf-8")
-            else:
-                shutil.copy2(answer_source, output_target)
         except OSError:
             continue
         rows.append({"inputFile": input_name, "outputFile": output_name})

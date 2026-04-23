@@ -34,12 +34,10 @@ class TestExport(SmokeBase):
     def _seed_export_tests(self, workspace: Path, token: str) -> list[str]:
         tracked = [
             f"tests/manual/{token}.in",
-            f"tests/answers/{token}.ans",
             "tests/spec.json",
         ]
         (workspace / tracked[0]).write_text("1\n", encoding="utf-8")
-        (workspace / tracked[1]).write_text("1\n", encoding="utf-8")
-        (workspace / tracked[2]).write_text(
+        (workspace / tracked[1]).write_text(
             json.dumps({"tests": [{"id": token, "kind": "manual", "sample": True, "sample_output": "1\n"}]}, indent=2, sort_keys=True)
             + "\n",
             encoding="utf-8",
@@ -423,7 +421,9 @@ class TestExport(SmokeBase):
         imported_ws = Path(workspace_service.ensure_workspace(target_problem, self.user))
         self.assertTrue((imported_ws / "tests" / "manual" / "001.in").is_file())
         self.assertEqual((imported_ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "1\n")
-        self.assertEqual((imported_ws / "tests" / "answers" / "001.ans").read_bytes(), b"1\n")
+        imported_tests = json.loads((imported_ws / "tests" / "spec.json").read_text(encoding="utf-8"))["tests"]
+        self.assertEqual(str(imported_tests[0].get("sample_output") or ""), "1\n")
+        self.assertFalse((imported_ws / "tests" / "answers").exists())
         self.assertTrue((imported_ws / "statement" / "statements.ftl").is_file())
         self.assertFalse((imported_ws / files["statement_asset"]).exists())
         imported_problem_cfg = json.loads((imported_ws / "config" / "problem.json").read_text(encoding="utf-8"))
@@ -530,8 +530,6 @@ class TestExport(SmokeBase):
         (ws / files["asset"]).write_bytes(b"PNG")
         (ws / "tests" / "manual" / "001.in").write_text("sample input\n", encoding="utf-8")
         (ws / "tests" / "manual" / "002.in").write_text("secret input\n", encoding="utf-8")
-        (ws / "tests" / "answers" / "001.ans").write_text("answer file should not win\n", encoding="utf-8")
-        (ws / "tests" / "answers" / "002.ans").write_text("secret answer\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
             json.dumps(
                 {
@@ -575,17 +573,39 @@ class TestExport(SmokeBase):
                 files["build"],
                 "tests/manual/001.in",
                 "tests/manual/002.in",
-                "tests/answers/001.ans",
-                "tests/answers/002.ans",
                 "tests/spec.json",
             ],
             f"test icpc root layout {token}",
         )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-layout-{token}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature=head,
+            source_commit=head,
+            kind="all",
+            status="ok",
+            detail={"sanity_status": "passed", "validation_status": "passed"},
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="002.in",
+            role="answer",
+            file_name="002.ans",
+            payload=b"secret answer\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "002.in",
+            {"answer_ref": answer_ref},
+        )
         archive = export_service.create_export(
             self.problem,
-            "",
+            verification_id,
             "icpc",
-            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
             source_commit=head,
         )
 
@@ -635,7 +655,7 @@ class TestExport(SmokeBase):
             [rel, f"{rel}.desc", "tests/manual/001.in", "tests/spec.json"],
             f"test icpc missing answer {token}",
         )
-        with self.assertRaisesRegex(ValueError, "export missing test answer"):
+        with self.assertRaisesRegex(ValueError, "export missing verification answer artifact"):
             export_service.create_export(
                 self.problem,
                 "",
@@ -819,6 +839,18 @@ class TestExport(SmokeBase):
         with self.assertRaisesRegex(ValueError, r"forbidden root path: README\.md"):
             service.import_package(ws, "native-root-file.zip", payload.getvalue())
 
+    def test_native_import_rejects_repository_answer_files(self) -> None:
+        ws = Path(self._workspace_path())
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("config/problem.json", json.dumps({"mode": "pass-fail", "pass_limit": 1}))
+            zf.writestr("tests/spec.json", json.dumps({"tests": []}))
+            zf.writestr("tests/answers/001.ans", "1\n")
+
+        service = NativePackageImportService()
+        with self.assertRaisesRegex(ValueError, r"repository answer file: tests/answers/001\.ans"):
+            service.import_package(ws, "native-answer-file.zip", payload.getvalue())
+
     def test_native_export_roundtrip_preserves_canonical_repo_state(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
@@ -829,15 +861,13 @@ class TestExport(SmokeBase):
             "config/problem.json",
             "config/build.json",
             "tests/manual/001.in",
-            "tests/answers/001.ans",
             "tests/spec.json",
         ]
         (ws / tracked[0]).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / tracked[1]).write_text("expected: accepted\n", encoding="utf-8")
         (ws / tracked[2]).write_text("#include \"testlib.h\"\nint main(){return 0;}\n", encoding="utf-8")
         (ws / tracked[5]).write_text("1\n", encoding="utf-8")
-        (ws / tracked[6]).write_text("1\n", encoding="utf-8")
-        (ws / tracked[7]).write_text(
+        (ws / tracked[6]).write_text(
             json.dumps({"tests": [{"id": "001", "kind": "manual", "sample": True, "sample_output": "1\n"}]}, indent=2, sort_keys=True)
             + "\n",
             encoding="utf-8",
@@ -1155,7 +1185,7 @@ class TestExport(SmokeBase):
 
     def test_export_page_failed_activity_keeps_export_error_over_verification_warning(self) -> None:
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        export_error = "export missing test answer: tests/answers/001.ans"
+        export_error = "export missing verification answer artifact: 001.ans"
         db_execute(
             "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
             [

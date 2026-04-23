@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.service.sandbox.base import ExecResult
-from app.service.problem.test_spec import dumps_tests_spec
+from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.statement.constant import (
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     STATEMENT_ASSETS_DIR,
@@ -253,11 +253,11 @@ class TestPreview(SmokeBase):
         (sections / "example.01").write_text("legacy-section-input\n", encoding="utf-8")
         (sections / "example.01.a").write_text("legacy-section-output\n", encoding="utf-8")
         (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
-        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
         (ws / "tests" / "manual" / "001.in").write_text("manual-sample-input\n", encoding="utf-8")
-        (ws / "tests" / "answers" / "001.ans").write_text("manual-sample-output\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
-            dumps_tests_spec([{"id": "001", "kind": "manual", "sample": True}]),
+            dumps_tests_spec(
+                [{"id": "001", "kind": "manual", "sample": True, "sample_output": "manual-sample-output\n"}]
+            ),
             encoding="utf-8",
         )
 
@@ -278,11 +278,9 @@ class TestPreview(SmokeBase):
         sections.mkdir(parents=True, exist_ok=True)
         (sections / "legend.tex").write_text("Legend marker.\n", encoding="utf-8")
         (ws / "tests" / "generator").mkdir(parents=True, exist_ok=True)
-        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
         (ws / "tests" / "generator" / "902.in").write_text("gen-sample-input\n", encoding="utf-8")
-        (ws / "tests" / "answers" / "902.ans").write_text("gen-sample-output\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
-            dumps_tests_spec([{"id": "902", "kind": "gen", "sample": True}]),
+            dumps_tests_spec([{"id": "902", "kind": "gen", "sample": True, "sample_output": "gen-sample-output\n"}]),
             encoding="utf-8",
         )
 
@@ -301,9 +299,7 @@ class TestPreview(SmokeBase):
         sections.mkdir(parents=True, exist_ok=True)
         (sections / "legend.tex").write_text("Legend marker.\n", encoding="utf-8")
         (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
-        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
         (ws / "tests" / "manual" / "001.in").write_text("generated-input\n", encoding="utf-8")
-        (ws / "tests" / "answers" / "001.ans").write_text("generated-output\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
             dumps_tests_spec(
                 [
@@ -327,10 +323,8 @@ class TestPreview(SmokeBase):
     def test_sample_verification_rows_include_validate_only_custom_output(self) -> None:
         ws = self._workspace_path()
         (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
-        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
         (ws / "tests" / "manual" / "001.in").write_text("base-input-1\n", encoding="utf-8")
         (ws / "tests" / "manual" / "002.in").write_text("base-input-2\n", encoding="utf-8")
-        (ws / "tests" / "answers" / "001.ans").write_text("base-answer-1\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
             dumps_tests_spec(
                 [
@@ -364,6 +358,28 @@ class TestPreview(SmokeBase):
         self.assertFalse(rows[1].needs_input_copy)
         self.assertTrue(rows[1].needs_output_copy)
         self.assertFalse(rows[1].validate_custom_output)
+
+    def test_sample_verification_rows_skip_fully_materialized_unvalidated_samples(self) -> None:
+        ws = self._workspace_path()
+        (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
+        (ws / "tests" / "manual" / "001.in").write_text("base-input\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            dumps_tests_spec(
+                [
+                    {
+                        "id": "001",
+                        "kind": "manual",
+                        "sample": True,
+                        "sample_output": "display-output\n",
+                        "sample_output_validate": False,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        rows = preview_service._sample_verification_rows_from_spec(ws)
+        self.assertEqual(rows, [])
 
     def test_generation_params_digest_changes_when_build_sources_change(self) -> None:
         ws = self._workspace_path()
@@ -463,14 +479,15 @@ class TestPreview(SmokeBase):
         self.assertEqual(calls, [("alice/sample", "alice")])
         self.assertEqual(int(summary.get("copied") or 0), 2)
         self.assertEqual((ws / "tests" / "manual" / "901.in").read_text(encoding="utf-8"), "build-manual-input\n")
-        self.assertEqual((ws / "tests" / "answers" / "901.ans").read_text(encoding="utf-8"), "build-manual-answer\n")
         self.assertEqual((ws / "tests" / "generator" / "902.in").read_text(encoding="utf-8"), "build-gen-input\n")
-        self.assertEqual((ws / "tests" / "answers" / "902.ans").read_text(encoding="utf-8"), "build-gen-answer\n")
+        tests_spec = load_tests_spec(ws / "tests" / "spec.json")
+        self.assertEqual(str(tests_spec[0].get("sample_output") or ""), "build-manual-answer\n")
+        self.assertEqual(str(tests_spec[1].get("sample_output") or ""), "build-gen-answer\n")
+        self.assertFalse((ws / "tests" / "answers").exists())
 
     def test_preview_sample_sync_keeps_manual_payload_when_custom_sample_input_present(self) -> None:
         ws = self._workspace_path()
         (ws / "tests" / "manual").mkdir(parents=True, exist_ok=True)
-        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
         (ws / "tests" / "manual" / "901.in").write_text("base-manual-input\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
             dumps_tests_spec(
@@ -543,7 +560,9 @@ class TestPreview(SmokeBase):
 
         self.assertEqual(int(summary.get("copied") or 0), 1)
         self.assertEqual((ws / "tests" / "manual" / "901.in").read_text(encoding="utf-8"), "base-manual-input\n")
-        self.assertEqual((ws / "tests" / "answers" / "901.ans").read_text(encoding="utf-8"), "custom-sample-answer\n")
+        tests_spec = load_tests_spec(ws / "tests" / "spec.json")
+        self.assertEqual(str(tests_spec[0].get("sample_output") or ""), "custom-sample-answer\n")
+        self.assertFalse((ws / "tests" / "answers").exists())
 
     def test_compile_preview_with_samples_skips_cache_and_syncs_samples(self) -> None:
         ws = self._workspace_path()
@@ -1063,11 +1082,9 @@ class TestPreview(SmokeBase):
     def test_statement_signature_changes_when_gen_sample_payload_changes(self) -> None:
         ws = self._workspace_path()
         (ws / "tests" / "generator").mkdir(parents=True, exist_ok=True)
-        (ws / "tests" / "answers").mkdir(parents=True, exist_ok=True)
         (ws / "tests" / "generator" / "901.in").write_text("gen-a\n", encoding="utf-8")
-        (ws / "tests" / "answers" / "901.ans").write_text("ans-a\n", encoding="utf-8")
         (ws / "tests" / "spec.json").write_text(
-            dumps_tests_spec([{"id": "901", "kind": "gen", "sample": True}]),
+            dumps_tests_spec([{"id": "901", "kind": "gen", "sample": True, "sample_output": "ans-a\n"}]),
             encoding="utf-8",
         )
         before = statement_sources_signature(ws, problem_title="T")

@@ -206,7 +206,6 @@ class SmokeBase(unittest.TestCase):
             "solutions",
             "tests/manual",
             "tests/generator",
-            "tests/answers",
             "third_party/testlib",
         ]:
             (ws / rel).mkdir(parents=True, exist_ok=True)

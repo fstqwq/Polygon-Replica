@@ -624,13 +624,10 @@ class PolygonPackageImportService:
 
         manual_dir = workspace / "tests" / "manual"
         gen_dir = workspace / "tests" / "generator"
-        answers_dir = workspace / "tests" / "answers"
         shutil.rmtree(manual_dir, ignore_errors=True)
         shutil.rmtree(gen_dir, ignore_errors=True)
-        shutil.rmtree(answers_dir, ignore_errors=True)
         manual_dir.mkdir(parents=True, exist_ok=True)
         gen_dir.mkdir(parents=True, exist_ok=True)
-        answers_dir.mkdir(parents=True, exist_ok=True)
 
         spec_entries: list[dict[str, object]] = []
         input_pattern = meta["input_pattern"]
@@ -650,13 +647,12 @@ class PolygonPackageImportService:
             test_id = f"{idx:03d}"
             answer_rel = _normalize_zip_path(_expand_pattern(answer_pattern, idx)) if answer_pattern else ""
             sample_output_text = ""
-            if answer_rel:
+            if sample and answer_rel:
                 answer_info = entries.get(answer_rel)
                 if answer_info is not None:
                     answer_payload = _read_bytes_from_zip(zf, answer_info)
                     if normalize_test_data_newlines:
                         answer_payload = _normalize_text_newlines_bytes(answer_payload)
-                    self._write_bytes(workspace, Path("tests") / "answers" / f"{test_id}.ans", answer_payload)
                     sample_output_text = answer_payload.decode("utf-8", errors="replace")
                     answer_count += 1
             spec_row: dict[str, object] = {"id": test_id, "sample": sample}

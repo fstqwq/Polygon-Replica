@@ -1252,7 +1252,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(f"icpc package imported as alice/{target_slug}", messages[0])
         ws = Path(workspace_service.ensure_workspace(f"alice/{target_slug}", "alice"))
         self.assertTrue((ws / "tests" / "manual" / "001.in").is_file())
-        self.assertTrue((ws / "tests" / "answers" / "001.ans").is_file())
+        self.assertFalse((ws / "tests" / "answers").exists())
 
     def test_problems_root_import_warns_when_english_statement_language_missing(self) -> None:
         class _Upload:
@@ -1540,10 +1540,7 @@ class TestUIWorkspace(UIBaseSuite):
             manual_rows = sorted((pws / "tests" / "manual").glob("*.in"))
             if manual_rows:
                 self.assertNotIn(b"\r\n", manual_rows[0].read_bytes())
-            answers_files = sorted((pws / "tests" / "answers").glob("*.ans"))
-            if not answers_files:
-                continue
-            self.assertNotIn(b"\r\n", answers_files[0].read_bytes())
+            self.assertFalse((pws / "tests" / "answers").exists())
 
     def test_file_manual_input_allows_payloads_larger_than_ui_limit(self) -> None:
         oversized = ("1" * (TEXTAREA_MAX_BYTES + 32)) + "\n"

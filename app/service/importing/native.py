@@ -12,6 +12,7 @@ from app.service.platform.zip_extract import extract_zip_entry_to_path_limited, 
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
+    is_repository_answer_path,
 )
 from app.service.problem.test_spec import load_tests_spec
 from app.service.statement.constant import STATEMENT_SECTIONS_DIR
@@ -81,6 +82,8 @@ def _validated_native_entries(
             raise ValueError(f"native package contains forbidden hidden path: {rel}")
         if not is_allowed_workspace_root_path(target_rel.parts):
             raise ValueError(f"native package contains forbidden root path: {rel}")
+        if is_repository_answer_path(target_rel.parts):
+            raise ValueError(f"native package contains repository answer file: {rel}")
         info = entry_map[rel]
         entry_size = validate_zip_entry_size(
             info,

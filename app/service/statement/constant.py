@@ -23,7 +23,6 @@ STATEMENT_CANONICAL_SECTION_FILES = frozenset(
     }
 )
 STATEMENT_IGNORED_SECTION_FILES = frozenset({"scoring.tex"})
-TESTS_ANSWERS_DIR_REL = Path("tests/answers")
 WF_STYLE_DIR = Path("third_party") / "Polygon-WF-Styles"
 WF_STYLE_STATEMENTS_REL = WF_STYLE_DIR / "statements.ftl"
 WF_STYLE_OLYMP_REL = WF_STYLE_DIR / "olymp.sty"
@@ -116,5 +115,4 @@ def is_canonical_statement_section_entry(rel_path: str | Path) -> bool:
 def is_ignored_statement_section_entry(rel_path: str | Path) -> bool:
     rel = Path(rel_path)
     return len(rel.parts) == 1 and rel.name in STATEMENT_IGNORED_SECTION_FILES
-
 

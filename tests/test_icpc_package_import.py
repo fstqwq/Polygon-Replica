@@ -65,6 +65,7 @@ class TestICPCPackageImport(SmokeBase):
             zf.writestr("roundtrip/data/secret/001.in", "1\n")
             zf.writestr("roundtrip/data/secret/001.ans", "1\n")
             zf.writestr("roundtrip/data/sample/1.in", "1\n")
+            zf.writestr("roundtrip/data/sample/1.ans", "1\n")
             zf.writestr("roundtrip/submissions/accepted/ac.cpp", "int main(){return 0;}\n")
             zf.writestr("roundtrip/submissions/wrong_answer/wa.cpp", "int main(){return 0;}\n")
             zf.writestr("roundtrip/input_validators/validator.cpp", "int main(){return 0;}\n")
@@ -83,7 +84,7 @@ class TestICPCPackageImport(SmokeBase):
         self.assertTrue(bool(tests[0].get("sample")))
         self.assertEqual(str(tests[0].get("sample_output") or ""), "1\n")
         self.assertEqual((ws / "tests" / "manual" / "001.in").read_text(encoding="utf-8"), "1\n")
-        self.assertEqual((ws / "tests" / "answers" / "001.ans").read_bytes(), b"1\n")
+        self.assertFalse((ws / "tests" / "answers").exists())
 
         problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(str(problem_cfg.get("mode") or ""), "pass-fail")

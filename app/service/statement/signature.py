@@ -11,7 +11,6 @@ from app.service.statement.constant import (
     STATEMENT_RENDERED_DIR_REL,
     STATEMENT_RENDERER_SIGNATURE_VERSION,
     STATEMENT_SECTIONS_DIR,
-    TESTS_ANSWERS_DIR_REL,
     is_canonical_statement_section_entry,
 )
 
@@ -120,10 +119,6 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
             sample_in = _safe_workspace_regular_file(workspace, payload_rel_path_for_test(test_id, kind))
             if sample_in is not None:
                 sample_related_files.append(sample_in)
-        if not row["sample_output"]:
-            sample_ans = _safe_workspace_regular_file(workspace, TESTS_ANSWERS_DIR_REL / f"{test_id}.ans")
-            if sample_ans is not None:
-                sample_related_files.append(sample_ans)
     uniq_sample_files = sorted(
         {path.relative_to(workspace).as_posix(): path for path in sample_related_files}.items(),
         key=lambda item: item[0],
@@ -153,4 +148,3 @@ def statement_sources_signature(workspace: Path, problem_title: str | None = Non
     if problem_title is not None:
         entries.append({"kind": "problem-title", "value": str(problem_title or "").strip()})
     return quick_fp_digest(entries, schema="statement-signature")
-

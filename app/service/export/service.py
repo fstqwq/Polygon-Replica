@@ -22,6 +22,7 @@ from app.service.platform.git_process import run_git
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
+    is_repository_answer_path,
 )
 
 
@@ -365,6 +366,8 @@ class ExportService:
                 continue
             if not is_allowed_workspace_root_path(rel.parts):
                 continue
+            if is_repository_answer_path(rel.parts):
+                continue
             if child.is_symlink():
                 continue
             target = dst_dir / child.name
@@ -567,10 +570,7 @@ class ExportService:
         if answer_blob is not None:
             target.write_bytes(answer_blob)
             return
-        answer_file = snapshot / "tests" / "answers" / f"{test_id}.ans"
-        if not self._is_safe_regular_file(snapshot, answer_file):
-            raise ValueError(f"export missing test answer: tests/answers/{test_id}.ans")
-        shutil.copy2(answer_file, target)
+        raise ValueError(f"export missing verification answer artifact: {test_id}.ans")
 
     def _copy_secret_and_sample_data(self, snapshot: Path, package_root: Path, *, verification_id: str) -> None:
         secret_dir = package_root / "data" / "secret"

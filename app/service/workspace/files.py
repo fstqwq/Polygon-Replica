@@ -11,7 +11,11 @@ from fastapi import UploadFile
 
 from app.main_util import enforce_textarea_max_bytes, write_upload_file_limited
 from app.service.platform.file_type import looks_like_binary_file
-from app.service.platform.workspace_path import safe_workspace_path, validate_workspace_rel_path
+from app.service.platform.workspace_path import (
+    is_repository_answer_path,
+    safe_workspace_path,
+    validate_workspace_rel_path,
+)
 from app.service.repository.git import GitService
 from app.service.repository.workspace import WorkspaceService
 
@@ -59,6 +63,10 @@ class WorkspaceFileService:
 
     def normalize_path(self, raw: str | None, *, allow_empty: bool = False, require_allowed_root: bool = False) -> str:
         return validate_workspace_rel_path(raw, allow_empty=allow_empty, require_allowed_root=require_allowed_root)
+
+    def _reject_repository_answer_path(self, normalized: str) -> None:
+        if is_repository_answer_path(Path(normalized).parts):
+            raise ValueError("repository answer files are not allowed")
 
     def list_entries(self, workspace: Path, raw_path: str, *, limit: int, require_allowed_root: bool) -> WorkspaceFileList:
         normalized = self.normalize_path(raw_path, allow_empty=True, require_allowed_root=require_allowed_root)
@@ -136,6 +144,7 @@ class WorkspaceFileService:
 
     def write_text(self, workspace: Path, raw_path: str, content: str, *, require_allowed_root: bool) -> str:
         normalized = self.normalize_path(raw_path, require_allowed_root=require_allowed_root)
+        self._reject_repository_answer_path(normalized)
         safe_content = enforce_textarea_max_bytes(content, label="file content")
         with self._workspace_service.workspace_lock(workspace):
             self._git_service.write_file(workspace, normalized, safe_content)
@@ -143,12 +152,14 @@ class WorkspaceFileService:
 
     def create_empty(self, workspace: Path, raw_path: str, *, require_allowed_root: bool) -> str:
         normalized = self.normalize_path(raw_path, require_allowed_root=require_allowed_root)
+        self._reject_repository_answer_path(normalized)
         with self._workspace_service.workspace_lock(workspace):
             self._git_service.write_file(workspace, normalized, "")
         return normalized
 
     async def upload_file(self, workspace: Path, raw_path: str, upload: UploadFile, *, require_allowed_root: bool) -> tuple[str, int]:
         normalized = self.normalize_path(raw_path, require_allowed_root=require_allowed_root)
+        self._reject_repository_answer_path(normalized)
         tmp_path: Path | None = None
         total_bytes = 0
         try:
@@ -177,6 +188,7 @@ class WorkspaceFileService:
     def rename_path(self, workspace: Path, raw_old_path: str, raw_new_path: str, *, require_allowed_root: bool) -> tuple[str, str]:
         old_path = self.normalize_path(raw_old_path, require_allowed_root=require_allowed_root)
         new_path = self.normalize_path(raw_new_path, require_allowed_root=require_allowed_root)
+        self._reject_repository_answer_path(new_path)
         with self._workspace_service.workspace_lock(workspace):
             self._git_service.rename_path(workspace, old_path, new_path)
         return (old_path, new_path)

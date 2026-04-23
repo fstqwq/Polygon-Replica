@@ -12,6 +12,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from app.service.platform.git_process import run_git
+from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
 from app.service.sandbox.base import ExecResult
 from app.service.statement.render import ensure_statement_language_sources
 from app.service.verification.signature import verification_signature
@@ -476,9 +477,9 @@ class TestUIContests(UIBaseSuite):
 
         def _fake_sync_sample_payloads(problem: str, username: str, snapshot: Path) -> dict[str, object]:
             sample_sync_calls.append((problem, username, str(snapshot)))
-            answers_dir = snapshot / "tests" / "answers"
-            answers_dir.mkdir(parents=True, exist_ok=True)
-            (answers_dir / "001.ans").write_text("6\n", encoding="utf-8")
+            tests = load_tests_spec(snapshot / "tests" / "spec.json")
+            tests[0]["sample_output"] = "6\n"
+            (snapshot / "tests" / "spec.json").write_text(dumps_tests_spec(tests), encoding="utf-8")
             return {"sample_count": 1, "copied": 1, "verification_id": "ver-sample-sync"}
 
         with (

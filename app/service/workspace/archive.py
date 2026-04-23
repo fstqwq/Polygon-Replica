@@ -14,6 +14,7 @@ from app.service.platform.workspace_path import (
     ALLOWED_WORKSPACE_ROOT_NAMES,
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
+    is_repository_answer_path,
 )
 from app.service.platform.zip_extract import extract_zip_entry_to_path_limited
 
@@ -62,6 +63,8 @@ def _normalize_zip_entry_name(raw: str) -> str:
         raise ValueError(f"hidden zip path is not allowed: {raw}")
     if not is_allowed_workspace_root_path(parts):
         raise ValueError(f"zip path root is not allowed: {raw}")
+    if is_repository_answer_path(parts):
+        raise ValueError(f"repository answer file is not allowed: {raw}")
     return PurePosixPath(*parts).as_posix()
 
 
@@ -82,14 +85,23 @@ def _safe_workspace_files(root: Path) -> dict[str, bytes]:
             for dirname in sorted(dirnames):
                 child = dir_root / dirname
                 rel_parts = child.relative_to(root).parts
-                if child.is_symlink() or is_hidden_workspace_path(rel_parts):
+                if (
+                    child.is_symlink()
+                    or is_hidden_workspace_path(rel_parts)
+                    or is_repository_answer_path(rel_parts)
+                ):
                     continue
                 keep_dirs.append(dirname)
             dirnames[:] = keep_dirs
             for filename in sorted(filenames):
                 child = dir_root / filename
                 rel_parts = child.relative_to(root).parts
-                if child.is_symlink() or is_hidden_workspace_path(rel_parts) or not child.is_file():
+                if (
+                    child.is_symlink()
+                    or is_hidden_workspace_path(rel_parts)
+                    or is_repository_answer_path(rel_parts)
+                    or not child.is_file()
+                ):
                     continue
                 rel = child.relative_to(root).as_posix()
                 result[rel] = normalize_workspace_text_bytes(child.read_bytes())[0]
@@ -109,7 +121,11 @@ def _safe_workspace_dirs(root: Path) -> list[str]:
             for dirname in sorted(dirnames):
                 child = dir_root / dirname
                 rel_parts = child.relative_to(root).parts
-                if child.is_symlink() or is_hidden_workspace_path(rel_parts):
+                if (
+                    child.is_symlink()
+                    or is_hidden_workspace_path(rel_parts)
+                    or is_repository_answer_path(rel_parts)
+                ):
                     continue
                 keep_dirs.append(dirname)
                 result.append(child.relative_to(root).as_posix() + "/")

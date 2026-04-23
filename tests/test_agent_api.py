@@ -560,6 +560,9 @@ class TestAgentAPI(SmokeBase):
         test_input = workspace / "tests" / "manual" / "001.in"
         test_input.parent.mkdir(parents=True, exist_ok=True)
         test_input.write_text("1\n", encoding="utf-8")
+        legacy_answer = workspace / "tests" / "answers" / "001.ans"
+        legacy_answer.parent.mkdir(parents=True, exist_ok=True)
+        legacy_answer.write_text("legacy\n", encoding="utf-8")
         (workspace / "README.md").write_text("private\n", encoding="utf-8")
         (workspace / ".env").write_text("secret\n", encoding="utf-8")
         (workspace / "temp").mkdir(exist_ok=True)
@@ -594,6 +597,7 @@ class TestAgentAPI(SmokeBase):
             snapshot_entries = self._zip_entries(snapshot.content)
             self.assertEqual(snapshot_entries["solutions/main.cpp"], b"int main(){return 0;}\n")
             self.assertEqual(snapshot_entries["tests/manual/001.in"], b"1\n")
+            self.assertNotIn("tests/answers/001.ans", snapshot_entries)
             self.assertNotIn("README.md", snapshot_entries)
             self.assertNotIn(".env", snapshot_entries)
             self.assertNotIn("temp/scratch.txt", snapshot_entries)
@@ -639,6 +643,13 @@ class TestAgentAPI(SmokeBase):
                 files={"archive": ("workspace.zip", invalid_zip, "application/zip")},
             )
             self.assertEqual(invalid_compare.status_code, 400, invalid_compare.text)
+            answer_zip = self._workspace_zip({"tests/answers/001.ans": "bad\n"})
+            invalid_answer_compare = client.post(
+                "/agent/v1/workspace/compare",
+                headers=self._bearer(readonly_token),
+                files={"archive": ("workspace.zip", answer_zip, "application/zip")},
+            )
+            self.assertEqual(invalid_answer_compare.status_code, 400, invalid_answer_compare.text)
 
             apply = client.post(
                 "/agent/v1/workspace/apply",

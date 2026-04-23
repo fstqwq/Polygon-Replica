@@ -128,10 +128,10 @@ class TestPolygonPackageImport(SmokeBase):
             normalize_test_data_newlines=True,
         )
         self.assertEqual((ws / "tests" / "manual" / "001.in").read_bytes(), b"1 2\n3 4\n")
-        self.assertEqual((ws / "tests" / "answers" / "001.ans").read_bytes(), b"5\n6\n")
         spec = json.loads((ws / "tests" / "spec.json").read_text(encoding="utf-8"))
         tests = spec.get("tests") if isinstance(spec, dict) else []
         self.assertEqual(str(tests[0].get("sample_output") or ""), "5\n6\n")
+        self.assertFalse((ws / "tests" / "answers").exists())
 
     def test_import_rejects_non_utf8_manual_test_payload(self) -> None:
         ws = self._workspace_path()
@@ -369,8 +369,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertEqual(str(tests[2].get("sample_input") or ""), "example input 2\n")
         self.assertEqual(str(tests[2].get("sample_output") or ""), "example output 2\n")
         self.assertTrue(bool(tests[2].get("sample_output_validate")))
-        self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8"), "raw answer 1\n")
-        self.assertEqual((ws / "tests" / "answers" / "003.ans").read_text(encoding="utf-8"), "raw answer 3\n")
+        self.assertFalse((ws / "tests" / "answers").exists())
         self.assertFalse((ws / "statement-sections" / "english" / "example.01").exists())
         self.assertFalse((ws / "statement-sections" / "english" / "example.01.a").exists())
 
@@ -400,9 +399,7 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertTrue(bool(normalized_tests[1].get("sample_output_validate")))
         tests_summary = result.get("tests") if isinstance(result.get("tests"), dict) else {}
         self.assertEqual(int(tests_summary.get("generated_fallback_to_manual") or 0), 0)
-        self.assertEqual(int(tests_summary.get("answers") or 0), 6)
-        self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8").strip(), "37")
-        self.assertEqual((ws / "tests" / "answers" / "002.ans").read_text(encoding="utf-8").strip(), "58")
+        self.assertFalse((ws / "tests" / "answers").exists())
         self.assertFalse((ws / "statement-sections" / "english" / "example.01").exists())
         self.assertFalse((ws / "statement-sections" / "english" / "example.01.a").exists())
 
@@ -462,18 +459,14 @@ class TestPolygonPackageImport(SmokeBase):
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or ""), "ok")
 
-    def test_import_hangzhou_interactive_package_keeps_answer_payloads(self) -> None:
+    def test_import_hangzhou_interactive_package_drops_answer_payloads(self) -> None:
         ws = self._workspace_path()
         package = Path("third_party/polygon-package-examples/2024hangzhou-rank-list-interactive-35$linux.zip")
         self.assertTrue(package.exists(), f"missing package fixture: {package}")
         service = PolygonPackageImportService()
         result = service.import_package(ws, package.name, package.read_bytes())
         self.assertEqual(str(result.get("title") or ""), "Fuzzy Ranking (Interactive ver.)")
-        tests_summary = result.get("tests") if isinstance(result.get("tests"), dict) else {}
-        self.assertEqual(int(tests_summary.get("answers") or 0), 27)
-        self.assertTrue((ws / "tests" / "answers" / "001.ans").is_file())
-        self.assertTrue((ws / "tests" / "answers" / "027.ans").is_file())
-        self.assertEqual((ws / "tests" / "answers" / "001.ans").read_text(encoding="utf-8").splitlines()[:1], ["3"])
+        self.assertFalse((ws / "tests" / "answers").exists())
         problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(str(problem_cfg.get("mode") or ""), "interactive")
         self.assertEqual(int(problem_cfg.get("pass_limit") or 0), 1)

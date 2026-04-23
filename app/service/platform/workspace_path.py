@@ -70,6 +70,12 @@ def is_allowed_workspace_root_path(rel_parts: tuple[str, ...]) -> bool:
     return bool(rel_parts) and rel_parts[0] in ALLOWED_WORKSPACE_ROOT_NAMES
 
 
+def is_repository_answer_path(rel_parts: tuple[str, ...]) -> bool:
+    if len(rel_parts) >= 2 and rel_parts[0] == "tests" and rel_parts[1] == "answers":
+        return True
+    return bool(rel_parts) and rel_parts[0] == "tests" and rel_parts[-1].lower().endswith(".ans")
+
+
 def safe_workspace_path(workspace: Path, rel: str, allow_workspace_root: bool = False) -> Path:
     ws_root = workspace.resolve()
     candidate = workspace / rel

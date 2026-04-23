@@ -551,13 +551,10 @@ class ICPCPackageImportService:
     ) -> TestsSummary:
         manual_dir = workspace / "tests" / "manual"
         gen_dir = workspace / "tests" / "generator"
-        answers_dir = workspace / "tests" / "answers"
         shutil.rmtree(manual_dir, ignore_errors=True)
         shutil.rmtree(gen_dir, ignore_errors=True)
-        shutil.rmtree(answers_dir, ignore_errors=True)
         manual_dir.mkdir(parents=True, exist_ok=True)
         gen_dir.mkdir(parents=True, exist_ok=True)
-        answers_dir.mkdir(parents=True, exist_ok=True)
 
         sample_inputs = sorted(
             [
@@ -584,7 +581,6 @@ class ICPCPackageImportService:
 
         used_ids: set[str] = set()
         entry_by_id: dict[str, dict[str, object]] = {}
-        answer_ids: set[str] = set()
         spec_entries: list[dict[str, object]] = []
         answer_count = 0
 
@@ -599,16 +595,18 @@ class ICPCPackageImportService:
             nonlocal answer_count
             ans_rel = rel[:-len(".in")] + ".ans"
             ans_info = entries.get(ans_rel)
-            if ans_info is None or test_id in answer_ids:
+            if (
+                ans_info is None
+                or not rel.startswith("data/sample/")
+                or (not bool(spec_row.get("sample")))
+                or str(spec_row.get("sample_output") or "")
+            ):
                 return
             ans_payload = _read_bytes_from_zip(zf, ans_info)
             if normalize_test_data_newlines:
                 ans_payload = _normalize_text_newlines_bytes(ans_payload)
-            self._write_bytes(workspace, Path("tests") / "answers" / f"{test_id}.ans", ans_payload)
-            answer_ids.add(test_id)
             answer_count += 1
-            if bool(spec_row.get("sample")) and not str(spec_row.get("sample_output") or ""):
-                spec_row["sample_output"] = ans_payload.decode("utf-8", errors="replace")
+            spec_row["sample_output"] = ans_payload.decode("utf-8", errors="replace")
 
         def _import_input(rel: str, *, sample: bool, fallback_index: int) -> dict[str, object]:
             preferred_id = self._test_id_from_data_path(rel)

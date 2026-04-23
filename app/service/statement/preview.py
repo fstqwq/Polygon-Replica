@@ -15,7 +15,12 @@ from app.service.platform.hashing import sha256_hex_json
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
-from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
+from app.service.problem.test_spec import (
+    TESTS_SPEC_REL,
+    dumps_tests_spec,
+    load_tests_spec,
+    payload_rel_path_for_test,
+)
 from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.repository.workspace import WorkspaceService
@@ -127,15 +132,7 @@ class PreviewService:
                     except Exception:
                         needs_input_copy = True
             if not sample_output:
-                if sample_input:
-                    needs_output_copy = True
-                else:
-                    answer_path = workspace / "tests" / "answers" / f"{test_id}.ans"
-                    try:
-                        if answer_path.is_symlink() or (not answer_path.exists()) or (not answer_path.is_file()):
-                            needs_output_copy = True
-                    except Exception:
-                        needs_output_copy = True
+                needs_output_copy = True
             validate_custom_output = bool(sample_output) and sample_output_validate
             if needs_input_copy or needs_output_copy or validate_custom_output:
                 rows.append(
@@ -173,6 +170,8 @@ class PreviewService:
             raise RuntimeError(f"sample verification failed ({verification_id})")
         copied = 0
         snapshot_root = snapshot.resolve()
+        spec_entries = load_tests_spec(snapshot / TESTS_SPEC_REL)
+        spec_changed = False
         for row in rows:
             index = int(row.index)
             test_id = str(row.test_id)
@@ -181,10 +180,8 @@ class PreviewService:
             input_ref = self.verification_service.verification_artifact_ref(verification_id, test_name, "input_ref")
             answer_ref = self.verification_service.verification_artifact_ref(verification_id, test_name, "answer_ref")
             input_rel = Path(payload_rel_path_for_test(test_id, kind))
-            answer_rel = Path("tests") / "answers" / f"{test_id}.ans"
             input_target = (snapshot / input_rel).resolve()
-            answer_target = (snapshot / answer_rel).resolve()
-            if snapshot_root not in input_target.parents or snapshot_root not in answer_target.parents:
+            if snapshot_root not in input_target.parents:
                 raise RuntimeError(f"invalid sample target path for test id {test_id}")
             copied_row = False
             if row.needs_input_copy:
@@ -198,11 +195,15 @@ class PreviewService:
                 answer_blob = self.verification_service.resolve_artifact_blob(answer_ref) if answer_ref else None
                 if answer_blob is None:
                     raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
-                answer_target.parent.mkdir(parents=True, exist_ok=True)
-                answer_target.write_bytes(answer_blob)
+                if index < 1 or index > len(spec_entries):
+                    raise RuntimeError(f"invalid tests/spec.json row for sample id {test_id}")
+                spec_entries[index - 1]["sample_output"] = answer_blob.decode("utf-8", errors="replace")
+                spec_changed = True
                 copied_row = True
             if copied_row:
                 copied += 1
+        if spec_changed:
+            (snapshot / TESTS_SPEC_REL).write_text(dumps_tests_spec(spec_entries), encoding="utf-8")
         return {"sample_count": len(rows), "copied": copied, "verification_id": verification_id}
 
     def sync_sample_payloads_for_snapshot(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
