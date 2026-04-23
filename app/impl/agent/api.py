@@ -11,16 +11,15 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from app.impl.agent.shared import require_agent_token, workspace_context_for_identity
 from app.impl.auth.shared import json_error_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_job import start_export_job, start_verification_job
+from app.impl.workspace.context_job import build_full_verification_targets, start_export_job, start_verification_job
 from app.impl.workspace.context_job_helper import allocate_run_id, allocate_verification_id
-from app.impl.workspace.context_operation import audit, run_solution_options_context, workspace_rel_file_exists
+from app.impl.workspace.context_operation import audit
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.main_util import read_upload_bytes_limited
 from app.service.platform.git_process import run_git
 from app.service.workspace.mutation import WorkspaceMutationConflict
-from app.service.problem.solution_metadata import normalize_expected_behavior
 
 
 def _json_body(payload: object, *, status_code: int = 200) -> JSONResponse:
@@ -39,32 +38,6 @@ async def _read_json(request: Request) -> dict[str, object]:
 
 def _agent_problem_ctx(identity) -> dict[str, object]:
     return workspace_context_for_identity(identity)
-
-
-def _build_verification_targets(workspace: Path) -> tuple[list[dict[str, object]], str]:
-    solution_options, accepted_source, _ = run_solution_options_context(workspace)
-    safe_accepted_source = str(accepted_source or "")
-    if not safe_accepted_source:
-        raise ValueError("main correct solution is required")
-    if not workspace_rel_file_exists(workspace, safe_accepted_source):
-        raise ValueError("main correct solution source does not exist")
-    targets: list[dict[str, object]] = []
-    for row in solution_options:
-        source_path = str(row.get("path") or "")
-        if not source_path:
-            continue
-        expected_behavior = normalize_expected_behavior(str(row.get("expected_behavior") or "unknown"))
-        if source_path == safe_accepted_source or bool(row.get("is_accepted")):
-            expected_behavior = "accepted"
-        targets.append({"path": source_path, "expected_behavior": expected_behavior})
-    if not targets:
-        raise ValueError("at least one solution source is required")
-    if not any(str(item.get("expected_behavior") or "") == "accepted" for item in targets):
-        raise ValueError("accepted solution source is required")
-    targets.sort(key=lambda item: (0 if item["expected_behavior"] == "accepted" else 1, str(item["path"])))
-    for target in targets:
-        target["run_id"] = allocate_run_id()
-    return targets, safe_accepted_source
 
 
 async def agent_register(request: Request, code: str):
@@ -139,7 +112,7 @@ async def agent_verification_start(request: Request):
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     verification_id = allocate_verification_id()
     try:
-        targets, accepted_source = _build_verification_targets(workspace)
+        targets, accepted_source = build_full_verification_targets(workspace)
         details: dict[str, object] = {
             "status": "running",
             "steps": ["gen", "val", "run", "check"],
@@ -590,7 +563,7 @@ async def agent_export_start(request: Request):
     ctx = _agent_problem_ctx(identity)
     payload = await _read_json(request)
     export_type = str(payload.get("export_type") or "icpc").strip().lower() or "icpc"
-    verification_id = str(payload.get("verification_id") or "")
+    verification_id = allocate_verification_id() if export_type == "icpc" else ""
     workspace_head = str(ctx["workspace"].get("head_commit") or "")
     if export_type not in {"icpc", "native"}:
         return json_error_response("unsupported package type", status_code=400)

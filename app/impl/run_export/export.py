@@ -17,6 +17,7 @@ from app.impl.runtime.config import config
 from app.impl.workspace.access import require_write_access
 from app.service.repository.revision import git_commit_count
 from app.impl.workspace.context_job import start_export_job
+from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_operation import audit
 from app.impl.run_export.query import (
@@ -24,6 +25,7 @@ from app.impl.run_export.query import (
     _count_label,
     _verification_href,
 )
+from app.service.verification.validation_status import build_validation_status
 
 
 class ExportAuditDetails(TypedDict):
@@ -69,13 +71,6 @@ def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
         "error": "" if error is None else error.strip(),
         "export_task_id": "" if export_task_id is None else export_task_id.strip(),
     }
-
-
-def _parse_step_status(raw: object) -> str:
-    status = cast(str | None, raw)
-    if status is None:
-        return ""
-    return status
 
 
 def _export_recent_events(
@@ -134,32 +129,7 @@ def _export_recent_events(
     return result
 
 def _build_validation_status(verification_row: dict[str, object] | None) -> str:
-    if verification_row is None:
-        return "validation unknown"
-    status = cast(str | None, verification_row.get("status"))
-    if status is None:
-        status = ""
-    details = dict(cast(dict[str, object], verification_row.get("details") or {}))
-    sanity_status = _parse_step_status(details.get("sanity_status"))
-    if sanity_status == "passed":
-        return "validation passed"
-    if sanity_status == "failed":
-        return "validation failed"
-    if sanity_status == "unknown":
-        return "validation unknown"
-    validation_status = _parse_step_status(details.get("validation_status"))
-    if validation_status == "passed":
-        return "validation passed"
-    if validation_status == "failed":
-        return "validation failed"
-    if validation_status == "unknown":
-        return "validation unknown"
-    failed_step = _parse_step_status(details.get("failed_step"))
-    if failed_step in {"validate", "sanity"}:
-        return "validation failed"
-    if status == "ok":
-        return "validation passed"
-    return "validation unknown"
+    return build_validation_status(verification_row)
 
 
 def _resolve_export_verification_id(
@@ -429,6 +399,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
 def export_create(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: str=Form(''), export_type: str=Form('icpc')):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
     require_write_access(ctx)
+    _ = verification_id
     requested_export_type = export_type.lower()
     problem_id = int(ctx['problem']['id'])
     workspace_id = int(ctx['workspace']['id'])
@@ -438,10 +409,11 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
     if not requested_export_type:
         requested_export_type = 'icpc'
     source_commit = head_commit
+    export_verification_id = allocate_verification_id() if requested_export_type == "icpc" else ""
     export_task_id = f"exp-{uuid.uuid4().hex[:12]}"
     initial_details: dict[str, object] = {
         'status': 'running',
-        'verification_id': verification_id,
+        'verification_id': export_verification_id,
         'export_type': requested_export_type,
         'source_commit': source_commit,
         'filename': '',
@@ -460,7 +432,7 @@ def export_create(problem: str, user: Annotated[str, Depends(require_session_use
             problem_id=problem_id,
             workspace_id=workspace_id,
             source_commit=source_commit,
-            requested_verification_id=verification_id,
+            requested_verification_id=export_verification_id,
             requested_export_type=requested_export_type,
             export_task_id=export_task_id,
             initial_details=initial_details,

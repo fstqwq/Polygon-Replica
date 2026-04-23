@@ -17,6 +17,7 @@ from .ui_support import _flash_messages_from_response, _request
 from app.impl.run_export import export as export_page_module
 from app.impl.run_export import import_source as export_import_module
 from app.impl.run_export.import_source import import_package_as_new_problem
+from app.impl.workspace.context_job import _run_export_create_worker
 from app.impl.runtime.config import config
 from app.service.importing import native as native_import_module
 from app.service.platform.git_process import run_git
@@ -151,6 +152,116 @@ class TestExport(SmokeBase):
         )
         self.assertIsNotNone(row)
         self.assertEqual(str(row["verification_id"] or ""), verification_id)
+
+    def test_icpc_export_worker_verifies_revision_and_binds_verification_id(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_export_auto_verify_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export auto verify {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-auto-{token}"
+
+        def _fake_dag(_problem: str, _user: str, **kwargs) -> None:
+            self.assertEqual(str(kwargs["source_commit"]), head)
+            self.assertEqual(str(kwargs["workspace_head"]), head)
+            self.assertFalse(bool(kwargs["workspace_dirty"]))
+            snapshot = Path(str(kwargs["snapshot_root_override"]))
+            self.assertTrue((snapshot / rel).is_file())
+            config.verification_service.begin_verification_record(
+                verification_id=verification_id,
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                signature=str(kwargs["signature"]),
+                source_commit=str(kwargs["source_commit"]),
+                kind=str(kwargs["kind"]),
+                status="ok",
+                detail={"sanity_status": "passed", "validation_status": "passed"},
+            )
+            config.verification_service.update_verification_record_status(
+                verification_id,
+                status="ok",
+                fail_reason="",
+                finished=True,
+            )
+
+        with patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=_fake_dag):
+            _run_export_create_worker(
+                self.problem,
+                self.user,
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+                requested_verification_id=verification_id,
+                requested_export_type="icpc",
+                export_task_id=f"exp-test-{token}",
+            )
+
+        export_row = db_fetch_one(
+            "SELECT verification_id,source_commit FROM exports WHERE source_commit=? ORDER BY created_at DESC LIMIT 1",
+            [head],
+        )
+        self.assertIsNotNone(export_row)
+        self.assertEqual(str(export_row["verification_id"] or ""), verification_id)
+        self.assertEqual(str(export_row["source_commit"] or ""), head)
+        verification_row = config.verification_service.verification_record(verification_id)
+        self.assertIsNotNone(verification_row)
+        self.assertEqual(str(verification_row["source_commit"] or ""), head)
+
+    def test_icpc_export_worker_fails_without_package_when_auto_verification_fails(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_export_auto_fail_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export auto verify fail {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-fail-{token}"
+
+        def _fake_dag(_problem: str, _user: str, **kwargs) -> None:
+            config.verification_service.begin_verification_record(
+                verification_id=verification_id,
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                signature=str(kwargs["signature"]),
+                source_commit=str(kwargs["source_commit"]),
+                kind=str(kwargs["kind"]),
+                status="failed",
+                detail={"sanity_status": "failed", "validation_status": "failed"},
+            )
+            config.verification_service.update_verification_record_status(
+                verification_id,
+                status="failed",
+                fail_reason="verification failed",
+                finished=True,
+            )
+
+        with patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=_fake_dag):
+            with self.assertRaisesRegex(ValueError, "verification failed"):
+                _run_export_create_worker(
+                    self.problem,
+                    self.user,
+                    actor_user_id=int(ctx["user"]["id"]),
+                    problem_id=int(ctx["problem"]["id"]),
+                    workspace_id=int(ctx["workspace"]["id"]),
+                    source_commit=head,
+                    requested_verification_id=verification_id,
+                    requested_export_type="icpc",
+                    export_task_id=f"exp-test-fail-{token}",
+                )
+
+        export_count = int(db_fetch_one("SELECT COUNT(*) AS c FROM exports WHERE source_commit=?", [head])["c"])
+        self.assertEqual(export_count, 0)
 
     def test_export_validation_fallback_requires_explicit_verification_id(self) -> None:
         resolved = export_page_module._resolve_export_verification_id(
@@ -668,6 +779,32 @@ class TestExport(SmokeBase):
             resp = export_page_module.export_create(self.problem, self.user, verification_id="", export_type="native")
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(str(start_job.call_args.kwargs["source_commit"]), head)
+
+    def test_icpc_export_route_allocates_verification_for_committed_revision(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/icpc_route_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test icpc export route {token}",
+        )
+        with patch.object(export_page_module, "start_export_job", return_value=True) as start_job:
+            resp = export_page_module.export_create(
+                self.problem,
+                self.user,
+                verification_id="client-provided-id-is-ignored",
+                export_type="icpc",
+            )
+        self.assertEqual(resp.status_code, 303)
+        requested_verification_id = str(start_job.call_args.kwargs["requested_verification_id"])
+        self.assertTrue(requested_verification_id.startswith("ver-"))
+        self.assertNotEqual(requested_verification_id, "client-provided-id-is-ignored")
+        self.assertEqual(str(start_job.call_args.kwargs["source_commit"]), head)
+        initial_details = dict(start_job.call_args.kwargs["initial_details"])
+        self.assertEqual(str(initial_details["verification_id"]), requested_verification_id)
 
     def test_native_export_route_requires_committed_revision(self) -> None:
         resp = export_page_module.export_create(self.problem, self.user, verification_id="", export_type="native")

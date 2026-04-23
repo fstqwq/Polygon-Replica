@@ -9,7 +9,7 @@
 <table class="table-base verification-list-table">
   <tr>
     <th>Created</th>
-    <th>Finished</th>
+    <th>Source</th>
     <th class="verification-list-kind-head">Kind</th>
     <th class="verification-list-status-head">Status</th>
     <th class="verification-list-reason-head">Reason</th>
@@ -20,13 +20,7 @@
     <td>
       <a href="/problems/{{ ctx.problem.slug }}/run/details?verification_id={{ r.id }}">{{ r.created_at | local_time }}</a>
     </td>
-    <td>
-      {% if r.finished_at %}
-      {{ r.finished_at | local_time }}
-      {% else %}
-      <span class="muted">-</span>
-      {% endif %}
-    </td>
+    <td>{{ r.source_display }}</td>
     <td class="verification-list-kind-cell">{{ r.kind }}</td>
     <td class="verification-list-status-cell">
       {% if r.status_tone == "warn" %}

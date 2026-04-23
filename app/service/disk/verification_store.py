@@ -20,6 +20,7 @@ class VerificationRecordRow(TypedDict):
     problem_id: int
     workspace_id: int | None
     signature: str
+    source_commit: str
     kind: str
     status: str
     fail_reason: str
@@ -33,6 +34,7 @@ class WorkspaceVerificationRow(TypedDict):
     id: str
     status: str
     signature: str
+    source_commit: str
     kind: str
     fail_reason: str
     error: str
@@ -66,6 +68,7 @@ class VerificationStore:
             "problem_id": int(row["problem_id"]),
             "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
             "signature": str(row["signature"] or ""),
+            "source_commit": str(row["source_commit"] or ""),
             "kind": str(row["kind"] or ""),
             "status": str(row["status"] or ""),
             "fail_reason": str(row["fail_reason"] or ""),
@@ -100,7 +103,7 @@ class VerificationStore:
     def record_row(self, verification_id: str) -> VerificationRecordRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,error,sanity_status,created_at,finished_at
+            SELECT id,problem_id,workspace_id,signature,source_commit,kind,status,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE id=?
             """,
@@ -118,6 +121,7 @@ class VerificationStore:
         problem_id: int,
         workspace_id: int | None,
         signature: str,
+        source_commit: str,
         kind: str,
         status: str,
     ) -> str:
@@ -129,14 +133,15 @@ class VerificationStore:
             int(problem_id),
             int(workspace_id) if workspace_id is not None else None,
             signature,
+            source_commit,
             kind or Kind.ALL.value,
             status or Status.RUNNING.value,
         ]
         if existing is None:
             self.db.execute(
                 """
-                INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?)
+                INSERT INTO verifications(id,problem_id,workspace_id,signature,source_commit,kind,status,fail_reason,created_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
                 """,
                 [
                     verification_id,
@@ -150,7 +155,7 @@ class VerificationStore:
             self.db.execute(
                 """
                 UPDATE verifications
-                SET problem_id=?,workspace_id=?,signature=?,kind=?,status=?
+                SET problem_id=?,workspace_id=?,signature=?,source_commit=?,kind=?,status=?
                 WHERE id=?
                 """,
                 [*params, verification_id],
@@ -222,7 +227,7 @@ class VerificationStore:
         placeholders = ",".join(("?" for _ in kind_tokens))
         rows = self.db.fetch_all(
             f"""
-            SELECT id,problem_id,workspace_id,signature,kind,status,fail_reason,error,sanity_status,created_at,finished_at
+            SELECT id,problem_id,workspace_id,signature,source_commit,kind,status,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
             ORDER BY created_at DESC
@@ -244,7 +249,7 @@ class VerificationStore:
         kind_tokens = list(kinds) or [Kind.ALL.value, Kind.CUSTOM.value]
         placeholders = ",".join(("?" for _ in kind_tokens))
         sql = f"""
-            SELECT id,status,signature,kind,fail_reason,error,sanity_status,created_at,finished_at
+            SELECT id,status,signature,source_commit,kind,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
         """
@@ -259,6 +264,7 @@ class VerificationStore:
                 "id": str(row["id"]),
                 "status": str(row["status"] or ""),
                 "signature": str(row["signature"] or ""),
+                "source_commit": str(row["source_commit"] or ""),
                 "kind": str(row["kind"] or ""),
                 "fail_reason": str(row["fail_reason"] or ""),
                 "error": str(row["error"] or ""),
@@ -277,7 +283,7 @@ class VerificationStore:
     ) -> WorkspaceVerificationRow | None:
         row = self.db.fetch_one(
             """
-            SELECT id,status,signature,kind,fail_reason,error,sanity_status,created_at,finished_at
+            SELECT id,status,signature,source_commit,kind,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE id=? AND problem_id=? AND workspace_id=?
             """,
@@ -289,6 +295,7 @@ class VerificationStore:
             "id": str(row["id"]),
             "status": str(row["status"] or ""),
             "signature": str(row["signature"] or ""),
+            "source_commit": str(row["source_commit"] or ""),
             "kind": str(row["kind"] or ""),
             "fail_reason": str(row["fail_reason"] or ""),
             "error": str(row["error"] or ""),

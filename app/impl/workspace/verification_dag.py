@@ -812,6 +812,7 @@ def run_workspace_verification_dag(
     targets: list[dict[str, object]],
     verification_id: str,
     signature: str = "",
+    source_commit: str = "",
     kind: str = Kind.ALL.value,
     sample_only: bool = False,
     snapshot_root_override: Path | None = None,
@@ -850,6 +851,7 @@ def run_workspace_verification_dag(
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature=signature,
+            source_commit=source_commit,
             kind=kind,
             status=Status.FAILED.value,
         )
@@ -931,6 +933,7 @@ def run_workspace_verification_dag(
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature=signature,
+            source_commit=source_commit,
             kind=effective_kind,
             status=Status.RUNNING.value,
         )

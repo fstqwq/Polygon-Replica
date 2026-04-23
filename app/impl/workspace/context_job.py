@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from app.impl.runtime.config import config
 from app.service.verification.types import Kind, Status
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
+from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification.validation_status import build_validation_status
 
-from .context_operation import audit
+from .context_job_helper import allocate_run_id, allocate_verification_id
+from .context_operation import audit, run_solution_options_context, workspace_rel_file_exists
 from .context_verification import (
     normalize_run_id_token,
     _verification_sources_signature,
@@ -15,6 +19,34 @@ from .problem_config import read_problem_config
 from .verification_dag import run_workspace_verification_dag
 
 _C = config.constants
+
+
+def build_full_verification_targets(workspace: Path) -> tuple[list[dict[str, object]], str]:
+    solution_options, accepted_source, _ = run_solution_options_context(workspace)
+    safe_accepted_source = str(accepted_source or "")
+    if not safe_accepted_source:
+        raise ValueError("main correct solution is required")
+    if not workspace_rel_file_exists(workspace, safe_accepted_source):
+        raise ValueError("main correct solution source does not exist")
+    targets: list[dict[str, object]] = []
+    for row in solution_options:
+        source_path = str(row.get("path") or "")
+        if not source_path:
+            continue
+        expected_behavior = normalize_expected_behavior(str(row.get("expected_behavior") or "unknown"))
+        if source_path == safe_accepted_source or bool(row.get("is_accepted")):
+            expected_behavior = "accepted"
+        targets.append({"path": source_path, "expected_behavior": expected_behavior})
+    if not targets:
+        raise ValueError("at least one solution source is required")
+    if not any(str(item.get("expected_behavior") or "") == "accepted" for item in targets):
+        raise ValueError("accepted solution source is required")
+    targets.sort(key=lambda item: (0 if item["expected_behavior"] == "accepted" else 1, str(item["path"])))
+    for target in targets:
+        target["run_id"] = allocate_run_id()
+    return targets, safe_accepted_source
+
+
 def _workspace_mode_and_pass_limit(problem_id: int, workspace_id: int) -> tuple[str, int]:
     default_mode = str(_C.GENERAL_CONFIG_DEFAULTS.get("mode") or "pass-fail")
     default_pass_limit = int(_C.GENERAL_CONFIG_DEFAULTS.get("pass_limit") or 1)
@@ -44,6 +76,7 @@ def _run_verification_start_worker(
     targets: list[dict[str, object]],
     verification_id: str,
     signature: str='',
+    source_commit: str = "",
     kind: str=Kind.ALL.value,
     selected_test_names: list[str] | None=None,
     force_recompile: bool = False,
@@ -59,6 +92,7 @@ def _run_verification_start_worker(
         targets=targets,
         verification_id=verification_id,
         signature=signature,
+        source_commit=source_commit,
         kind=kind,
         selected_test_names=selected_test_names or [],
         force_recompile=force_recompile,
@@ -85,6 +119,7 @@ def start_verification_job(
     workspace_path: Path | str | None=None,
     selected_test_names: list[str] | None=None,
     force_recompile: bool = False,
+    source_commit: str = "",
 ) -> bool:
     if initial_details is None and initial_summary is not None:
         initial_details = dict(initial_summary)
@@ -124,6 +159,7 @@ def start_verification_job(
         problem_id=problem_id,
         workspace_id=workspace_id,
         signature=signature,
+        source_commit=source_commit,
         kind=kind,
         status=Status.RUNNING.value,
         detail=detail,
@@ -144,6 +180,7 @@ def start_verification_job(
                     targets=targets,
                     verification_id=verification_id,
                     signature=signature,
+                    source_commit=source_commit,
                     kind=kind,
                     selected_test_names=selected_test_names or [],
                     force_recompile=force_recompile,
@@ -205,20 +242,80 @@ def _export_workspace_key(problem_id: int, workspace_id: int, source_commit: str
     effective_source_commit = _export_source_commit(export_type, source_commit)
     return f"{int(problem_id)}:{int(workspace_id)}:{effective_source_commit}:{export_type}"
 
+
+def _run_icpc_export_verification(
+    problem: str,
+    user: str,
+    *,
+    actor_user_id: int,
+    problem_id: int,
+    workspace_id: int,
+    source_commit: str,
+    verification_id: str,
+) -> None:
+    workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
+    if not workspace_path_text:
+        raise ValueError("workspace metadata missing")
+    workspace = Path(workspace_path_text).resolve()
+    snapshot = config.workspace_service.create_snapshot(workspace, source_commit)
+    try:
+        targets, _accepted_source = build_full_verification_targets(snapshot)
+        signature = _verification_sources_signature(snapshot)
+        run_workspace_verification_dag(
+            problem,
+            user,
+            actor_user_id=actor_user_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            workspace_head=source_commit,
+            workspace_dirty=False,
+            targets=targets,
+            verification_id=verification_id,
+            signature=signature,
+            source_commit=source_commit,
+            kind=Kind.ALL.value,
+            snapshot_root_override=snapshot,
+        )
+        snapshot = None
+    finally:
+        if snapshot is not None and snapshot.exists():
+            shutil.rmtree(snapshot.parent, ignore_errors=True)
+    verification_row = config.verification_service.workspace_verification_detail(
+        int(problem_id),
+        int(workspace_id),
+        verification_id,
+    )
+    validation_status = build_validation_status(verification_row)
+    if validation_status != "validation passed":
+        raise ValueError(f"verification failed: {verification_id}")
+
+
 def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, source_commit: str, requested_verification_id: str, requested_export_type: str, export_task_id: str = "") -> None:
     safe_requested_verification_id = normalize_run_id_token(requested_verification_id)
     safe_export_type = requested_export_type or 'icpc'
     effective_source_commit = _export_source_commit(safe_export_type, source_commit)
-    details: dict[str, object] = {'status': 'failed', 'artifact_verification_id': safe_requested_verification_id, 'export_type': safe_export_type, 'source_commit': effective_source_commit, 'filename': '', 'error': '', 'export_task_id': export_task_id}
+    if safe_export_type == "icpc" and not safe_requested_verification_id:
+        safe_requested_verification_id = allocate_verification_id()
+    details: dict[str, object] = {'status': 'failed', 'verification_id': safe_requested_verification_id, 'export_type': safe_export_type, 'source_commit': effective_source_commit, 'filename': '', 'error': '', 'export_task_id': export_task_id}
     worker_error: Exception | None = None
     try:
         if safe_export_type not in {'icpc', 'native'}:
             raise ValueError('unsupported package type')
         if not effective_source_commit:
             raise ValueError('no committed revision; commit changes first')
+        if safe_export_type == "icpc":
+            _run_icpc_export_verification(
+                problem,
+                user,
+                actor_user_id=actor_user_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=effective_source_commit,
+                verification_id=safe_requested_verification_id,
+            )
         out = config.export_service.create_export(
             problem,
-            "",
+            safe_requested_verification_id,
             safe_export_type,
             workspace_id=int(workspace_id),
             source_commit=effective_source_commit,

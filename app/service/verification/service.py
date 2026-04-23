@@ -781,6 +781,7 @@ class VerificationService:
         problem_id: int,
         workspace_id: int | None,
         signature: str = "",
+        source_commit: str = "",
         kind: str,
         status: str,
         detail: dict[str, object] | None = None,
@@ -791,6 +792,7 @@ class VerificationService:
             problem_id=int(problem_id),
             workspace_id=None if workspace_id is None else int(workspace_id),
             signature=signature,
+            source_commit=source_commit,
             kind=kind,
             status=status,
         )

@@ -189,6 +189,7 @@ class TestUIRun(UIBaseSuite):
         kind: str = Kind.ALL,
         signature: str = "",
         status: str = "ok",
+        source_commit: str = "",
         summary: dict[str, object] | None = None,
         artifact_path: str | None = None,
         created_at: str = "2026-03-10T00:00:00Z",
@@ -214,6 +215,7 @@ class TestUIRun(UIBaseSuite):
             problem_id=problem_id,
             workspace_id=workspace_id,
             signature=str(signature or "").strip(),
+            source_commit=str(source_commit or "").strip(),
             kind=str(kind or Kind.ALL).strip() or Kind.ALL.value,
             status=status,
             detail=summary_obj,
@@ -1393,6 +1395,49 @@ class TestUIRun(UIBaseSuite):
         self.assertLess(ordered_ids.index(new_verification), ordered_ids.index(old_verification))
         old_row = next((item for item in rows if str(item.get("id") or "") == old_verification), {})
         self.assertEqual(str(old_row.get("created_at") or ""), "2026-03-03T00:00:00Z")
+
+    def test_verification_list_source_replaces_finished_column(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        marker = ws / "solutions" / f"source-display-{uuid.uuid4().hex[:8]}.cpp"
+        marker.write_text("int main(){return 0;}\n", encoding="utf-8")
+        with config.workspace_service.workspace_lock(ws):
+            head = config.git_service.commit(ws, "source display", "alice", "alice@example.test")
+        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        working_id = f"ver-source-working-{uuid.uuid4().hex[:8]}"
+        revision_id = f"ver-source-revision-{uuid.uuid4().hex[:8]}"
+        self._insert_stage_verification(
+            verification_id=working_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-03-03T00:00:00Z",
+        )
+        self._insert_stage_verification(
+            verification_id=revision_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            kind=Kind.ALL,
+            status="ok",
+            source_commit=head,
+            created_at="2026-03-03T00:01:00Z",
+        )
+
+        rows = workspace_impl.run_list_rows(problem_id, workspace_id, ws, limit=10, actor_user_id=int(ctx["user"]["id"]))
+        working_row = next(item for item in rows if str(item.get("id") or "") == working_id)
+        revision_row = next(item for item in rows if str(item.get("id") or "") == revision_id)
+        self.assertEqual(str(working_row.get("source_display") or ""), "working copy")
+        self.assertRegex(str(revision_row.get("source_display") or ""), r"^v[1-9][0-9]*$")
+
+        resp = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("<th>Source</th>", html)
+        self.assertNotIn("<th>Finished</th>", html)
+        self.assertIn("working copy", html)
+        self.assertIn(str(revision_row.get("source_display") or ""), html)
 
     def test_rejudge_unavailable_consistent_between_list_and_details_while_running(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
