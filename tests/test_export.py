@@ -1102,6 +1102,49 @@ class TestExport(SmokeBase):
         self.assertIn(f">v{revision}<", html)
         self.assertNotIn(f">{head[:8]}<", html)
 
+    def test_export_page_failed_activity_keeps_export_error_over_verification_warning(self) -> None:
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        export_error = "export missing test answer: tests/answers/001.ans"
+        db_execute(
+            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+            [
+                int(ctx["user"]["id"]),
+                int(ctx["problem"]["id"]),
+                "export.create",
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "export_type": "icpc",
+                        "source_commit": "abc123",
+                        "verification_id": "ver-export-warning-hidden",
+                        "filename": "",
+                        "error": export_error,
+                        "export_task_id": "task-failed-answer",
+                    }
+                ),
+                "2026-04-12T02:10:00Z",
+            ],
+        )
+
+        with patch.object(
+            export_page_module,
+            "_verification_runtime_progress",
+            return_value={
+                "detail": "solutions/ac_python.py: accepted solution is close to the time limit.",
+                "log_href": "",
+            },
+        ):
+            resp = export_page_module.export_page(
+                _request(f"/problems/{self.problem}/export"),
+                self.problem,
+                self.user,
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn(export_error, html)
+        self.assertNotIn("accepted solution is close to the time limit", html)
+
     def test_import_into_working_copy_overwrites_matching_paths_and_keeps_others(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]

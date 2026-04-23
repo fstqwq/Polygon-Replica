@@ -113,7 +113,12 @@ def _export_recent_events(
         )
         runtime_detail = runtime_progress["detail"]
         log_href = runtime_progress["log_href"]
-        if runtime_detail:
+        use_runtime_detail = bool(runtime_detail) and (
+            status == "running"
+            or not error_text
+            or error_text.startswith("verification failed:")
+        )
+        if use_runtime_detail:
             detail = runtime_detail
         verification_href = _verification_href(
             problem_id=int(problem_id),
