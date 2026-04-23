@@ -14,7 +14,7 @@ from app.db import DB
 from app.service.disk.export_store import ExportStore
 from app.service.platform.hashing import sha256_file
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
-from app.service.problem.test_spec import load_tests_spec, payload_rel_path_for_test
+from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec, payload_rel_path_for_test
 from app.service.problem.solution_metadata import infer_expected_behavior_from_name, normalize_expected_behavior, parse_solution_desc
 from app.service.statement.render import render_statement_main
 from app.service.statement.tex_compile import TexCompileService
@@ -595,6 +595,23 @@ class ExportService:
             return
         raise ValueError(f"export missing verification answer artifact: {test_id}.ans")
 
+    def _materialize_export_sample_outputs(self, snapshot: Path, *, verification_id: str) -> None:
+        spec_path = snapshot / "tests" / "spec.json"
+        entries = load_tests_spec(spec_path)
+        changed = False
+        for row in entries:
+            if not bool(row["sample"]):
+                continue
+            if str(row["sample_output"] or ""):
+                continue
+            answer_blob = self._verification_answer_blob(verification_id, row["id"])
+            if answer_blob is None:
+                continue
+            row["sample_output"] = answer_blob.decode("utf-8", errors="replace")
+            changed = True
+        if changed:
+            spec_path.write_text(dumps_tests_spec(entries), encoding="utf-8")
+
     def _copy_secret_and_sample_data(self, snapshot: Path, package_root: Path, *, verification_id: str) -> None:
         secret_dir = package_root / "data" / "secret"
         sample_dir = package_root / "data" / "sample"
@@ -702,6 +719,7 @@ class ExportService:
             self._build_domjudge_problem_ini(slug=self._public_problem_slug(problem_slug), snapshot=snapshot),
             encoding="utf-8",
         )
+        self._materialize_export_sample_outputs(snapshot, verification_id=verification_id)
         self._copy_secret_and_sample_data(snapshot, package_root, verification_id=verification_id)
         self._try_compile_statement_pdf(
             snapshot,

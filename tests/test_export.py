@@ -23,6 +23,7 @@ from app.service.importing import native as native_import_module
 from app.service.platform.git_process import run_git
 from app.service.importing.native import NativePackageImportService
 from app.service.sandbox.base import ExecResult
+from app.service.statement.constant import DEFAULT_STATEMENT_PROBLEM_TEMPLATE
 from app.service.statement.tex_compile import TexCompileResult
 
 db = config.db
@@ -1645,6 +1646,89 @@ class TestExport(SmokeBase):
             names = set(zf.namelist())
         self.assertIn("problem.yaml", names)
         self.assertIn("problem_statement/problem.en.pdf", names)
+
+    def test_export_statement_pdf_uses_verification_sample_answer_artifacts(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_pdf_sample_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "statement" / "problem.tex").write_text(DEFAULT_STATEMENT_PROBLEM_TEMPLATE, encoding="utf-8")
+        (ws / "tests" / "manual" / "001.in").write_text("sample input\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps({"tests": [{"id": "001", "kind": "manual", "sample": True}]}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", "tests/manual/001.in", "tests/spec.json"],
+            f"test export statement pdf sample artifact {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-sample-pdf-{token}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature=head,
+            source_commit=head,
+            kind="all",
+            status="ok",
+            detail={"sanity_status": "passed", "validation_status": "passed"},
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"artifact sample answer\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"answer_ref": answer_ref},
+        )
+
+        def _fake_compile(tex_path: Path) -> TexCompileResult:
+            rendered_root = tex_path.parent / "rendered" / "english"
+            rendered_problem = (rendered_root / "problem.tex").read_text(encoding="utf-8")
+            self.assertIn(r"\exmpfile{sample.001.in}{sample.001.ans}", rendered_problem)
+            self.assertEqual((rendered_root / "sample.001.in").read_text(encoding="utf-8"), "sample input\n")
+            self.assertEqual(
+                (rendered_root / "sample.001.ans").read_text(encoding="utf-8"),
+                "artifact sample answer\n",
+            )
+            pdf_path = tex_path.with_suffix(".pdf")
+            pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            return TexCompileResult(
+                engine="pdflatex",
+                proc=ExecResult(
+                    backend="fake",
+                    status="ok",
+                    returncode=0,
+                    elapsed_ms=1,
+                    timed_out=False,
+                    stdout="",
+                    stderr="",
+                ),
+                log_text="ok\n",
+                pdf_path=pdf_path,
+            )
+
+        with patch.object(export_service.tex_compile_service, "compile_pdf", side_effect=_fake_compile):
+            archive = export_service.create_export(
+                self.problem,
+                verification_id,
+                "icpc",
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+            )
+
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+            self.assertIn("problem_statement/problem.en.pdf", names)
+            self.assertEqual(zf.read("data/sample/001.ans"), b"artifact sample answer\n")
+        self.assertNotIn("sample_output", (ws / "tests" / "spec.json").read_text(encoding="utf-8"))
 
     def test_export_emits_multilanguage_statement_tex_and_pdf_names(self) -> None:
         ws = Path(self._workspace_path())
