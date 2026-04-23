@@ -323,7 +323,7 @@ class JudgehostStateStore:
             return row, "leased-host-testcase-id"
         return None, "missing"
 
-    def jobs_for_script_kind(self, kind: str) -> list[dict[str, object]]:
+    def active_script_hashes_for_kind(self, kind: str) -> list[str]:
         field_map = {
             "compile": "compile_hash",
             "run": "run_hash",
@@ -332,16 +332,17 @@ class JudgehostStateStore:
         field = field_map.get(kind)
         if field is None:
             return []
-        return self._fetch_all(
+        rows = self._fetch_all(
             f"""
-            SELECT job_id,work_root,{field} AS script_hash
+            SELECT {field} AS script_hash
             FROM judgehost_domjudge_jobs
-            WHERE TRIM({field})<>''
+            WHERE TRIM({field})<>'' AND status IN ('queued','leased')
             ORDER BY job_id DESC
             LIMIT 256
             """,
             [],
         )
+        return [str(row["script_hash"] or "") for row in rows if str(row["script_hash"] or "").strip()]
 
     def job_finalize_row(self, job_id: int) -> dict[str, object] | None:
         return self._fetch_one(

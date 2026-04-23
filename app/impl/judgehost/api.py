@@ -327,7 +327,8 @@ async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: 
             hostname = _resolve_request_hostname(service, request)
             rows = await _run_service_call(service.domjudge_get_testcase_files, test_id, hostname=hostname)
         elif token in {"compile", "run", "compare"}:
-            rows = await _run_service_call(service.domjudge_get_executable_files, token, item_id)
+            hostname = _resolve_request_hostname(service, request)
+            rows = await _run_service_call(service.domjudge_get_executable_files, token, item_id, hostname=hostname)
         else:
             raise RuntimeError("unknown file type")
     except RuntimeError as exc:

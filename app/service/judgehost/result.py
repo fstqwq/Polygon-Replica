@@ -243,47 +243,102 @@ class ResultProcessor:
             {"filename": "output", "content": base64.b64encode(answer_blob).decode("ascii")},
         ]
 
-    def domjudge_get_executable_files(self, kind: str, script_id: object) -> list[dict[str, object]]:
+    def _domjudge_executable_rows(
+        self,
+        *,
+        kind: str,
+        executable_hash: str,
+    ) -> list[dict[str, object]]:
+        cached_rows = self._toolkit.read_executable_cache(kind=kind, executable_hash=executable_hash)
+        if not cached_rows:
+            raise RuntimeError("script files not found")
+        return [
+            {
+                "filename": str(row["filename"]),
+                "content": base64.b64encode(bytes(row["content"])).decode("ascii"),
+                "is_executable": bool(row["is_executable"]),
+            }
+            for row in cached_rows
+        ]
+
+    def _domjudge_active_job_script_hash(
+        self,
+        *,
+        hostname: str,
+        kind: str,
+        requested_id: int,
+    ) -> tuple[int, str] | None:
+        safe_host = self._core.normalize_hostname(hostname)
+        if not safe_host:
+            return None
+        job_row = self._s.judgehost_state_store.active_job_for_host(safe_host)
+        if job_row is None:
+            return None
+        field = domjudge_script_hash_field(kind)
+        script_hash = domjudge_lower_text(job_row[field])
+        if not script_hash:
+            return None
+        if domjudge_script_id(script_hash) != requested_id:
+            return None
+        return (int(job_row["job_id"]), script_hash)
+
+    def _domjudge_shared_script_hash(self, *, kind: str, requested_id: int) -> str:
+        matching_hashes = {
+            script_hash
+            for script_hash in self._s.judgehost_state_store.active_script_hashes_for_kind(kind)
+            if script_hash and domjudge_script_id(script_hash) == requested_id
+        }
+        if not matching_hashes:
+            raise RuntimeError("script files not found")
+        if len(matching_hashes) > 1:
+            raise RuntimeError("ambiguous script id")
+        return next(iter(matching_hashes))
+
+    def _domjudge_fail_job_executable_lookup(self, *, job_id: int, error_text: str) -> None:
+        safe_error = domjudge_text(error_text)
+        if not safe_error:
+            safe_error = "judgehost executable cache missing"
+        now_text = now_iso()
+        self._s.judgehost_state_store.append_debug_text(
+            case_id=None,
+            job_id=int(job_id),
+            debug_text=safe_error,
+            now_text=now_text,
+        )
+        self._s.judgehost_state_store.mark_job_cases_reported(
+            int(job_id),
+            runresult="internal-error",
+            updated_at=now_text,
+        )
+        self._domjudge_finalize_if_ready(int(job_id), force_failed=True, error_text=safe_error)
+
+    def domjudge_get_executable_files(
+        self,
+        kind: str,
+        script_id: object,
+        *,
+        hostname: str = "",
+    ) -> list[dict[str, object]]:
         requested_id = domjudge_parse_script_id(script_id)
         token = domjudge_lower_text(kind)
         _ = domjudge_script_hash_field(token)
-        candidates = self._s.judgehost_state_store.jobs_for_script_kind(token)
-        matching_roots: list[Path] = []
-        matching_hashes: set[str] = set()
-        for row in candidates:
-            script_hash = domjudge_lower_text(row["script_hash"])
-            if not script_hash:
-                continue
-            if domjudge_script_id(script_hash) != requested_id:
-                continue
-            matching_hashes.add(script_hash)
-            work_root_text = domjudge_text(row["work_root"])
-            if not work_root_text:
-                continue
-            matching_roots.append(Path(work_root_text).resolve())
-        if not matching_roots:
-            raise RuntimeError("script files not found")
-        unique_roots = {str(root) for root in matching_roots}
-        if len(unique_roots) > 1 and len(matching_hashes) > 1:
-            raise RuntimeError("ambiguous script id")
-        base = (matching_roots[0] / "scripts" / token).resolve()
-        if not base.exists() or not base.is_dir():
-            raise RuntimeError("script files not found")
-        rows: list[dict[str, object]] = []
-        for file in sorted(base.iterdir(), key=lambda item: item.name):
-            if not file.is_file():
-                continue
-            st_mode = int(file.stat().st_mode)
-            rows.append(
-                {
-                    "filename": file.name,
-                    "content": base64.b64encode(file.read_bytes()).decode("ascii"),
-                    "is_executable": bool(st_mode & 0o111),
-                }
-            )
-        if not rows:
-            raise RuntimeError("script files not found")
-        return rows
+        active_match = None if not hostname else self._domjudge_active_job_script_hash(
+            hostname=hostname,
+            kind=token,
+            requested_id=requested_id,
+        )
+        if active_match is not None:
+            job_id, executable_hash = active_match
+            try:
+                return self._domjudge_executable_rows(kind=token, executable_hash=executable_hash)
+            except RuntimeError:
+                self._domjudge_fail_job_executable_lookup(
+                    job_id=job_id,
+                    error_text=f"judgehost executable cache missing: {token}/{requested_id}",
+                )
+                raise
+        executable_hash = self._domjudge_shared_script_hash(kind=token, requested_id=requested_id)
+        return self._domjudge_executable_rows(kind=token, executable_hash=executable_hash)
 
     def domjudge_get_version_commands(self, judgetask_id: int) -> dict[str, object]:
         _ = int(judgetask_id)

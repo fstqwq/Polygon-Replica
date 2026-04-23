@@ -424,11 +424,7 @@ class TaskEnqueue:
         prepared = self._dispatch._domjudge_prepare_payload(payload, compile_only=compile_only)
         work_root = self._toolkit.work_root(task_id)
         source_dir = (work_root / "source").resolve()
-        scripts_compile_dir = (work_root / "scripts" / "compile").resolve()
-        scripts_run_dir = (work_root / "scripts" / "run").resolve()
-        scripts_compare_dir = (work_root / "scripts" / "compare").resolve()
-        for directory in (source_dir, scripts_compile_dir, scripts_run_dir, scripts_compare_dir):
-            directory.mkdir(parents=True, exist_ok=True)
+        source_dir.mkdir(parents=True, exist_ok=True)
         source_name = prepared["source_name"]
         source_bytes = prepared["source_bytes"]
         source_path = (source_dir / source_name).resolve()
@@ -438,12 +434,21 @@ class TaskEnqueue:
             if target == source_path:
                 continue
             self._toolkit.ensure_bytes_file(target, blob, executable=False)
-        for name, content, is_exec in prepared["compile_files"]:
-            self._toolkit.ensure_bytes_file(scripts_compile_dir / name, content, executable=is_exec)
-        for name, content, is_exec in prepared["run_files"]:
-            self._toolkit.ensure_bytes_file(scripts_run_dir / name, content, executable=is_exec)
-        for name, content, is_exec in prepared["compare_files"]:
-            self._toolkit.ensure_bytes_file(scripts_compare_dir / name, content, executable=is_exec)
+        self._toolkit.store_executable_cache(
+            kind="compile",
+            executable_hash=prepared["compile_hash"],
+            files=prepared["compile_files"],
+        )
+        self._toolkit.store_executable_cache(
+            kind="run",
+            executable_hash=prepared["run_hash"],
+            files=prepared["run_files"],
+        )
+        self._toolkit.store_executable_cache(
+            kind="compare",
+            executable_hash=prepared["compare_hash"],
+            files=prepared["compare_files"],
+        )
 
     @staticmethod
     def _verification_id(run_id: str, verification_id: str) -> str:

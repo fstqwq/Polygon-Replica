@@ -17,6 +17,7 @@ from app.service.judgehost.domjudge.cache import (
     domjudge_parse_cache_blob_ref,
     domjudge_set_hash_from_blobs,
 )
+from app.service.judgehost.domjudge.executable_cache import DomjudgeExecutableCache
 from app.service.judgehost.shared import (
     _DOMJUDGE_CACHE_NAME_RE,
     _DOMJUDGE_CONTEST_ID_RE,
@@ -43,6 +44,7 @@ class DomjudgeToolkit:
 
     def __init__(self, state: JudgehostState) -> None:
         self._s = state
+        self._executable_cache = DomjudgeExecutableCache(self._s.fs_manager.judgehost_executables_root)
 
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_GENERATE_INPUT = "generate-input"
@@ -325,6 +327,27 @@ class DomjudgeToolkit:
 
     def set_hash_from_blobs(self, blobs: list[bytes]) -> str:
         return domjudge_set_hash_from_blobs(blobs)
+
+    def store_executable_cache(
+        self,
+        *,
+        kind: str,
+        executable_hash: str,
+        files: list[tuple[str, bytes, bool]],
+    ) -> None:
+        self._executable_cache.put(
+            kind=kind,
+            executable_hash=executable_hash,
+            files=files,
+        )
+
+    def read_executable_cache(
+        self,
+        *,
+        kind: str,
+        executable_hash: str,
+    ) -> list[dict[str, object]] | None:
+        return self._executable_cache.read(kind=kind, executable_hash=executable_hash)
 
     def read_artifact_blob(self, work_root: Path, token: str) -> bytes | None:
         return domjudge_read_artifact_blob(

@@ -816,6 +816,187 @@ class TestJudgehostService(SmokeBase):
         with self.assertRaises(RuntimeError):
             fresh_service.domjudge_get_executable_files("compare", compare_script_id)
 
+    def test_domjudge_executable_files_ignore_deleted_job_work_roots(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
+
+        verification_id = f"b-jh-script-cache-{uuid.uuid4().hex[:8]}"
+        run_id_a = f"r-jh-script-cache-a-{uuid.uuid4().hex[:8]}"
+        run_id_b = f"r-jh-script-cache-b-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+
+        task_id_a = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id_a,
+            selected_tests=["001.in"],
+            verification_id="inv-script-cache-a",
+            verification_run_ids=[run_id_a],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            force_recompile=True,
+        )
+        service.domjudge_register_host("judgehost-script-cache-a")
+        leased_a = service.domjudge_fetch_work("judgehost-script-cache-a", max_batchsize=8)
+        row_a = next((row for row in leased_a if str(row.get("uuid") or "") == task_id_a), None)
+        self.assertIsNotNone(row_a)
+        assert row_a is not None
+        case_id_a = int(row_a.get("judgetaskid") or 0)
+        compare_script_id_a = int(row_a.get("compare_script_id") or 0)
+
+        service.domjudge_update_judging(
+            "judgehost-script-cache-a",
+            case_id_a,
+            {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
+        )
+        service.domjudge_add_judging_run(
+            "judgehost-script-cache-a",
+            case_id_a,
+            {
+                "runresult": "correct",
+                "runtime": "0.001",
+                "output_run": "",
+                "output_diff": base64.b64encode(b"ok\n").decode("ascii"),
+                "output_error": "",
+                "output_system": "",
+                "metadata": "",
+                "compare_metadata": "",
+            },
+        )
+        self.assertEqual(service.wait_for_task(task_id_a, timeout_sec=2.0), run_id_a)
+
+        task_id_b = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id_b,
+            selected_tests=["001.in"],
+            verification_id="inv-script-cache-b",
+            verification_run_ids=[run_id_b],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            force_recompile=True,
+        )
+        service.domjudge_register_host("judgehost-script-cache-b")
+        leased_b: list[dict[str, object]] = []
+        row_b = None
+        for _ in range(8):
+            leased_b = service.domjudge_fetch_work("judgehost-script-cache-b", max_batchsize=8)
+            row_b = next((row for row in leased_b if str(row.get("uuid") or "") == task_id_b), None)
+            if row_b is not None:
+                break
+        self.assertIsNotNone(row_b)
+        assert row_b is not None
+        compare_script_id_b = int(row_b.get("compare_script_id") or 0)
+        self.assertEqual(compare_script_id_b, compare_script_id_a)
+
+        shutil.rmtree(service.toolkit.work_root(task_id_b), ignore_errors=True)
+
+        compare_files = service.domjudge_get_executable_files(
+            "compare",
+            compare_script_id_b,
+            hostname="judgehost-script-cache-b",
+        )
+        compare_names = {str(item.get("filename") or "") for item in compare_files}
+        self.assertIn("run", compare_names)
+
+    def test_domjudge_missing_executable_cache_fails_active_job(self) -> None:
+        service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
+
+        verification_id = f"b-jh-script-miss-{uuid.uuid4().hex[:8]}"
+        run_id = f"r-jh-script-miss-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id="inv-script-miss",
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+        )
+        host = "judgehost-script-miss"
+        service.domjudge_register_host(host)
+        leased = service.domjudge_fetch_work(host, max_batchsize=8)
+        row = next((item for item in leased if str(item.get("uuid") or "") == task_id), None)
+        self.assertIsNotNone(row)
+        assert row is not None
+        case_id = int(row.get("judgetaskid") or 0)
+        compare_script_id = int(row.get("compare_script_id") or 0)
+        self.assertGreater(compare_script_id, 0)
+
+        service.domjudge_update_judging(
+            host,
+            case_id,
+            {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
+        )
+        job_row = service.state.judgehost_state_store.job_for_task(task_id)
+        self.assertIsNotNone(job_row)
+        assert job_row is not None
+        compare_hash = str(job_row["compare_hash"] or "")
+        cache_dir = config.fs_manager.judgehost_executables_root / "compare" / compare_hash
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+        with self.assertRaises(RuntimeError):
+            service.domjudge_get_executable_files(
+                "compare",
+                compare_script_id,
+                hostname=host,
+            )
+
+        failed_job = judgehost_fetch_job(service, int(job_row["job_id"] or 0))
+        self.assertIsNotNone(failed_job)
+        assert failed_job is not None
+        self.assertEqual(str(failed_job["status"] or ""), "failed")
+
+        run_row = self._verification_run_row(run_id)
+        self.assertIsNotNone(run_row)
+        assert run_row is not None
+        self.assertEqual(str(run_row["status"] or ""), "failed")
+        self.assertIn(
+            "judgehost executable cache missing: compare/",
+            str(dict(run_row["summary"]).get("error") or ""),
+        )
+
     def test_generate_prepared_payload_recomputes_domjudge_precomputed_from_final_verification_payload(self) -> None:
         service = config.judgehost_task_service
         old_enabled = service.state.enabled
@@ -3808,6 +3989,61 @@ class TestJudgehostService(SmokeBase):
         files = testcase_resp.json()
         input_blob = next(item["content"] for item in files if str(item.get("filename") or "") == "input")
         self.assertEqual(base64.b64decode(input_blob).decode("utf-8", errors="replace"), "peer-input\n")
+
+    def test_domjudge_executable_files_endpoint_uses_request_peer_hostname_binding(self) -> None:
+        from app.main import app
+
+        service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
+
+        with TestClient(app) as client:
+            verification_id = f"b-jh-peer-script-{uuid.uuid4().hex[:8]}"
+            run_id = f"r-jh-peer-script-{uuid.uuid4().hex[:8]}"
+            self._seed_build_verification(verification_id)
+            service.enqueue_task(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id=verification_id,
+                mode="pass-fail",
+                submission_path="solutions/ac.cpp",
+                upload_content=None,
+                upload_filename=None,
+                run_id=run_id,
+                selected_tests=["001.in"],
+                verification_id="inv-domjudge-peer-script",
+                verification_run_ids=[run_id],
+                expected_behavior="accepted",
+                verification_source="run.execute",
+            )
+            fetch_resp = client.post(
+                "/api/v4/judgehosts/fetch-work",
+                data={"hostname": "judgehost-peer-script", "max_batchsize": "1"},
+                headers={"Authorization": "Bearer test-token"},
+            )
+            self.assertEqual(fetch_resp.status_code, 200)
+            tasks = fetch_resp.json()
+            self.assertEqual(len(tasks), 1)
+            compare_script_id = int(tasks[0].get("compare_script_id") or 0)
+            self.assertGreater(compare_script_id, 0)
+            compare_resp = client.get(
+                f"/api/v4/judgehosts/get_files/compare/{compare_script_id}",
+                headers={"Authorization": "Bearer test-token"},
+            )
+        self.assertEqual(compare_resp.status_code, 200)
+        files = compare_resp.json()
+        filenames = {str(item.get("filename") or "") for item in files}
+        self.assertIn("run", filenames)
 
     def test_domjudge_cancel_keeps_leased_case_running_and_stops_pending_case_dispatch(self) -> None:
         service = config.judgehost_task_service

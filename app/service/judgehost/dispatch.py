@@ -464,11 +464,7 @@ class DispatchHandler:
 
         work_root = self._toolkit.work_root(task_id)
         source_dir = (work_root / "source").resolve()
-        scripts_compile_dir = (work_root / "scripts" / "compile").resolve()
-        scripts_run_dir = (work_root / "scripts" / "run").resolve()
-        scripts_compare_dir = (work_root / "scripts" / "compare").resolve()
-        for directory in (source_dir, scripts_compile_dir, scripts_run_dir, scripts_compare_dir):
-            directory.mkdir(parents=True, exist_ok=True)
+        source_dir.mkdir(parents=True, exist_ok=True)
         source_path = (source_dir / source_name).resolve()
         self._toolkit.ensure_bytes_file(source_path, source_bytes, executable=False)
         for name, blob in extra_source_items:
@@ -476,12 +472,9 @@ class DispatchHandler:
             if target == source_path:
                 continue
             self._toolkit.ensure_bytes_file(target, blob, executable=False)
-        for name, content, is_exec in compile_files:
-            self._toolkit.ensure_bytes_file(scripts_compile_dir / name, content, executable=is_exec)
-        for name, content, is_exec in run_files:
-            self._toolkit.ensure_bytes_file(scripts_run_dir / name, content, executable=is_exec)
-        for name, content, is_exec in compare_files:
-            self._toolkit.ensure_bytes_file(scripts_compare_dir / name, content, executable=is_exec)
+        self._toolkit.store_executable_cache(kind="compile", executable_hash=compile_hash, files=compile_files)
+        self._toolkit.store_executable_cache(kind="run", executable_hash=run_hash, files=run_files)
+        self._toolkit.store_executable_cache(kind="compare", executable_hash=compare_hash, files=compare_files)
 
         now_text = now_iso()
         case_rows = self._domjudge_case_rows(
