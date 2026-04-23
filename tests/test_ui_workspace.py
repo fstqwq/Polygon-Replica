@@ -458,6 +458,83 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(payload.get("pass_limit"), 2)
         self.assertNotIn("interactive", payload)
 
+    def test_general_save_pass_fail_removes_interactor_source(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        files = [
+            "solutions/std.cpp",
+            "validators/validator.cpp",
+            "checkers/checker.cpp",
+            "interactors/interactor.cpp",
+        ]
+        for rel in files:
+            path = ws / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "config" / "build.json").write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": "solutions/std.cpp",
+                    "validator_source": "validators/validator.cpp",
+                    "checker_source": "checkers/checker.cpp",
+                    "interactor_source": "interactors/interactor.cpp",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        resp = general_save(
+            problem="alice/sample",
+            user="alice",
+            time_limit_ms="2000",
+            memory_limit_mb="1024",
+            mode="pass-fail",
+            pass_limit="2",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
+        self.assertEqual(build_cfg.get("accepted_solution_source"), "solutions/std.cpp")
+        self.assertEqual(build_cfg.get("validator_source"), "validators/validator.cpp")
+        self.assertEqual(build_cfg.get("checker_source"), "checkers/checker.cpp")
+        self.assertNotIn("interactor_source", build_cfg)
+
+    def test_general_save_interactive_removes_checker_and_stale_sources(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        interactor = ws / "interactors" / "interactor.cpp"
+        interactor.parent.mkdir(parents=True, exist_ok=True)
+        interactor.write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "config" / "build.json").write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": "solutions/missing.cpp",
+                    "validator_source": "validators/missing.cpp",
+                    "checker_source": "checkers/checker.cpp",
+                    "interactor_source": "interactors/interactor.cpp",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        resp = general_save(
+            problem="alice/sample",
+            user="alice",
+            time_limit_ms="2000",
+            memory_limit_mb="1024",
+            mode="interactive",
+            pass_limit="2",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        build_cfg = json.loads((ws / "config" / "build.json").read_text(encoding="utf-8"))
+        self.assertEqual(build_cfg.get("interactor_source"), "interactors/interactor.cpp")
+        self.assertNotIn("checker_source", build_cfg)
+        self.assertNotIn("validator_source", build_cfg)
+        self.assertNotIn("accepted_solution_source", build_cfg)
+
     def test_metadata_popup_shows_readonly_system_limits(self) -> None:
         resp = general_page(_request("/problems/alice/sample/statement"), "alice/sample", "alice")
         self.assertEqual(resp.status_code, 200)
