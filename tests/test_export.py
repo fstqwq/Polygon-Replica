@@ -89,6 +89,7 @@ class TestExport(SmokeBase):
             "statement-sections/english/input.tex",
             "statement-sections/english/output.tex",
             "statement-sections/english/notes.tex",
+            "third_party/testlib/testlib.h",
         ]
         add = run_git(["git", "-C", str(workspace), "add", *(baseline + list(paths))])
         self.assertEqual(add.returncode, 0, add.stderr)
@@ -629,9 +630,13 @@ class TestExport(SmokeBase):
             self.assertEqual(zf.read("data/sample/001.ans").decode("utf-8"), "sample answer\n")
             self.assertEqual(zf.read("data/secret/002.ans").decode("utf-8"), "secret answer\n")
             self.assertIn(f"output_validators/checker/{Path(files['checker']).name}", names)
+            self.assertIn("output_validators/checker/testlib.h", names)
             domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
             self.assertIn(f"short-name = {public_slug[:32]}", domjudge_ini)
+            self.assertRegex(domjudge_ini, r"(?m)^color = #[0-9a-f]{6}$")
             self.assertIn(f"externalid = {public_slug}", domjudge_ini)
+            problem_yaml = zf.read("problem.yaml").decode("utf-8", errors="replace")
+            self.assertNotIn("problem_format_version", problem_yaml)
         export_row = db_fetch_one("SELECT id FROM exports WHERE filename=?", [archive.name])
         self.assertIsNotNone(export_row)
         summary = export_page_module._export_archive_summary(self.problem, str(export_row["id"]), archive.name)
@@ -775,11 +780,18 @@ class TestExport(SmokeBase):
         with zipfile.ZipFile(archive, "r") as zf:
             problem_yaml = zf.read("problem.yaml").decode("utf-8", errors="replace")
             domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
+            self.assertNotIn("problem_format_version", problem_yaml)
             self.assertIn("validation: custom interactive multi-pass", problem_yaml)
+            self.assertIn("memory: 1024", problem_yaml)
             self.assertIn("validation_passes: 2", problem_yaml)
+            self.assertNotIn("time_limit:", problem_yaml)
+            self.assertNotIn("memory_limit:", problem_yaml)
             self.assertIn("timelimit = 2", domjudge_ini)
+            self.assertRegex(domjudge_ini, r"(?m)^color = #[0-9a-f]{6}$")
             self.assertIn(f"externalid = {Path(self.problem).name}", domjudge_ini)
             self.assertIn(f"output_validators/interactor/interactor_{token}.cpp", zf.namelist())
+            self.assertIn("output_validators/interactor/testlib.h", zf.namelist())
+            self.assertIn("output_validators/interactor/build", zf.namelist())
         self.assertTrue(archive.name.startswith(f"{Path(self.problem).name}-v"))
 
     def test_native_import_rejects_git_metadata_paths(self) -> None:
@@ -1503,7 +1515,7 @@ class TestExport(SmokeBase):
             self.assertNotIn(f"output_validators/checker/{Path(files['checker_other']).name}", names)
 
             content = zf.read("problem.yaml").decode("utf-8", errors="replace")
-            self.assertIn("problem_format_version:", content)
+            self.assertNotIn("problem_format_version:", content)
 
     def test_export_keeps_only_latest_record_per_revision(self) -> None:
         ws = Path(self._workspace_path())
@@ -1582,7 +1594,7 @@ class TestExport(SmokeBase):
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
         self.assertIn("problem.yaml", names)
-        self.assertIn("statement/problem.en.pdf", names)
+        self.assertIn("problem_statement/problem.en.pdf", names)
 
     def test_export_statement_pdf_compilation_uses_shared_tex_compile_service(self) -> None:
         ws = Path(self._workspace_path())
@@ -1632,7 +1644,7 @@ class TestExport(SmokeBase):
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
         self.assertIn("problem.yaml", names)
-        self.assertIn("statement/problem.en.pdf", names)
+        self.assertIn("problem_statement/problem.en.pdf", names)
 
     def test_export_emits_multilanguage_statement_tex_and_pdf_names(self) -> None:
         ws = Path(self._workspace_path())
@@ -1680,12 +1692,12 @@ class TestExport(SmokeBase):
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
         self.assertIn("problem.yaml", names)
-        self.assertNotIn("statement/problem.en.tex", names)
-        self.assertNotIn("statement/problem.zh.tex", names)
-        self.assertNotIn("statement/problem.japanese.tex", names)
-        self.assertIn("statement/problem.en.pdf", names)
-        self.assertIn("statement/problem.zh.pdf", names)
-        self.assertIn("statement/problem.japanese.pdf", names)
+        self.assertNotIn("problem_statement/problem.en.tex", names)
+        self.assertNotIn("problem_statement/problem.zh.tex", names)
+        self.assertNotIn("problem_statement/problem.japanese.tex", names)
+        self.assertIn("problem_statement/problem.en.pdf", names)
+        self.assertIn("problem_statement/problem.zh.pdf", names)
+        self.assertIn("problem_statement/problem.japanese.pdf", names)
 
     def test_export_skips_statement_pdf_when_export_compile_fails(self) -> None:
         ws = Path(self._workspace_path())
@@ -1713,5 +1725,5 @@ class TestExport(SmokeBase):
         with zipfile.ZipFile(archive, "r") as zf:
             names = set(zf.namelist())
         self.assertIn("problem.yaml", names)
-        self.assertNotIn("statement/problem.en.pdf", names)
-        self.assertNotIn("statement/problem.en.tex", names)
+        self.assertNotIn("problem_statement/problem.en.pdf", names)
+        self.assertNotIn("problem_statement/problem.en.tex", names)

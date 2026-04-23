@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -39,6 +40,27 @@ class ExportService:
         "run_time_error",
         "rejected",
     )
+    DOMJUDGE_COLOR_PALETTE = (
+        "#e6194b",
+        "#3cb44b",
+        "#ffe119",
+        "#4363d8",
+        "#f58231",
+        "#911eb4",
+        "#46f0f0",
+        "#f032e6",
+        "#bcf60c",
+        "#fabebe",
+        "#008080",
+        "#e6beff",
+        "#9a6324",
+        "#fffac8",
+        "#800000",
+        "#aaffc3",
+        "#808000",
+        "#ffd8b1",
+    )
+
     def __init__(
         self,
         db: DB,
@@ -96,6 +118,10 @@ class ExportService:
     def _public_problem_slug(self, slug: str) -> str:
         token = str(slug or "").replace("\\", "/").strip("/").rsplit("/", 1)[-1].strip()
         return self._archive_filename_slug(token)
+
+    def _domjudge_color(self, slug: str) -> str:
+        digest = hashlib.sha256(str(slug or "problem").encode("utf-8")).digest()
+        return self.DOMJUDGE_COLOR_PALETTE[digest[0] % len(self.DOMJUDGE_COLOR_PALETTE)]
 
     def _is_safe_regular_file(self, root: Path, p: Path, root_resolved: Path | None = None) -> bool:
         if p.is_symlink() or not p.exists() or not p.is_file():
@@ -476,26 +502,22 @@ class ExportService:
             validation = "custom interactive multi-pass" if int(pass_limit) > 1 else "custom interactive"
         elif has_checker:
             validation = "custom"
-        lines = [
-            "problem_format_version: 2025-09",
-            f"name: {self._yaml_quote(str(problem_name or '').strip() or 'Problem')}",
-            f"validation: {validation}",
-        ]
-        if int(pass_limit) > 1:
-            lines.append("limits:")
-            lines.append(f"  validation_passes: {max(2, int(pass_limit))}")
-        time_limit_ms = cfg.get("time_limit_ms")
-        memory_limit_mb = cfg.get("memory_limit_mb")
+        lines: list[str] = []
         limit_lines: list[str] = []
-        if isinstance(time_limit_ms, int) and time_limit_ms > 0:
-            seconds = max(1, int(round(time_limit_ms / 1000.0)))
-            limit_lines.append(f"  time_limit: {seconds} s")
+        memory_limit_mb = cfg.get("memory_limit_mb")
         if isinstance(memory_limit_mb, int) and memory_limit_mb > 0:
-            limit_lines.append(f"  memory_limit: {memory_limit_mb} MiB")
+            limit_lines.append(f"  memory: {memory_limit_mb}")
+        if int(pass_limit) > 1:
+            limit_lines.append(f"  validation_passes: {max(2, int(pass_limit))}")
         if limit_lines:
-            if "limits:" not in lines:
-                lines.append("limits:")
+            lines.append("limits:")
             lines.extend(limit_lines)
+        lines.extend(
+            [
+                f"name: {self._yaml_quote(str(problem_name or '').strip() or 'Problem')}",
+                f"validation: {validation}",
+            ]
+        )
         return "\n".join(lines) + "\n"
 
     def _build_domjudge_problem_ini(self, *, slug: str, snapshot: Path) -> str:
@@ -508,6 +530,7 @@ class ExportService:
         return (
             f"short-name = {short_name}\n"
             f"timelimit = {seconds:.3f}".rstrip("0").rstrip(".") + "\n"
+            f"color = {self._domjudge_color(slug)}\n"
             f"externalid = {slug}\n"
         )
 
@@ -607,12 +630,37 @@ class ExportService:
                 verification_id=verification_id,
             )
 
-    def _copy_output_validator_component(self, source: Path | None, dst_dir: Path, subdir: str) -> None:
+    def _copy_output_validator_component(
+        self,
+        source: Path | None,
+        dst_dir: Path,
+        subdir: str,
+        *,
+        snapshot: Path,
+        create_build_script: bool = False,
+    ) -> None:
         if source is None:
             return
         target_dir = dst_dir / subdir
         target_dir.mkdir(parents=True, exist_ok=True)
+        if source.suffix == ".cpp":
+            testlib = snapshot / "third_party" / "testlib" / "testlib.h"
+            if not self._is_safe_regular_file(snapshot, testlib):
+                raise ValueError("export missing testlib header: third_party/testlib/testlib.h")
+            shutil.copy2(testlib, target_dir / "testlib.h")
+            if create_build_script:
+                self._write_output_validator_build_script(target_dir, source.name)
         shutil.copy2(source, target_dir / source.name)
+
+    def _write_output_validator_build_script(self, target_dir: Path, source_name: str) -> None:
+        build = target_dir / "build"
+        build.write_text(
+            "#!/bin/sh\n"
+            "# Auto-generated for DOMjudge multi-pass validation.\n"
+            f"g++ -Wall -DDOMJUDGE -O2 {source_name} -std=gnu++20 -o run\n",
+            encoding="utf-8",
+        )
+        build.chmod(0o755)
 
     def _copy_solutions(self, snapshot: Path, package_root: Path) -> None:
         dst_submissions = package_root / "submissions"
@@ -655,11 +703,17 @@ class ExportService:
             encoding="utf-8",
         )
         self._copy_secret_and_sample_data(snapshot, package_root, verification_id=verification_id)
-        self._try_compile_statement_pdf(snapshot, package_root / "statement", problem_name=problem_name)
+        self._try_compile_statement_pdf(
+            snapshot,
+            package_root / "problem_statement",
+            problem_name=problem_name,
+        )
         self._copy_output_validator_component(
             interactor_source if mode == "interactive" else checker_source,
             package_root / "output_validators",
             "interactor" if mode == "interactive" else "checker",
+            snapshot=snapshot,
+            create_build_script=mode == "interactive" and int(pass_limit) > 1,
         )
         self._copy_solutions(snapshot, package_root)
         self._copy_attachments(snapshot, package_root)
