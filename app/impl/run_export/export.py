@@ -46,6 +46,15 @@ def _export_type_display(export_type: str) -> str:
     return export_type or "-"
 
 
+def _source_revision_display(workspace: Path, source_commit: str, revision_cache: dict[str, int | None]) -> str:
+    if not source_commit:
+        return "working copy"
+    if source_commit not in revision_cache:
+        revision_cache[source_commit] = git_commit_count(workspace, source_commit)
+    revision = revision_cache[source_commit]
+    return f"v{revision}" if revision is not None and revision >= 0 else "v?"
+
+
 def _parse_export_audit_details(raw: str | None) -> ExportAuditDetails:
     details: dict[str, object] = {}
     if raw is not None:
@@ -79,6 +88,8 @@ def _export_recent_events(
     *,
     problem_slug: str,
     username: str,
+    workspace: Path,
+    revision_cache: dict[str, int | None],
     limit: int = 20,
 ) -> list[dict[str, object]]:
     cap = max(1, min(100, int(limit)))
@@ -116,7 +127,7 @@ def _export_recent_events(
                 "status": status,
                 "export_type": details["export_type"],
                 "source_commit": source_commit,
-                "source_display": "working tree" if details["export_type"] == "native" and not source_commit else (source_commit[:8] if source_commit else "-"),
+                "source_display": _source_revision_display(workspace, source_commit, revision_cache),
                 "verification_id": verification_id or "-",
                 "export_task_id": details["export_task_id"],
                 "filename": filename,
@@ -276,16 +287,11 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
             source_commit = ""
         revision = None
         if source_commit:
-            if source_commit in revision_cache:
-                revision = revision_cache[source_commit]
-            else:
-                revision = git_commit_count(workspace, source_commit)
-                revision_cache[source_commit] = revision
-        item['revision'] = revision
-        if cast(str, item["export_type"]) == "native" and not source_commit:
-            item['source_display'] = 'working tree'
+            item['source_display'] = _source_revision_display(workspace, source_commit, revision_cache)
+            revision = revision_cache[source_commit]
         else:
-            item['source_display'] = f'v{revision}' if revision is not None and revision >= 0 else 'v?'
+            item['source_display'] = _source_revision_display(workspace, source_commit, revision_cache)
+        item['revision'] = revision
         stored_filename = cast(str | None, item.get("filename"))
         if stored_filename is None:
             stored_filename = ""
@@ -340,6 +346,8 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
         actor_user_id,
         problem_slug=ctx["problem"]["slug"],
         username=ctx["user"]["username"],
+        workspace=workspace,
+        revision_cache=revision_cache,
         limit=20,
     )
     export_row_index: dict[tuple[str, str, str], dict[str, object]] = {}

@@ -263,6 +263,59 @@ class TestExport(SmokeBase):
         export_count = int(db_fetch_one("SELECT COUNT(*) AS c FROM exports WHERE source_commit=?", [head])["c"])
         self.assertEqual(export_count, 0)
 
+    def test_icpc_export_worker_allows_auto_verification_warning(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_export_auto_warn_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", *self._seed_export_tests(ws, "001")],
+            f"test export auto verify warning {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-warn-{token}"
+
+        def _fake_dag(_problem: str, _user: str, **kwargs) -> None:
+            config.verification_service.begin_verification_record(
+                verification_id=verification_id,
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                signature=str(kwargs["signature"]),
+                source_commit=str(kwargs["source_commit"]),
+                kind=str(kwargs["kind"]),
+                status="ok",
+                detail={
+                    "sanity_status": "warning",
+                    "validation_status": "warning",
+                    "failed_step": "sanity",
+                    "error": "solutions/ac_python.py: accepted solution is close to the time limit.",
+                },
+            )
+            config.verification_service.update_verification_record_status(
+                verification_id,
+                status="ok",
+                fail_reason="",
+                finished=True,
+            )
+
+        with patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=_fake_dag):
+            _run_export_create_worker(
+                self.problem,
+                self.user,
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+                requested_verification_id=verification_id,
+                requested_export_type="icpc",
+                export_task_id=f"exp-test-warn-{token}",
+            )
+
+        export_count = int(db_fetch_one("SELECT COUNT(*) AS c FROM exports WHERE source_commit=?", [head])["c"])
+        self.assertEqual(export_count, 1)
+
     def test_export_validation_fallback_requires_explicit_verification_id(self) -> None:
         resolved = export_page_module._resolve_export_verification_id(
             problem_id=1,
@@ -301,6 +354,7 @@ class TestExport(SmokeBase):
                 "details": {
                     "sanity_status": "warning",
                     "validation_status": "warning",
+                    "failed_step": "sanity",
                 },
             }
         )
@@ -912,6 +966,9 @@ class TestExport(SmokeBase):
         self.assertIn(">running<", html)
         self.assertEqual(html.count(">RUNNING<"), 1)
         self.assertEqual(html.count(">OK<"), 1)
+        revision = run_git(["git", "-C", str(ws), "rev-list", "--count", head]).stdout.strip()
+        self.assertIn(f">v{revision}<", html)
+        self.assertNotIn(f">{head[:8]}<", html)
 
     def test_import_into_working_copy_overwrites_matching_paths_and_keeps_others(self) -> None:
         ws = Path(self._workspace_path())
