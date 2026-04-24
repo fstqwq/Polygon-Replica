@@ -47,6 +47,8 @@ from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
 
 _C = config.constants
+_REGISTRATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_REGISTRATION_CODE_LENGTH = 12
 
 
 def _setup_config_rows() -> list[dict[str, str]]:
@@ -138,9 +140,20 @@ def _enforce_auth_rate_limit(
     raise ValueError(f"too many registration attempts; retry in {int(hit['retry_after_sec'])}s")
 
 
-def _registration_verify_url(request: Request, token: str) -> str:
-    base_url = str(request.base_url).rstrip("/")
-    return f"{base_url}/register/verify?token={quote_plus(token)}"
+def _new_registration_verification_code() -> str:
+    raw = "".join(secrets.choice(_REGISTRATION_CODE_ALPHABET) for _ in range(_REGISTRATION_CODE_LENGTH))
+    return "-".join(raw[index : index + 4] for index in range(0, len(raw), 4))
+
+
+def _normalize_registration_verification_code(value: str) -> str:
+    normalized = "".join(
+        ch for ch in form_text(value).upper() if not ch.isspace() and ch != "-"
+    )
+    if len(normalized) != _REGISTRATION_CODE_LENGTH:
+        raise ValueError("registration verification failed")
+    if any(ch not in _REGISTRATION_CODE_ALPHABET for ch in normalized):
+        raise ValueError("registration verification failed")
+    return normalized
 
 
 def _registration_expiry_minutes() -> int:
@@ -354,8 +367,8 @@ def register_submit(
             response = redirect_response(target, status_code=303)
             response.set_cookie(_C.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
             return response
-        verification_token = secrets.token_urlsafe(32)
-        token_hash = sha256_hex_text(verification_token)
+        verification_code = _new_registration_verification_code()
+        token_hash = sha256_hex_text(_normalize_registration_verification_code(verification_code))
         pending_id = config.auth_service.create_pending_registration(
             username=safe_user,
             email=safe_email,
@@ -371,7 +384,7 @@ def register_submit(
         try:
             config.smtp_config_service.send_registration_email(
                 recipient=safe_email,
-                verification_url=_registration_verify_url(request, verification_token),
+                verification_code=verification_code,
                 expires_in_sec=int(_C.AUTH_REGISTER_PENDING_TTL_SEC),
             )
         except ValueError as exc:
@@ -384,21 +397,28 @@ def register_submit(
     except ValueError as exc:
         return redirect_response('/register', status_code=303, message=str(exc))
     return redirect_response(
-        '/login',
+        '/register/verify',
         status_code=303,
-        message=f'registration email sent; check your inbox within {_registration_expiry_minutes()} minutes',
+        message=f'registration email sent; enter the verification code within {_registration_expiry_minutes()} minutes',
     )
 
 
-def register_verify(request: Request, token: str = ""):
+def register_verify_page(request: Request):
+    return template_response(
+        request,
+        'register_verify.html',
+        {'expiry_minutes': _registration_expiry_minutes()},
+    )
+
+
+def register_verify(request: Request, code: str = Form("")):
+    enforce_same_origin_state_change(request)
     request_ip = _client_ip_for_auth_rate_limit(request)
     user_agent = _request_user_agent(request)
     audit_base: dict[str, object] = {"ip": request_ip, "user_agent": user_agent}
     try:
-        raw_token = form_text(token).strip()
-        if not _C.SESSION_TOKEN_RE.fullmatch(raw_token):
-            raise ValueError("registration verification failed")
-        token_hash = sha256_hex_text(raw_token)
+        normalized_code = _normalize_registration_verification_code(code)
+        token_hash = sha256_hex_text(normalized_code)
         pending = config.auth_service.pending_registration_by_token_hash(token_hash)
         if pending is not None:
             audit_base.update(
@@ -425,9 +445,9 @@ def register_verify(request: Request, token: str = ""):
                 details={**audit_base, "reason": str(exc)},
             )
         except ValueError as rate_exc:
-            return redirect_response('/register', status_code=303, message=str(rate_exc))
+            return redirect_response('/register/verify', status_code=303, message=str(rate_exc))
         _auth_audit("auth.register.verify_failed", {**audit_base, "reason": str(exc)})
-        return redirect_response('/register', status_code=303, message=str(exc))
+        return redirect_response('/register/verify', status_code=303, message=str(exc))
     response = redirect_response('/problems', status_code=303, message='registration verified')
     response.set_cookie(_C.AUTH_COOKIE_NAME, auth_token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
     return response

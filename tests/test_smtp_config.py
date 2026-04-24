@@ -105,6 +105,37 @@ class TestSmtpConfig(UIBaseSuite):
         smtp.login.assert_called_once_with("mailer@example.com", "secret-token")
         smtp.send_message.assert_called_once()
 
+    def test_registration_email_sends_code_without_verification_link(self) -> None:
+        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor)
+        with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
+            config.smtp_config_service.save_from_form(
+                host="smtp.example.com",
+                port="587",
+                username="mailer@example.com",
+                password="secret-token",
+                clear_password=False,
+                actor_user_id=int(actor["id"]),
+            )
+            smtp_context = MagicMock()
+            smtp = smtp_context.__enter__.return_value
+            with patch("app.service.mail.smtp_config.smtplib.SMTP", return_value=smtp_context):
+                config.smtp_config_service.send_registration_email(
+                    recipient="user@example.com",
+                    verification_code="8F3K-2Q7M-Z9PA",
+                    expires_in_sec=1800,
+                )
+
+        smtp.send_message.assert_called_once()
+        message = smtp.send_message.call_args.args[0]
+        body = message.get_content()
+        self.assertIn("8F3K-2Q7M-Z9PA", body)
+        self.assertIn("This code expires in 30 minutes.", body)
+        self.assertNotIn("http://", body)
+        self.assertNotIn("https://", body)
+        self.assertNotIn("/register/verify", body)
+        self.assertNotIn("token=", body)
+
     def test_smtp_settings_route_smoke(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         with self.assertRaises(HTTPException):

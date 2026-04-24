@@ -40,6 +40,7 @@ from .ui_support import (
     register_page,
     register_submit,
     register_verify,
+    register_verify_page,
     settings_page,
     settings_judgehost_snapshot,
     settings_config_category_page,
@@ -59,6 +60,48 @@ SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
 
 
 class TestUIAuth(UIBaseSuite):
+    def _submit_pending_registration_with_smtp(
+        self,
+        username: str,
+        *,
+        request: Request | None = None,
+    ) -> tuple[object, str]:
+        password = "StrongPass123"
+        page = register_page(_request("/register"))
+        html = page.body.decode("utf-8", errors="replace")
+        csrf = _extract_hidden_input_value(html, "csrf_token")
+        salt = _extract_hidden_input_value(html, "password_salt")
+        iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
+        verifier = _password_verifier_hex(password, salt, iters)
+        proof = _sha256_hex(csrf + verifier)
+        password_hash = _sha256_hex(csrf + password)
+        sent_codes: list[str] = []
+
+        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+                def _capture_registration_email(*, recipient, verification_code, expires_in_sec):
+                    del recipient, expires_in_sec
+                    sent_codes.append(str(verification_code))
+
+                send_mail.side_effect = _capture_registration_email
+                resp = register_submit(
+                    request=request if request is not None else _post_request("/register"),
+                    username=username,
+                    email=f"{username}@gmail.com",
+                    password=password_hash,
+                    password_confirm=password_hash,
+                    password_verifier=verifier,
+                    password_proof=proof,
+                    csrf_token=csrf,
+                    password_salt=salt,
+                    password_iters=str(iters),
+                    next="/",
+                    terms_accepted="yes",
+                )
+
+        self.assertEqual(len(sent_codes), 1)
+        return resp, sent_codes[0]
+
     def test_sudo_password_proof_flow_sets_short_lived_token(self) -> None:
         username = self.random_id("sudo")
         password = "StrongPass123"
@@ -406,47 +449,14 @@ class TestUIAuth(UIBaseSuite):
 
     def test_register_uses_pending_email_verification_when_smtp_configured(self) -> None:
         username = self.random_id("verify")
-        password = "StrongPass123"
-        page = register_page(_request("/register"))
-        html = page.body.decode("utf-8", errors="replace")
-        csrf = _extract_hidden_input_value(html, "csrf_token")
-        salt = _extract_hidden_input_value(html, "password_salt")
-        iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
-        verifier = _password_verifier_hex(password, salt, iters)
-        proof = _sha256_hex(csrf + verifier)
-        password_hash = _sha256_hex(csrf + password)
-        sent_urls: list[str] = []
-
-        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
-            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
-                def _capture_registration_email(*, recipient, verification_url, expires_in_sec):
-                    del recipient, expires_in_sec
-                    sent_urls.append(str(verification_url))
-
-                send_mail.side_effect = _capture_registration_email
-                resp = register_submit(
-                    request=_post_request("/register"),
-                    username=username,
-                    email=f"{username}@gmail.com",
-                    password=password_hash,
-                    password_confirm=password_hash,
-                    password_verifier=verifier,
-                    password_proof=proof,
-                    csrf_token=csrf,
-                    password_salt=salt,
-                    password_iters=str(iters),
-                    next="/",
-                    terms_accepted="yes",
-                )
+        resp, code = self._submit_pending_registration_with_smtp(username)
 
         self.assertEqual(resp.status_code, 303)
-        self.assertEqual(resp.headers.get("location", ""), "/login")
+        self.assertEqual(resp.headers.get("location", ""), "/register/verify")
         self.assertFalse(_cookie_value_from_response(resp, AUTH_COOKIE_NAME))
         self.assertIsNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))
-        self.assertEqual(len(sent_urls), 1)
 
-        token = sent_urls[0].split("token=", 1)[1]
-        verified = register_verify(_request("/register/verify", query=f"token={token}"), token=token)
+        verified = register_verify(_post_request("/register/verify"), code=code)
         self.assertEqual(verified.status_code, 303)
         self.assertEqual(verified.headers.get("location", ""), "/problems")
         self.assertTrue(_cookie_value_from_response(verified, AUTH_COOKIE_NAME))
@@ -458,54 +468,65 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(str(user_row["email_normalized"]), f"{username}@gmail.com")
         self.assertTrue(str(user_row["email_verified_at"] or ""))
 
-    def test_register_verification_link_expires(self) -> None:
+    def test_register_verify_page_prompts_for_email_code(self) -> None:
+        resp = register_verify_page(_request("/register/verify"))
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Enter the verification code from your email", html)
+        self.assertIn('name="code"', html)
+        self.assertIn("The code expires in", html)
+
+    def test_register_email_verification_ignores_poisoned_host(self) -> None:
+        username = self.random_id("host")
+        request = _request(
+            "/register",
+            method="POST",
+            headers=[
+                (b"host", b"evil.example"),
+                (b"origin", b"http://evil.example"),
+            ],
+        )
+        resp, code = self._submit_pending_registration_with_smtp(username, request=request)
+        self.assertEqual(resp.status_code, 303)
+        self.assertNotIn("evil.example", code)
+        self.assertNotIn("/register/verify", code)
+        self.assertNotIn("token=", code)
+
+    def test_register_verification_code_accepts_spacing_and_case(self) -> None:
+        username = self.random_id("code")
+        resp, code = self._submit_pending_registration_with_smtp(username)
+        self.assertEqual(resp.status_code, 303)
+        submitted = code.replace("-", " ").lower()
+        verified = register_verify(_post_request("/register/verify"), code=submitted)
+        self.assertEqual(verified.status_code, 303)
+        self.assertEqual(verified.headers.get("location", ""), "/problems")
+        self.assertIsNotNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))
+
+    def test_register_verification_code_rejects_wrong_code(self) -> None:
+        username = self.random_id("wrong")
+        resp, code = self._submit_pending_registration_with_smtp(username)
+        self.assertEqual(resp.status_code, 303)
+        wrong = ("A" if code[0] != "A" else "B") + code[1:]
+        rejected = register_verify(_post_request("/register/verify"), code=wrong)
+        self.assertEqual(rejected.status_code, 303)
+        self.assertEqual(rejected.headers.get("location", ""), "/register/verify")
+        self.assertIsNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))
+
+    def test_register_verification_code_expires(self) -> None:
         username = self.random_id("expiry")
-        password = "StrongPass123"
-        page = register_page(_request("/register"))
-        html = page.body.decode("utf-8", errors="replace")
-        csrf = _extract_hidden_input_value(html, "csrf_token")
-        salt = _extract_hidden_input_value(html, "password_salt")
-        iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
-        verifier = _password_verifier_hex(password, salt, iters)
-        proof = _sha256_hex(csrf + verifier)
-        password_hash = _sha256_hex(csrf + password)
-        sent_urls: list[str] = []
-
-        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
-            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
-                def _capture_registration_email(*, recipient, verification_url, expires_in_sec):
-                    del recipient, expires_in_sec
-                    sent_urls.append(str(verification_url))
-
-                send_mail.side_effect = _capture_registration_email
-                resp = register_submit(
-                    request=_post_request("/register"),
-                    username=username,
-                    email=f"{username}@gmail.com",
-                    password=password_hash,
-                    password_confirm=password_hash,
-                    password_verifier=verifier,
-                    password_proof=proof,
-                    csrf_token=csrf,
-                    password_salt=salt,
-                    password_iters=str(iters),
-                    next="/",
-                    terms_accepted="yes",
-                )
+        resp, code = self._submit_pending_registration_with_smtp(username)
 
         self.assertEqual(resp.status_code, 303)
         messages = _flash_messages_from_response(resp)
         self.assertTrue(any("within" in item.lower() for item in messages))
-        self.assertEqual(len(sent_urls), 1)
-        token = sent_urls[0].split("token=", 1)[1]
         db_execute(
             "UPDATE pending_registrations SET expires_at=? WHERE username=?",
             ["2000-01-01T00:00:00+00:00", username],
         )
 
-        expired = register_verify(_request("/register/verify", query=f"token={token}"), token=token)
+        expired = register_verify(_post_request("/register/verify"), code=code)
         self.assertEqual(expired.status_code, 303)
-        self.assertEqual(expired.headers.get("location", ""), "/register")
+        self.assertEqual(expired.headers.get("location", ""), "/register/verify")
         expired_messages = _flash_messages_from_response(expired)
         self.assertTrue(any("expired" in item.lower() for item in expired_messages))
         self.assertIsNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))

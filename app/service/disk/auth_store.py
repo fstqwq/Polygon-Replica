@@ -402,9 +402,9 @@ class AuthStore:
             if row is None:
                 raise ValueError("registration verification failed")
             if str(row["used_at"] or ""):
-                raise ValueError("registration link has already been used")
+                raise ValueError("registration code has already been used")
             if str(row["expires_at"] or "") <= now_text:
-                raise ValueError("registration link has expired")
+                raise ValueError("registration code has expired")
             username = str(row["username"] or "")
             email = str(row["email"] or "")
             email_normalized = str(row["email_normalized"] or "")

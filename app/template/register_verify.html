@@ -1,0 +1,17 @@
+{% extends "auth_base.html" %}
+{% block auth_page_title %}Polygon-Replica Verify Email{% endblock %}
+{% block auth_title %}Verify Email{% endblock %}
+{% block auth_subtitle %}Registration email sent. Enter the verification code from your email to finish creating your account.{% endblock %}
+
+{% block auth_form %}
+<form class="form-stack" method="post" action="/register/verify">
+  <label for="code">Verification code</label>
+  <input id="code" name="code" type="text" autocomplete="one-time-code" placeholder="8F3K-2Q7M-Z9PA" autofocus />
+  <p class="muted">The code expires in {{ expiry_minutes }} minutes.</p>
+  <button class="btn primary-action" type="submit">Verify email</button>
+</form>
+{% endblock %}
+
+{% block auth_footer %}
+<p class="muted">Need a new code? <a href="/register">Register again</a></p>
+{% endblock %}

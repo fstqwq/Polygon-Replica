@@ -100,6 +100,8 @@ export POLYGON_REPLICA_ENCRYPTION_KEY="$(python3 -c 'import base64, secrets; pri
 ```
 
 Keep this value stable across restarts. Changing it requires re-entering the SMTP password.
+Registration emails send a verification code only. They do not include absolute URLs
+or derive links from the request `Host` header.
 
 ## Service Management
 
