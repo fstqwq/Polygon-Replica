@@ -5,6 +5,7 @@ from .db_helpers import db_execute, db_fetch_all, db_fetch_one
 import io
 import json
 import re
+import shlex
 import shutil
 import tempfile
 import uuid
@@ -99,6 +100,70 @@ class TestExport(SmokeBase):
         head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"])
         self.assertEqual(head.returncode, 0, head.stderr)
         return head.stdout.strip()
+
+    def _create_interactive_domjudge_export(
+        self,
+        *,
+        token: str | None = None,
+        interactor_name: str | None = None,
+    ) -> tuple[Path, str, str]:
+        ws = Path(self._workspace_path())
+        safe_token = token or uuid.uuid4().hex[:8]
+        solution_rel = f"solutions/ac_domjudge_{safe_token}.cpp"
+        safe_interactor_name = interactor_name or f"interactor_{safe_token}.cpp"
+        interactor_rel = f"interactors/{safe_interactor_name}"
+        (ws / solution_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{solution_rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "config" / "problem.json").write_text(
+            json.dumps(
+                {
+                    "mode": "interactive",
+                    "pass_limit": 2,
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                    "input_file": "stdin",
+                    "output_file": "stdout",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / interactor_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / "config" / "build.json").write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": solution_rel,
+                    "interactor_source": interactor_rel,
+                    "generator_sources": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [
+                solution_rel,
+                f"{solution_rel}.desc",
+                "config/problem.json",
+                "config/build.json",
+                interactor_rel,
+                *self._seed_export_tests(ws, "001"),
+            ],
+            f"test export domjudge metadata {safe_token}",
+        )
+        archive = export_service.create_export(
+            self.problem,
+            "",
+            "icpc",
+            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+            source_commit=head,
+        )
+        return (archive, safe_token, safe_interactor_name)
 
     def _build_native_package_bytes(self, files: dict[str, str]) -> bytes:
         payload = io.BytesIO()
@@ -841,62 +906,7 @@ class TestExport(SmokeBase):
             )
 
     def test_icpc_export_emits_domjudge_reference_metadata(self) -> None:
-        ws = Path(self._workspace_path())
-        token = uuid.uuid4().hex[:8]
-        rel = f"solutions/ac_domjudge_{token}.cpp"
-        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
-        problem_cfg = ws / "config" / "problem.json"
-        problem_cfg.write_text(
-            json.dumps(
-                {
-                    "mode": "interactive",
-                    "pass_limit": 2,
-                    "time_limit_ms": 2000,
-                    "memory_limit_mb": 1024,
-                    "input_file": "stdin",
-                    "output_file": "stdout",
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        (ws / "interactors" / f"interactor_{token}.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        build_cfg = ws / "config" / "build.json"
-        build_cfg.write_text(
-            json.dumps(
-                {
-                    "accepted_solution_source": rel,
-                    "interactor_source": f"interactors/interactor_{token}.cpp",
-                    "generator_sources": [],
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        head = self._commit_workspace_paths(
-            ws,
-            [
-                rel,
-                f"{rel}.desc",
-                "config/problem.json",
-                "config/build.json",
-                f"interactors/interactor_{token}.cpp",
-                *self._seed_export_tests(ws, "001"),
-            ],
-            f"test export domjudge metadata {token}",
-        )
-        archive = export_service.create_export(
-            self.problem,
-            "",
-            "icpc",
-            workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
-            source_commit=head,
-        )
+        archive, _token, interactor_name = self._create_interactive_domjudge_export()
         with zipfile.ZipFile(archive, "r") as zf:
             problem_yaml = zf.read("problem.yaml").decode("utf-8", errors="replace")
             domjudge_ini = zf.read("domjudge-problem.ini").decode("utf-8", errors="replace")
@@ -909,10 +919,28 @@ class TestExport(SmokeBase):
             self.assertIn("timelimit = 2", domjudge_ini)
             self.assertRegex(domjudge_ini, r"(?m)^color = #[0-9a-f]{6}$")
             self.assertIn(f"externalid = {Path(self.problem).name}", domjudge_ini)
-            self.assertIn(f"output_validators/interactor/interactor_{token}.cpp", zf.namelist())
+            self.assertIn(f"output_validators/interactor/{interactor_name}", zf.namelist())
             self.assertIn("output_validators/interactor/testlib.h", zf.namelist())
             self.assertIn("output_validators/interactor/build", zf.namelist())
         self.assertTrue(archive.name.startswith(f"{Path(self.problem).name}-v"))
+
+    def test_icpc_export_build_script_shell_quotes_interactor_filename(self) -> None:
+        token = uuid.uuid4().hex[:8]
+        interactor_name = f"interactor_{token};echo injected.cpp"
+        archive, _token, _interactor_name = self._create_interactive_domjudge_export(
+            token=token,
+            interactor_name=interactor_name,
+        )
+        with zipfile.ZipFile(archive, "r") as zf:
+            build_script = zf.read("output_validators/interactor/build").decode("utf-8", errors="replace")
+            self.assertIn(
+                f"g++ -Wall -DDOMJUDGE -O2 {shlex.quote(interactor_name)} -std=gnu++20 -o run\n",
+                build_script,
+            )
+            self.assertNotIn(
+                f"g++ -Wall -DDOMJUDGE -O2 {interactor_name} -std=gnu++20 -o run\n",
+                build_script,
+            )
 
     def test_native_import_rejects_git_metadata_paths(self) -> None:
         ws = Path(self._workspace_path())

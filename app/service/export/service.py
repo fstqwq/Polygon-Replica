@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import uuid
 import zipfile
@@ -756,7 +757,7 @@ class ExportService:
         build.write_text(
             "#!/bin/sh\n"
             "# Auto-generated for DOMjudge multi-pass validation.\n"
-            f"g++ -Wall -DDOMJUDGE -O2 {source_name} -std=gnu++20 -o run\n",
+            f"g++ -Wall -DDOMJUDGE -O2 {shlex.quote(source_name)} -std=gnu++20 -o run\n",
             encoding="utf-8",
         )
         build.chmod(0o755)
