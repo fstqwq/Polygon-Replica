@@ -58,6 +58,72 @@ class TestJudgehostService(SmokeBase):
         service.state.include_build_payload = True
         return service
 
+    def _enable_config_judgehost_service(self) -> Judgehost:
+        service = config.judgehost_task_service
+        old_enabled = service.state.enabled
+        old_token = service.state.api_token
+        old_username = service.state.api_username
+        old_include_build_payload = service.state.include_build_payload
+        self.addCleanup(setattr, service.state, "enabled", old_enabled)
+        self.addCleanup(setattr, service.state, "api_token", old_token)
+        self.addCleanup(setattr, service.state, "api_username", old_username)
+        self.addCleanup(setattr, service.state, "include_build_payload", old_include_build_payload)
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
+        return service
+
+    def _enqueue_and_lease_cached_job(
+        self,
+        service: Judgehost,
+        *,
+        artifact_verification_id: str,
+        verification_id: str,
+        run_id: str,
+        hostname: str,
+    ) -> tuple[str, dict[str, object]]:
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=artifact_verification_id,
+            mode="pass-fail",
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id=verification_id,
+            verification_run_ids=[run_id],
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            force_recompile=True,
+        )
+        service.domjudge_register_host(hostname)
+        leased = service.domjudge_fetch_work(hostname, max_batchsize=8)
+        task_row = next((row for row in leased if str(row.get("uuid") or "") == task_id), None)
+        self.assertIsNotNone(task_row)
+        job_row = service.state.judgehost_state_store.job_for_task(task_id)
+        self.assertIsNotNone(job_row)
+        assert job_row is not None
+        return task_id, dict(job_row)
+
+    @staticmethod
+    def _job_executable_cache_paths(job_row: dict[str, object]) -> dict[str, Path]:
+        return {
+            kind: config.fs_manager.judgehost_executables_root / kind / str(job_row[f"{kind}_hash"] or "")
+            for kind in ("compile", "run", "compare")
+        }
+
+    @staticmethod
+    def _mark_domjudge_job_completed(service: Judgehost, job_row: dict[str, object]) -> None:
+        service.state.judgehost_state_store.set_job_terminal_status(
+            int(job_row["job_id"]),
+            status="completed",
+            completed_at="2026-04-25T00:00:00+00:00",
+            updated_at="2026-04-25T00:00:00+00:00",
+        )
+
     def _verification_run_row(self, run_id: str, verification_id: str = "") -> dict[str, object] | None:
         safe_run_id = str(run_id or "").strip()
         if not safe_run_id:
@@ -919,6 +985,50 @@ class TestJudgehostService(SmokeBase):
         )
         compare_names = {str(item.get("filename") or "") for item in compare_files}
         self.assertIn("run", compare_names)
+
+    def test_domjudge_executable_cache_cleanup_respects_active_shared_hashes(self) -> None:
+        service = self._enable_config_judgehost_service()
+        self._reset_task_queue_state(service)
+        self.addCleanup(self._reset_task_queue_state, service)
+
+        artifact_verification_id = f"b-jh-script-shared-clean-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(artifact_verification_id)
+        task_id_a, job_row_a = self._enqueue_and_lease_cached_job(
+            service,
+            artifact_verification_id=artifact_verification_id,
+            verification_id="inv-script-shared-clean-a",
+            run_id=f"r-jh-script-shared-clean-a-{uuid.uuid4().hex[:8]}",
+            hostname="judgehost-script-shared-clean-a",
+        )
+        task_id_b, job_row_b = self._enqueue_and_lease_cached_job(
+            service,
+            artifact_verification_id=artifact_verification_id,
+            verification_id="inv-script-shared-clean-b",
+            run_id=f"r-jh-script-shared-clean-b-{uuid.uuid4().hex[:8]}",
+            hostname="judgehost-script-shared-clean-b",
+        )
+        cache_paths = self._job_executable_cache_paths(job_row_a)
+        for kind, path in cache_paths.items():
+            self.assertEqual(job_row_a[f"{kind}_hash"], job_row_b[f"{kind}_hash"])
+            self.assertTrue(path.is_dir(), f"missing executable cache directory: {path}")
+
+        self._mark_domjudge_job_completed(service, job_row_a)
+        stats_a = service.cleanup_executable_cache_for_tasks([task_id_a])
+        self.assertEqual(stats_a["entries"], 3)
+        self.assertEqual(stats_a["kept_active"], 3)
+        self.assertEqual(stats_a["removed"], 0)
+        self.assertEqual(stats_a["errors"], 0)
+        for path in cache_paths.values():
+            self.assertTrue(path.is_dir(), f"deleted cache entry with an active shared reference: {path}")
+
+        self._mark_domjudge_job_completed(service, job_row_b)
+        stats_b = service.cleanup_executable_cache_for_tasks([task_id_b])
+        self.assertEqual(stats_b["entries"], 3)
+        self.assertEqual(stats_b["kept_active"], 0)
+        self.assertEqual(stats_b["removed"], 3)
+        self.assertEqual(stats_b["errors"], 0)
+        for path in cache_paths.values():
+            self.assertFalse(path.exists(), f"left unreferenced executable cache entry behind: {path}")
 
     def test_domjudge_missing_executable_cache_fails_active_job(self) -> None:
         service = config.judgehost_task_service

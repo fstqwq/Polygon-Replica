@@ -245,6 +245,22 @@ class JudgehostStateStore:
         row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE task_id=? LIMIT 1", [task_id])
         return None if row is None else row
 
+    def jobs_for_tasks(self, task_ids: list[str]) -> list[JudgehostJobRow]:
+        safe_task_ids = sorted({task_id for task_id in task_ids if task_id})
+        if not safe_task_ids:
+            return []
+        placeholders = ",".join("?" for _ in safe_task_ids)
+        rows = self._fetch_all(
+            f"""
+            SELECT *
+            FROM judgehost_domjudge_jobs
+            WHERE task_id IN ({placeholders})
+            ORDER BY job_id ASC
+            """,
+            safe_task_ids,
+        )
+        return rows
+
     def job_for_group_key(self, group_key: str) -> JudgehostJobRow | None:
         row = self._fetch_one(
             """
@@ -343,6 +359,30 @@ class JudgehostStateStore:
             [],
         )
         return [str(row["script_hash"] or "") for row in rows if str(row["script_hash"] or "").strip()]
+
+    def active_script_hash_reference_count(self, kind: str, script_hash: str) -> int:
+        field_map = {
+            "compile": "compile_hash",
+            "run": "run_hash",
+            "compare": "compare_hash",
+        }
+        field = field_map.get(kind)
+        if field is None:
+            raise RuntimeError("invalid executable kind")
+        if not script_hash:
+            return 0
+        row = self._fetch_one(
+            f"""
+            SELECT COUNT(*) AS ref_count
+            FROM judgehost_domjudge_jobs
+            WHERE {field}=?
+              AND status IN ('queued','leased')
+            """,
+            [script_hash],
+        )
+        if row is None:
+            return 0
+        return max(0, int(row["ref_count"] or 0))
 
     def job_finalize_row(self, job_id: int) -> dict[str, object] | None:
         return self._fetch_one(

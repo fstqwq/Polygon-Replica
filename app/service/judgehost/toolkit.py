@@ -349,6 +349,14 @@ class DomjudgeToolkit:
     ) -> list[dict[str, object]] | None:
         return self._executable_cache.read(kind=kind, executable_hash=executable_hash)
 
+    def delete_executable_cache(
+        self,
+        *,
+        kind: str,
+        executable_hash: str,
+    ) -> bool:
+        return self._executable_cache.delete(kind=kind, executable_hash=executable_hash)
+
     def read_artifact_blob(self, work_root: Path, token: str) -> bytes | None:
         return domjudge_read_artifact_blob(
             parse_cache_blob_ref=domjudge_parse_cache_blob_ref,
