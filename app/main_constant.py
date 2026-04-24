@@ -28,10 +28,14 @@ AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 AUTH_COOKIE_SECURE = True
 AUTH_EMAIL_ALLOW_REGEX = r"^[a-z0-9_-]+@(?:gmail\.com|(?:[a-z0-9-]+\.)*sjtu\.edu\.cn)$"
 AUTH_REGISTER_PENDING_TTL_SEC = 30 * 60
-AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC = 60 * 60
-AUTH_REGISTER_RATE_LIMIT_IP_MAX = 20
-AUTH_REGISTER_RATE_LIMIT_EMAIL_MAX = 5
-AUTH_REGISTER_VERIFY_FAIL_IP_MAX = 20
+AUTH_REGISTER_SUBMIT_WINDOW_SEC = 60 * 60
+AUTH_REGISTER_SUBMIT_MAX = 20
+AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC = 60 * 60
+AUTH_REGISTER_VERIFY_FAIL_MAX = 20
+AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC = 24 * 60 * 60
+AUTH_REGISTER_EMAIL_GLOBAL_MAX = 100
+AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC = 5
+AUTH_REGISTER_EMAIL_SEND_MAX = 1
 SUDO_COOKIE_NAME = "polygonlike_sudo_session"
 SUDO_COOKIE_MAX_AGE = 5 * 60
 SUDO_SCOPE_DESTRUCTIVE = "destructive"
@@ -393,29 +397,53 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "max": 86400,
         "description": "Pending email verification lifetime in seconds.",
     },
-    "AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC": {
+    "AUTH_REGISTER_SUBMIT_WINDOW_SEC": {
         "type": "int",
         "min": 60,
         "max": 86400,
-        "description": "Registration rate-limit window in seconds.",
+        "description": "Global registration submission rate-limit window in seconds.",
     },
-    "AUTH_REGISTER_RATE_LIMIT_IP_MAX": {
+    "AUTH_REGISTER_SUBMIT_MAX": {
         "type": "int",
         "min": 1,
         "max": 10000,
-        "description": "Max registration attempts per IP in one window.",
+        "description": "Max global registration submissions in one window.",
     },
-    "AUTH_REGISTER_RATE_LIMIT_EMAIL_MAX": {
+    "AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC": {
+        "type": "int",
+        "min": 60,
+        "max": 86400,
+        "description": "Global failed registration verification rate-limit window in seconds.",
+    },
+    "AUTH_REGISTER_VERIFY_FAIL_MAX": {
         "type": "int",
         "min": 1,
         "max": 10000,
-        "description": "Max registration attempts per email in one window.",
+        "description": "Max global failed registration verification attempts in one window.",
     },
-    "AUTH_REGISTER_VERIFY_FAIL_IP_MAX": {
+    "AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC": {
+        "type": "int",
+        "min": 60,
+        "max": 604800,
+        "description": "Global registration email send rate-limit window in seconds.",
+    },
+    "AUTH_REGISTER_EMAIL_GLOBAL_MAX": {
         "type": "int",
         "min": 1,
         "max": 10000,
-        "description": "Max failed registration verification attempts per IP in one window.",
+        "description": "Max global registration emails sent in one window.",
+    },
+    "AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC": {
+        "type": "int",
+        "min": 1,
+        "max": 3600,
+        "description": "Per-email registration email send cooldown window in seconds.",
+    },
+    "AUTH_REGISTER_EMAIL_SEND_MAX": {
+        "type": "int",
+        "min": 1,
+        "max": 100,
+        "description": "Max registration emails sent to one normalized email in the cooldown window.",
     },
     "SUDO_COOKIE_MAX_AGE": {
         "type": "int",

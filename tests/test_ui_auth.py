@@ -60,12 +60,14 @@ SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
 
 
 class TestUIAuth(UIBaseSuite):
-    def _submit_pending_registration_with_smtp(
-        self,
-        username: str,
-        *,
-        request: Request | None = None,
-    ) -> tuple[object, str]:
+    def _replace_auth_constants(self, **overrides: object) -> None:
+        previous = config.constants.to_dict()
+        updated = dict(previous)
+        updated.update(overrides)
+        config.constants.replace(updated)
+        self.addCleanup(config.constants.replace, previous)
+
+    def _valid_registration_kwargs(self, username: str, *, email: str | None = None) -> dict[str, object]:
         password = "StrongPass123"
         page = register_page(_request("/register"))
         html = page.body.decode("utf-8", errors="replace")
@@ -75,6 +77,28 @@ class TestUIAuth(UIBaseSuite):
         verifier = _password_verifier_hex(password, salt, iters)
         proof = _sha256_hex(csrf + verifier)
         password_hash = _sha256_hex(csrf + password)
+        return {
+            "username": username,
+            "email": email or f"{username}@gmail.com",
+            "password": password_hash,
+            "password_confirm": password_hash,
+            "password_verifier": verifier,
+            "password_proof": proof,
+            "csrf_token": csrf,
+            "password_salt": salt,
+            "password_iters": str(iters),
+            "next": "/",
+            "terms_accepted": "yes",
+        }
+
+    def _submit_pending_registration_with_smtp(
+        self,
+        username: str,
+        *,
+        request: Request | None = None,
+        email: str | None = None,
+    ) -> tuple[object, str]:
+        kwargs = self._valid_registration_kwargs(username, email=email)
         sent_codes: list[str] = []
 
         with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
@@ -86,17 +110,7 @@ class TestUIAuth(UIBaseSuite):
                 send_mail.side_effect = _capture_registration_email
                 resp = register_submit(
                     request=request if request is not None else _post_request("/register"),
-                    username=username,
-                    email=f"{username}@gmail.com",
-                    password=password_hash,
-                    password_confirm=password_hash,
-                    password_verifier=verifier,
-                    password_proof=proof,
-                    csrf_token=csrf,
-                    password_salt=salt,
-                    password_iters=str(iters),
-                    next="/",
-                    terms_accepted="yes",
+                    **kwargs,
                 )
 
         self.assertEqual(len(sent_codes), 1)
@@ -530,6 +544,118 @@ class TestUIAuth(UIBaseSuite):
         expired_messages = _flash_messages_from_response(expired)
         self.assertTrue(any("expired" in item.lower() for item in expired_messages))
         self.assertIsNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))
+
+    def test_register_submit_uses_global_rate_limit(self) -> None:
+        self._replace_auth_constants(
+            AUTH_REGISTER_SUBMIT_WINDOW_SEC=3600,
+            AUTH_REGISTER_SUBMIT_MAX=1,
+        )
+        first_kwargs = self._valid_registration_kwargs(self.random_id("global-one"))
+        second_kwargs = self._valid_registration_kwargs(self.random_id("global-two"))
+        first = register_submit(request=_post_request("/register"), **first_kwargs)
+        self.assertEqual(first.status_code, 303)
+
+        second_request = _request(
+            "/register",
+            method="POST",
+            headers=[
+                (b"origin", b"http://testserver"),
+                (b"x-forwarded-for", b"203.0.113.7"),
+            ],
+        )
+        second = register_submit(request=second_request, **second_kwargs)
+        self.assertEqual(second.status_code, 303)
+        self.assertEqual(second.headers.get("location", ""), "/register")
+        messages = _flash_messages_from_response(second)
+        self.assertTrue(any("too many registration attempts" in item for item in messages))
+
+    def test_register_email_send_uses_global_daily_limit(self) -> None:
+        self._replace_auth_constants(
+            AUTH_REGISTER_SUBMIT_WINDOW_SEC=3600,
+            AUTH_REGISTER_SUBMIT_MAX=100,
+            AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC=86400,
+            AUTH_REGISTER_EMAIL_GLOBAL_MAX=1,
+        )
+        first_kwargs = self._valid_registration_kwargs(self.random_id("mail-one"))
+        second_kwargs = self._valid_registration_kwargs(self.random_id("mail-two"))
+
+        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+                first = register_submit(request=_post_request("/register"), **first_kwargs)
+                second = register_submit(request=_post_request("/register"), **second_kwargs)
+
+        self.assertEqual(first.status_code, 303)
+        self.assertEqual(first.headers.get("location", ""), "/register/verify")
+        self.assertEqual(second.status_code, 303)
+        self.assertEqual(second.headers.get("location", ""), "/register")
+        self.assertEqual(send_mail.call_count, 1)
+        blocked_row = db_fetch_one(
+            "SELECT id FROM pending_registrations WHERE username=?",
+            [str(second_kwargs["username"])],
+        )
+        self.assertIsNone(blocked_row)
+        messages = _flash_messages_from_response(second)
+        self.assertTrue(any("too many registration emails" in item for item in messages))
+
+    def test_register_email_send_uses_per_email_cooldown(self) -> None:
+        self._replace_auth_constants(
+            AUTH_REGISTER_SUBMIT_WINDOW_SEC=3600,
+            AUTH_REGISTER_SUBMIT_MAX=100,
+            AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC=86400,
+            AUTH_REGISTER_EMAIL_GLOBAL_MAX=100,
+            AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC=5,
+            AUTH_REGISTER_EMAIL_SEND_MAX=1,
+        )
+        target_email = f"{self.random_id('target')}@gmail.com"
+        first_kwargs = self._valid_registration_kwargs(self.random_id("cool-one"), email=target_email)
+        second_kwargs = self._valid_registration_kwargs(self.random_id("cool-two"), email=target_email)
+        third_kwargs = self._valid_registration_kwargs(self.random_id("cool-three"))
+
+        with patch.object(config.smtp_config_service, "delivery_configured", return_value=True):
+            with patch.object(config.smtp_config_service, "send_registration_email") as send_mail:
+                first = register_submit(request=_post_request("/register"), **first_kwargs)
+                second = register_submit(request=_post_request("/register"), **second_kwargs)
+                third = register_submit(request=_post_request("/register"), **third_kwargs)
+
+        self.assertEqual(first.status_code, 303)
+        self.assertEqual(first.headers.get("location", ""), "/register/verify")
+        self.assertEqual(second.status_code, 303)
+        self.assertEqual(second.headers.get("location", ""), "/register")
+        self.assertEqual(third.status_code, 303)
+        self.assertEqual(third.headers.get("location", ""), "/register/verify")
+        self.assertEqual(send_mail.call_count, 2)
+        blocked_row = db_fetch_one(
+            "SELECT id FROM pending_registrations WHERE username=?",
+            [str(second_kwargs["username"])],
+        )
+        self.assertIsNone(blocked_row)
+        messages = _flash_messages_from_response(second)
+        self.assertTrue(any("too many registration emails" in item for item in messages))
+
+    def test_register_verify_fail_uses_global_rate_limit(self) -> None:
+        self._replace_auth_constants(
+            AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC=3600,
+            AUTH_REGISTER_VERIFY_FAIL_MAX=1,
+        )
+        first = register_verify(_post_request("/register/verify"), code="AAAA-BBBB-CCCC")
+        second_request = _request(
+            "/register/verify",
+            method="POST",
+            headers=[
+                (b"origin", b"http://testserver"),
+                (b"x-forwarded-for", b"203.0.113.9"),
+            ],
+        )
+        second = register_verify(second_request, code="BBBB-CCCC-DDDD")
+
+        self.assertEqual(first.status_code, 303)
+        self.assertEqual(first.headers.get("location", ""), "/register/verify")
+        first_messages = _flash_messages_from_response(first)
+        self.assertTrue(any("registration verification failed" in item for item in first_messages))
+        self.assertEqual(second.status_code, 303)
+        self.assertEqual(second.headers.get("location", ""), "/register/verify")
+        second_messages = _flash_messages_from_response(second)
+        self.assertTrue(any("too many registration verification attempts" in item for item in second_messages))
 
     def test_setup_page_shows_config_when_no_registered_users(self) -> None:
         count = db_fetch_one(

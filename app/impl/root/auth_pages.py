@@ -123,6 +123,7 @@ def _enforce_auth_rate_limit(
     window_sec: int,
     audit_action: str,
     details: dict[str, object],
+    message: str = "too many registration attempts",
 ) -> None:
     hit = _hit_auth_rate_limit(bucket_key, limit=limit, window_sec=window_sec)
     if bool(hit["allowed"]):
@@ -137,7 +138,7 @@ def _enforce_auth_rate_limit(
         }
     )
     _auth_audit(audit_action, audit_details)
-    raise ValueError(f"too many registration attempts; retry in {int(hit['retry_after_sec'])}s")
+    raise ValueError(f"{message}; retry in {int(hit['retry_after_sec'])}s")
 
 
 def _new_registration_verification_code() -> str:
@@ -297,22 +298,15 @@ def register_submit(
     audit_base: dict[str, object] = {"ip": request_ip, "user_agent": user_agent}
     try:
         _enforce_auth_rate_limit(
-            bucket_key=f"register:ip:{request_ip}",
-            limit=int(_C.AUTH_REGISTER_RATE_LIMIT_IP_MAX),
-            window_sec=int(_C.AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC),
+            bucket_key="register-submit:global",
+            limit=int(_C.AUTH_REGISTER_SUBMIT_MAX),
+            window_sec=int(_C.AUTH_REGISTER_SUBMIT_WINDOW_SEC),
             audit_action="auth.register.rate_limited",
             details=audit_base,
         )
         safe_user = normalize_username_required(form_text(username))
         safe_email, email_normalized = _normalize_registration_email(form_text(email))
         audit_base.update({"username": safe_user, "email": email_normalized})
-        _enforce_auth_rate_limit(
-            bucket_key=f"register:email:{email_normalized}",
-            limit=int(_C.AUTH_REGISTER_RATE_LIMIT_EMAIL_MAX),
-            window_sec=int(_C.AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC),
-            audit_action="auth.register.rate_limited",
-            details=audit_base,
-        )
         proof_token = form_text(csrf_token).strip()
         proof_value = form_text(password_proof).strip().lower()
         verifier_value = form_text(password_verifier).strip().lower()
@@ -367,6 +361,22 @@ def register_submit(
             response = redirect_response(target, status_code=303)
             response.set_cookie(_C.AUTH_COOKIE_NAME, token, httponly=True, samesite='lax', secure=_C.AUTH_COOKIE_SECURE, max_age=_C.AUTH_COOKIE_MAX_AGE, path='/')
             return response
+        _enforce_auth_rate_limit(
+            bucket_key="register-email-send:global",
+            limit=int(_C.AUTH_REGISTER_EMAIL_GLOBAL_MAX),
+            window_sec=int(_C.AUTH_REGISTER_EMAIL_GLOBAL_WINDOW_SEC),
+            audit_action="auth.register.email_rate_limited",
+            details=audit_base,
+            message="too many registration emails",
+        )
+        _enforce_auth_rate_limit(
+            bucket_key=f"register-email-send:email:{email_normalized}",
+            limit=int(_C.AUTH_REGISTER_EMAIL_SEND_MAX),
+            window_sec=int(_C.AUTH_REGISTER_EMAIL_SEND_WINDOW_SEC),
+            audit_action="auth.register.email_rate_limited",
+            details=audit_base,
+            message="too many registration emails",
+        )
         verification_code = _new_registration_verification_code()
         token_hash = sha256_hex_text(_normalize_registration_verification_code(verification_code))
         pending_id = config.auth_service.create_pending_registration(
@@ -438,11 +448,12 @@ def register_verify(request: Request, code: str = Form("")):
     except ValueError as exc:
         try:
             _enforce_auth_rate_limit(
-                bucket_key=f"register-verify-fail:ip:{request_ip}",
-                limit=int(_C.AUTH_REGISTER_VERIFY_FAIL_IP_MAX),
-                window_sec=int(_C.AUTH_REGISTER_RATE_LIMIT_WINDOW_SEC),
+                bucket_key="register-verify-fail:global",
+                limit=int(_C.AUTH_REGISTER_VERIFY_FAIL_MAX),
+                window_sec=int(_C.AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC),
                 audit_action="auth.register.verify_rate_limited",
                 details={**audit_base, "reason": str(exc)},
+                message="too many registration verification attempts",
             )
         except ValueError as rate_exc:
             return redirect_response('/register/verify', status_code=303, message=str(rate_exc))
