@@ -443,7 +443,7 @@ ADMIN_CONFIG_SPECS: dict[str, dict[str, object]] = {
         "type": "int",
         "min": 1,
         "max": 100,
-        "description": "Max registration emails sent to one normalized email in the cooldown window.",
+        "description": "Max registration emails sent to one email in the cooldown window.",
     },
     "SUDO_COOKIE_MAX_AGE": {
         "type": "int",
