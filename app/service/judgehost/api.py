@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 from app.db import DB
@@ -17,8 +16,6 @@ from .result import ResultProcessor
 from .state import JudgehostState
 from .task_queue import TaskQueue
 from .toolkit import DomjudgeToolkit
-
-logger = logging.getLogger(__name__)
 
 
 class Judgehost:
@@ -174,49 +171,6 @@ class Judgehost:
 
     def clear_testcase_registry(self, *args, **kwargs):
         return self._toolkit.clear_testcase_registry(*args, **kwargs)
-
-    def cleanup_executable_cache_for_tasks(self, judgehost_task_ids: list[str]) -> dict[str, int]:
-        rows = self._state.judgehost_state_store.jobs_for_tasks(judgehost_task_ids)
-        pairs: set[tuple[str, str]] = set()
-        for row in rows:
-            for kind, field in (
-                ("compile", "compile_hash"),
-                ("run", "run_hash"),
-                ("compare", "compare_hash"),
-            ):
-                script_hash = str(row[field] or "").strip().lower()
-                if script_hash:
-                    pairs.add((kind, script_hash))
-        removed = 0
-        kept_active = 0
-        missing = 0
-        errors = 0
-        for kind, script_hash in sorted(pairs):
-            active_refs = self._state.judgehost_state_store.active_script_hash_reference_count(kind, script_hash)
-            if active_refs > 0:
-                kept_active += 1
-                continue
-            try:
-                if self._toolkit.delete_executable_cache(kind=kind, executable_hash=script_hash):
-                    removed += 1
-                else:
-                    missing += 1
-            except Exception as exc:
-                errors += 1
-                logger.warning(
-                    "failed to delete DOMjudge executable cache kind=%s hash=%s: %s",
-                    kind,
-                    script_hash,
-                    exc,
-                )
-        return {
-            "jobs": len(rows),
-            "entries": len(pairs),
-            "removed": removed,
-            "kept_active": kept_active,
-            "missing": missing,
-            "errors": errors,
-        }
 
     def domjudge_config(self, *args, **kwargs):
         return self._toolkit.config(*args, **kwargs)

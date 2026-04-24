@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -45,8 +44,6 @@ from .runtime_threshold import time_limit_ms_from_run_config_json
 from .verification_dag_plan import VerificationTestPlan, build_verification_execution_plan
 from .verification_payload import prepared_payload_for_uploaded_source as _prepared_payload_for_uploaded_source
 from .problem_config import read_problem_config
-
-logger = logging.getLogger(__name__)
 
 _C = config.constants
 
@@ -840,22 +837,6 @@ def run_workspace_verification_dag(
             workspace_dirty=workspace_dirty,
         )
     execution_plan = None
-
-    def _cleanup_domjudge_executable_cache() -> None:
-        judgehost_task_ids = sorted(
-            {
-                str(row["judgehost_task_id"] or "").strip()
-                for row in task_store.list_rows(verification_id)
-                if str(row["judgehost_task_id"] or "").strip()
-            }
-        )
-        if not judgehost_task_ids:
-            return
-        try:
-            config.judgehost_task_service.cleanup_executable_cache_for_tasks(judgehost_task_ids)
-        except Exception as exc:
-            logger.warning("verification %s executable cache cleanup failed: %s", verification_id, exc)
-
     try:
         execution_plan = build_verification_execution_plan(
             snapshot_root,
@@ -1203,7 +1184,6 @@ def run_workspace_verification_dag(
             },
         )
     finally:
-        _cleanup_domjudge_executable_cache()
         if snapshot_root.exists():
             import shutil
 

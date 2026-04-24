@@ -176,7 +176,8 @@ A single verification can write to these places:
 - `artifacts/verifications/<verification_id>/tests/`, `ans/`, `logs/`, `bin/`, `uploaded-sources/`
 - `runtime/snapshots/<snapshot_id>/src`
 - `runtime/judgehost-runs/<judgehost_task_id>/...`
+- `runtime/judgehost-executables/<kind>/<script_hash>/...`
 - `judge-fs-index/...`
 - `runtime/worker-queue-events.jsonl`
 
-By current runtime policy, cache-root data is startup-cleared.
+By current runtime policy, cache-root data is startup-cleared. Judgehost executable cache is not cleared at verification completion.

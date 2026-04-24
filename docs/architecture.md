@@ -121,6 +121,7 @@ The exact root paths come from environment settings. Relative to those roots, th
   runtime/
     snapshots/<snapshot_id>/src/
     judgehost-runs/<judgehost_task_id>/
+    judgehost-executables/<kind>/<script_hash>/
     worker-queue-events.jsonl
   judge-fs-index/
 ```
@@ -130,6 +131,7 @@ What each area means:
 - `artifacts/previews/<id>/statement_preview/statement.pdf`: preview output
 - `runtime/snapshots/<id>/src`: snapshot created for verification/preview/export execution
 - `runtime/judgehost-runs/<task_id>`: temporary judgehost workdirs
+- `runtime/judgehost-executables/<kind>/<script_hash>`: runtime-scoped DOMjudge executable scripts; startup clears them with the runtime cache, verification completion does not
 - `judge-fs-index`: content-addressed blobs for testcase files, exact case-cache payloads, and verification artifact blobs referenced from SQLite
 
 ### Artifacts root

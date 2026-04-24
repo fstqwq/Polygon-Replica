@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import threading
 from pathlib import Path
 
@@ -146,18 +145,3 @@ class DomjudgeExecutableCache:
                     }
                 )
             return out
-
-    def delete(self, *, kind: str, executable_hash: str) -> bool:
-        safe_kind = self._normalize_kind(kind)
-        safe_hash = self._normalize_hash(executable_hash)
-        entry_dir = self._entry_dir(kind=safe_kind, executable_hash=safe_hash)
-        kind_root = (self._root / safe_kind).resolve()
-        if entry_dir.parent != kind_root:
-            raise RuntimeError("invalid executable cache entry path")
-        with self._lock:
-            if not entry_dir.exists():
-                return False
-            if entry_dir.is_symlink() or not entry_dir.is_dir():
-                return False
-            shutil.rmtree(entry_dir, ignore_errors=False)
-            return True
