@@ -30,7 +30,7 @@ from app.service.statement.context import pick_statement_language, statement_lan
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
-from app.service.verification.signature import verification_signature
+from app.service.verification.signature import verification_fingerprint, verification_signature
 from .common import SmokeBase
 from app.impl.runtime.config import config
 
@@ -408,6 +408,7 @@ class TestPreview(SmokeBase):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("{}\n", encoding="utf-8")
         digest_before = verification_signature(ws)
+        fingerprint_before = verification_fingerprint(ws)
 
         stat_obj = target.stat()
         os.utime(
@@ -419,6 +420,7 @@ class TestPreview(SmokeBase):
         )
 
         self.assertEqual(digest_before, verification_signature(ws))
+        self.assertNotEqual(fingerprint_before, verification_fingerprint(ws))
 
     def test_preview_sample_sync_builds_manual_and_generator_from_verification(self) -> None:
         ws = self._workspace_path()

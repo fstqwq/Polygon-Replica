@@ -1204,6 +1204,137 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(status["verification_id"], workspace_verification_id)
         self.assertFalse(status["stale"])
 
+    def test_verification_sidebar_fingerprint_cache_skips_full_hash(self) -> None:
+        problem = f"alice/verify-fingerprint-cache-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        (ws / "tests" / "manual" / "large.bin").write_bytes(b"x" * 4096)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        user_id = int(ctx["user"]["id"])
+        verification_id = f"ver-cache-{uuid.uuid4().hex[:8]}"
+        fingerprint = workspace_verification_module._verification_sources_fingerprint(ws)
+
+        self._insert_stage_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=f"sig-{uuid.uuid4().hex}",
+            status="ok",
+        )
+        workspace_verification_module.remember_verification_fingerprint(
+            problem_id,
+            workspace_id,
+            fingerprint,
+            verification_id,
+        )
+
+        with patch.object(
+            workspace_verification_module,
+            "_verification_sources_signature",
+            side_effect=AssertionError("full hash should be skipped"),
+        ) as full_hash:
+            status = workspace_verification_module._verification_status_context(
+                problem_id,
+                user_id,
+                workspace_id,
+                False,
+                workspace_path=ws,
+            )
+
+        full_hash.assert_not_called()
+        self.assertEqual(status["verification_id"], verification_id)
+        self.assertFalse(status["stale"])
+
+    def test_verification_sidebar_full_hash_match_populates_fingerprint_cache(self) -> None:
+        problem = f"alice/verify-fingerprint-fill-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        user_id = int(ctx["user"]["id"])
+        signature = workspace_impl._verification_sources_signature(ws)
+        verification_id = f"ver-fill-{uuid.uuid4().hex[:8]}"
+
+        self._insert_stage_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=signature,
+            status="ok",
+        )
+
+        first = workspace_verification_module._verification_status_context(
+            problem_id,
+            user_id,
+            workspace_id,
+            False,
+            workspace_path=ws,
+        )
+        self.assertEqual(first["verification_id"], verification_id)
+        self.assertFalse(first["stale"])
+
+        with patch.object(
+            workspace_verification_module,
+            "_verification_sources_signature",
+            side_effect=AssertionError("full hash should be cached after first match"),
+        ) as full_hash:
+            second = workspace_verification_module._verification_status_context(
+                problem_id,
+                user_id,
+                workspace_id,
+                False,
+                workspace_path=ws,
+            )
+
+        full_hash.assert_not_called()
+        self.assertEqual(second["verification_id"], verification_id)
+        self.assertFalse(second["stale"])
+
+    def test_verification_sidebar_stale_fingerprint_cache_skips_repeated_full_hash(self) -> None:
+        problem = f"alice/verify-fingerprint-stale-{uuid.uuid4().hex[:8]}"
+        ws = self._prepare_verification_workspace(problem)
+        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        user_id = int(ctx["user"]["id"])
+        verification_id = f"ver-stale-cache-{uuid.uuid4().hex[:8]}"
+
+        self._insert_stage_verification(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            signature=f"old-{uuid.uuid4().hex}",
+            status="ok",
+        )
+
+        first = workspace_verification_module._verification_status_context(
+            problem_id,
+            user_id,
+            workspace_id,
+            False,
+            workspace_path=ws,
+        )
+        self.assertEqual(first["verification_id"], verification_id)
+        self.assertTrue(first["stale"])
+
+        with patch.object(
+            workspace_verification_module,
+            "_verification_sources_signature",
+            side_effect=AssertionError("stale fingerprint should cache current signature"),
+        ) as full_hash:
+            second = workspace_verification_module._verification_status_context(
+                problem_id,
+                user_id,
+                workspace_id,
+                False,
+                workspace_path=ws,
+            )
+
+        full_hash.assert_not_called()
+        self.assertEqual(second["verification_id"], verification_id)
+        self.assertTrue(second["stale"])
+
     def test_run_page_shows_multi_solution_selector_without_mode_select(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)

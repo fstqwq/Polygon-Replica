@@ -23,7 +23,11 @@ _VERIFICATION_SIGNATURE_DIR_TARGETS: tuple[str, ...] = (
 )
 
 
-def verification_signature(workspace: Path) -> str:
+def _stat_mtime_ns(stat_obj: os.stat_result) -> int:
+    return int(getattr(stat_obj, "st_mtime_ns", int(float(stat_obj.st_mtime) * 1_000_000_000)))
+
+
+def _verification_source_entries(workspace: Path, *, hash_content: bool) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     try:
         workspace_resolved = workspace.resolve()
@@ -45,6 +49,18 @@ def verification_signature(workspace: Path) -> str:
             return None
         return target
 
+    def _file_entry(kind: str, path: Path, stat_obj: os.stat_result) -> dict[str, object]:
+        entry: dict[str, object] = {
+            "kind": kind,
+            "state": "ok",
+            "size": int(stat_obj.st_size),
+        }
+        if hash_content:
+            entry["sha256"] = sha256_file(path)
+        else:
+            entry["mtime_ns"] = _stat_mtime_ns(stat_obj)
+        return entry
+
     def _hash_file(rel_path: str) -> None:
         target = _safe_file(rel_path)
         if target is None:
@@ -52,15 +68,9 @@ def verification_signature(workspace: Path) -> str:
             return
         try:
             stat_obj = target.stat()
-            entries.append(
-                {
-                    "kind": "file",
-                    "target": rel_path,
-                    "state": "ok",
-                    "size": int(stat_obj.st_size),
-                    "sha256": sha256_file(target),
-                }
-            )
+            entry = _file_entry("file", target, stat_obj)
+            entry["target"] = rel_path
+            entries.append(entry)
         except OSError:
             entries.append({"kind": "file", "target": rel_path, "state": "unreadable"})
 
@@ -118,16 +128,10 @@ def verification_signature(workspace: Path) -> str:
         for rel, path in files:
             try:
                 stat_obj = path.stat()
-                entries.append(
-                    {
-                        "kind": "dir-file",
-                        "target": rel_dir,
-                        "path": rel,
-                        "state": "ok",
-                        "size": int(stat_obj.st_size),
-                        "sha256": sha256_file(path),
-                    }
-                )
+                entry = _file_entry("dir-file", path, stat_obj)
+                entry["target"] = rel_dir
+                entry["path"] = rel
+                entries.append(entry)
             except OSError:
                 entries.append({"kind": "dir-file", "target": rel_dir, "path": rel, "state": "unreadable"})
 
@@ -135,4 +139,18 @@ def verification_signature(workspace: Path) -> str:
         _hash_file(rel_path)
     for rel_dir in _VERIFICATION_SIGNATURE_DIR_TARGETS:
         _hash_dir(rel_dir)
-    return quick_fp_digest(entries, schema="verification-signature")
+    return entries
+
+
+def verification_signature(workspace: Path) -> str:
+    return quick_fp_digest(
+        _verification_source_entries(workspace, hash_content=True),
+        schema="verification-signature",
+    )
+
+
+def verification_fingerprint(workspace: Path) -> str:
+    return quick_fp_digest(
+        _verification_source_entries(workspace, hash_content=False),
+        schema="verification-fingerprint",
+    )

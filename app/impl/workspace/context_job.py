@@ -12,7 +12,9 @@ from app.service.verification.validation_status import build_validation_status
 from .context_job_helper import allocate_run_id, allocate_verification_id
 from .context_operation import audit, run_solution_options_context, workspace_rel_file_exists
 from .context_verification import (
+    remember_verification_fingerprint,
     normalize_run_id_token,
+    _verification_sources_fingerprint,
     _verification_sources_signature,
 )
 from .problem_config import read_problem_config
@@ -124,12 +126,15 @@ def start_verification_job(
     if initial_details is None and initial_summary is not None:
         initial_details = dict(initial_summary)
     key = _verification_workspace_key(problem_id, workspace_id)
+    fingerprint = ""
     signature = ""
     if workspace_path:
         try:
             workspace_obj = Path(workspace_path)
+            fingerprint = _verification_sources_fingerprint(workspace_obj)
             signature = _verification_sources_signature(workspace_obj)
         except Exception:
+            fingerprint = ""
             signature = ""
     if initial_details is not None:
         if signature and (not (initial_details.get("signature") or "")):
@@ -164,6 +169,14 @@ def start_verification_job(
         status=Status.RUNNING.value,
         detail=detail,
     )
+    if kind == Kind.ALL.value and fingerprint and signature:
+        remember_verification_fingerprint(
+            problem_id,
+            workspace_id,
+            fingerprint,
+            verification_id,
+            signature,
+        )
     worker_ref: list[object] = [None]
 
     def _runner() -> None:

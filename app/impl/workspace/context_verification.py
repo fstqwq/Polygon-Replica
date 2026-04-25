@@ -1,15 +1,31 @@
 from __future__ import annotations
+from collections import OrderedDict
 import re
+import threading
 from pathlib import Path
+from typing import TypedDict
 from app.impl.runtime.config import config
 from app.service.platform.error_text import bounded_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.signature import verification_signature
+from app.service.verification.signature import verification_fingerprint, verification_signature
 from app.service.verification.types import Kind
 from .run_display import run_actual_failed_codes, run_actual_short
 
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
+_VERIFICATION_FINGERPRINT_CACHE_MAX = 1024
+
+
+class _FingerprintCacheEntry(TypedDict):
+    verification_id: str
+    signature: str
+
+
+_VERIFICATION_FINGERPRINT_CACHE: OrderedDict[
+    tuple[int, int, str],
+    _FingerprintCacheEntry,
+] = OrderedDict()
+_VERIFICATION_FINGERPRINT_CACHE_LOCK = threading.RLock()
 _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     # Each expected behavior is evaluated by:
     # 1) required: at least one code from this list must appear.
@@ -75,6 +91,58 @@ def latest_workspace_signature_verification(problem_id: int, workspace_id: int, 
 
 def _verification_sources_signature(workspace: Path) -> str:
     return verification_signature(workspace)
+
+
+def _verification_sources_fingerprint(workspace: Path) -> str:
+    return verification_fingerprint(workspace)
+
+
+def remember_verification_fingerprint(
+    problem_id: int,
+    workspace_id: int,
+    fingerprint: str,
+    verification_id: str,
+    signature: str = "",
+) -> None:
+    if not fingerprint or not verification_id:
+        return
+    key = (int(problem_id), int(workspace_id), fingerprint)
+    # Full verification_signature() hashes file contents and remains the correctness boundary.
+    # Workspace status is a high-frequency UI path, so repeated full hashes of large tests
+    # can become a file-size DoS. This process-local cache only skips full hashing after a
+    # stat-based fingerprint is known to map to a recent verification; cache misses still
+    # fall back to the full content signature.
+    with _VERIFICATION_FINGERPRINT_CACHE_LOCK:
+        _VERIFICATION_FINGERPRINT_CACHE[key] = {
+            "verification_id": str(verification_id),
+            "signature": str(signature or ""),
+        }
+        _VERIFICATION_FINGERPRINT_CACHE.move_to_end(key)
+        while len(_VERIFICATION_FINGERPRINT_CACHE) > _VERIFICATION_FINGERPRINT_CACHE_MAX:
+            _VERIFICATION_FINGERPRINT_CACHE.popitem(last=False)
+
+
+def _cached_verification_for_fingerprint(
+    problem_id: int,
+    workspace_id: int,
+    fingerprint: str,
+    rows: list[dict[str, object]],
+) -> tuple[dict[str, object] | None, str]:
+    if not fingerprint:
+        return (None, "")
+    key = (int(problem_id), int(workspace_id), fingerprint)
+    by_id = {str(row["id"]): row for row in rows}
+    with _VERIFICATION_FINGERPRINT_CACHE_LOCK:
+        entry = _VERIFICATION_FINGERPRINT_CACHE.get(key)
+        if not entry:
+            return (None, "")
+        _VERIFICATION_FINGERPRINT_CACHE.move_to_end(key)
+        row = by_id.get(entry["verification_id"])
+        if row is None:
+            _VERIFICATION_FINGERPRINT_CACHE.pop(key, None)
+            return (None, "")
+        return (row, entry["signature"])
+
 
 def _verification_run_passed(run_status: str, summary: dict[str, object] | None) -> bool:
     if run_status != 'ok' or summary is None:
@@ -287,18 +355,47 @@ def _verification_status_context(
     )
     if not rows:
         return _empty_verification_status_context()
+    workspace_obj: Path | None = None
+    current_fingerprint = ''
     current_signature = ''
     if workspace_path:
         try:
             workspace_obj = Path(workspace_path)
+            current_fingerprint = _verification_sources_fingerprint(workspace_obj)
+        except Exception:
+            workspace_obj = None
+            current_fingerprint = ''
+    row, current_signature = _cached_verification_for_fingerprint(
+        int(problem_id),
+        int(workspace_id),
+        current_fingerprint,
+        [dict(item) for item in rows],
+    )
+    if row is None and workspace_obj is not None:
+        try:
             current_signature = _verification_sources_signature(workspace_obj)
         except Exception:
             current_signature = ''
-    row = None
-    if current_signature:
+    if row is None and current_signature:
         row = next((item for item in rows if item["signature"] == current_signature), None)
+        if row is not None and current_fingerprint:
+            remember_verification_fingerprint(
+                int(problem_id),
+                int(workspace_id),
+                current_fingerprint,
+                str(row["id"] or ""),
+                current_signature,
+            )
     if row is None:
         row = rows[0]
+        if current_fingerprint and current_signature:
+            remember_verification_fingerprint(
+                int(problem_id),
+                int(workspace_id),
+                current_fingerprint,
+                str(row["id"] or ""),
+                current_signature,
+            )
     verification_id = row['id']
     detail = config.verification_service.verification_detail(verification_id)
     status_token = row['status']
