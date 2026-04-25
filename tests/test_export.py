@@ -391,7 +391,7 @@ class TestExport(SmokeBase):
         self.assertEqual(resolved, "")
 
     def test_build_validation_status_respects_explicit_unknown_metadata(self) -> None:
-        status = export_page_module._build_validation_status(
+        status = export_page_module.build_validation_status(
             {
                 "status": "ok",
                 "details": {
@@ -402,7 +402,7 @@ class TestExport(SmokeBase):
         self.assertEqual(status, "validation unknown")
 
     def test_build_validation_status_prefers_sanity_metadata(self) -> None:
-        status = export_page_module._build_validation_status(
+        status = export_page_module.build_validation_status(
             {
                 "status": "running",
                 "details": {
@@ -413,7 +413,7 @@ class TestExport(SmokeBase):
         self.assertEqual(status, "validation failed")
 
     def test_build_validation_status_treats_sanity_warning_as_passed_when_verification_ok(self) -> None:
-        status = export_page_module._build_validation_status(
+        status = export_page_module.build_validation_status(
             {
                 "status": "ok",
                 "details": {
@@ -1745,12 +1745,33 @@ class TestExport(SmokeBase):
         self.assertIn("problem_statement/problem.en.pdf", names)
 
     def test_export_archive_summary_detects_icpc_statement_pdf(self) -> None:
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
         archive_root = Path(config.settings.artifacts_root) / "exports" / self.problem.replace("/", "-") / "e-summary-pdf"
         archive_root.mkdir(parents=True, exist_ok=True)
         archive = archive_root / "summary-pdf.zip"
         with zipfile.ZipFile(archive, "w") as zf:
             zf.writestr("problem.yaml", "name: Summary\n")
             zf.writestr("problem_statement/problem.en.pdf", b"%PDF-1.4\n%%EOF\n")
+        db_execute(
+            """
+            INSERT INTO exports(id,problem_id,verification_id,workspace_id,export_type,filename,sha256,size_bytes,source_commit,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                "e-summary-pdf",
+                problem_id,
+                "ver-summary-pdf",
+                workspace_id,
+                "icpc",
+                archive.name,
+                "",
+                archive.stat().st_size,
+                "",
+                "2026-02-23T00:00:00Z",
+            ],
+        )
 
         summary = export_page_module._export_archive_summary(self.problem, "e-summary-pdf", archive.name)
 

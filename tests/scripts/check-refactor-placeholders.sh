@@ -29,12 +29,12 @@ scan_pattern \
   '^[[:space:]]*#[[:space:]].*moved?[[:space:]]+here[[:space:]]+in[[:space:]]+task[[:space:]]+[0-9]+\.[0-9]+' \
   'unfinished task-targeted migration placeholder marker detected'
 
-if ! tests/scripts/check-forwarding-shims.sh; then
+if ! bash tests/scripts/check-forwarding-shims.sh; then
   echo "forwarding shim module detected" >&2
   failed=1
 fi
 
-if ! tests/scripts/check-cross-package-private-imports.sh; then
+if ! bash tests/scripts/check-cross-package-private-imports.sh; then
   echo "cross-package private import policy violation detected" >&2
   failed=1
 fi

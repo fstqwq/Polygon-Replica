@@ -144,10 +144,6 @@ def _export_recent_events(
         )
     return result
 
-def _build_validation_status(verification_row: dict[str, object] | None) -> str:
-    return build_validation_status(verification_row)
-
-
 def _resolve_export_verification_id(
     *,
     problem_id: int,
@@ -335,7 +331,7 @@ def export_page(request: Request, problem: str, user: Annotated[str, Depends(req
                 verification_id,
             )
             verification_meta_cache[verification_id] = verification_meta
-        validation_status = _build_validation_status(verification_meta)
+        validation_status = build_validation_status(verification_meta)
         summary_bits: list[str] = [validation_status]
         summary_key = (cast(str, item["id"]), stored_filename)
         archive_summary = archive_summary_cache.get(summary_key)
