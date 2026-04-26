@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from time import monotonic
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.impl.auth.middleware import auth_middleware as auth_http_middleware
@@ -36,6 +36,12 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Polygonlike", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Serve the browser favicon at the conventional root path."""
+    return FileResponse("app/static/favicon.ico", media_type="image/x-icon")
 
 
 @app.middleware("http")
