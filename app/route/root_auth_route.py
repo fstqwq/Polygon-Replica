@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from app.impl.root.auth_pages import (
-    auth_login_pubkey,
+    auth_password_envelope,
     auth_password_meta,
     home,
     login_page,
@@ -48,8 +48,8 @@ router.add_api_route(
 )
 
 router.add_api_route(
-    "/auth/login-pubkey",
-    auth_login_pubkey,
+    "/auth/password-envelope",
+    auth_password_envelope,
     methods=["GET"],
 )
 

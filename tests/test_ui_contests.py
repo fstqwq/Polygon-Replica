@@ -21,7 +21,7 @@ from .ui_support import (
     Path,
     UIBaseSuite,
     _flash_messages_from_response,
-    _register_with_password_proof,
+    _register_with_password_envelope,
     _request,
     _wait_for_row,
     contest_access_grant,
@@ -321,7 +321,7 @@ class TestUIContests(UIBaseSuite):
     def test_contest_access_cannot_transfer_owner_role(self) -> None:
         contest_slug = f"ui-contest-owner-transfer-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Owner Transfer Contest")
-        _register_with_password_proof("bob", "StrongPass123", next_path="/")
+        _register_with_password_envelope("bob", "StrongPass123", next_path="/")
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="owner")
         self.assertEqual(grant.status_code, 303)

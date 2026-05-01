@@ -28,10 +28,10 @@ from .ui_support import (
     _flash_messages_from_response,
     _post_form_request,
     _post_request,
-    _register_with_password_proof,
+    _register_with_password_envelope,
     _request,
     _request_with_cookie,
-    _sudo_with_password_proof,
+    _sudo_with_password_envelope,
     access_page,
     config,
     contests_root_create,
@@ -102,7 +102,7 @@ class TestUIWorkspace(UIBaseSuite):
         return problem, alice_ws, bob_ws
 
     def _issue_auth_cookie_header(self, username: str, password: str) -> str:
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(auth_token)
@@ -131,7 +131,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(denied.status_code, 303)
         self.assertIn("/sudo?next=", denied.headers.get("location", ""))
 
-        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path="/problems/alice/sample/workspace")
+        sudo_resp = _sudo_with_password_envelope(auth_cookie, password, next_path="/problems/alice/sample/workspace")
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
         self.assertTrue(sudo_token)
@@ -190,7 +190,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(denied.status_code, 303)
         self.assertIn("/sudo?next=", denied.headers.get("location", ""))
 
-        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path=f"/problems/{problem}/workspace")
+        sudo_resp = _sudo_with_password_envelope(auth_cookie, password, next_path=f"/problems/{problem}/workspace")
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
         self.assertTrue(sudo_token)
@@ -307,7 +307,7 @@ class TestUIWorkspace(UIBaseSuite):
             ],
         )
 
-        sudo_resp = _sudo_with_password_proof(
+        sudo_resp = _sudo_with_password_envelope(
             auth_cookie,
             password,
             next_path=f"/problems/{problem}/workspace",
@@ -341,7 +341,7 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_service.grant_repo_access(problem, username, "owner")
         workspace_service.ensure_workspace(problem, username)
 
-        sudo_resp = _sudo_with_password_proof(
+        sudo_resp = _sudo_with_password_envelope(
             auth_cookie,
             password,
             next_path=f"/problems/{problem}/workspace",
@@ -378,7 +378,7 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_service.ensure_workspace(problem, username)
         db_execute("UPDATE problems SET repo_name='' WHERE slug=?", [problem])
 
-        sudo_resp = _sudo_with_password_proof(
+        sudo_resp = _sudo_with_password_envelope(
             auth_cookie,
             password,
             next_path=f"/problems/{problem}/workspace",
@@ -703,7 +703,7 @@ class TestUIWorkspace(UIBaseSuite):
         auth_cookie = self._issue_auth_cookie_header(username, password)
         workspace_service.grant_repo_access("alice/sample", username, "owner")
         workspace_service.ensure_workspace("alice/sample", username)
-        sudo_resp = _sudo_with_password_proof(auth_cookie, password, next_path="/problems/alice/sample/workspace")
+        sudo_resp = _sudo_with_password_envelope(auth_cookie, password, next_path="/problems/alice/sample/workspace")
         self.assertEqual(sudo_resp.status_code, 303)
         sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
         self.assertTrue(sudo_token)
@@ -916,7 +916,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertEqual(denied.exception.status_code, 403)
 
     def test_workspace_owner_can_manage_problem_access(self) -> None:
-        register_bob = _register_with_password_proof("bob", "StrongPass123", next_path="/")
+        register_bob = _register_with_password_envelope("bob", "StrongPass123", next_path="/")
         self.assertEqual(register_bob.status_code, 303)
         grant_resp = workspace_access_grant(
             problem="alice/sample",
@@ -991,7 +991,7 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIsNone(member)
 
     def test_workspace_access_cannot_transfer_owner_role(self) -> None:
-        register_bob = _register_with_password_proof("bob", "StrongPass123", next_path="/")
+        register_bob = _register_with_password_envelope("bob", "StrongPass123", next_path="/")
         self.assertEqual(register_bob.status_code, 303)
         resp = workspace_access_grant(
             problem="alice/sample",

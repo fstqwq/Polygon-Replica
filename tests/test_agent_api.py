@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from .common import SmokeBase
 from .db_helpers import db_execute, db_fetch_one
-from .ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_proof
+from .ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_envelope
 from app.impl.runtime.config import config
 from app.main import app
 from app.service.verification.task_store import VerificationTaskStore
@@ -19,7 +19,7 @@ workspace_service = config.workspace_service
 
 class TestAgentAPI(SmokeBase):
     def _issue_auth_cookie(self, username: str, password: str = "StrongPass123") -> tuple[str, str]:
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(auth_token)

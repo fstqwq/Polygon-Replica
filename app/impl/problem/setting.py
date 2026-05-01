@@ -9,8 +9,8 @@ from fastapi import Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.impl.auth.session import create_session_for_user, revoke_sudo_sessions_for_user
-from app.impl.auth.shared import dummy_password_salt_hex, lookup_user_auth, normalize_password_iters, normalize_password_salt_hex, normalize_password_verifier_hex, redirect_response, set_user_password_verifier, template_response
-from app.impl.auth.csrf import issue_password_form_csrf_token, password_proof_from_verifier, verify_password_form_csrf_token
+from app.impl.auth.shared import dummy_password_salt_hex, lookup_user_auth, normalize_password_iters, normalize_password_salt_hex, redirect_response, set_user_password_verifier, template_response
+from app.impl.auth.csrf import issue_password_form_csrf_token, verify_password_form_csrf_token
 from app.impl.auth.password_envelope import password_envelope_store
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _as_bool_form_value, _settings_user_ctx, _system_config_row_by_key
@@ -361,12 +361,12 @@ def settings_password_update(
     current_password: str=Form(''),
     new_password: str=Form(''),
     new_password_confirm: str=Form(''),
-    current_password_proof: str=Form(''),
     current_password_key_id: str=Form(''),
     current_password_envelope_token: str=Form(''),
     current_password_encrypted_verifier: str=Form(''),
-    new_password_verifier: str=Form(''),
-    new_password_proof: str=Form(''),
+    new_password_key_id: str=Form(''),
+    new_password_envelope_token: str=Form(''),
+    new_password_encrypted_verifier: str=Form(''),
     csrf_token: str=Form(''),
     new_password_salt: str=Form(''),
     new_password_iters: str=Form(''),
@@ -379,46 +379,45 @@ def settings_password_update(
         msg = 'user not found'
         return redirect_response('/settings', status_code=303, message=msg)
     try:
-        proof_token = form_text(csrf_token).strip()
-        current_proof_value = form_text(current_password_proof).strip().lower()
-        new_verifier_value = form_text(new_password_verifier).strip().lower()
-        new_proof_value = form_text(new_password_proof).strip().lower()
+        password_csrf = form_text(csrf_token).strip()
         new_salt_value = form_text(new_password_salt)
         new_iters_value = form_text(new_password_iters)
-        if not verify_password_form_csrf_token(proof_token, 'settings-password'):
+        if not verify_password_form_csrf_token(password_csrf, 'settings-password'):
             raise ValueError('invalid password token')
         stored_hash = str(row['password_hash'] or '').strip().lower()
         if not _C.HEX_64_RE.fullmatch(stored_hash):
             raise ValueError('current password is incorrect')
-        if not _C.HEX_64_RE.fullmatch(current_proof_value):
-            raise ValueError('current password is incorrect')
         try:
             current_verifier = password_envelope_store.consume(
                 scope='settings-password',
+                purpose='settings-current',
                 username=user,
-                csrf_token=proof_token,
+                csrf_token=password_csrf,
                 key_id=form_text(current_password_key_id),
                 envelope_token=form_text(current_password_envelope_token),
                 encrypted_verifier=form_text(current_password_encrypted_verifier),
             )
         except ValueError as exc:
             raise ValueError('current password is incorrect') from exc
-        expected_current_proof = password_proof_from_verifier(proof_token, current_verifier)
-        if not secrets.compare_digest(expected_current_proof, current_proof_value):
-            raise ValueError('current password is incorrect')
         expected_current_hash = password_verifier_storage_hash(current_verifier)
         if not secrets.compare_digest(expected_current_hash, stored_hash):
             raise ValueError('current password is incorrect')
-        new_verifier = normalize_password_verifier_hex(new_verifier_value)
-        if not _C.HEX_64_RE.fullmatch(new_proof_value):
-            raise ValueError('invalid new password proof')
+        try:
+            new_verifier = password_envelope_store.consume(
+                scope='settings-password',
+                purpose='settings-new',
+                username=user,
+                csrf_token=password_csrf,
+                key_id=form_text(new_password_key_id),
+                envelope_token=form_text(new_password_envelope_token),
+                encrypted_verifier=form_text(new_password_encrypted_verifier),
+            )
+        except ValueError as exc:
+            raise ValueError('invalid new password envelope') from exc
         new_salt = normalize_password_salt_hex(new_salt_value)
         new_iters = normalize_password_iters(new_iters_value)
         if new_iters != int(_C.PASSWORD_HASH_ITERS):
             raise ValueError('invalid password iterations')
-        expected_new_proof = password_proof_from_verifier(proof_token, new_verifier)
-        if not secrets.compare_digest(expected_new_proof, new_proof_value):
-            raise ValueError('invalid new password proof')
         set_user_password_verifier(int(row['id']), new_verifier, new_salt, new_iters)
         config.auth_service.revoke_auth_sessions_for_user(int(row["id"]))
         revoke_sudo_sessions_for_user(int(row['id']))

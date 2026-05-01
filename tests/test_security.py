@@ -42,7 +42,7 @@ from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.platform.workspace_path import is_hidden_workspace_path, safe_workspace_path
 from app.service.problem.test_spec import parse_gen_command_tokens
 from app.service.verification.task_store import VerificationTaskStore
-from .ui_support import _register_with_password_proof
+from .ui_support import _register_with_password_envelope
 
 db = config.db
 workspace_service = config.workspace_service
@@ -167,7 +167,7 @@ class TestSecurity(SmokeBase):
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:
         username = self.random_id("secsql")
         password = "StrongPass123"
-        registered = _register_with_password_proof(username, password, next_path="/")
+        registered = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(registered.status_code, 303)
 
         row = db_fetch_one("SELECT password_salt FROM users WHERE username=?", [username])

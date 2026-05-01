@@ -21,7 +21,6 @@ from app.impl.auth.shared import (
     lookup_user_auth,
     normalize_password_iters,
     normalize_password_salt_hex,
-    normalize_password_verifier_hex,
     normalize_username_required,
     password_meta_for_username,
     redirect_response,
@@ -39,11 +38,10 @@ from app.impl.auth.session import (
 )
 from app.impl.auth.csrf import (
     issue_password_form_csrf_token,
-    password_proof_from_verifier,
     verify_password_form_csrf_token,
 )
 from app.impl.auth.password_envelope import (
-    normalize_password_envelope_scope,
+    normalize_password_envelope_scope_purpose,
     password_envelope_store,
 )
 from app.impl.runtime.config import config
@@ -176,7 +174,20 @@ def setup_page(request: Request):
         return redirect_response('/login', status_code=303, message='setup already completed')
     return template_response(request, 'setup.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('setup-password'), 'password_salt': secrets.token_hex(16), 'password_iters': int(_C.PASSWORD_HASH_ITERS), 'config_rows': _setup_config_rows()})
 
-def setup_submit(request: Request, username: str=Form(...), password: str=Form(''), password_confirm: str=Form(''), password_verifier: str=Form(''), password_proof: str=Form(''), csrf_token: str=Form(''), password_salt: str=Form(''), password_iters: str=Form(''), confirm_config: str=Form('0'), next: str=Form('/')):
+def setup_submit(
+    request: Request,
+    username: str=Form(...),
+    password: str=Form(''),
+    password_confirm: str=Form(''),
+    csrf_token: str=Form(''),
+    key_id: str=Form(''),
+    envelope_token: str=Form(''),
+    encrypted_verifier: str=Form(''),
+    password_salt: str=Form(''),
+    password_iters: str=Form(''),
+    confirm_config: str=Form('0'),
+    next: str=Form('/'),
+):
     enforce_same_origin_state_change(request)
     _ = (password, password_confirm)
     try:
@@ -185,23 +196,28 @@ def setup_submit(request: Request, username: str=Form(...), password: str=Form('
         if str(confirm_config or '').strip() not in {'1', 'true', 'on', 'yes'}:
             raise ValueError('please confirm current system configuration paths')
         safe_user = normalize_username_required(form_text(username))
-        proof_token = form_text(csrf_token).strip()
-        proof_value = form_text(password_proof).strip().lower()
-        verifier_value = form_text(password_verifier).strip().lower()
+        password_csrf = form_text(csrf_token).strip()
         salt_value = form_text(password_salt)
         iter_value = form_text(password_iters)
         next_path = form_text(next)
-        if not verify_password_form_csrf_token(proof_token, 'setup-password'):
+        if not verify_password_form_csrf_token(password_csrf, 'setup-password'):
             raise ValueError('setup failed; invalid csrf token')
-        verifier = normalize_password_verifier_hex(verifier_value)
-        if not _C.HEX_64_RE.fullmatch(proof_value):
-            raise ValueError('setup failed; invalid password proof')
+        try:
+            verifier = password_envelope_store.consume(
+                scope='setup-password',
+                purpose='setup',
+                username=safe_user,
+                csrf_token=password_csrf,
+                key_id=form_text(key_id),
+                envelope_token=form_text(envelope_token),
+                encrypted_verifier=form_text(encrypted_verifier),
+            )
+        except ValueError as exc:
+            raise ValueError('setup failed; invalid password envelope') from exc
         salt_hex = normalize_password_salt_hex(salt_value)
         iters = normalize_password_iters(iter_value)
         if iters != int(_C.PASSWORD_HASH_ITERS):
             raise ValueError('setup failed; invalid password iterations')
-        if not secrets.compare_digest(password_proof_from_verifier(proof_token, verifier), proof_value):
-            raise ValueError('setup failed; invalid password proof')
         user_id = bootstrap_super_admin_with_password_verifier(safe_user, verifier, salt_hex, iters)
         token = create_session_for_user(int(user_id))
         audit(int(user_id), None, 'system.setup', {'super_admin': safe_user, 'config_confirmed': True})
@@ -229,16 +245,17 @@ def auth_password_meta(username: str='', csrf_token: str=''):
     return {'salt': salt_hex, 'iters': iterations}
 
 
-def auth_login_pubkey(
+def auth_password_envelope(
     request: Request,
     scope: str = 'login-password',
+    purpose: str = 'login',
     username: str = '',
     csrf_token: str = '',
 ):
     """Issue an in-memory one-time public key for password verifier encryption."""
 
     try:
-        safe_scope = normalize_password_envelope_scope(scope)
+        safe_scope, safe_purpose = normalize_password_envelope_scope_purpose(scope, purpose)
         safe_username = form_text(username).strip()
         if safe_scope == 'sudo-password':
             identity = session_identity(request)
@@ -252,6 +269,7 @@ def auth_login_pubkey(
             safe_username = current_user
         payload = password_envelope_store.issue(
             scope=safe_scope,
+            purpose=safe_purpose,
             username=safe_username,
             csrf_token=form_text(csrf_token).strip(),
             rate_key=_client_ip_for_auth_rate_limit(request),
@@ -267,7 +285,6 @@ def login_submit(
     request: Request,
     username: str=Form(...),
     password: str=Form(''),
-    password_proof: str=Form(''),
     csrf_token: str=Form(''),
     key_id: str=Form(''),
     envelope_token: str=Form(''),
@@ -275,9 +292,9 @@ def login_submit(
     next: str=Form('/'),
 ):
     enforce_same_origin_state_change(request)
+    _ = password
     raw_user = form_text(username).strip()
-    proof_token = form_text(csrf_token).strip()
-    proof_value = form_text(password_proof).strip().lower()
+    password_csrf = form_text(csrf_token).strip()
     next_path = form_text(next)
     rate_limit_key = login_rate_limit_key(raw_user, request)
     try:
@@ -294,21 +311,19 @@ def login_submit(
         if row is None:
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
-        if not verify_password_form_csrf_token(proof_token, 'login-password'):
+        if not verify_password_form_csrf_token(password_csrf, 'login-password'):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
         stored_hash = str(row['password_hash'] or '').strip().lower()
         if not _C.HEX_64_RE.fullmatch(stored_hash):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
-        if not _C.HEX_64_RE.fullmatch(proof_value):
-            login_rate_limit_fail(rate_limit_key)
-            raise ValueError('invalid username or password')
         try:
             verifier = password_envelope_store.consume(
                 scope='login-password',
+                purpose='login',
                 username=raw_user,
-                csrf_token=proof_token,
+                csrf_token=password_csrf,
                 key_id=form_text(key_id),
                 envelope_token=form_text(envelope_token),
                 encrypted_verifier=form_text(encrypted_verifier),
@@ -316,10 +331,6 @@ def login_submit(
         except ValueError as exc:
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password') from exc
-        expected_proof = password_proof_from_verifier(proof_token, verifier)
-        if not secrets.compare_digest(expected_proof, proof_value):
-            login_rate_limit_fail(rate_limit_key)
-            raise ValueError('invalid username or password')
         expected_hash = password_verifier_storage_hash(verifier)
         if not secrets.compare_digest(expected_hash, stored_hash):
             login_rate_limit_fail(rate_limit_key)
@@ -349,9 +360,10 @@ def register_submit(
     email: str=Form(''),
     password: str=Form(''),
     password_confirm: str=Form(''),
-    password_verifier: str=Form(''),
-    password_proof: str=Form(''),
     csrf_token: str=Form(''),
+    key_id: str=Form(''),
+    envelope_token: str=Form(''),
+    encrypted_verifier: str=Form(''),
     password_salt: str=Form(''),
     password_iters: str=Form(''),
     next: str=Form('/'),
@@ -373,9 +385,7 @@ def register_submit(
         safe_user = normalize_username_required(form_text(username))
         safe_email, email_normalized = _normalize_registration_email(form_text(email))
         audit_base.update({"username": safe_user, "email": email_normalized})
-        proof_token = form_text(csrf_token).strip()
-        proof_value = form_text(password_proof).strip().lower()
-        verifier_value = form_text(password_verifier).strip().lower()
+        password_csrf = form_text(csrf_token).strip()
         salt_value = form_text(password_salt)
         iter_value = form_text(password_iters)
         next_path = form_text(next)
@@ -390,22 +400,27 @@ def register_submit(
         if terms_value != 'yes':
             _auth_audit("auth.register.rejected", {**audit_base, "reason": "terms_not_accepted"})
             raise ValueError('registration failed; terms of use must be accepted')
-        if not verify_password_form_csrf_token(proof_token, 'register-password'):
+        if not verify_password_form_csrf_token(password_csrf, 'register-password'):
             _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_csrf"})
             raise ValueError('registration failed; invalid csrf token')
-        verifier = normalize_password_verifier_hex(verifier_value)
-        if not _C.HEX_64_RE.fullmatch(proof_value):
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_proof_format"})
-            raise ValueError('registration failed; invalid password proof')
+        try:
+            verifier = password_envelope_store.consume(
+                scope='register-password',
+                purpose='register',
+                username=safe_user,
+                csrf_token=password_csrf,
+                key_id=form_text(key_id),
+                envelope_token=form_text(envelope_token),
+                encrypted_verifier=form_text(encrypted_verifier),
+            )
+        except ValueError as exc:
+            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_envelope"})
+            raise ValueError('registration failed; invalid password envelope') from exc
         salt_hex = normalize_password_salt_hex(salt_value)
         iters = normalize_password_iters(iter_value)
         if iters != int(_C.PASSWORD_HASH_ITERS):
             _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_iterations"})
             raise ValueError('registration failed; invalid password iterations')
-        expected_proof = password_proof_from_verifier(proof_token, verifier)
-        if not secrets.compare_digest(expected_proof, proof_value):
-            _auth_audit("auth.register.rejected", {**audit_base, "reason": "invalid_password_proof"})
-            raise ValueError('registration failed; invalid password proof')
         if not config.smtp_config_service.delivery_configured():
             user_id = create_user_with_password_verifier(
                 safe_user,
@@ -576,7 +591,6 @@ def sudo_page(request: Request):
 def sudo_submit(
     request: Request,
     password: str = Form(''),
-    password_proof: str = Form(''),
     csrf_token: str = Form(''),
     key_id: str = Form(''),
     envelope_token: str = Form(''),
@@ -584,40 +598,36 @@ def sudo_submit(
     next: str = Form('/'),
 ):
     enforce_same_origin_state_change(request)
+    _ = password
     identity = session_identity(request)
     if identity is None:
         return redirect_response('/login', status_code=303)
     next_path = safe_next_path(form_text(next), "/settings")
     try:
-        proof_token = form_text(csrf_token).strip()
-        proof_value = form_text(password_proof).strip().lower()
-        if not verify_password_form_csrf_token(proof_token, 'sudo-password'):
-            raise ValueError('invalid password proof')
+        password_csrf = form_text(csrf_token).strip()
+        if not verify_password_form_csrf_token(password_csrf, 'sudo-password'):
+            raise ValueError('invalid password envelope')
         row = lookup_user_auth(str(identity['username']))
         if row is None:
-            raise ValueError('invalid password proof')
+            raise ValueError('invalid password envelope')
         stored_hash = str(row['password_hash'] or '').strip().lower()
         if not _C.HEX_64_RE.fullmatch(stored_hash):
-            raise ValueError('invalid password proof')
-        if not _C.HEX_64_RE.fullmatch(proof_value):
-            raise ValueError('invalid password proof')
+            raise ValueError('invalid password envelope')
         try:
             verifier = password_envelope_store.consume(
                 scope='sudo-password',
+                purpose='sudo',
                 username=str(identity['username']),
-                csrf_token=proof_token,
+                csrf_token=password_csrf,
                 key_id=form_text(key_id),
                 envelope_token=form_text(envelope_token),
                 encrypted_verifier=form_text(encrypted_verifier),
             )
         except ValueError as exc:
-            raise ValueError('invalid password proof') from exc
-        expected_proof = password_proof_from_verifier(proof_token, verifier)
-        if not secrets.compare_digest(expected_proof, proof_value):
-            raise ValueError('invalid password proof')
+            raise ValueError('invalid password envelope') from exc
         expected_hash = password_verifier_storage_hash(verifier)
         if not secrets.compare_digest(expected_hash, stored_hash):
-            raise ValueError('invalid password proof')
+            raise ValueError('invalid password envelope')
         token = create_sudo_session_for_user(int(identity['user_id']), str(_C.SUDO_SCOPE_DESTRUCTIVE))
     except ValueError as exc:
         return redirect_response(f'/sudo?next={quote_plus(next_path)}', status_code=303, message=str(exc))

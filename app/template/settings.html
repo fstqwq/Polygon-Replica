@@ -19,14 +19,14 @@
       <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
       <input type="hidden" name="current_password_salt" value="{{ current_password_salt }}" />
       <input type="hidden" name="current_password_iters" value="{{ current_password_iters }}" />
-      <input type="hidden" name="current_password_proof" value="" />
       <input type="hidden" name="current_password_key_id" value="" />
       <input type="hidden" name="current_password_envelope_token" value="" />
       <input type="hidden" name="current_password_encrypted_verifier" value="" />
       <input type="hidden" name="new_password_salt" value="{{ new_password_salt }}" />
       <input type="hidden" name="new_password_iters" value="{{ new_password_iters }}" />
-      <input type="hidden" name="new_password_verifier" value="" />
-      <input type="hidden" name="new_password_proof" value="" />
+      <input type="hidden" name="new_password_key_id" value="" />
+      <input type="hidden" name="new_password_envelope_token" value="" />
+      <input type="hidden" name="new_password_encrypted_verifier" value="" />
       <button class="btn" type="submit">Update Password</button>
     </form>
   </section>

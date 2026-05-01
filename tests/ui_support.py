@@ -120,7 +120,7 @@ issue_password_form_csrf_token = _api_attr("issue_password_form_csrf_token")
 session_user = _api_attr("session_user")
 workspace_revision_info = _api_attr("workspace_revision_info")
 auth_password_meta = _api_attr("auth_password_meta")
-auth_login_pubkey = _api_attr("auth_login_pubkey")
+auth_password_envelope = _api_attr("auth_password_envelope")
 auth_middleware = _api_attr("auth_middleware")
 artifact_file = _api_attr("artifact_file")
 tests_page = tests_spec_module.render_tests_page
@@ -366,10 +366,6 @@ def _flash_cookie_header(*messages: str) -> str:
     return f"{FLASH_COOKIE_NAME}={token}"
 
 
-def _sha256_hex(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _password_verifier_hex(password: str, salt_hex: str, iters: int) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iters)).hex()
 
@@ -387,14 +383,16 @@ def _b64url_encode(payload: bytes) -> str:
 def _password_envelope_fields(
     *,
     scope: str,
+    purpose: str,
     username: str,
     csrf_token: str,
     verifier: str,
     request: Request | None = None,
 ) -> dict[str, str]:
-    response = auth_login_pubkey(
-        request=request if request is not None else _request("/auth/login-pubkey"),
+    response = auth_password_envelope(
+        request=request if request is not None else _request("/auth/password-envelope"),
         scope=scope,
+        purpose=purpose,
         username=username,
         csrf_token=csrf_token,
     )
@@ -415,8 +413,20 @@ def _password_envelope_fields(
     }
 
 
-def _password_envelope_fields_direct(*, scope: str, username: str, csrf_token: str, verifier: str) -> dict[str, str]:
-    payload = password_envelope_store.issue(scope=scope, username=username, csrf_token=csrf_token)
+def _password_envelope_fields_direct(
+    *,
+    scope: str,
+    purpose: str,
+    username: str,
+    csrf_token: str,
+    verifier: str,
+) -> dict[str, str]:
+    payload = password_envelope_store.issue(
+        scope=scope,
+        purpose=purpose,
+        username=username,
+        csrf_token=csrf_token,
+    )
     public_key = serialization.load_der_public_key(_b64url_decode(str(payload["public_key"])))
     ciphertext = public_key.encrypt(
         verifier.encode("utf-8"),
@@ -479,23 +489,29 @@ def _post_form_request(path: str, form_data: dict[str, object], *, origin: str =
         receive,
     )
 
-def _register_with_password_proof(username: str, password: str, *, next_path: str = "/"):
+def _register_with_password_envelope(username: str, password: str, *, next_path: str = "/"):
     page = register_page(_request("/register"))
     html = page.body.decode("utf-8", errors="replace")
     csrf = _extract_hidden_input_value(html, "csrf_token")
     salt = _extract_hidden_input_value(html, "password_salt")
     iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
     verifier = _password_verifier_hex(password, salt, iters)
-    proof = _sha256_hex(csrf + verifier)
-    password_hash = _sha256_hex(csrf + password)
+    envelope = _password_envelope_fields_direct(
+        scope="register-password",
+        purpose="register",
+        username=username,
+        csrf_token=csrf,
+        verifier=verifier,
+    )
     return register_submit(
         request=_post_request("/register"),
         username=username,
         email=f"{username}@gmail.com",
-        password=password_hash,
-        password_confirm=password_hash,
-        password_verifier=verifier,
-        password_proof=proof,
+        password="",
+        password_confirm="",
+        key_id=envelope["key_id"],
+        envelope_token=envelope["envelope_token"],
+        encrypted_verifier=envelope["encrypted_verifier"],
         csrf_token=csrf,
         password_salt=salt,
         password_iters=str(iters),
@@ -503,7 +519,7 @@ def _register_with_password_proof(username: str, password: str, *, next_path: st
         terms_accepted="yes",
     )
 
-def _login_with_password_proof(username: str, password: str, *, next_path: str = "/"):
+def _login_with_password_envelope(username: str, password: str, *, next_path: str = "/"):
     page = login_page(_request("/login"))
     html = page.body.decode("utf-8", errors="replace")
     csrf = _extract_hidden_input_value(html, "csrf_token")
@@ -511,19 +527,17 @@ def _login_with_password_proof(username: str, password: str, *, next_path: str =
     salt = str(meta.get("salt") or "").strip().lower()
     iters = int(meta.get("iters") or 0)
     verifier = _password_verifier_hex(password, salt, iters)
-    proof = _sha256_hex(csrf + verifier)
     envelope = _password_envelope_fields(
         scope="login-password",
+        purpose="login",
         username=username,
         csrf_token=csrf,
         verifier=verifier,
     )
-    password_hash = _sha256_hex(csrf + password)
     return login_submit(
         request=_post_request("/login"),
         username=username,
-        password=password_hash,
-        password_proof=proof,
+        password="",
         key_id=envelope["key_id"],
         envelope_token=envelope["envelope_token"],
         encrypted_verifier=envelope["encrypted_verifier"],
@@ -531,22 +545,28 @@ def _login_with_password_proof(username: str, password: str, *, next_path: str =
         next=next_path,
     )
 
-def _setup_with_password_proof(username: str, password: str, *, confirm_config: str = "1", next_path: str = "/"):
+def _setup_with_password_envelope(username: str, password: str, *, confirm_config: str = "1", next_path: str = "/"):
     page = setup_page(_request("/setup"))
     html = page.body.decode("utf-8", errors="replace")
     csrf = _extract_hidden_input_value(html, "csrf_token")
     salt = _extract_hidden_input_value(html, "password_salt")
     iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
     verifier = _password_verifier_hex(password, salt, iters)
-    proof = _sha256_hex(csrf + verifier)
-    password_hash = _sha256_hex(csrf + password)
+    envelope = _password_envelope_fields_direct(
+        scope="setup-password",
+        purpose="setup",
+        username=username,
+        csrf_token=csrf,
+        verifier=verifier,
+    )
     return setup_submit(
         request=_post_request("/setup"),
         username=username,
-        password=password_hash,
-        password_confirm=password_hash,
-        password_verifier=verifier,
-        password_proof=proof,
+        password="",
+        password_confirm="",
+        key_id=envelope["key_id"],
+        envelope_token=envelope["envelope_token"],
+        encrypted_verifier=envelope["encrypted_verifier"],
         csrf_token=csrf,
         password_salt=salt,
         password_iters=str(iters),
@@ -554,7 +574,7 @@ def _setup_with_password_proof(username: str, password: str, *, confirm_config: 
         next=next_path,
     )
 
-def _sudo_with_password_proof(cookie_header: str, password: str, *, next_path: str = "/"):
+def _sudo_with_password_envelope(cookie_header: str, password: str, *, next_path: str = "/"):
     query = f"next={quote_plus(next_path)}" if next_path else ""
     page = sudo_page(_request_with_cookie("/sudo", cookie_header, query=query))
     html = page.body.decode("utf-8", errors="replace")
@@ -562,15 +582,14 @@ def _sudo_with_password_proof(cookie_header: str, password: str, *, next_path: s
     salt = _extract_hidden_input_value(html, "password_salt")
     iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
     verifier = _password_verifier_hex(password, salt, iters)
-    proof = _sha256_hex(csrf + verifier)
     envelope = _password_envelope_fields(
         scope="sudo-password",
+        purpose="sudo",
         username="",
         csrf_token=csrf,
         verifier=verifier,
-        request=_request_with_cookie("/auth/login-pubkey", cookie_header),
+        request=_request_with_cookie("/auth/password-envelope", cookie_header),
     )
-    password_hash = _sha256_hex(csrf + password)
     return sudo_submit(
         request=_request_with_cookie(
             "/sudo",
@@ -578,8 +597,7 @@ def _sudo_with_password_proof(cookie_header: str, password: str, *, next_path: s
             method="POST",
             extra_headers=[(b"origin", b"http://testserver")],
         ),
-        password=password_hash,
-        password_proof=proof,
+        password="",
         key_id=envelope["key_id"],
         envelope_token=envelope["envelope_token"],
         encrypted_verifier=envelope["encrypted_verifier"],
@@ -587,7 +605,7 @@ def _sudo_with_password_proof(cookie_header: str, password: str, *, next_path: s
         next=next_path,
     )
 
-def _settings_password_update_with_proof(user: str, current_password: str, new_password: str):
+def _settings_password_update_with_envelope(user: str, current_password: str, new_password: str):
     csrf = issue_password_form_csrf_token("settings-password")
     auth_row = db.fetch_one("SELECT id,password_salt,password_iters FROM users WHERE username=?", [user])
     if auth_row is None:
@@ -597,28 +615,32 @@ def _settings_password_update_with_proof(user: str, current_password: str, new_p
     new_salt = uuid.uuid4().hex
     new_iters = current_iters
     current_verifier = _password_verifier_hex(current_password, current_salt, current_iters)
-    current_proof = _sha256_hex(csrf + current_verifier)
     current_envelope = _password_envelope_fields_direct(
         scope="settings-password",
+        purpose="settings-current",
         username=user,
         csrf_token=csrf,
         verifier=current_verifier,
     )
     new_verifier = _password_verifier_hex(new_password, new_salt, new_iters)
-    new_proof = _sha256_hex(csrf + new_verifier)
-    current_password_hash = _sha256_hex(csrf + current_password)
-    new_password_hash = _sha256_hex(csrf + new_password)
+    new_envelope = _password_envelope_fields_direct(
+        scope="settings-password",
+        purpose="settings-new",
+        username=user,
+        csrf_token=csrf,
+        verifier=new_verifier,
+    )
     return settings_password_update(
         user=user,
-        current_password=current_password_hash,
-        new_password=new_password_hash,
-        new_password_confirm=new_password_hash,
-        current_password_proof=current_proof,
+        current_password="",
+        new_password="",
+        new_password_confirm="",
         current_password_key_id=current_envelope["key_id"],
         current_password_envelope_token=current_envelope["envelope_token"],
         current_password_encrypted_verifier=current_envelope["encrypted_verifier"],
-        new_password_verifier=new_verifier,
-        new_password_proof=new_proof,
+        new_password_key_id=new_envelope["key_id"],
+        new_password_envelope_token=new_envelope["envelope_token"],
+        new_password_encrypted_verifier=new_envelope["encrypted_verifier"],
         csrf_token=csrf,
         new_password_salt=new_salt,
         new_password_iters=str(new_iters),

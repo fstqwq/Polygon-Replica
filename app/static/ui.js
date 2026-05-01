@@ -86,12 +86,13 @@
       .replace(/=+$/g, "");
   }
 
-  async function passwordEnvelope(scope, username, csrfToken, verifier) {
+  async function passwordEnvelope(scope, purpose, username, csrfToken, verifier) {
     var qs = new URLSearchParams();
     qs.set("scope", String(scope || ""));
+    qs.set("purpose", String(purpose || ""));
     qs.set("username", String(username || ""));
     qs.set("csrf_token", String(csrfToken || ""));
-    var resp = await fetch("/auth/login-pubkey?" + qs.toString(), { credentials: "same-origin" });
+    var resp = await fetch("/auth/password-envelope?" + qs.toString(), { credentials: "same-origin" });
     if (!resp.ok) {
       throw new Error("password envelope fetch failed");
     }
@@ -1888,7 +1889,7 @@
     });
   }
 
-  function initLoginProofForm() {
+  function initLoginEnvelopeForm() {
     var form = document.getElementById("login-form");
     if (!form) return;
     form.addEventListener("submit", function (ev) {
@@ -1905,24 +1906,27 @@
         var usernameEl = form.querySelector("input[name='username']");
         var passwordEl = form.querySelector("input[name='password']");
         var csrfEl = form.querySelector("input[name='csrf_token']");
-        var proofEl = form.querySelector("input[name='password_proof']");
         var keyIdEl = form.querySelector("input[name='key_id']");
         var envelopeTokenEl = form.querySelector("input[name='envelope_token']");
         var encryptedVerifierEl = form.querySelector("input[name='encrypted_verifier']");
-        if (!usernameEl || !passwordEl || !csrfEl || !proofEl || !keyIdEl || !envelopeTokenEl || !encryptedVerifierEl) {
-          form.dataset.passwordPrepared = "1";
+        if (!usernameEl || !passwordEl || !csrfEl || !keyIdEl || !envelopeTokenEl || !encryptedVerifierEl) {
           delete form.dataset.passwordPending;
-          form.submit();
+          window.alert("Password envelope fields are missing.");
           return;
         }
 
         var username = String(usernameEl.value || "").trim();
         var password = String(passwordEl.value || "");
         var csrfToken = String(csrfEl.value || "").trim();
-        if (!password || !csrfToken) {
+        if (!password) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
+          return;
+        }
+        if (!csrfToken) {
+          window.alert("Invalid password token.");
+          delete form.dataset.passwordPending;
           return;
         }
 
@@ -1944,23 +1948,22 @@
         }
 
         var verifier = await pbkdf2Hex(password, salt, Math.floor(iters));
-        var envelope = await passwordEnvelope("login-password", username, csrfToken, verifier);
-        proofEl.value = await sha256Hex(csrfToken + verifier);
+        var envelope = await passwordEnvelope("login-password", "login", username, csrfToken, verifier);
         keyIdEl.value = envelope.keyId;
         envelopeTokenEl.value = envelope.envelopeToken;
         encryptedVerifierEl.value = envelope.encryptedVerifier;
-        passwordEl.value = await sha256Hex(csrfToken + password);
+        passwordEl.value = "";
         form.dataset.passwordPrepared = "1";
         delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
         delete form.dataset.passwordPending;
-        window.alert("Failed to prepare password proof.");
+        window.alert("Failed to prepare password envelope.");
       });
     });
   }
 
-  function initRegisterLikeProofForm(formId) {
+  function initRegisterLikeEnvelopeForm(formId) {
     var form = document.getElementById(formId);
     if (!form) return;
 
@@ -1975,20 +1978,22 @@
       form.dataset.passwordPending = "1";
 
       (async function () {
+        var usernameEl = form.querySelector("input[name='username']");
         var passwordEl = form.querySelector("input[name='password']");
         var confirmEl = form.querySelector("input[name='password_confirm']");
         var csrfEl = form.querySelector("input[name='csrf_token']");
         var saltEl = form.querySelector("input[name='password_salt']");
         var itersEl = form.querySelector("input[name='password_iters']");
-        var verifierEl = form.querySelector("input[name='password_verifier']");
-        var proofEl = form.querySelector("input[name='password_proof']");
-        if (!passwordEl || !confirmEl || !csrfEl || !saltEl || !itersEl || !verifierEl || !proofEl) {
-          form.dataset.passwordPrepared = "1";
+        var keyIdEl = form.querySelector("input[name='key_id']");
+        var envelopeTokenEl = form.querySelector("input[name='envelope_token']");
+        var encryptedVerifierEl = form.querySelector("input[name='encrypted_verifier']");
+        if (!usernameEl || !passwordEl || !confirmEl || !csrfEl || !saltEl || !itersEl || !keyIdEl || !envelopeTokenEl || !encryptedVerifierEl) {
           delete form.dataset.passwordPending;
-          form.submit();
+          window.alert("Password envelope fields are missing.");
           return;
         }
 
+        var username = String(usernameEl.value || "").trim();
         var password = String(passwordEl.value || "");
         var confirm = String(confirmEl.value || "");
         var csrfToken = String(csrfEl.value || "").trim();
@@ -2000,10 +2005,15 @@
           delete form.dataset.passwordPending;
           return;
         }
-        if (!password || !csrfToken) {
+        if (!password) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
+          return;
+        }
+        if (!csrfToken) {
+          window.alert("Invalid password token.");
+          delete form.dataset.passwordPending;
           return;
         }
         if (!/^[0-9a-f]{32}$/.test(salt) || !Number.isFinite(iters) || iters <= 0) {
@@ -2013,21 +2023,25 @@
         }
 
         var verifier = await pbkdf2Hex(password, salt, Math.floor(iters));
-        verifierEl.value = verifier;
-        proofEl.value = await sha256Hex(csrfToken + verifier);
-        passwordEl.value = await sha256Hex(csrfToken + password);
-        confirmEl.value = await sha256Hex(csrfToken + confirm);
+        var scope = formId === "setup-form" ? "setup-password" : "register-password";
+        var purpose = formId === "setup-form" ? "setup" : "register";
+        var envelope = await passwordEnvelope(scope, purpose, username, csrfToken, verifier);
+        keyIdEl.value = envelope.keyId;
+        envelopeTokenEl.value = envelope.envelopeToken;
+        encryptedVerifierEl.value = envelope.encryptedVerifier;
+        passwordEl.value = "";
+        confirmEl.value = "";
         form.dataset.passwordPrepared = "1";
         delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
         delete form.dataset.passwordPending;
-        window.alert("Failed to prepare password proof.");
+        window.alert("Failed to prepare password envelope.");
       });
     });
   }
 
-  function initSettingsPasswordProofForm() {
+  function initSettingsPasswordEnvelopeForm() {
     var form = document.getElementById("settings-password-form");
     if (!form) return;
 
@@ -2048,19 +2062,18 @@
         var csrfEl = form.querySelector("input[name='csrf_token']");
         var currentSaltEl = form.querySelector("input[name='current_password_salt']");
         var currentItersEl = form.querySelector("input[name='current_password_iters']");
-        var currentProofEl = form.querySelector("input[name='current_password_proof']");
         var currentKeyIdEl = form.querySelector("input[name='current_password_key_id']");
         var currentEnvelopeTokenEl = form.querySelector("input[name='current_password_envelope_token']");
         var currentEncryptedVerifierEl = form.querySelector("input[name='current_password_encrypted_verifier']");
         var newSaltEl = form.querySelector("input[name='new_password_salt']");
         var newItersEl = form.querySelector("input[name='new_password_iters']");
-        var newVerifierEl = form.querySelector("input[name='new_password_verifier']");
-        var newProofEl = form.querySelector("input[name='new_password_proof']");
+        var newKeyIdEl = form.querySelector("input[name='new_password_key_id']");
+        var newEnvelopeTokenEl = form.querySelector("input[name='new_password_envelope_token']");
+        var newEncryptedVerifierEl = form.querySelector("input[name='new_password_encrypted_verifier']");
 
-        if (!currentEl || !nextEl || !confirmEl || !csrfEl || !currentSaltEl || !currentItersEl || !currentProofEl || !currentKeyIdEl || !currentEnvelopeTokenEl || !currentEncryptedVerifierEl || !newSaltEl || !newItersEl || !newVerifierEl || !newProofEl) {
-          form.dataset.passwordPrepared = "1";
+        if (!currentEl || !nextEl || !confirmEl || !csrfEl || !currentSaltEl || !currentItersEl || !currentKeyIdEl || !currentEnvelopeTokenEl || !currentEncryptedVerifierEl || !newSaltEl || !newItersEl || !newKeyIdEl || !newEnvelopeTokenEl || !newEncryptedVerifierEl) {
           delete form.dataset.passwordPending;
-          form.submit();
+          window.alert("Password envelope fields are missing.");
           return;
         }
 
@@ -2078,10 +2091,15 @@
           delete form.dataset.passwordPending;
           return;
         }
-        if (!currentPassword || !nextPassword || !csrfToken) {
+        if (!currentPassword || !nextPassword) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
+          return;
+        }
+        if (!csrfToken) {
+          window.alert("Invalid password token.");
+          delete form.dataset.passwordPending;
           return;
         }
         if (!/^[0-9a-f]{32}$/.test(currentSalt) || !/^[0-9a-f]{32}$/.test(newSalt)) {
@@ -2097,27 +2115,28 @@
 
         var currentVerifier = await pbkdf2Hex(currentPassword, currentSalt, Math.floor(currentIters));
         var nextVerifier = await pbkdf2Hex(nextPassword, newSalt, Math.floor(newIters));
-        var currentEnvelope = await passwordEnvelope("settings-password", "", csrfToken, currentVerifier);
-        currentProofEl.value = await sha256Hex(csrfToken + currentVerifier);
+        var currentEnvelope = await passwordEnvelope("settings-password", "settings-current", "", csrfToken, currentVerifier);
+        var newEnvelope = await passwordEnvelope("settings-password", "settings-new", "", csrfToken, nextVerifier);
         currentKeyIdEl.value = currentEnvelope.keyId;
         currentEnvelopeTokenEl.value = currentEnvelope.envelopeToken;
         currentEncryptedVerifierEl.value = currentEnvelope.encryptedVerifier;
-        newVerifierEl.value = nextVerifier;
-        newProofEl.value = await sha256Hex(csrfToken + nextVerifier);
-        currentEl.value = await sha256Hex(csrfToken + currentPassword);
-        nextEl.value = await sha256Hex(csrfToken + nextPassword);
-        confirmEl.value = await sha256Hex(csrfToken + confirmPassword);
+        newKeyIdEl.value = newEnvelope.keyId;
+        newEnvelopeTokenEl.value = newEnvelope.envelopeToken;
+        newEncryptedVerifierEl.value = newEnvelope.encryptedVerifier;
+        currentEl.value = "";
+        nextEl.value = "";
+        confirmEl.value = "";
         form.dataset.passwordPrepared = "1";
         delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
         delete form.dataset.passwordPending;
-        window.alert("Failed to prepare password proof.");
+        window.alert("Failed to prepare password envelope.");
       });
     });
   }
 
-  function initSudoProofForm() {
+  function initSudoEnvelopeForm() {
     var form = document.getElementById("sudo-form");
     if (!form) return;
 
@@ -2136,14 +2155,12 @@
         var csrfEl = form.querySelector("input[name='csrf_token']");
         var saltEl = form.querySelector("input[name='password_salt']");
         var itersEl = form.querySelector("input[name='password_iters']");
-        var proofEl = form.querySelector("input[name='password_proof']");
         var keyIdEl = form.querySelector("input[name='key_id']");
         var envelopeTokenEl = form.querySelector("input[name='envelope_token']");
         var encryptedVerifierEl = form.querySelector("input[name='encrypted_verifier']");
-        if (!passwordEl || !csrfEl || !saltEl || !itersEl || !proofEl || !keyIdEl || !envelopeTokenEl || !encryptedVerifierEl) {
-          form.dataset.passwordPrepared = "1";
+        if (!passwordEl || !csrfEl || !saltEl || !itersEl || !keyIdEl || !envelopeTokenEl || !encryptedVerifierEl) {
           delete form.dataset.passwordPending;
-          form.submit();
+          window.alert("Password envelope fields are missing.");
           return;
         }
 
@@ -2151,10 +2168,15 @@
         var csrfToken = String(csrfEl.value || "").trim();
         var salt = String(saltEl.value || "").trim().toLowerCase();
         var iters = Number(itersEl.value || 0);
-        if (!password || !csrfToken) {
+        if (!password) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
+          return;
+        }
+        if (!csrfToken) {
+          window.alert("Invalid password token.");
+          delete form.dataset.passwordPending;
           return;
         }
         if (!/^[0-9a-f]{32}$/.test(salt) || !Number.isFinite(iters) || iters <= 0) {
@@ -2164,18 +2186,17 @@
         }
 
         var verifier = await pbkdf2Hex(password, salt, Math.floor(iters));
-        var envelope = await passwordEnvelope("sudo-password", "", csrfToken, verifier);
-        proofEl.value = await sha256Hex(csrfToken + verifier);
+        var envelope = await passwordEnvelope("sudo-password", "sudo", "", csrfToken, verifier);
         keyIdEl.value = envelope.keyId;
         envelopeTokenEl.value = envelope.envelopeToken;
         encryptedVerifierEl.value = envelope.encryptedVerifier;
-        passwordEl.value = await sha256Hex(csrfToken + password);
+        passwordEl.value = "";
         form.dataset.passwordPrepared = "1";
         delete form.dataset.passwordPending;
         form.submit();
       })().catch(function () {
         delete form.dataset.passwordPending;
-        window.alert("Failed to prepare password proof.");
+        window.alert("Failed to prepare password envelope.");
       });
     });
   }
@@ -2976,11 +2997,11 @@
     initComponentSourceEditorAsyncSave();
     initSolutionEditorAsyncSave();
     initCodeEditorUnloadGuard();
-    initLoginProofForm();
-    initRegisterLikeProofForm("register-form");
-    initRegisterLikeProofForm("setup-form");
-    initSettingsPasswordProofForm();
-    initSudoProofForm();
+    initLoginEnvelopeForm();
+    initRegisterLikeEnvelopeForm("register-form");
+    initRegisterLikeEnvelopeForm("setup-form");
+    initSettingsPasswordEnvelopeForm();
+    initSudoEnvelopeForm();
     initStatementDraftBackup();
     initStatementLanguageSwitch();
     initAutoSubmitSelects();

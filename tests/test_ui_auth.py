@@ -19,20 +19,19 @@ from .ui_support import (
     _extract_hidden_input_value,
     _flash_messages_from_response,
     issue_password_form_csrf_token,
-    _login_with_password_proof,
+    _login_with_password_envelope,
     _password_envelope_fields_direct,
     _password_verifier_hex,
     _post_form_request,
     _post_request,
-    _register_with_password_proof,
+    _register_with_password_envelope,
     _request,
     _request_with_cookie,
     _response_set_cookie_blob,
     session_user,
-    _settings_password_update_with_proof,
-    _sha256_hex,
-    _setup_with_password_proof,
-    _sudo_with_password_proof,
+    _settings_password_update_with_envelope,
+    _setup_with_password_envelope,
+    _sudo_with_password_envelope,
     auth_middleware,
     auth_password_meta,
     config,
@@ -77,15 +76,21 @@ class TestUIAuth(UIBaseSuite):
         salt = _extract_hidden_input_value(html, "password_salt")
         iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
         verifier = _password_verifier_hex(password, salt, iters)
-        proof = _sha256_hex(csrf + verifier)
-        password_hash = _sha256_hex(csrf + password)
+        envelope = _password_envelope_fields_direct(
+            scope="register-password",
+            purpose="register",
+            username=username,
+            csrf_token=csrf,
+            verifier=verifier,
+        )
         return {
             "username": username,
             "email": email or f"{username}@gmail.com",
-            "password": password_hash,
-            "password_confirm": password_hash,
-            "password_verifier": verifier,
-            "password_proof": proof,
+            "password": "",
+            "password_confirm": "",
+            "key_id": envelope["key_id"],
+            "envelope_token": envelope["envelope_token"],
+            "encrypted_verifier": envelope["encrypted_verifier"],
             "csrf_token": csrf,
             "password_salt": salt,
             "password_iters": str(iters),
@@ -118,10 +123,10 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(len(sent_codes), 1)
         return resp, sent_codes[0]
 
-    def test_sudo_password_proof_flow_sets_short_lived_token(self) -> None:
+    def test_sudo_password_envelope_flow_sets_short_lived_token(self) -> None:
         username = self.random_id("sudo")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(auth_token)
@@ -134,25 +139,25 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn("Sudo Mode", html)
         self.assertIn("Enable Sudo Mode", html)
 
-        enabled = _sudo_with_password_proof(cookie_header, password, next_path=next_path)
+        enabled = _sudo_with_password_envelope(cookie_header, password, next_path=next_path)
         self.assertEqual(enabled.status_code, 303)
         self.assertEqual(next_path, enabled.headers.get("location", ""))
         sudo_set_cookie = _response_set_cookie_blob(enabled)
         self.assertIn(f"{SUDO_COOKIE_NAME}=", sudo_set_cookie)
         self.assertIn(f"Max-Age={SUDO_COOKIE_MAX_AGE}", sudo_set_cookie)
 
-        denied = _sudo_with_password_proof(cookie_header, "WrongPass123", next_path=next_path)
+        denied = _sudo_with_password_envelope(cookie_header, "WrongPass123", next_path=next_path)
         self.assertEqual(denied.status_code, 303)
         self.assertIn("/sudo?next=", denied.headers.get("location", ""))
         denied_messages = _flash_messages_from_response(denied)
-        self.assertTrue(any("invalid password proof" in item for item in denied_messages))
+        self.assertTrue(any("invalid password envelope" in item for item in denied_messages))
 
     def test_register_login_and_password_update(self) -> None:
         username = self.random_id("user")
         password = "StrongPass123"
         updated = "UpdatedPass456"
 
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         self.assertIn("/problems", reg.headers.get("location", ""))
         reg_set_cookie = _response_set_cookie_blob(reg)
@@ -176,13 +181,13 @@ class TestUIAuth(UIBaseSuite):
         self.assertNotEqual(stored_hash, registered_verifier)
         self.assertEqual(stored_hash, password_verifier_storage_hash(registered_verifier))
 
-        bad = _login_with_password_proof(username, "wrong-password", next_path="/")
+        bad = _login_with_password_envelope(username, "wrong-password", next_path="/")
         self.assertEqual(bad.status_code, 303)
         self.assertEqual("/login", bad.headers.get("location", ""))
         bad_messages = _flash_messages_from_response(bad)
         self.assertTrue(any("invalid username or password" in item for item in bad_messages))
 
-        ok = _login_with_password_proof(username, password, next_path="/")
+        ok = _login_with_password_envelope(username, password, next_path="/")
         self.assertEqual(ok.status_code, 303)
         self.assertIn("/problems", ok.headers.get("location", ""))
         set_cookie = _response_set_cookie_blob(ok)
@@ -193,7 +198,7 @@ class TestUIAuth(UIBaseSuite):
         req = _request_with_cookie("/problems/alice/sample/general", f"{AUTH_COOKIE_NAME}={token}")
         self.assertEqual(session_user(req), username)
 
-        changed = _settings_password_update_with_proof(username, password, updated)
+        changed = _settings_password_update_with_envelope(username, password, updated)
         self.assertEqual(changed.status_code, 303)
         self.assertIn("/settings", changed.headers.get("location", ""))
         changed_messages = _flash_messages_from_response(changed)
@@ -202,13 +207,13 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn(f"{AUTH_COOKIE_NAME}=", changed_set_cookie)
         self.assertIn("Secure", changed_set_cookie)
 
-        old_login = _login_with_password_proof(username, password, next_path="/")
+        old_login = _login_with_password_envelope(username, password, next_path="/")
         self.assertEqual(old_login.status_code, 303)
         self.assertEqual("/login", old_login.headers.get("location", ""))
         old_messages = _flash_messages_from_response(old_login)
         self.assertTrue(any("invalid username or password" in item for item in old_messages))
 
-        new_login = _login_with_password_proof(username, updated, next_path="/")
+        new_login = _login_with_password_envelope(username, updated, next_path="/")
         self.assertEqual(new_login.status_code, 303)
         new_login_set_cookie = _response_set_cookie_blob(new_login)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", new_login_set_cookie)
@@ -217,7 +222,7 @@ class TestUIAuth(UIBaseSuite):
     def test_login_envelope_rejects_replay_and_stored_hash_as_verifier(self) -> None:
         username = self.random_id("envelope")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         auth_row = db_fetch_one(
             "SELECT password_hash,password_salt,password_iters FROM users WHERE username=?",
@@ -230,9 +235,9 @@ class TestUIAuth(UIBaseSuite):
 
         csrf = issue_password_form_csrf_token("login-password")
         verifier = _password_verifier_hex(password, salt, iters)
-        proof = _sha256_hex(csrf + verifier)
         envelope = _password_envelope_fields_direct(
             scope="login-password",
+            purpose="login",
             username=username,
             csrf_token=csrf,
             verifier=verifier,
@@ -240,8 +245,7 @@ class TestUIAuth(UIBaseSuite):
         ok = login_submit(
             request=_post_request("/login"),
             username=username,
-            password=_sha256_hex(csrf + password),
-            password_proof=proof,
+            password="",
             key_id=envelope["key_id"],
             envelope_token=envelope["envelope_token"],
             encrypted_verifier=envelope["encrypted_verifier"],
@@ -253,8 +257,7 @@ class TestUIAuth(UIBaseSuite):
         replay = login_submit(
             request=_post_request("/login"),
             username=username,
-            password=_sha256_hex(csrf + password),
-            password_proof=proof,
+            password="",
             key_id=envelope["key_id"],
             envelope_token=envelope["envelope_token"],
             encrypted_verifier=envelope["encrypted_verifier"],
@@ -266,6 +269,7 @@ class TestUIAuth(UIBaseSuite):
         leaked_csrf = issue_password_form_csrf_token("login-password")
         leaked_envelope = _password_envelope_fields_direct(
             scope="login-password",
+            purpose="login",
             username=username,
             csrf_token=leaked_csrf,
             verifier=stored_hash,
@@ -273,8 +277,7 @@ class TestUIAuth(UIBaseSuite):
         leaked = login_submit(
             request=_post_request("/login"),
             username=username,
-            password=_sha256_hex(leaked_csrf + stored_hash),
-            password_proof=_sha256_hex(leaked_csrf + stored_hash),
+            password="",
             key_id=leaked_envelope["key_id"],
             envelope_token=leaked_envelope["envelope_token"],
             encrypted_verifier=leaked_envelope["encrypted_verifier"],
@@ -283,8 +286,64 @@ class TestUIAuth(UIBaseSuite):
         )
         self.assertEqual("/login", leaked.headers.get("location", ""))
 
-    def test_auth_password_proof_flow_works_without_plaintext_submission(self) -> None:
-        username = self.random_id("proof")
+    def test_settings_password_envelope_purpose_prevents_current_new_swap(self) -> None:
+        username = self.random_id("swap")
+        password = "StrongPass123"
+        updated = "UpdatedPass456"
+        reg = _register_with_password_envelope(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        auth_row = db_fetch_one(
+            "SELECT id,password_hash,password_salt,password_iters FROM users WHERE username=?",
+            [username],
+        )
+        self.assertIsNotNone(auth_row)
+        original_hash = str(auth_row["password_hash"] or "")
+        csrf = issue_password_form_csrf_token("settings-password")
+        current_salt = str(auth_row["password_salt"] or "")
+        current_iters = int(auth_row["password_iters"] or 0)
+        new_salt = uuid.uuid4().hex
+        current_verifier = _password_verifier_hex(password, current_salt, current_iters)
+        new_verifier = _password_verifier_hex(updated, new_salt, current_iters)
+        current_as_new = _password_envelope_fields_direct(
+            scope="settings-password",
+            purpose="settings-new",
+            username=username,
+            csrf_token=csrf,
+            verifier=current_verifier,
+        )
+        new_as_current = _password_envelope_fields_direct(
+            scope="settings-password",
+            purpose="settings-current",
+            username=username,
+            csrf_token=csrf,
+            verifier=new_verifier,
+        )
+
+        changed = settings_password_update(
+            user=username,
+            current_password="",
+            new_password="",
+            new_password_confirm="",
+            current_password_key_id=current_as_new["key_id"],
+            current_password_envelope_token=current_as_new["envelope_token"],
+            current_password_encrypted_verifier=current_as_new["encrypted_verifier"],
+            new_password_key_id=new_as_current["key_id"],
+            new_password_envelope_token=new_as_current["envelope_token"],
+            new_password_encrypted_verifier=new_as_current["encrypted_verifier"],
+            csrf_token=csrf,
+            new_password_salt=new_salt,
+            new_password_iters=str(current_iters),
+        )
+
+        self.assertEqual(changed.status_code, 303)
+        messages = _flash_messages_from_response(changed)
+        self.assertTrue(any("current password is incorrect" in item for item in messages))
+        after_row = db_fetch_one("SELECT password_hash FROM users WHERE username=?", [username])
+        self.assertIsNotNone(after_row)
+        self.assertEqual(str(after_row["password_hash"] or ""), original_hash)
+
+    def test_auth_password_envelope_flow_works_without_plaintext_submission(self) -> None:
+        username = self.random_id("env")
         password = "StrongPass123"
         updated = "UpdatedPass456"
 
@@ -309,19 +368,28 @@ class TestUIAuth(UIBaseSuite):
             register_html.rfind('data-popup-open="terms-of-use-popup"'),
             register_html.find('id="profile-judgehost-health-summary"'),
         )
+        self.assertNotIn('name="password_verifier"', register_html)
+        self.assertNotIn('name="password_proof"', register_html)
+        self.assertIn('name="encrypted_verifier"', register_html)
 
         register_verifier = _password_verifier_hex(password, register_salt, register_iters)
-        register_proof = _sha256_hex(register_csrf + register_verifier)
-        register_password_hash = _sha256_hex(register_csrf + password)
+        register_envelope = _password_envelope_fields_direct(
+            scope="register-password",
+            purpose="register",
+            username=username,
+            csrf_token=register_csrf,
+            verifier=register_verifier,
+        )
 
         reg = register_submit(
             request=_post_request("/register"),
             username=username,
             email=f"{username}@gmail.com",
-            password=register_password_hash,
-            password_confirm=register_password_hash,
-            password_verifier=register_verifier,
-            password_proof=register_proof,
+            password="",
+            password_confirm="",
+            key_id=register_envelope["key_id"],
+            envelope_token=register_envelope["envelope_token"],
+            encrypted_verifier=register_envelope["encrypted_verifier"],
             csrf_token=register_csrf,
             password_salt=register_salt,
             password_iters=str(register_iters),
@@ -336,6 +404,8 @@ class TestUIAuth(UIBaseSuite):
         login_html = login_resp.body.decode("utf-8", errors="replace")
         login_csrf = _extract_hidden_input_value(login_html, "csrf_token")
         self.assertTrue(login_csrf)
+        self.assertNotIn('name="password_proof"', login_html)
+        self.assertIn('name="encrypted_verifier"', login_html)
         login_meta = auth_password_meta(username=username, csrf_token=login_csrf)
         login_salt = str(login_meta.get("salt") or "")
         login_iters = int(login_meta.get("iters") or 0)
@@ -343,19 +413,17 @@ class TestUIAuth(UIBaseSuite):
         self.assertGreater(login_iters, 0)
 
         login_verifier = _password_verifier_hex(password, login_salt, login_iters)
-        login_proof = _sha256_hex(login_csrf + login_verifier)
         login_envelope = _password_envelope_fields_direct(
             scope="login-password",
+            purpose="login",
             username=username,
             csrf_token=login_csrf,
             verifier=login_verifier,
         )
-        login_password_hash = _sha256_hex(login_csrf + password)
         login_ok = login_submit(
             request=_post_request("/login"),
             username=username,
-            password=login_password_hash,
-            password_proof=login_proof,
+            password="",
             key_id=login_envelope["key_id"],
             envelope_token=login_envelope["envelope_token"],
             encrypted_verifier=login_envelope["encrypted_verifier"],
@@ -383,29 +451,33 @@ class TestUIAuth(UIBaseSuite):
         self.assertGreater(current_iters, 0)
 
         current_verifier = _password_verifier_hex(password, current_salt, current_iters)
-        current_proof = _sha256_hex(settings_csrf + current_verifier)
         current_envelope = _password_envelope_fields_direct(
             scope="settings-password",
+            purpose="settings-current",
             username=username,
             csrf_token=settings_csrf,
             verifier=current_verifier,
         )
         new_verifier = _password_verifier_hex(updated, new_salt, new_iters)
-        new_proof = _sha256_hex(settings_csrf + new_verifier)
-        current_password_hash = _sha256_hex(settings_csrf + password)
-        updated_password_hash = _sha256_hex(settings_csrf + updated)
+        new_envelope = _password_envelope_fields_direct(
+            scope="settings-password",
+            purpose="settings-new",
+            username=username,
+            csrf_token=settings_csrf,
+            verifier=new_verifier,
+        )
 
         changed = settings_password_update(
             user=username,
-            current_password=current_password_hash,
-            new_password=updated_password_hash,
-            new_password_confirm=updated_password_hash,
-            current_password_proof=current_proof,
+            current_password="",
+            new_password="",
+            new_password_confirm="",
             current_password_key_id=current_envelope["key_id"],
             current_password_envelope_token=current_envelope["envelope_token"],
             current_password_encrypted_verifier=current_envelope["encrypted_verifier"],
-            new_password_verifier=new_verifier,
-            new_password_proof=new_proof,
+            new_password_key_id=new_envelope["key_id"],
+            new_password_envelope_token=new_envelope["envelope_token"],
+            new_password_encrypted_verifier=new_envelope["encrypted_verifier"],
             csrf_token=settings_csrf,
             new_password_salt=new_salt,
             new_password_iters=str(new_iters),
@@ -422,19 +494,17 @@ class TestUIAuth(UIBaseSuite):
         old_salt = str(old_meta.get("salt") or "")
         old_iters = int(old_meta.get("iters") or 0)
         old_verifier = _password_verifier_hex(password, old_salt, old_iters)
-        old_proof = _sha256_hex(old_login_csrf + old_verifier)
         old_envelope = _password_envelope_fields_direct(
             scope="login-password",
+            purpose="login",
             username=username,
             csrf_token=old_login_csrf,
             verifier=old_verifier,
         )
-        old_password_hash = _sha256_hex(old_login_csrf + password)
         old_login = login_submit(
             request=_post_request("/login"),
             username=username,
-            password=old_password_hash,
-            password_proof=old_proof,
+            password="",
             key_id=old_envelope["key_id"],
             envelope_token=old_envelope["envelope_token"],
             encrypted_verifier=old_envelope["encrypted_verifier"],
@@ -453,19 +523,17 @@ class TestUIAuth(UIBaseSuite):
         new_salt_login = str(new_meta.get("salt") or "")
         new_iters_login = int(new_meta.get("iters") or 0)
         new_verifier_login = _password_verifier_hex(updated, new_salt_login, new_iters_login)
-        new_proof_login = _sha256_hex(new_login_csrf + new_verifier_login)
         new_envelope = _password_envelope_fields_direct(
             scope="login-password",
+            purpose="login",
             username=username,
             csrf_token=new_login_csrf,
             verifier=new_verifier_login,
         )
-        new_password_hash_login = _sha256_hex(new_login_csrf + updated)
         new_login = login_submit(
             request=_post_request("/login"),
             username=username,
-            password=new_password_hash_login,
-            password_proof=new_proof_login,
+            password="",
             key_id=new_envelope["key_id"],
             envelope_token=new_envelope["envelope_token"],
             encrypted_verifier=new_envelope["encrypted_verifier"],
@@ -526,17 +594,23 @@ class TestUIAuth(UIBaseSuite):
         salt = _extract_hidden_input_value(html, "password_salt")
         iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
         verifier = _password_verifier_hex(password, salt, iters)
-        proof = _sha256_hex(csrf + verifier)
-        password_hash = _sha256_hex(csrf + password)
+        envelope = _password_envelope_fields_direct(
+            scope="register-password",
+            purpose="register",
+            username=username,
+            csrf_token=csrf,
+            verifier=verifier,
+        )
 
         resp = register_submit(
             request=_post_request("/register"),
             username=username,
             email=f"{username}@gmail.com",
-            password=password_hash,
-            password_confirm=password_hash,
-            password_verifier=verifier,
-            password_proof=proof,
+            password="",
+            password_confirm="",
+            key_id=envelope["key_id"],
+            envelope_token=envelope["envelope_token"],
+            encrypted_verifier=envelope["encrypted_verifier"],
             csrf_token=csrf,
             password_salt=salt,
             password_iters=str(iters),
@@ -803,16 +877,22 @@ class TestUIAuth(UIBaseSuite):
         self.assertGreater(iters, 0)
 
         verifier = _password_verifier_hex(password, salt, iters)
-        proof = _sha256_hex(csrf + verifier)
-        password_hash = _sha256_hex(csrf + password)
+        envelope = _password_envelope_fields_direct(
+            scope="setup-password",
+            purpose="setup",
+            username=username,
+            csrf_token=csrf,
+            verifier=verifier,
+        )
 
         resp = setup_submit(
             request=_post_request("/setup"),
             username=username,
-            password=password_hash,
-            password_confirm=password_hash,
-            password_verifier=verifier,
-            password_proof=proof,
+            password="",
+            password_confirm="",
+            key_id=envelope["key_id"],
+            envelope_token=envelope["envelope_token"],
+            encrypted_verifier=envelope["encrypted_verifier"],
             csrf_token=csrf,
             password_salt=salt,
             password_iters=str(iters),
@@ -836,7 +916,7 @@ class TestUIAuth(UIBaseSuite):
 
     def test_setup_submit_requires_config_confirmation(self) -> None:
         username = self.random_id("boot")
-        resp = _setup_with_password_proof(username, "StrongPass123", confirm_config="0", next_path="/")
+        resp = _setup_with_password_envelope(username, "StrongPass123", confirm_config="0", next_path="/")
         self.assertEqual(resp.status_code, 303)
         self.assertEqual("/setup", resp.headers.get("location", ""))
         messages = _flash_messages_from_response(resp)
@@ -849,7 +929,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertIsNotNone(row_before)
         self.assertFalse(str(row_before["password_hash"] or ""))
 
-        resp = _register_with_password_proof(username, "StrongPass123", next_path="/")
+        resp = _register_with_password_envelope(username, "StrongPass123", next_path="/")
         self.assertEqual(resp.status_code, 303)
         location = resp.headers.get("location", "")
         self.assertEqual("/register", location)
@@ -871,13 +951,13 @@ class TestUIAuth(UIBaseSuite):
         self.assertIsNotNone(before)
         self.assertEqual(int(before["c"]), 0)
 
-        first_reg = _register_with_password_proof(first, "StrongPass123", next_path="/")
+        first_reg = _register_with_password_envelope(first, "StrongPass123", next_path="/")
         self.assertEqual(first_reg.status_code, 303)
         first_row = db_fetch_one("SELECT is_system_admin FROM users WHERE username=?", [first])
         self.assertIsNotNone(first_row)
         self.assertEqual(int(first_row["is_system_admin"] or 0), 1)
 
-        second_reg = _register_with_password_proof(second, "StrongPass123", next_path="/")
+        second_reg = _register_with_password_envelope(second, "StrongPass123", next_path="/")
         self.assertEqual(second_reg.status_code, 303)
         second_row = db_fetch_one("SELECT is_system_admin FROM users WHERE username=?", [second])
         self.assertIsNotNone(second_row)
@@ -893,13 +973,13 @@ class TestUIAuth(UIBaseSuite):
     def test_login_rate_limit_blocks_repeated_failures(self) -> None:
         username = self.random_id("ratelim")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
 
         blocked_location = ""
         blocked_message = ""
         for _ in range(12):
-            bad = _login_with_password_proof(username, "wrong-password", next_path="/")
+            bad = _login_with_password_envelope(username, "wrong-password", next_path="/")
             self.assertEqual(bad.status_code, 303)
             blocked_location = bad.headers.get("location", "")
             blocked_messages = _flash_messages_from_response(bad)
@@ -909,7 +989,7 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual("/login", blocked_location)
         self.assertIn("too many failed attempts", blocked_message)
 
-        blocked_ok = _login_with_password_proof(username, password, next_path="/")
+        blocked_ok = _login_with_password_envelope(username, password, next_path="/")
         self.assertEqual(blocked_ok.status_code, 303)
         blocked_ok_messages = _flash_messages_from_response(blocked_ok)
         self.assertTrue(any("too many failed attempts" in item for item in blocked_ok_messages))
@@ -917,7 +997,7 @@ class TestUIAuth(UIBaseSuite):
     def test_auth_middleware_blocks_cross_origin_post(self) -> None:
         username = self.random_id("csrf")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)
@@ -939,7 +1019,7 @@ class TestUIAuth(UIBaseSuite):
     def test_auth_middleware_allows_same_origin_post(self) -> None:
         username = self.random_id("csrfok")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)
@@ -960,7 +1040,7 @@ class TestUIAuth(UIBaseSuite):
     def test_auth_middleware_allows_userless_contest_path(self) -> None:
         username = self.random_id("ctauth")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)
@@ -981,7 +1061,7 @@ class TestUIAuth(UIBaseSuite):
     def test_auth_middleware_keeps_userless_contest_query_intact(self) -> None:
         username = self.random_id("ctmsg")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)
@@ -1370,7 +1450,7 @@ class TestUIAuth(UIBaseSuite):
     def test_problem_id_validation_requires_lowercase_dash_format(self) -> None:
         username = self.random_id("swauth")
         password = "StrongPass123"
-        reg = _register_with_password_proof(username, password, next_path="/")
+        reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)

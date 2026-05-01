@@ -4,8 +4,7 @@ import secrets
 import time
 
 from app.impl.runtime.config import config
-from app.impl.auth.shared import normalize_password_verifier_hex
-from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_text
+from app.service.platform.hashing import hmac_sha256_hex
 
 _C = config.constants
 
@@ -43,10 +42,3 @@ def verify_password_form_csrf_token(token: str, scope: str) -> bool:
         return False
     expected = _password_form_csrf_signature(str(scope or '').strip().lower(), issued_at, nonce)
     return secrets.compare_digest(expected, str(provided_sig or '').lower())
-
-def password_proof_from_verifier(csrf_token: str, verifier_hex: str) -> str:
-    safe_csrf = str(csrf_token or '').strip()
-    safe_verifier = normalize_password_verifier_hex(verifier_hex)
-    digest = sha256_hex_text(f'{safe_csrf}{safe_verifier}')
-    return digest
-

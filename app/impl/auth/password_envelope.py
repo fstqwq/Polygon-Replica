@@ -15,11 +15,15 @@ from app.impl.runtime.config import config
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
 
-_ALLOWED_PASSWORD_ENVELOPE_SCOPES = {
-    "login-password",
-    "settings-password",
-    "sudo-password",
+_PASSWORD_ENVELOPE_PURPOSE_SCOPES = {
+    "login": "login-password",
+    "register": "register-password",
+    "setup": "setup-password",
+    "sudo": "sudo-password",
+    "settings-current": "settings-password",
+    "settings-new": "settings-password",
 }
+_ALLOWED_PASSWORD_ENVELOPE_SCOPES = set(_PASSWORD_ENVELOPE_PURPOSE_SCOPES.values())
 _PASSWORD_ENVELOPE_TTL_SEC = 30
 _PASSWORD_ENVELOPE_MAX_ENTRIES = 128
 _PASSWORD_ENVELOPE_RATE_WINDOW_SEC = 10.0
@@ -30,6 +34,7 @@ _PASSWORD_ENVELOPE_RATE_MAX = 128
 class _PasswordEnvelopeEntry:
     private_key: rsa.RSAPrivateKey
     scope: str
+    purpose: str
     username: str
     csrf_token: str
     public_key_hash: str
@@ -60,9 +65,27 @@ def normalize_password_envelope_scope(scope: str) -> str:
     return safe_scope
 
 
+def normalize_password_envelope_purpose(purpose: str) -> str:
+    """Normalize the small fixed set of password envelope purposes."""
+
+    safe_purpose = str(purpose or "").strip().lower()
+    if safe_purpose not in _PASSWORD_ENVELOPE_PURPOSE_SCOPES:
+        raise ValueError("invalid password envelope purpose")
+    return safe_purpose
+
+
+def normalize_password_envelope_scope_purpose(scope: str, purpose: str) -> tuple[str, str]:
+    safe_scope = normalize_password_envelope_scope(scope)
+    safe_purpose = normalize_password_envelope_purpose(purpose)
+    if _PASSWORD_ENVELOPE_PURPOSE_SCOPES[safe_purpose] != safe_scope:
+        raise ValueError("invalid password envelope scope")
+    return safe_scope, safe_purpose
+
+
 def _envelope_signature(
     *,
     scope: str,
+    purpose: str,
     csrf_token: str,
     username: str,
     key_id: str,
@@ -70,8 +93,8 @@ def _envelope_signature(
     expires_at: int,
 ) -> str:
     payload = (
-        "password-envelope-v1|"
-        f"{scope}|{csrf_token}|{username}|{key_id}|{public_key_hash}|{int(expires_at)}"
+        "password-envelope-v2|"
+        f"{scope}|{purpose}|{csrf_token}|{username}|{key_id}|{public_key_hash}|{int(expires_at)}"
     ).encode("utf-8")
     return hmac_sha256_hex(config.password_form_csrf_secret, payload)
 
@@ -121,13 +144,14 @@ class PasswordEnvelopeStore:
         self,
         *,
         scope: str,
+        purpose: str,
         username: str,
         csrf_token: str,
         rate_key: str = "",
     ) -> dict[str, object]:
         """Create a short-lived public key bound to a password CSRF token."""
 
-        safe_scope = normalize_password_envelope_scope(scope)
+        safe_scope, safe_purpose = normalize_password_envelope_scope_purpose(scope, purpose)
         safe_username = str(username or "").strip()
         safe_csrf = str(csrf_token or "").strip()
         if not verify_password_form_csrf_token(safe_csrf, safe_scope):
@@ -144,6 +168,7 @@ class PasswordEnvelopeStore:
         expires_at = int(time.time()) + _PASSWORD_ENVELOPE_TTL_SEC
         token = _envelope_signature(
             scope=safe_scope,
+            purpose=safe_purpose,
             csrf_token=safe_csrf,
             username=safe_username,
             key_id=key_id,
@@ -153,6 +178,7 @@ class PasswordEnvelopeStore:
         entry = _PasswordEnvelopeEntry(
             private_key=private_key,
             scope=safe_scope,
+            purpose=safe_purpose,
             username=safe_username,
             csrf_token=safe_csrf,
             public_key_hash=public_key_hash,
@@ -173,6 +199,7 @@ class PasswordEnvelopeStore:
         self,
         *,
         scope: str,
+        purpose: str,
         username: str,
         csrf_token: str,
         key_id: str,
@@ -181,7 +208,7 @@ class PasswordEnvelopeStore:
     ) -> str:
         """Consume an envelope and return the decrypted canonical verifier."""
 
-        safe_scope = normalize_password_envelope_scope(scope)
+        safe_scope, safe_purpose = normalize_password_envelope_scope_purpose(scope, purpose)
         safe_username = str(username or "").strip()
         safe_csrf = str(csrf_token or "").strip()
         safe_key_id = str(key_id or "").strip()
@@ -197,6 +224,7 @@ class PasswordEnvelopeStore:
                 raise ValueError("invalid password envelope")
             expected_token = _envelope_signature(
                 scope=safe_scope,
+                purpose=safe_purpose,
                 csrf_token=safe_csrf,
                 username=safe_username,
                 key_id=safe_key_id,
@@ -205,6 +233,7 @@ class PasswordEnvelopeStore:
             )
             if (
                 entry.scope != safe_scope
+                or entry.purpose != safe_purpose
                 or entry.username != safe_username
                 or entry.csrf_token != safe_csrf
                 or not secrets.compare_digest(expected_token, safe_token)
