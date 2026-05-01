@@ -367,13 +367,13 @@ def password_meta_for_username(username: str) -> tuple[str, int]:
     row = lookup_user_auth(username)
     if row is None:
         return (dummy_password_salt_hex(username), int(_C.PASSWORD_HASH_ITERS))
-    verifier = str(row["password_hash"] or "").strip().lower()
+    stored_hash = str(row["password_hash"] or "").strip().lower()
     salt_hex = str(row["password_salt"] or "").strip().lower()
     try:
         iterations = int(row["password_iters"] or 0)
     except Exception:
         iterations = 0
-    if _C.HEX_64_RE.fullmatch(verifier) and _C.HEX_32_RE.fullmatch(salt_hex) and (iterations > 0):
+    if _C.HEX_64_RE.fullmatch(stored_hash) and _C.HEX_32_RE.fullmatch(salt_hex) and (iterations > 0):
         return (salt_hex, iterations)
     return (dummy_password_salt_hex(username), int(_C.PASSWORD_HASH_ITERS))
 

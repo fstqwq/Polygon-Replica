@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from starlette.responses import PlainTextResponse
+from app.service.auth.password_hash import password_verifier_storage_hash
 
 from .ui_support import (
     ADMIN_CONFIG_DEFAULTS,
@@ -19,6 +20,7 @@ from .ui_support import (
     _flash_messages_from_response,
     issue_password_form_csrf_token,
     _login_with_password_proof,
+    _password_envelope_fields_direct,
     _password_verifier_hex,
     _post_form_request,
     _post_request,
@@ -165,6 +167,14 @@ class TestUIAuth(UIBaseSuite):
         self.assertTrue(str(user_row["password_hash"] or ""))
         self.assertTrue(str(user_row["password_salt"] or ""))
         self.assertGreater(int(user_row["password_iters"] or 0), 0)
+        stored_hash = str(user_row["password_hash"] or "")
+        registered_verifier = _password_verifier_hex(
+            password,
+            str(user_row["password_salt"] or ""),
+            int(user_row["password_iters"] or 0),
+        )
+        self.assertNotEqual(stored_hash, registered_verifier)
+        self.assertEqual(stored_hash, password_verifier_storage_hash(registered_verifier))
 
         bad = _login_with_password_proof(username, "wrong-password", next_path="/")
         self.assertEqual(bad.status_code, 303)
@@ -203,6 +213,75 @@ class TestUIAuth(UIBaseSuite):
         new_login_set_cookie = _response_set_cookie_blob(new_login)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", new_login_set_cookie)
         self.assertIn("Secure", new_login_set_cookie)
+
+    def test_login_envelope_rejects_replay_and_stored_hash_as_verifier(self) -> None:
+        username = self.random_id("envelope")
+        password = "StrongPass123"
+        reg = _register_with_password_proof(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        auth_row = db_fetch_one(
+            "SELECT password_hash,password_salt,password_iters FROM users WHERE username=?",
+            [username],
+        )
+        self.assertIsNotNone(auth_row)
+        stored_hash = str(auth_row["password_hash"] or "")
+        salt = str(auth_row["password_salt"] or "")
+        iters = int(auth_row["password_iters"] or 0)
+
+        csrf = issue_password_form_csrf_token("login-password")
+        verifier = _password_verifier_hex(password, salt, iters)
+        proof = _sha256_hex(csrf + verifier)
+        envelope = _password_envelope_fields_direct(
+            scope="login-password",
+            username=username,
+            csrf_token=csrf,
+            verifier=verifier,
+        )
+        ok = login_submit(
+            request=_post_request("/login"),
+            username=username,
+            password=_sha256_hex(csrf + password),
+            password_proof=proof,
+            key_id=envelope["key_id"],
+            envelope_token=envelope["envelope_token"],
+            encrypted_verifier=envelope["encrypted_verifier"],
+            csrf_token=csrf,
+            next="/",
+        )
+        self.assertEqual(ok.status_code, 303)
+
+        replay = login_submit(
+            request=_post_request("/login"),
+            username=username,
+            password=_sha256_hex(csrf + password),
+            password_proof=proof,
+            key_id=envelope["key_id"],
+            envelope_token=envelope["envelope_token"],
+            encrypted_verifier=envelope["encrypted_verifier"],
+            csrf_token=csrf,
+            next="/",
+        )
+        self.assertEqual("/login", replay.headers.get("location", ""))
+
+        leaked_csrf = issue_password_form_csrf_token("login-password")
+        leaked_envelope = _password_envelope_fields_direct(
+            scope="login-password",
+            username=username,
+            csrf_token=leaked_csrf,
+            verifier=stored_hash,
+        )
+        leaked = login_submit(
+            request=_post_request("/login"),
+            username=username,
+            password=_sha256_hex(leaked_csrf + stored_hash),
+            password_proof=_sha256_hex(leaked_csrf + stored_hash),
+            key_id=leaked_envelope["key_id"],
+            envelope_token=leaked_envelope["envelope_token"],
+            encrypted_verifier=leaked_envelope["encrypted_verifier"],
+            csrf_token=leaked_csrf,
+            next="/",
+        )
+        self.assertEqual("/login", leaked.headers.get("location", ""))
 
     def test_auth_password_proof_flow_works_without_plaintext_submission(self) -> None:
         username = self.random_id("proof")
@@ -265,12 +344,21 @@ class TestUIAuth(UIBaseSuite):
 
         login_verifier = _password_verifier_hex(password, login_salt, login_iters)
         login_proof = _sha256_hex(login_csrf + login_verifier)
+        login_envelope = _password_envelope_fields_direct(
+            scope="login-password",
+            username=username,
+            csrf_token=login_csrf,
+            verifier=login_verifier,
+        )
         login_password_hash = _sha256_hex(login_csrf + password)
         login_ok = login_submit(
             request=_post_request("/login"),
             username=username,
             password=login_password_hash,
             password_proof=login_proof,
+            key_id=login_envelope["key_id"],
+            envelope_token=login_envelope["envelope_token"],
+            encrypted_verifier=login_envelope["encrypted_verifier"],
             csrf_token=login_csrf,
             next="/",
         )
@@ -296,6 +384,12 @@ class TestUIAuth(UIBaseSuite):
 
         current_verifier = _password_verifier_hex(password, current_salt, current_iters)
         current_proof = _sha256_hex(settings_csrf + current_verifier)
+        current_envelope = _password_envelope_fields_direct(
+            scope="settings-password",
+            username=username,
+            csrf_token=settings_csrf,
+            verifier=current_verifier,
+        )
         new_verifier = _password_verifier_hex(updated, new_salt, new_iters)
         new_proof = _sha256_hex(settings_csrf + new_verifier)
         current_password_hash = _sha256_hex(settings_csrf + password)
@@ -307,6 +401,9 @@ class TestUIAuth(UIBaseSuite):
             new_password=updated_password_hash,
             new_password_confirm=updated_password_hash,
             current_password_proof=current_proof,
+            current_password_key_id=current_envelope["key_id"],
+            current_password_envelope_token=current_envelope["envelope_token"],
+            current_password_encrypted_verifier=current_envelope["encrypted_verifier"],
             new_password_verifier=new_verifier,
             new_password_proof=new_proof,
             csrf_token=settings_csrf,
@@ -326,12 +423,21 @@ class TestUIAuth(UIBaseSuite):
         old_iters = int(old_meta.get("iters") or 0)
         old_verifier = _password_verifier_hex(password, old_salt, old_iters)
         old_proof = _sha256_hex(old_login_csrf + old_verifier)
+        old_envelope = _password_envelope_fields_direct(
+            scope="login-password",
+            username=username,
+            csrf_token=old_login_csrf,
+            verifier=old_verifier,
+        )
         old_password_hash = _sha256_hex(old_login_csrf + password)
         old_login = login_submit(
             request=_post_request("/login"),
             username=username,
             password=old_password_hash,
             password_proof=old_proof,
+            key_id=old_envelope["key_id"],
+            envelope_token=old_envelope["envelope_token"],
+            encrypted_verifier=old_envelope["encrypted_verifier"],
             csrf_token=old_login_csrf,
             next="/",
         )
@@ -348,12 +454,21 @@ class TestUIAuth(UIBaseSuite):
         new_iters_login = int(new_meta.get("iters") or 0)
         new_verifier_login = _password_verifier_hex(updated, new_salt_login, new_iters_login)
         new_proof_login = _sha256_hex(new_login_csrf + new_verifier_login)
+        new_envelope = _password_envelope_fields_direct(
+            scope="login-password",
+            username=username,
+            csrf_token=new_login_csrf,
+            verifier=new_verifier_login,
+        )
         new_password_hash_login = _sha256_hex(new_login_csrf + updated)
         new_login = login_submit(
             request=_post_request("/login"),
             username=username,
             password=new_password_hash_login,
             password_proof=new_proof_login,
+            key_id=new_envelope["key_id"],
+            envelope_token=new_envelope["envelope_token"],
+            encrypted_verifier=new_envelope["encrypted_verifier"],
             csrf_token=new_login_csrf,
             next="/",
         )

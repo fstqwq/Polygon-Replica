@@ -5,7 +5,7 @@ import re
 import secrets
 
 from fastapi import Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from urllib.parse import quote_plus
 
 from app.service.platform.hashing import sha256_hex_text
@@ -42,9 +42,14 @@ from app.impl.auth.csrf import (
     password_proof_from_verifier,
     verify_password_form_csrf_token,
 )
+from app.impl.auth.password_envelope import (
+    normalize_password_envelope_scope,
+    password_envelope_store,
+)
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
 from app.main_util import form_text
+from app.service.auth.password_hash import password_verifier_storage_hash
 
 _C = config.constants
 _REGISTRATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -223,7 +228,52 @@ def auth_password_meta(username: str='', csrf_token: str=''):
     salt_hex, iterations = password_meta_for_username(username)
     return {'salt': salt_hex, 'iters': iterations}
 
-def login_submit(request: Request, username: str=Form(...), password: str=Form(''), password_proof: str=Form(''), csrf_token: str=Form(''), next: str=Form('/')):
+
+def auth_login_pubkey(
+    request: Request,
+    scope: str = 'login-password',
+    username: str = '',
+    csrf_token: str = '',
+):
+    """Issue an in-memory one-time public key for password verifier encryption."""
+
+    try:
+        safe_scope = normalize_password_envelope_scope(scope)
+        safe_username = form_text(username).strip()
+        if safe_scope == 'sudo-password':
+            identity = session_identity(request)
+            if identity is None:
+                raise HTTPException(status_code=401, detail='login required')
+            safe_username = str(identity['username'])
+        elif safe_scope == 'settings-password':
+            current_user = session_user(request)
+            if not current_user:
+                raise HTTPException(status_code=401, detail='login required')
+            safe_username = current_user
+        payload = password_envelope_store.issue(
+            scope=safe_scope,
+            username=safe_username,
+            csrf_token=form_text(csrf_token).strip(),
+            rate_key=_client_ip_for_auth_rate_limit(request),
+        )
+        return JSONResponse(payload)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def login_submit(
+    request: Request,
+    username: str=Form(...),
+    password: str=Form(''),
+    password_proof: str=Form(''),
+    csrf_token: str=Form(''),
+    key_id: str=Form(''),
+    envelope_token: str=Form(''),
+    encrypted_verifier: str=Form(''),
+    next: str=Form('/'),
+):
     enforce_same_origin_state_change(request)
     raw_user = form_text(username).strip()
     proof_token = form_text(csrf_token).strip()
@@ -247,15 +297,31 @@ def login_submit(request: Request, username: str=Form(...), password: str=Form('
         if not verify_password_form_csrf_token(proof_token, 'login-password'):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
-        verifier = str(row['password_hash'] or '').strip().lower()
-        if not _C.HEX_64_RE.fullmatch(verifier):
+        stored_hash = str(row['password_hash'] or '').strip().lower()
+        if not _C.HEX_64_RE.fullmatch(stored_hash):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
         if not _C.HEX_64_RE.fullmatch(proof_value):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
+        try:
+            verifier = password_envelope_store.consume(
+                scope='login-password',
+                username=raw_user,
+                csrf_token=proof_token,
+                key_id=form_text(key_id),
+                envelope_token=form_text(envelope_token),
+                encrypted_verifier=form_text(encrypted_verifier),
+            )
+        except ValueError as exc:
+            login_rate_limit_fail(rate_limit_key)
+            raise ValueError('invalid username or password') from exc
         expected_proof = password_proof_from_verifier(proof_token, verifier)
         if not secrets.compare_digest(expected_proof, proof_value):
+            login_rate_limit_fail(rate_limit_key)
+            raise ValueError('invalid username or password')
+        expected_hash = password_verifier_storage_hash(verifier)
+        if not secrets.compare_digest(expected_hash, stored_hash):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
         login_rate_limit_success(rate_limit_key)
@@ -507,7 +573,16 @@ def sudo_page(request: Request):
     )
 
 
-def sudo_submit(request: Request, password: str = Form(''), password_proof: str = Form(''), csrf_token: str = Form(''), next: str = Form('/')):
+def sudo_submit(
+    request: Request,
+    password: str = Form(''),
+    password_proof: str = Form(''),
+    csrf_token: str = Form(''),
+    key_id: str = Form(''),
+    envelope_token: str = Form(''),
+    encrypted_verifier: str = Form(''),
+    next: str = Form('/'),
+):
     enforce_same_origin_state_change(request)
     identity = session_identity(request)
     if identity is None:
@@ -521,13 +596,27 @@ def sudo_submit(request: Request, password: str = Form(''), password_proof: str 
         row = lookup_user_auth(str(identity['username']))
         if row is None:
             raise ValueError('invalid password proof')
-        verifier = str(row['password_hash'] or '').strip().lower()
-        if not _C.HEX_64_RE.fullmatch(verifier):
+        stored_hash = str(row['password_hash'] or '').strip().lower()
+        if not _C.HEX_64_RE.fullmatch(stored_hash):
             raise ValueError('invalid password proof')
         if not _C.HEX_64_RE.fullmatch(proof_value):
             raise ValueError('invalid password proof')
+        try:
+            verifier = password_envelope_store.consume(
+                scope='sudo-password',
+                username=str(identity['username']),
+                csrf_token=proof_token,
+                key_id=form_text(key_id),
+                envelope_token=form_text(envelope_token),
+                encrypted_verifier=form_text(encrypted_verifier),
+            )
+        except ValueError as exc:
+            raise ValueError('invalid password proof') from exc
         expected_proof = password_proof_from_verifier(proof_token, verifier)
         if not secrets.compare_digest(expected_proof, proof_value):
+            raise ValueError('invalid password proof')
+        expected_hash = password_verifier_storage_hash(verifier)
+        if not secrets.compare_digest(expected_hash, stored_hash):
             raise ValueError('invalid password proof')
         token = create_sudo_session_for_user(int(identity['user_id']), str(_C.SUDO_SCOPE_DESTRUCTIVE))
     except ValueError as exc:

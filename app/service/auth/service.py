@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.runtime_value import RuntimeValues
 from app.service.disk.auth_store import AuthStore
+from app.service.auth.password_hash import password_verifier_storage_hash
 
 
 class AuthService:
@@ -21,7 +22,7 @@ class AuthService:
     def set_user_password_verifier(self, user_id: int, verifier_hex: str, salt_hex: str, iterations: int) -> None:
         self._store.update_password_verifier(
             user_id=int(user_id),
-            verifier_hex=verifier_hex,
+            verifier_hex=password_verifier_storage_hash(verifier_hex),
             salt_hex=salt_hex,
             iterations=int(iterations),
         )
@@ -38,7 +39,7 @@ class AuthService:
     ) -> int:
         return self._store.create_user_with_password_verifier(
             username=username,
-            verifier_hex=verifier_hex,
+            verifier_hex=password_verifier_storage_hash(verifier_hex),
             salt_hex=salt_hex,
             iterations=int(iterations),
             email=email,
@@ -70,7 +71,7 @@ class AuthService:
             username=username,
             email=email,
             email_normalized=email_normalized,
-            verifier_hex=verifier_hex,
+            verifier_hex=password_verifier_storage_hash(verifier_hex),
             salt_hex=salt_hex,
             iterations=int(iterations),
             token_hash=token_hash,
@@ -97,7 +98,7 @@ class AuthService:
     ) -> int:
         return self._store.bootstrap_super_admin_with_password_verifier(
             username=username,
-            verifier_hex=verifier_hex,
+            verifier_hex=password_verifier_storage_hash(verifier_hex),
             salt_hex=salt_hex,
             iterations=int(iterations),
         )

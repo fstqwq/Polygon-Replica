@@ -62,6 +62,60 @@
     return false;
   }
 
+  function base64UrlToBytes(text) {
+    var normalized = String(text || "").replace(/-/g, "+").replace(/_/g, "/");
+    while (normalized.length % 4) normalized += "=";
+    var binary = window.atob(normalized);
+    var out = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  }
+
+  function bytesToBase64Url(bytes) {
+    var binary = "";
+    var data = new Uint8Array(bytes);
+    for (var i = 0; i < data.length; i += 1) {
+      binary += String.fromCharCode(data[i]);
+    }
+    return window
+      .btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
+  async function passwordEnvelope(scope, username, csrfToken, verifier) {
+    var qs = new URLSearchParams();
+    qs.set("scope", String(scope || ""));
+    qs.set("username", String(username || ""));
+    qs.set("csrf_token", String(csrfToken || ""));
+    var resp = await fetch("/auth/login-pubkey?" + qs.toString(), { credentials: "same-origin" });
+    if (!resp.ok) {
+      throw new Error("password envelope fetch failed");
+    }
+    var payload = await resp.json();
+    var publicKeyDer = base64UrlToBytes(payload.public_key || "");
+    var publicKey = await crypto.subtle.importKey(
+      "spki",
+      publicKeyDer,
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      false,
+      ["encrypt"]
+    );
+    var ciphertext = await crypto.subtle.encrypt(
+      { name: "RSA-OAEP" },
+      publicKey,
+      new TextEncoder().encode(String(verifier || ""))
+    );
+    return {
+      keyId: String(payload.key_id || ""),
+      envelopeToken: String(payload.envelope_token || ""),
+      encryptedVerifier: bytesToBase64Url(ciphertext),
+    };
+  }
+
   function generateStrongToken32() {
     if (!window.crypto || typeof window.crypto.getRandomValues !== "function" || typeof window.btoa !== "function") {
       throw new Error("secure random unavailable");
@@ -1852,7 +1906,10 @@
         var passwordEl = form.querySelector("input[name='password']");
         var csrfEl = form.querySelector("input[name='csrf_token']");
         var proofEl = form.querySelector("input[name='password_proof']");
-        if (!usernameEl || !passwordEl || !csrfEl || !proofEl) {
+        var keyIdEl = form.querySelector("input[name='key_id']");
+        var envelopeTokenEl = form.querySelector("input[name='envelope_token']");
+        var encryptedVerifierEl = form.querySelector("input[name='encrypted_verifier']");
+        if (!usernameEl || !passwordEl || !csrfEl || !proofEl || !keyIdEl || !envelopeTokenEl || !encryptedVerifierEl) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
@@ -1887,7 +1944,11 @@
         }
 
         var verifier = await pbkdf2Hex(password, salt, Math.floor(iters));
+        var envelope = await passwordEnvelope("login-password", username, csrfToken, verifier);
         proofEl.value = await sha256Hex(csrfToken + verifier);
+        keyIdEl.value = envelope.keyId;
+        envelopeTokenEl.value = envelope.envelopeToken;
+        encryptedVerifierEl.value = envelope.encryptedVerifier;
         passwordEl.value = await sha256Hex(csrfToken + password);
         form.dataset.passwordPrepared = "1";
         delete form.dataset.passwordPending;
@@ -1988,12 +2049,15 @@
         var currentSaltEl = form.querySelector("input[name='current_password_salt']");
         var currentItersEl = form.querySelector("input[name='current_password_iters']");
         var currentProofEl = form.querySelector("input[name='current_password_proof']");
+        var currentKeyIdEl = form.querySelector("input[name='current_password_key_id']");
+        var currentEnvelopeTokenEl = form.querySelector("input[name='current_password_envelope_token']");
+        var currentEncryptedVerifierEl = form.querySelector("input[name='current_password_encrypted_verifier']");
         var newSaltEl = form.querySelector("input[name='new_password_salt']");
         var newItersEl = form.querySelector("input[name='new_password_iters']");
         var newVerifierEl = form.querySelector("input[name='new_password_verifier']");
         var newProofEl = form.querySelector("input[name='new_password_proof']");
 
-        if (!currentEl || !nextEl || !confirmEl || !csrfEl || !currentSaltEl || !currentItersEl || !currentProofEl || !newSaltEl || !newItersEl || !newVerifierEl || !newProofEl) {
+        if (!currentEl || !nextEl || !confirmEl || !csrfEl || !currentSaltEl || !currentItersEl || !currentProofEl || !currentKeyIdEl || !currentEnvelopeTokenEl || !currentEncryptedVerifierEl || !newSaltEl || !newItersEl || !newVerifierEl || !newProofEl) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
@@ -2033,7 +2097,11 @@
 
         var currentVerifier = await pbkdf2Hex(currentPassword, currentSalt, Math.floor(currentIters));
         var nextVerifier = await pbkdf2Hex(nextPassword, newSalt, Math.floor(newIters));
+        var currentEnvelope = await passwordEnvelope("settings-password", "", csrfToken, currentVerifier);
         currentProofEl.value = await sha256Hex(csrfToken + currentVerifier);
+        currentKeyIdEl.value = currentEnvelope.keyId;
+        currentEnvelopeTokenEl.value = currentEnvelope.envelopeToken;
+        currentEncryptedVerifierEl.value = currentEnvelope.encryptedVerifier;
         newVerifierEl.value = nextVerifier;
         newProofEl.value = await sha256Hex(csrfToken + nextVerifier);
         currentEl.value = await sha256Hex(csrfToken + currentPassword);
@@ -2069,7 +2137,10 @@
         var saltEl = form.querySelector("input[name='password_salt']");
         var itersEl = form.querySelector("input[name='password_iters']");
         var proofEl = form.querySelector("input[name='password_proof']");
-        if (!passwordEl || !csrfEl || !saltEl || !itersEl || !proofEl) {
+        var keyIdEl = form.querySelector("input[name='key_id']");
+        var envelopeTokenEl = form.querySelector("input[name='envelope_token']");
+        var encryptedVerifierEl = form.querySelector("input[name='encrypted_verifier']");
+        if (!passwordEl || !csrfEl || !saltEl || !itersEl || !proofEl || !keyIdEl || !envelopeTokenEl || !encryptedVerifierEl) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
@@ -2093,7 +2164,11 @@
         }
 
         var verifier = await pbkdf2Hex(password, salt, Math.floor(iters));
+        var envelope = await passwordEnvelope("sudo-password", "", csrfToken, verifier);
         proofEl.value = await sha256Hex(csrfToken + verifier);
+        keyIdEl.value = envelope.keyId;
+        envelopeTokenEl.value = envelope.envelopeToken;
+        encryptedVerifierEl.value = envelope.encryptedVerifier;
         passwordEl.value = await sha256Hex(csrfToken + password);
         form.dataset.passwordPrepared = "1";
         delete form.dataset.passwordPending;

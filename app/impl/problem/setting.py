@@ -11,11 +11,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from app.impl.auth.session import create_session_for_user, revoke_sudo_sessions_for_user
 from app.impl.auth.shared import dummy_password_salt_hex, lookup_user_auth, normalize_password_iters, normalize_password_salt_hex, normalize_password_verifier_hex, redirect_response, set_user_password_verifier, template_response
 from app.impl.auth.csrf import issue_password_form_csrf_token, password_proof_from_verifier, verify_password_form_csrf_token
+from app.impl.auth.password_envelope import password_envelope_store
 from app.impl.runtime.config import config
 from app.impl.problem.shared import _as_bool_form_value, _settings_user_ctx, _system_config_row_by_key
 from app.impl.workspace.context_operation import audit, user_participating_problems
 from app.impl.workspace.access import is_system_admin_user_id, require_system_admin
 from app.main_util import form_text
+from app.service.auth.password_hash import password_verifier_storage_hash
 from app.service.verification.runtime import coerce_int
 
 _C = config.constants
@@ -354,7 +356,21 @@ def settings_system_config_reset(user: Annotated[str, Depends(require_session_us
     audit(ctx['user']['id'], None, 'system_config.reset', {})
     return redirect_response('/settings', status_code=303, message='system config reset to defaults; runtime keys reloaded, restart-marked keys need restart')
 
-def settings_password_update(user: Annotated[str, Depends(require_session_user)], current_password: str=Form(''), new_password: str=Form(''), new_password_confirm: str=Form(''), current_password_proof: str=Form(''), new_password_verifier: str=Form(''), new_password_proof: str=Form(''), csrf_token: str=Form(''), new_password_salt: str=Form(''), new_password_iters: str=Form('')):
+def settings_password_update(
+    user: Annotated[str, Depends(require_session_user)],
+    current_password: str=Form(''),
+    new_password: str=Form(''),
+    new_password_confirm: str=Form(''),
+    current_password_proof: str=Form(''),
+    current_password_key_id: str=Form(''),
+    current_password_envelope_token: str=Form(''),
+    current_password_encrypted_verifier: str=Form(''),
+    new_password_verifier: str=Form(''),
+    new_password_proof: str=Form(''),
+    csrf_token: str=Form(''),
+    new_password_salt: str=Form(''),
+    new_password_iters: str=Form(''),
+):
     row = lookup_user_auth(user)
     msg = 'password updated'
     response: RedirectResponse
@@ -371,13 +387,27 @@ def settings_password_update(user: Annotated[str, Depends(require_session_user)]
         new_iters_value = form_text(new_password_iters)
         if not verify_password_form_csrf_token(proof_token, 'settings-password'):
             raise ValueError('invalid password token')
-        stored_verifier = str(row['password_hash'] or '').strip().lower()
-        if not _C.HEX_64_RE.fullmatch(stored_verifier):
+        stored_hash = str(row['password_hash'] or '').strip().lower()
+        if not _C.HEX_64_RE.fullmatch(stored_hash):
             raise ValueError('current password is incorrect')
         if not _C.HEX_64_RE.fullmatch(current_proof_value):
             raise ValueError('current password is incorrect')
-        expected_current_proof = password_proof_from_verifier(proof_token, stored_verifier)
+        try:
+            current_verifier = password_envelope_store.consume(
+                scope='settings-password',
+                username=user,
+                csrf_token=proof_token,
+                key_id=form_text(current_password_key_id),
+                envelope_token=form_text(current_password_envelope_token),
+                encrypted_verifier=form_text(current_password_encrypted_verifier),
+            )
+        except ValueError as exc:
+            raise ValueError('current password is incorrect') from exc
+        expected_current_proof = password_proof_from_verifier(proof_token, current_verifier)
         if not secrets.compare_digest(expected_current_proof, current_proof_value):
+            raise ValueError('current password is incorrect')
+        expected_current_hash = password_verifier_storage_hash(current_verifier)
+        if not secrets.compare_digest(expected_current_hash, stored_hash):
             raise ValueError('current password is incorrect')
         new_verifier = normalize_password_verifier_hex(new_verifier_value)
         if not _C.HEX_64_RE.fullmatch(new_proof_value):
