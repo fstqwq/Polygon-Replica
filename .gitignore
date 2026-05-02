@@ -7,5 +7,6 @@ openspec/*
 migration-gates/*
 .*
 !.gitattributes
+!.dockerignore
 tmp/
 third_party/polygon-package-examples/contest/contest-41963.zip

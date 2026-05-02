@@ -25,7 +25,8 @@ This keeps authored problem files versioned while keeping generated PDFs, verifi
 
 ## Deployment
 
-For deployment, see [docs/deployment.md](docs/deployment.md).
+For deployment, see [docs/deployment.md](docs/deployment.md) (host install) or
+[docs/docker.md](docs/docker.md) (Docker Compose).
 
 DOMjudge judgedaemon workers can run anywhere with network access to the main app
 using the `domjudge/judgehost:latest` Docker image.
@@ -34,7 +35,7 @@ using the `domjudge/judgehost:latest` Docker image.
 
 Useful references:
 
-- [Deployment](docs/deployment.md)
+- [Deployment](docs/deployment.md) and [Docker deployment](docs/docker.md)
 - [Agent and contributor requirements](docs/AGENTS.md)
 - [System architecture](docs/architecture.md)
 - [Problem editing and workspace model](docs/problem-workflow.md)

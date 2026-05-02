@@ -2,6 +2,8 @@
 
 This document describes the production-style deployment flow for Polygon-Replica.
 
+For a containerized alternative, see [docker.md](docker.md).
+
 Scope:
 
 - install the web service on a Debian/Ubuntu host

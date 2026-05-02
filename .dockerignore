@@ -1,0 +1,23 @@
+.git
+.gitattributes
+.gitignore
+.github
+.venv
+.DS_Store
+**/__pycache__
+**/*.pyc
+**/*.pyo
+tests
+docs
+openspec
+migration-gates
+tmp
+var
+# Keep runtime-required third_party assets; drop the heavy example packages.
+third_party/icpc-package-examples
+third_party/polygon-package-examples
+*.md
+!app/**/*.md
+Dockerfile
+docker-compose.yml
+.dockerignore
