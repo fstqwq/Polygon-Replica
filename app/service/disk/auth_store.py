@@ -85,7 +85,9 @@ class AuthStore:
             """
             SELECT id,username,email,email_normalized,email_verified_at,password_hash,password_salt,password_iters
             FROM users
-            WHERE username=?
+            WHERE LOWER(username)=LOWER(?)
+            ORDER BY id ASC
+            LIMIT 1
             """,
             [safe_username],
         )
@@ -107,14 +109,14 @@ class AuthStore:
             """
             SELECT username,email_normalized
             FROM users
-            WHERE username=? OR (email_normalized<>'' AND email_normalized=?)
+            WHERE LOWER(username)=LOWER(?) OR (email_normalized<>'' AND email_normalized=?)
             LIMIT 1
             """,
             [username, email_normalized],
         )
         if row is None:
             return ""
-        if str(row["username"] or "") == username:
+        if str(row["username"] or "").strip().lower() == str(username or "").strip().lower():
             return "username"
         return "email"
 
@@ -158,6 +160,12 @@ class AuthStore:
         now_text = now_iso()
 
         def _tx(conn: sqlite3.Connection) -> int:
+            existing_username = conn.execute(
+                "SELECT 1 FROM users WHERE LOWER(username)=LOWER(?) LIMIT 1",
+                [username],
+            ).fetchone()
+            if existing_username is not None:
+                raise ValueError("user already exists")
             has_registered_user = (
                 conn.execute(
                     "SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1"
@@ -221,7 +229,10 @@ class AuthStore:
             )
             if has_registered_user:
                 raise ValueError("setup already completed")
-            existing_cursor = conn.execute("SELECT id,password_hash FROM users WHERE username=?", [username])
+            existing_cursor = conn.execute(
+                "SELECT id,username,password_hash FROM users WHERE LOWER(username)=LOWER(?) ORDER BY id ASC LIMIT 1",
+                [username],
+            )
             existing = existing_cursor.fetchone()
             if existing is None:
                 try:
@@ -412,7 +423,7 @@ class AuthStore:
                 """
                 SELECT username,email_normalized
                 FROM users
-                WHERE username=? OR (email_normalized<>'' AND email_normalized=?)
+                WHERE LOWER(username)=LOWER(?) OR (email_normalized<>'' AND email_normalized=?)
                 LIMIT 1
                 """,
                 [username, email_normalized],

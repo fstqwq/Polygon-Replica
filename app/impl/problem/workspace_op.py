@@ -30,10 +30,11 @@ def switch_workspace(
     try:
         if not raw_problem:
             raise ValueError('problem id is required')
+        problem_owner = active_user.lower()
         if "/" in raw_problem:
             safe_problem = raw_problem
         else:
-            safe_problem = f"{active_user}/{raw_problem}"
+            safe_problem = f"{problem_owner}/{raw_problem}"
         if len(safe_problem) > _C.PROBLEM_ID_MAX_LEN or not _C.PROBLEM_IDENT_RE.fullmatch(safe_problem):
             raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
         user_id = config.workspace_service.known_user_id(active_user)

@@ -585,6 +585,22 @@ class TestUIAuth(UIBaseSuite):
         long_messages = _flash_messages_from_response(too_long)
         self.assertTrue(any("invalid username" in item.lower() for item in long_messages))
 
+    def test_register_accepts_uppercase_username_and_login_lookup_is_case_insensitive(self) -> None:
+        username = "Qingyu"
+        password = "StrongPass123"
+
+        reg = _register_with_password_envelope(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        self.assertIn("/problems", reg.headers.get("location", ""))
+
+        stored = db_fetch_one("SELECT username FROM users WHERE username=?", [username])
+        self.assertIsNotNone(stored)
+        self.assertEqual(str(stored["username"] or ""), username)
+
+        login_lower = _login_with_password_envelope(username.lower(), password, next_path="/")
+        self.assertEqual(login_lower.status_code, 303)
+        self.assertIn("/problems", login_lower.headers.get("location", ""))
+
     def test_register_requires_terms_of_use_acceptance(self) -> None:
         username = self.random_id("terms")
         password = "StrongPass123"

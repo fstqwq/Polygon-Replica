@@ -1054,6 +1054,23 @@ class TestUIWorkspace(UIBaseSuite):
         ws = Path(workspace_service.ensure_workspace(f"{username}/{slug}", username))
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
+    def test_switch_workspace_lowercases_problem_owner_for_uppercase_username(self) -> None:
+        username = "Qingyu"
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        slug = f"ui-switch-upper-{uuid.uuid4().hex[:8]}"
+
+        resp = switch_workspace(
+            _request_with_cookie("/switch-workspace", auth_cookie),
+            problem=slug,
+            page="statement",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{username.lower()}/{slug}/statement", str(resp.headers.get("location", "")))
+        ws = Path(workspace_service.ensure_workspace(f"{username.lower()}/{slug}", username))
+        self.assertTrue(ws.exists())
+
     def test_statement_page_title_does_not_use_name_tex(self) -> None:
         username = self.random_id("stmtitle")
         password = "StrongPass123"

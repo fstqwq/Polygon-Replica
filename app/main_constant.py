@@ -54,11 +54,11 @@ PROBLEM_ID_RULE_MESSAGE = (
     "Examples: alice/books, team-7/minimal-spanning-tree"
 )
 USERNAME_RULE_MESSAGE = (
-    "invalid username. Use 3-16 lowercased characters, separated by dash. "
-    "Examples: alice, team-7, judge-admin"
+    "invalid username. Use 3-16 letters or digits, separated by dash. "
+    "Examples: alice, Qingyu, team-7, judge-admin"
 )
 
-USER_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+USER_IDENT_RE = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$")
 USERNAME_MIN_LEN = 3
 USERNAME_MAX_LEN = 16
 PROBLEM_IDENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$")

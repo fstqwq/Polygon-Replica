@@ -153,14 +153,17 @@ class WorkspaceDiskStore:
         return row
 
     def user_id_by_username(self, username: str) -> int | None:
-        row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
+        row = self.db.fetch_one(
+            "SELECT id FROM users WHERE LOWER(username)=LOWER(?) ORDER BY id ASC LIMIT 1",
+            [username],
+        )
         if row is None:
             return None
         return int(row["id"])
 
     def user_row_by_username(self, username: str) -> UserRow | None:
         row = self.db.fetch_one(
-            "SELECT id,username,created_at,is_system_admin FROM users WHERE username=?",
+            "SELECT id,username,created_at,is_system_admin FROM users WHERE LOWER(username)=LOWER(?) ORDER BY id ASC LIMIT 1",
             [username],
         )
         if row is None:
@@ -187,6 +190,9 @@ class WorkspaceDiskStore:
         }
 
     def ensure_user_row(self, username: str) -> UserRow:
+        existing = self.user_row_by_username(username)
+        if existing is not None:
+            return existing
         self.db.execute(
             "INSERT OR IGNORE INTO users(username, created_at) VALUES(?,?)",
             [username, now_iso()],
