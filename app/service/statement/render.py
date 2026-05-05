@@ -244,7 +244,14 @@ def _seed_polygon_statement_sources(workspace: Path) -> None:
     ensure_statement_language_sources(workspace, "english")
 
 
-def _render_polygon_statement(workspace: Path, statement_root: Path, problem_title: str | None = None, *, language: str) -> Path:
+def _render_polygon_statement(
+    workspace: Path,
+    statement_root: Path,
+    problem_title: str | None = None,
+    *,
+    language: str,
+    include_sample_tests: bool = True,
+) -> Path:
     template_text = _read_required_text(
         workspace / STATEMENT_TEMPLATE_REL,
         label=f"statement template ({STATEMENT_TEMPLATE_REL.as_posix()})",
@@ -260,7 +267,11 @@ def _render_polygon_statement(workspace: Path, statement_root: Path, problem_tit
         raise RuntimeError("statement language is required")
     rendered_lang_root = workspace / STATEMENT_RENDERED_DIR_REL / safe_language
     _prepare_statement_language_compile_tree(workspace, safe_language, rendered_lang_root)
-    sample_tests = _collect_sample_tests(workspace, rendered_lang_root)
+    sample_tests = (
+        _collect_sample_tests(workspace, rendered_lang_root)
+        if include_sample_tests
+        else []
+    )
     problem_ctx = _problem_context_for_language(
         workspace,
         safe_language,
@@ -340,6 +351,18 @@ def seed_statement_sources(workspace: Path) -> None:
     _seed_polygon_statement_sources(workspace)
 
 
-def render_statement_main(statement_root: Path, problem_title: str | None = None, *, language: str) -> Path:
+def render_statement_main(
+    statement_root: Path,
+    problem_title: str | None = None,
+    *,
+    language: str,
+    include_sample_tests: bool = True,
+) -> Path:
     workspace = statement_root.parent
-    return _render_polygon_statement(workspace, statement_root, problem_title=problem_title, language=language)
+    return _render_polygon_statement(
+        workspace,
+        statement_root,
+        problem_title=problem_title,
+        language=language,
+        include_sample_tests=include_sample_tests,
+    )

@@ -22,6 +22,7 @@ _PASSWORD_ENVELOPE_PURPOSE_SCOPES = {
     "sudo": "sudo-password",
     "settings-current": "settings-password",
     "settings-new": "settings-password",
+    "settings-admin-new": "settings-admin-password",
 }
 _ALLOWED_PASSWORD_ENVELOPE_SCOPES = set(_PASSWORD_ENVELOPE_PURPOSE_SCOPES.values())
 _PASSWORD_ENVELOPE_TTL_SEC = 30

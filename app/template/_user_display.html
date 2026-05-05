@@ -1,0 +1,12 @@
+{% macro render_username(username, viewer_is_system_admin=false, is_system_admin=false, use_code=false, extra_class='') -%}
+  {%- set safe_username = username|string -%}
+  {%- set classes = extra_class|string -%}
+  {%- if viewer_is_system_admin and is_system_admin -%}
+    {%- set classes = (classes ~ ' system-admin-username')|trim -%}
+  {%- endif -%}
+  {%- if use_code -%}
+    <code{% if classes %} class="{{ classes }}"{% endif %}>{{ safe_username }}</code>
+  {%- else -%}
+    <span{% if classes %} class="{{ classes }}"{% endif %}>{{ safe_username }}</span>
+  {%- endif -%}
+{%- endmacro %}

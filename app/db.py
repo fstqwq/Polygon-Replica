@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS users (
     password_iters INTEGER,
     password_updated_at TEXT,
     is_system_admin INTEGER NOT NULL DEFAULT 0,
+    is_banned INTEGER NOT NULL DEFAULT 0,
+    banned_at TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -509,6 +511,8 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "password_iters",
         "password_updated_at",
         "is_system_admin",
+        "is_banned",
+        "banned_at",
         "created_at",
     ),
     "auth_sessions": (
@@ -819,6 +823,7 @@ class DB:
         with sqlite3.connect(self.path) as conn:
             self._prepare_connection(conn)
             conn.executescript(SCHEMA)
+            self._apply_compat_migrations(conn)
             self._validate_existing_schema(conn)
             conn.executescript(SCHEMA_INDEXES)
             conn.commit()
@@ -831,6 +836,16 @@ class DB:
         self._install_sql_trace(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(f"PRAGMA busy_timeout={int(self.SQLITE_BUSY_TIMEOUT_MS)}")
+
+    def _apply_compat_migrations(self, conn: sqlite3.Connection) -> None:
+        user_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "is_banned" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0")
+        if "banned_at" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN banned_at TEXT")
 
     def _validate_existing_schema(self, conn: sqlite3.Connection) -> None:
         table_rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()

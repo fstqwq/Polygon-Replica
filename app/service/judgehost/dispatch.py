@@ -199,32 +199,15 @@ class DispatchHandler:
 
     def domjudge_register_host(self, hostname: str) -> list[dict[str, object]]:
         safe_host = self._core.normalize_hostname(hostname)
-        now_text = now_iso()
         self._queue._requeue_expired_leases(force=True)
         self._queue._record_host_event_conn(hostname=safe_host, action="register")
-        remap_seed = int(time.time() * 1000)
-        unfinished = self._s.judgehost_state_store.register_host_requeue(
-            safe_host,
-            now_text=now_text,
-            remap_seed=remap_seed,
-        )
-        if unfinished:
-            logger.warning(
-                "domjudge register_host host=%s unfinished_jobs=%s",
-                safe_host,
-                unfinished,
-            )
-        with self._s.state_lock:
-            for task in self._s.tasks_by_id.values():
-                if task.get("lease_owner") != safe_host:
-                    continue
-                if task.get("status") != self.STATUS_LEASED:
-                    continue
-                task["status"] = self.STATUS_QUEUED
-                task["lease_owner"] = ""
-                task["lease_expires_at"] = ""
-                task["updated_at"] = now_text
-        return unfinished
+        # judgedaemon calls /judgehosts periodically as a heartbeat. Treating
+        # re-registration as a hard reconnect and requeueing unfinished work
+        # here causes duplicate delivery of leased cases, which can wedge the
+        # daemon in a restart loop inside the same work_root. Real recovery
+        # from dead hosts is already handled by lease expiry and explicit host
+        # disable paths, so keep register_host idempotent.
+        return []
 
     def _domjudge_task_payload(self, task: dict[str, object]) -> tuple[str, str, dict[str, object]]:
         task_id = domjudge_text(task.get("task_id"))
@@ -510,7 +493,7 @@ class DispatchHandler:
             case_rows=case_rows,
         )
 
-    def _domjudge_append_grouped_task(self, job_id: int, task: dict[str, object]) -> None:
+    def _domjudge_append_task_to_job(self, job_id: int, task: dict[str, object]) -> None:
         task_id, run_id, payload = self._domjudge_task_payload(task)
         latest_task_row = self._core.task_by_id(task_id)
         if latest_task_row is not None:
@@ -547,7 +530,7 @@ class DispatchHandler:
             leased_task = self._queue._lease_matching_group_task(hostname=hostname, group_key=group_key)
             if leased_task is None:
                 break
-            self._domjudge_append_grouped_task(int(job_id), leased_task)
+            self._domjudge_append_task_to_job(int(job_id), leased_task)
             absorbed += 1
         return absorbed
 
@@ -916,6 +899,29 @@ class DispatchHandler:
         active = self._s.judgehost_state_store.active_job_for_host(safe_host)
         if active is not None:
             active_job_id = int(active["job_id"])
+            active_task_id = domjudge_text(active["task_id"])
+            active_task_row = self._core.task_by_id(active_task_id) if active_task_id else None
+            active_priority = (
+                self._queue._task_priority_for_row(active_task_row)
+                if active_task_row is not None
+                else self._queue._task_priority_rank(
+                    task_kind="",
+                    verification_source=active.get("verification_source"),
+                    compile_only=False,
+                )
+            )
+            preempt_active = self._queue._queued_higher_priority_exists(active_priority) or self._s.judgehost_state_store.higher_priority_pending_job_exists(
+                exclude_job_id=active_job_id,
+                priority_lt=active_priority,
+            )
+            if preempt_active:
+                now_text = now_iso()
+                self._queue._release_host_task_leases(safe_host, now_text=now_text)
+                self._s.judgehost_state_store.release_host_leases(safe_host, now_text=now_text)
+                self._queue._record_host_event_conn(hostname=safe_host, action="preempt")
+                active = None
+        if active is not None:
+            active_job_id = int(active["job_id"])
             active_group_key = domjudge_text(active["group_key"])
             if active_group_key:
                 self._domjudge_absorb_grouped_tasks(
@@ -945,6 +951,7 @@ class DispatchHandler:
                 return []
             leased_task = leased[0]
             task_id = domjudge_text(leased_task.get("task_id"))
+            run_id = domjudge_text(leased_task.get("run_id"))
             try:
                 leased_payload = cast(dict[str, object] | None, leased_task.get("payload")) or {}
                 group_key = domjudge_text(leased_payload.get("domjudge_group_key"))
@@ -956,7 +963,7 @@ class DispatchHandler:
                     )
                     if reuse_group_job:
                         active_job_id = int(existing_group_job["job_id"])
-                        self._domjudge_append_grouped_task(active_job_id, leased_task)
+                        self._domjudge_append_task_to_job(active_job_id, leased_task)
                     else:
                         active_job_id = self._domjudge_prepare_job(safe_host, leased_task, group_key=group_key)
                     self._domjudge_absorb_grouped_tasks(
@@ -965,10 +972,18 @@ class DispatchHandler:
                         group_key=group_key,
                     )
                 else:
-                    existing_job = self._s.judgehost_state_store.job_for_task(task_id) if task_id else None
-                    active_job_id = (
-                        int(existing_job["job_id"]) if existing_job is not None else self._domjudge_prepare_job(safe_host, leased_task)
-                    )
+                    existing_job = None
+                    if task_id:
+                        existing_job = self._s.judgehost_state_store.job_for_task(task_id)
+                    if existing_job is None and run_id:
+                        existing_job = self._s.judgehost_state_store.job_for_run(run_id)
+                    if existing_job is not None:
+                        active_job_id = int(existing_job["job_id"])
+                        existing_task_id = domjudge_text(existing_job.get("task_id"))
+                        if task_id and task_id != existing_task_id:
+                            self._domjudge_append_task_to_job(active_job_id, leased_task)
+                    else:
+                        active_job_id = self._domjudge_prepare_job(safe_host, leased_task)
             except Exception as exc:
                 error_text = str(exc)
                 if not error_text:

@@ -42,6 +42,9 @@ from app.impl.problem.setting import (
     settings_smtp_test,
     settings_smtp_update,
     settings_system_config_reset,
+    settings_user_ban_update,
+    settings_user_password_update,
+    settings_user_system_admin_update,
     settings_worker_queue_snapshot,
 )
 from app.impl.problem.solution import solutions_create_template, solutions_delete, solutions_editor_page, solutions_page, solutions_rename, solutions_save_source, solutions_set_tag
@@ -211,6 +214,21 @@ router.add_api_route(
 router.add_api_route(
     "/settings/password",
     settings_password_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/settings/users/system-admin",
+    settings_user_system_admin_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/settings/users/ban",
+    settings_user_ban_update,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/settings/users/password",
+    settings_user_password_update,
     methods=["POST"],
 )
 router.add_api_route(

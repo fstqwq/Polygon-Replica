@@ -198,14 +198,14 @@ class SmtpConfigService:
         sender = (
             credentials.username
             if "@" in credentials.username
-            else "polygon-replica@localhost"
+            else "qiulygon@localhost"
         )
         message = EmailMessage()
-        message["Subject"] = "Polygon-Replica email verification"
+        message["Subject"] = "qiulygon email verification"
         message["From"] = sender
         message["To"] = safe_recipient
         message.set_content(
-            "Confirm your Polygon-Replica registration with this verification code:\n\n"
+            "Confirm your qiulygon registration with this verification code:\n\n"
             f"{safe_code}\n\n"
             f"This code expires in {expiry_text}.\n\n"
             "If you did not request this account, ignore this email.\n"
@@ -223,13 +223,13 @@ class SmtpConfigService:
         sender = (
             credentials.username
             if "@" in credentials.username
-            else "polygon-replica@localhost"
+            else "qiulygon@localhost"
         )
         message = EmailMessage()
-        message["Subject"] = "Polygon-Replica SMTP test"
+        message["Subject"] = "qiulygon SMTP test"
         message["From"] = sender
         message["To"] = safe_recipient
-        message.set_content("This is a Polygon-Replica SMTP test email.\n")
+        message.set_content("This is a qiulygon SMTP test email.\n")
         try:
             self._send_message(credentials, message)
         except ValueError:

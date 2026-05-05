@@ -56,7 +56,16 @@ def _request_peer_addr(request: Request) -> str:
     client = request.client
     if client is None:
         return ""
-    return str(client.host or "").strip()
+    host = str(client.host or "").strip()
+    if not host:
+        return ""
+    try:
+        port = int(client.port or 0)
+    except Exception:
+        port = 0
+    if port > 0:
+        return f"{host}:{port}"
+    return host
 
 
 def _bind_request_peer(service, request: Request, hostname: str) -> None:

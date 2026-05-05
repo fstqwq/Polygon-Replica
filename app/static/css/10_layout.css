@@ -131,6 +131,10 @@
   font-weight: 700;
 }
 
+.system-admin-username {
+  color: rgb(255, 51, 204);
+}
+
 .main-menu {
   display: flex;
   flex-wrap: nowrap;

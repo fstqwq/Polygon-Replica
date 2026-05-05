@@ -26,7 +26,7 @@ SOLUTION_NOTE_CHAR_LIMIT = 4096
 AUTH_COOKIE_NAME = "polygonlike_session"
 AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 AUTH_COOKIE_SECURE = True
-AUTH_EMAIL_ALLOW_REGEX = r"^[a-z0-9_-]+@(?:gmail\.com|(?:[a-z0-9-]+\.)*sjtu\.edu\.cn)$"
+AUTH_EMAIL_ALLOW_REGEX = r"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 AUTH_REGISTER_PENDING_TTL_SEC = 30 * 60
 AUTH_REGISTER_SUBMIT_WINDOW_SEC = 60 * 60
 AUTH_REGISTER_SUBMIT_MAX = 20

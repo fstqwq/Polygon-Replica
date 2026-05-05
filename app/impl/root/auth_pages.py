@@ -96,6 +96,16 @@ def _request_user_agent(request: Request | None) -> str:
     return str(request.headers.get("user-agent") or "").strip()[:512]
 
 
+def _is_system_admin_auth_row(row: dict[str, object] | None) -> bool:
+    if row is None:
+        return False
+    try:
+        user_id = int(row["id"])
+    except Exception:
+        return False
+    return config.workspace_service.user_is_system_admin(user_id)
+
+
 def _normalize_registration_email(value: str) -> tuple[str, str]:
     email = form_text(value).strip()
     if any(ch in email for ch in ("\x00", "\r", "\n")):
@@ -267,6 +277,13 @@ def auth_password_envelope(
             if not current_user:
                 raise HTTPException(status_code=401, detail='login required')
             safe_username = current_user
+        elif safe_scope == 'settings-admin-password':
+            current_user = session_user(request)
+            if not current_user:
+                raise HTTPException(status_code=401, detail='login required')
+            current_row = lookup_user_auth(current_user)
+            if not _is_system_admin_auth_row(current_row):
+                raise HTTPException(status_code=403, detail='system admin required')
         payload = password_envelope_store.issue(
             scope=safe_scope,
             purpose=safe_purpose,
@@ -311,6 +328,9 @@ def login_submit(
         if row is None:
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')
+        if int(row.get('is_banned') or 0) == 1:
+            login_rate_limit_fail(rate_limit_key)
+            raise ValueError('account is banned')
         if not verify_password_form_csrf_token(password_csrf, 'login-password'):
             login_rate_limit_fail(rate_limit_key)
             raise ValueError('invalid username or password')

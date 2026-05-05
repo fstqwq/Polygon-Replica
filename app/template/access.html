@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_user_display.html" import render_username %}
 {% block content %}
 <h1 class="page-title">Manage Access</h1>
 {% include "_flash_message.html" %}
@@ -15,13 +16,13 @@
 
   <section>
     <h2>Problem Access</h2>
-    <p class="muted">Owners can grant/revoke <code>write/read</code> roles. Owner access is fixed and cannot be transferred. Target user must register first.</p>
+    <p class="muted">Owners and system admins can grant/revoke <code>write/read</code> roles. Owner access is fixed and cannot be transferred. Target user must register first.</p>
     {% if acl_entries %}
     <table class="table-base">
       <tr><th>User</th><th>Role</th><th>Granted</th><th>Actions</th></tr>
       {% for row in acl_entries %}
       <tr>
-        <td><code>{{ row.username }}</code></td>
+        <td>{{ render_username(row.username, viewer_is_system_admin=ctx.user.is_system_admin, is_system_admin=row.is_system_admin, use_code=true) }}</td>
         <td>{{ row.role }}</td>
         <td>{{ row.created_at | local_time }}</td>
         <td>
@@ -44,7 +45,7 @@
           </form>
           {% endif %}
           {% else %}
-          <span class="muted">owner only</span>
+          <span class="muted">owner or admin</span>
           {% endif %}
         </td>
       </tr>
@@ -66,7 +67,7 @@
       <button class="btn" type="submit">Grant / Update</button>
     </form>
     {% else %}
-    <p class="muted">Only owner can manage problem access.</p>
+    <p class="muted">Only owners and system admins can manage problem access.</p>
     {% endif %}
   </section>
 </div>

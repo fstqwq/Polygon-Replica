@@ -192,6 +192,8 @@ contests_root_page = _api_attr("contests_root_page")
 contest_access_grant = _api_attr("contest_access_grant")
 contest_access_page = _api_attr("contest_access_page")
 contest_access_revoke = _api_attr("contest_access_revoke")
+contest_access_sync_all = _api_attr("contest_access_sync_all")
+contest_access_sync_user = _api_attr("contest_access_sync_user")
 contest_overview_page = _api_attr("contest_overview_page")
 contest_packages_page = _api_attr("contest_packages_page")
 contest_packages_artifact_download = _api_attr("contest_packages_artifact_download")
@@ -214,6 +216,9 @@ solutions_rename = _api_attr("solutions_rename")
 solutions_delete = _api_attr("solutions_delete")
 solutions_set_tag = _api_attr("solutions_set_tag")
 settings_password_update = _api_attr("settings_password_update")
+settings_user_ban_update = _api_attr("settings_user_ban_update")
+settings_user_password_update = _api_attr("settings_user_password_update")
+settings_user_system_admin_update = _api_attr("settings_user_system_admin_update")
 settings_page = _api_attr("settings_page")
 settings_smtp_update = _api_attr("settings_smtp_update")
 settings_smtp_test = _api_attr("settings_smtp_test")
@@ -638,6 +643,32 @@ def _settings_password_update_with_envelope(user: str, current_password: str, ne
         current_password_key_id=current_envelope["key_id"],
         current_password_envelope_token=current_envelope["envelope_token"],
         current_password_encrypted_verifier=current_envelope["encrypted_verifier"],
+        new_password_key_id=new_envelope["key_id"],
+        new_password_envelope_token=new_envelope["envelope_token"],
+        new_password_encrypted_verifier=new_envelope["encrypted_verifier"],
+        csrf_token=csrf,
+        new_password_salt=new_salt,
+        new_password_iters=str(new_iters),
+    )
+
+
+def _settings_admin_password_update_with_envelope(actor_user: str, target_user: str, new_password: str):
+    csrf = issue_password_form_csrf_token("settings-admin-password")
+    new_salt = uuid.uuid4().hex
+    new_iters = int(config.constants.PASSWORD_HASH_ITERS)
+    new_verifier = _password_verifier_hex(new_password, new_salt, new_iters)
+    new_envelope = _password_envelope_fields_direct(
+        scope="settings-admin-password",
+        purpose="settings-admin-new",
+        username=target_user,
+        csrf_token=csrf,
+        verifier=new_verifier,
+    )
+    return settings_user_password_update(
+        user=actor_user,
+        target_username=target_user,
+        new_password="",
+        new_password_confirm="",
         new_password_key_id=new_envelope["key_id"],
         new_password_envelope_token=new_envelope["envelope_token"],
         new_password_encrypted_verifier=new_envelope["encrypted_verifier"],

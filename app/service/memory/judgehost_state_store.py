@@ -184,7 +184,15 @@ class JudgehostStateStore:
             SELECT j.*
             FROM judgehost_domjudge_jobs j
             WHERE j.lease_owner=? AND j.status IN ('leased','queued')
-            ORDER BY j.job_id ASC
+            ORDER BY
+              CASE
+                WHEN j.verification_source='compile.only' THEN 0
+                WHEN j.verification_source LIKE '%generate-input' THEN 1
+                WHEN j.verification_source='main-correct' THEN 2
+                WHEN j.verification_source LIKE 'sanity-check%' THEN 3
+                ELSE 10
+              END ASC,
+              j.job_id ASC
             LIMIT 1
             """,
             [hostname],
@@ -199,6 +207,11 @@ class JudgehostStateStore:
             WHERE (
                 (j.lease_owner=? AND j.status IN ('leased','queued'))
                 OR ((j.lease_owner IS NULL OR TRIM(j.lease_owner)='') AND j.status='queued')
+                OR (
+                    j.status='leased'
+                    AND COALESCE(j.compile_success, 0)=1
+                    AND COALESCE(TRIM(j.lease_owner), '')<>'prequeue-cache'
+                )
             )
               AND EXISTS (
                 SELECT 1
@@ -207,6 +220,13 @@ class JudgehostStateStore:
               )
             ORDER BY
               CASE WHEN j.lease_owner=? THEN 0 ELSE 1 END,
+              CASE
+                WHEN j.verification_source='compile.only' THEN 0
+                WHEN j.verification_source LIKE '%generate-input' THEN 1
+                WHEN j.verification_source='main-correct' THEN 2
+                WHEN j.verification_source LIKE 'sanity-check%' THEN 3
+                ELSE 10
+              END ASC,
               CASE WHEN j.status='leased' THEN 0 ELSE 1 END,
               j.created_at ASC,
               j.job_id ASC
@@ -215,6 +235,40 @@ class JudgehostStateStore:
             [hostname, hostname],
         )
         return rows[0] if rows else None
+
+    def higher_priority_pending_job_exists(self, *, exclude_job_id: int, priority_lt: int) -> bool:
+        row = self._fetch_one(
+            """
+            SELECT 1 AS found
+            FROM judgehost_domjudge_jobs j
+            WHERE j.job_id<>?
+              AND (
+                ((j.lease_owner IS NULL OR TRIM(j.lease_owner)='') AND j.status='queued')
+                OR (
+                    j.status='leased'
+                    AND COALESCE(j.compile_success, 0)=1
+                    AND COALESCE(TRIM(j.lease_owner), '')<>'prequeue-cache'
+                )
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM judgehost_domjudge_cases c
+                WHERE c.job_id=j.job_id AND c.status='pending'
+              )
+              AND (
+                CASE
+                  WHEN j.verification_source='compile.only' THEN 0
+                  WHEN j.verification_source LIKE '%generate-input' THEN 1
+                  WHEN j.verification_source='main-correct' THEN 2
+                  WHEN j.verification_source LIKE 'sanity-check%' THEN 3
+                  ELSE 10
+                END
+              ) < ?
+            LIMIT 1
+            """,
+            [int(exclude_job_id), int(priority_lt)],
+        )
+        return row is not None
 
     def cases_for_job(self, job_id: int, *, status: str | None = None) -> list[JudgehostCaseRow]:
         if status:
@@ -243,6 +297,10 @@ class JudgehostStateStore:
 
     def job_for_task(self, task_id: str) -> JudgehostJobRow | None:
         row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE task_id=? LIMIT 1", [task_id])
+        return None if row is None else row
+
+    def job_for_run(self, run_id: str) -> JudgehostJobRow | None:
+        row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE run_id=? LIMIT 1", [run_id])
         return None if row is None else row
 
     def job_for_group_key(self, group_key: str) -> JudgehostJobRow | None:

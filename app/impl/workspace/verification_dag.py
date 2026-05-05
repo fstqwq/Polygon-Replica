@@ -818,6 +818,7 @@ def run_workspace_verification_dag(
     snapshot_root_override: Path | None = None,
     selected_test_names: list[str] | None = None,
     force_recompile: bool = False,
+    skip_sanity: bool = False,
 ) -> None:
     workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
     if not workspace_path_text:
@@ -919,7 +920,10 @@ def run_workspace_verification_dag(
             available_test_names=list(execution_plan.test_names),
         )
         selected_test_plans = [execution_plan.test_plan_by_name[name] for name in test_names if name in execution_plan.test_plan_by_name]
-        sanity_checks, sanity_status = _sanity_plan_for_verification_kind(effective_kind, selected_test_plans)
+        if skip_sanity:
+            sanity_checks, sanity_status = ([], SANITY_SKIPPED)
+        else:
+            sanity_checks, sanity_status = _sanity_plan_for_verification_kind(effective_kind, selected_test_plans)
         graph = _build_graph(
             task_store=task_store,
             accepted_source_path=execution_plan.accepted_source_path,

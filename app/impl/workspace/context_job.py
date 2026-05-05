@@ -7,6 +7,7 @@ from app.impl.runtime.config import config
 from app.service.verification.types import Kind, Status
 from app.service.verification.runtime import normalize_pass_limit, normalize_problem_mode
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.problem.test_spec import load_tests_spec
 from app.service.verification.validation_status import build_validation_status
 
 from .context_job_helper import allocate_run_id, allocate_verification_id
@@ -256,7 +257,95 @@ def _export_workspace_key(problem_id: int, workspace_id: int, source_commit: str
     return f"{int(problem_id)}:{int(workspace_id)}:{effective_source_commit}:{export_type}"
 
 
-def _run_icpc_export_verification(
+def _icpc_test_ids(snapshot: Path) -> list[str]:
+    entries = load_tests_spec(snapshot / "tests" / "spec.json")
+    test_ids: list[str] = []
+    for row in entries:
+        test_id = str(row.get("id") or "").strip()
+        if test_id:
+            test_ids.append(test_id)
+    if not test_ids:
+        raise ValueError("ICPC export requires tests/spec.json entries")
+    return test_ids
+
+
+def _icpc_required_test_ids_for_commit(problem_id: int, workspace_id: int, source_commit: str) -> list[str]:
+    workspace_path_text = config.workspace_service.workspace_path(int(problem_id), int(workspace_id))
+    if not workspace_path_text:
+        raise ValueError("workspace metadata missing")
+    workspace = Path(workspace_path_text).resolve()
+    snapshot = config.workspace_service.create_snapshot(workspace, source_commit)
+    try:
+        return _icpc_test_ids(snapshot)
+    finally:
+        if snapshot.exists():
+            shutil.rmtree(snapshot.parent, ignore_errors=True)
+
+
+def _icpc_verification_has_complete_artifacts(
+    verification_id: str,
+    *,
+    problem_id: int,
+    workspace_id: int,
+    source_commit: str,
+    test_ids: list[str],
+) -> bool:
+    safe_verification_id = normalize_run_id_token(verification_id)
+    if not safe_verification_id or not test_ids:
+        return False
+    record = config.verification_service.verification_record(safe_verification_id)
+    if record is None:
+        return False
+    if int(record.get("problem_id") or 0) != int(problem_id):
+        return False
+    if int(record.get("workspace_id") or 0) != int(workspace_id):
+        return False
+    if str(record.get("source_commit") or "") != str(source_commit or ""):
+        return False
+    refs = config.verification_service.verification_artifact_refs(safe_verification_id)
+    for test_id in test_ids:
+        item = refs.get(f"{test_id}.in") or {}
+        input_ref = str(item.get("input_ref") or "")
+        answer_ref = str(item.get("answer_ref") or "")
+        if not input_ref:
+            return False
+        if not answer_ref:
+            return False
+        if config.verification_service.resolve_artifact_blob(input_ref) is None:
+            return False
+        if config.verification_service.resolve_artifact_blob(answer_ref) is None:
+            return False
+    return True
+
+
+def _find_reusable_icpc_verification(
+    *,
+    problem_id: int,
+    workspace_id: int,
+    source_commit: str,
+    test_ids: list[str],
+) -> str:
+    for row in config.verification_service.list_workspace_verification_rows(
+        int(problem_id),
+        int(workspace_id),
+        limit=80,
+        kinds=(Kind.ALL.value, Kind.CUSTOM.value),
+    ):
+        verification_id = str(row.get("id") or "")
+        if str(row.get("source_commit") or "") != str(source_commit or ""):
+            continue
+        if _icpc_verification_has_complete_artifacts(
+            verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            source_commit=source_commit,
+            test_ids=test_ids,
+        ):
+            return verification_id
+    return ""
+
+
+def _run_icpc_export_data_generation(
     problem: str,
     user: str,
     *,
@@ -272,7 +361,15 @@ def _run_icpc_export_verification(
     workspace = Path(workspace_path_text).resolve()
     snapshot = config.workspace_service.create_snapshot(workspace, source_commit)
     try:
-        targets, _accepted_source = build_full_verification_targets(snapshot)
+        targets, accepted_source = build_full_verification_targets(snapshot)
+        targets = [
+            target
+            for target in targets
+            if str(target.get("path") or "") == accepted_source
+            and normalize_expected_behavior(str(target.get("expected_behavior") or "accepted")) == "accepted"
+        ]
+        if not targets:
+            targets = [{"path": accepted_source, "expected_behavior": "accepted", "run_id": allocate_run_id()}]
         signature = _verification_sources_signature(snapshot)
         run_workspace_verification_dag(
             problem,
@@ -286,21 +383,70 @@ def _run_icpc_export_verification(
             verification_id=verification_id,
             signature=signature,
             source_commit=source_commit,
-            kind=Kind.ALL.value,
+            kind=Kind.CUSTOM.value,
             snapshot_root_override=snapshot,
+            skip_sanity=True,
         )
         snapshot = None
     finally:
         if snapshot is not None and snapshot.exists():
             shutil.rmtree(snapshot.parent, ignore_errors=True)
-    verification_row = config.verification_service.workspace_verification_detail(
-        int(problem_id),
-        int(workspace_id),
-        verification_id,
+
+
+def _prepare_icpc_export_verification(
+    problem: str,
+    user: str,
+    *,
+    actor_user_id: int,
+    problem_id: int,
+    workspace_id: int,
+    source_commit: str,
+    requested_verification_id: str,
+) -> str:
+    test_ids = _icpc_required_test_ids_for_commit(problem_id, workspace_id, source_commit)
+    safe_requested_verification_id = normalize_run_id_token(requested_verification_id)
+    if _icpc_verification_has_complete_artifacts(
+        safe_requested_verification_id,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        source_commit=source_commit,
+        test_ids=test_ids,
+    ):
+        return safe_requested_verification_id
+    reusable_verification_id = _find_reusable_icpc_verification(
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        source_commit=source_commit,
+        test_ids=test_ids,
     )
-    validation_status = build_validation_status(verification_row)
-    if validation_status != "validation passed":
-        raise ValueError(f"verification failed: {verification_id}")
+    if reusable_verification_id:
+        return reusable_verification_id
+
+    generated_verification_id = safe_requested_verification_id or allocate_verification_id()
+    _run_icpc_export_data_generation(
+        problem,
+        user,
+        actor_user_id=actor_user_id,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        source_commit=source_commit,
+        verification_id=generated_verification_id,
+    )
+    if not _icpc_verification_has_complete_artifacts(
+        generated_verification_id,
+        problem_id=problem_id,
+        workspace_id=workspace_id,
+        source_commit=source_commit,
+        test_ids=test_ids,
+    ):
+        verification_row = config.verification_service.workspace_verification_detail(
+            int(problem_id),
+            int(workspace_id),
+            generated_verification_id,
+        )
+        validation_status = build_validation_status(verification_row)
+        raise ValueError(f"ICPC export data generation failed: {generated_verification_id} ({validation_status})")
+    return generated_verification_id
 
 
 def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, problem_id: int, workspace_id: int, source_commit: str, requested_verification_id: str, requested_export_type: str, export_task_id: str = "") -> None:
@@ -317,15 +463,16 @@ def _run_export_create_worker(problem: str, user: str, *, actor_user_id: int, pr
         if not effective_source_commit:
             raise ValueError('no committed revision; commit changes first')
         if safe_export_type == "icpc":
-            _run_icpc_export_verification(
+            safe_requested_verification_id = _prepare_icpc_export_verification(
                 problem,
                 user,
                 actor_user_id=actor_user_id,
                 problem_id=problem_id,
                 workspace_id=workspace_id,
                 source_commit=effective_source_commit,
-                verification_id=safe_requested_verification_id,
+                requested_verification_id=safe_requested_verification_id,
             )
+            details['verification_id'] = safe_requested_verification_id
         out = config.export_service.create_export(
             problem,
             safe_requested_verification_id,

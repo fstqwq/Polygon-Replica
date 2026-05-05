@@ -922,6 +922,11 @@ class TestExport(SmokeBase):
             self.assertIn(f"output_validators/interactor/{interactor_name}", zf.namelist())
             self.assertIn("output_validators/interactor/testlib.h", zf.namelist())
             self.assertIn("output_validators/interactor/build", zf.namelist())
+            self.assertIn("data/secret/001.in", zf.namelist())
+            self.assertIn("data/secret/001.ans", zf.namelist())
+            self.assertEqual(zf.read("data/secret/001.ans"), b"")
+            self.assertNotIn("data/sample/001.in", zf.namelist())
+            self.assertNotIn("data/sample/001.ans", zf.namelist())
         self.assertTrue(archive.name.startswith(f"{Path(self.problem).name}-v"))
 
     def test_icpc_export_build_script_shell_quotes_interactor_filename(self) -> None:
@@ -940,6 +945,58 @@ class TestExport(SmokeBase):
             self.assertNotIn(
                 f"g++ -Wall -DDOMJUDGE -O2 {interactor_name} -std=gnu++20 -o run\n",
                 build_script,
+            )
+
+    def test_icpc_export_rejects_interactive_without_interactor_source(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        solution_rel = f"solutions/ac_no_interactor_{token}.cpp"
+        (ws / solution_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{solution_rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "config" / "problem.json").write_text(
+            json.dumps(
+                {
+                    "mode": "interactive",
+                    "pass_limit": 1,
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / "config" / "build.json").write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": solution_rel,
+                    "generator_sources": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [
+                solution_rel,
+                f"{solution_rel}.desc",
+                "config/problem.json",
+                "config/build.json",
+                *self._seed_export_tests(ws, "001"),
+            ],
+            f"test export missing interactor {token}",
+        )
+        with self.assertRaisesRegex(ValueError, "interactive export requires interactor source"):
+            export_service.create_export(
+                self.problem,
+                "",
+                "icpc",
+                workspace_id=int(workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["id"]),
+                source_commit=head,
             )
 
     def test_native_import_rejects_git_metadata_paths(self) -> None:

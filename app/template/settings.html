@@ -1,12 +1,13 @@
 {% extends "root_base.html" %}
 {% from "_component_dialogs.html" import ui_popup %}
+{% from "_user_display.html" import render_username %}
 {% block content %}
 <h1 class="page-title">Settings</h1>
 {% include "_flash_message.html" %}
 <div class="grid settings-grid">
   <section class="settings-account-panel">
     <h2>Account</h2>
-    <p><strong>User:</strong> <code>{{ user.username }}</code></p>
+    <p><strong>User:</strong> {{ render_username(user.username, viewer_is_system_admin=is_system_admin, is_system_admin=is_system_admin, use_code=true) }}</p>
     <p><a href="/agent/sessions">Connected Agents</a></p>
     <h3>Change Password</h3>
     <form id="settings-password-form" class="form-stack" method="post" action="/settings/password">
@@ -33,6 +34,127 @@
   {% if is_system_admin %}
   <section class="settings-admin-panel">
     <h2>System Admin Panel</h2>
+    <p class="muted">Active system admins: {{ active_system_admin_count }}</p>
+    <section class="info-card settings-admin-users-card">
+      <div class="settings-card-head">
+        <h3>User Administration</h3>
+      </div>
+      <p class="muted">System admins can grant admin access, ban accounts, reset passwords, and access every problem and contest.</p>
+      <form class="form-stack" method="get" action="/settings">
+        <div class="settings-inline-fields">
+          <div class="form-field-stack">
+            <label for="admin_users_query">Find Users</label>
+            <input
+              id="admin_users_query"
+              name="admin_users_query"
+              type="text"
+              value="{{ admin_users_query }}"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="username or email"
+            />
+          </div>
+        </div>
+        <div class="form-row form-row-actions">
+          <button class="btn" type="submit">Search Users</button>
+        </div>
+      </form>
+      {% if admin_user_rows %}
+      <table class="table-base settings-admin-user-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in admin_user_rows %}
+          <tr>
+            <td>
+              {{ render_username(row.username, viewer_is_system_admin=is_system_admin, is_system_admin=row.is_system_admin, use_code=true) }}
+            </td>
+            <td>{% if row.email %}<code>{{ row.email }}</code>{% else %}<span class="muted">-</span>{% endif %}</td>
+            <td>
+              {% if row.is_banned %}
+              <span class="danger">banned</span>
+              {% elif row.is_registered %}
+              active
+              {% else %}
+              <span class="muted">placeholder</span>
+              {% endif %}
+            </td>
+            <td>{% if row.created_at %}{{ row.created_at | local_time }}{% else %}<span class="muted">-</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted">
+        Showing first {{ admin_user_rows|length }} {% if admin_users_query %}matching{% else %}recent{% endif %}
+        {% if admin_user_rows|length == 1 %}user{% else %}users{% endif %}.
+      </p>
+      {% else %}
+      <p class="muted">No users matched the current filter.</p>
+      {% endif %}
+      <form class="form-stack" method="post" action="/settings/users/system-admin">
+        <div class="settings-inline-fields">
+          <div class="form-field-stack">
+            <label for="admin_target_username">Username</label>
+            <input id="admin_target_username" name="target_username" type="text" autocomplete="username" spellcheck="false" />
+          </div>
+          <div class="form-field-stack">
+            <label for="admin_action">System Admin</label>
+            <select id="admin_action" name="action">
+              <option value="grant">Grant</option>
+              <option value="revoke">Revoke</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row form-row-actions">
+          <button class="btn" type="submit">Update Admin Role</button>
+        </div>
+      </form>
+      <form class="form-stack" method="post" action="/settings/users/ban">
+        <div class="settings-inline-fields">
+          <div class="form-field-stack">
+            <label for="ban_target_username">Username</label>
+            <input id="ban_target_username" name="target_username" type="text" autocomplete="username" spellcheck="false" />
+          </div>
+          <div class="form-field-stack">
+            <label for="ban_action">Account Status</label>
+            <select id="ban_action" name="action">
+              <option value="ban">Ban</option>
+              <option value="unban">Unban</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row form-row-actions">
+          <button class="btn" type="submit">Update Ban Status</button>
+        </div>
+      </form>
+      <form id="settings-admin-password-form" class="form-stack" method="post" action="/settings/users/password">
+        <div class="settings-inline-fields">
+          <div class="form-field-stack">
+            <label for="admin_password_target_username">Username</label>
+            <input id="admin_password_target_username" name="target_username" type="text" autocomplete="username" spellcheck="false" />
+          </div>
+        </div>
+        <label for="admin_new_password">New Password</label>
+        <input id="admin_new_password" name="new_password" type="password" autocomplete="new-password" />
+        <label for="admin_new_password_confirm">Confirm New Password</label>
+        <input id="admin_new_password_confirm" name="new_password_confirm" type="password" autocomplete="new-password" />
+        <input type="hidden" name="csrf_token" value="{{ admin_password_csrf_token }}" />
+        <input type="hidden" name="new_password_salt" value="{{ admin_password_salt }}" />
+        <input type="hidden" name="new_password_iters" value="{{ admin_password_iters }}" />
+        <input type="hidden" name="new_password_key_id" value="" />
+        <input type="hidden" name="new_password_envelope_token" value="" />
+        <input type="hidden" name="new_password_encrypted_verifier" value="" />
+        <div class="form-row form-row-actions">
+          <button class="btn" type="submit">Reset User Password</button>
+        </div>
+      </form>
+    </section>
     <p class="muted">Edit runtime config with defaults from <code>app/main_constant.py</code>. Runtime keys apply immediately; restart-marked keys apply after service restart.</p>
     <p class="muted">Worker queue snapshot JSON: <a href="/settings/worker-queue" target="_blank" rel="noopener">open endpoint</a></p>
     <p class="muted">Judgehost snapshot JSON: <a href="/settings/judgehost" target="_blank" rel="noopener">open endpoint</a></p>

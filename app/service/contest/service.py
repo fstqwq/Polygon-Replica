@@ -29,6 +29,7 @@ class ContestMemberEntry(TypedDict):
     username: str
     role: str
     created_at: str
+    is_system_admin: int
 
 
 class ContestMembership(TypedDict):
@@ -113,7 +114,7 @@ class ContestVerificationStage(TypedDict):
 
 
 class ContestService:
-    _ACCESS_ROLES = {"owner", "write", "read"}
+    _ACCESS_ROLES = {"admin", "owner", "write", "read"}
     _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
     _STATEMENT_SOURCE_FOLDERS_KEY = "statement_source_folders"
     _LOCATION_KEY = "location"
@@ -270,7 +271,11 @@ class ContestService:
 
     def user_contests_overview(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
-        for row in self._store.user_contest_rows(int(user_id), limit=max(1, int(limit))):
+        if self._store.is_system_admin(int(user_id)):
+            rows = self._store.all_contest_rows(int(user_id), limit=max(1, int(limit)))
+        else:
+            rows = self._store.user_contest_rows(int(user_id), limit=max(1, int(limit)))
+        for row in rows:
             problem_count = max(0, int(row["problem_count"]))
             dirty_problem_count = max(0, int(row["dirty_problem_count"]))
             items.append(
@@ -340,6 +345,16 @@ class ContestService:
         }
 
     def access_context(self, contest_id: int, user_id: int) -> ContestAccessContext:
+        if self._store.is_system_admin(int(user_id)):
+            return {
+                "role": "admin",
+                "can_read": True,
+                "can_write": True,
+                "can_manage": True,
+                "read_block_reason": "",
+                "write_block_reason": "",
+                "manage_block_reason": "",
+            }
         role = self._store.contest_role(int(contest_id), int(user_id))
         if role is None:
             return {
@@ -349,18 +364,18 @@ class ContestService:
                 "can_manage": False,
                 "read_block_reason": "you do not have access to this contest",
                 "write_block_reason": "write access required",
-                "manage_block_reason": "owner access required",
+                "manage_block_reason": "owner or admin access required",
             }
         safe_role = self._normalize_role(role)
-        can_write = safe_role in {"owner", "write"}
+        can_write = safe_role in {"admin", "owner", "write"}
         return {
             "role": safe_role,
             "can_read": True,
             "can_write": can_write,
-            "can_manage": safe_role == "owner",
+            "can_manage": safe_role in {"admin", "owner"},
             "read_block_reason": "",
             "write_block_reason": "" if can_write else "read-only access",
-            "manage_block_reason": "" if safe_role == "owner" else "owner access required",
+            "manage_block_reason": "" if safe_role in {"admin", "owner"} else "owner or admin access required",
         }
 
     def owner_count(self, contest_id: int) -> int:
@@ -377,6 +392,7 @@ class ContestService:
                     "username": str(row["username"]),
                     "role": self._normalize_role(str(row["role"])),
                     "created_at": str(row["created_at"]),
+                    "is_system_admin": int(row["is_system_admin"] or 0),
                 }
             )
         return result

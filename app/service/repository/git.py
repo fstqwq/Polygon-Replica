@@ -352,6 +352,19 @@ class GitService:
             raise RuntimeError("unable to resolve committed head")
         return resolved_head
 
+    def _sync_local_origin_head(self, workspace: Path, branch: str) -> None:
+        branch_name = str(branch or "").strip() or "main"
+        remote_url_proc = run_git(["git", "-C", str(workspace), "remote", "get-url", "origin"])
+        if remote_url_proc.returncode != 0:
+            return
+        remote_url = remote_url_proc.stdout.strip()
+        if not remote_url:
+            return
+        remote_path = Path(remote_url)
+        if not remote_path.is_absolute() or (not remote_path.exists()) or (not remote_path.is_dir()):
+            return
+        run_git(["git", "--git-dir", str(remote_path), "symbolic-ref", "HEAD", f"refs/heads/{branch_name}"])
+
     def rollback_last_commit(self, workspace: Path, expected_head: str = "") -> str:
         if self._rebase_active(workspace):
             raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
@@ -381,6 +394,7 @@ class GitService:
         proc = run_git(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
+        self._sync_local_origin_head(workspace, branch)
         return proc.stdout + proc.stderr
 
     def _status_entries(self, workspace: Path) -> list[dict[str, str]]:

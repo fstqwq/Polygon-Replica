@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-from app.impl.contest.access import contest_access_grant, contest_access_page, contest_access_revoke
+from app.impl.contest.access import contest_access_grant, contest_access_page, contest_access_revoke, contest_access_sync_all, contest_access_sync_user
 from app.impl.contest.overview import contest_overview_page
 from app.impl.contest.package import contest_packages_artifact_download, contest_packages_build_start, contest_packages_job_status, contest_packages_page, contest_packages_preview_start
 from app.impl.contest.problem import contest_problems_add, contest_problems_change_general, contest_problems_page, contest_problems_remove, contest_problems_remove_selected, contest_problems_renumber, contest_problems_reorder
@@ -90,6 +90,18 @@ router.add_api_route(
 router.add_api_route(
     "/contests/{contest}/access/revoke",
     contest_access_revoke,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/access/sync-user",
+    contest_access_sync_user,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/access/sync-all",
+    contest_access_sync_all,
     methods=["POST"],
 )
 

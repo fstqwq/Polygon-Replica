@@ -1,6 +1,6 @@
 {% extends "auth_base.html" %}
 {% from "_terms_of_use.html" import terms_of_use_link %}
-{% block auth_page_title %}Polygon-Replica Register{% endblock %}
+{% block auth_page_title %}qiulygon Register{% endblock %}
 {% block auth_title %}Create Account{% endblock %}
 {% block auth_subtitle %}Register with username and password.{% endblock %}
 
@@ -9,7 +9,7 @@
   <label for="username">Username</label>
   <input id="username" name="username" minlength="3" maxlength="16" placeholder="user-name" autofocus />
   <label for="email">Email</label>
-  <input id="email" name="email" type="email" autocomplete="email" placeholder="name@gmail.com or name@sjtu.edu.cn" required />
+  <input id="email" name="email" type="email" autocomplete="email" placeholder="name@example.com" required />
   <label for="password">Password</label>
   <input id="password" name="password" type="password" autocomplete="new-password" placeholder="password (minimum 8 characters)" />
   <label for="password_confirm">Confirm Password</label>

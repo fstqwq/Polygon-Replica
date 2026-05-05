@@ -1,4 +1,4 @@
-"""ASGI entry point for the Polygon Replica web application."""
+"""ASGI entry point for the qiulygon web application."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ async def lifespan(_app: FastAPI):
         auth_shutdown()
 
 
-app = FastAPI(title="Polygonlike", lifespan=lifespan)
+app = FastAPI(title="qiulygon", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 

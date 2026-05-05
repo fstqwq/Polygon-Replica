@@ -29,11 +29,83 @@ class TaskQueue:
     STATUS_FAILED = "failed"
     STATUS_REPORTING = "reporting"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
+    _TASK_KIND_GENERATE_INPUT = "generate-input"
+    _TASK_KIND_COMPILE_ONLY = "compile-only"
 
     def __init__(self, state: JudgehostState, core: JudgehostCore, toolkit: DomjudgeToolkit) -> None:
         self._s = state
         self._core = core
         self._toolkit = toolkit
+
+    @classmethod
+    def _task_priority_rank(
+        cls,
+        *,
+        task_kind: object,
+        verification_source: object,
+        compile_only: object,
+    ) -> int:
+        safe_task_kind = str(task_kind or "").strip().lower()
+        safe_source = str(verification_source or "").strip().lower()
+        compile_only_flag = bool(compile_only)
+        if compile_only_flag or safe_task_kind == cls._TASK_KIND_COMPILE_ONLY or safe_source == "compile.only":
+            return 0
+        if safe_task_kind == cls._TASK_KIND_GENERATE_INPUT or safe_source.endswith("generate-input"):
+            return 1
+        if safe_task_kind == cls._TASK_KIND_MAIN_CORRECT or safe_source == cls._TASK_KIND_MAIN_CORRECT:
+            return 2
+        if safe_source.startswith("sanity-check"):
+            return 3
+        return 10
+
+    @classmethod
+    def _task_priority_for_payload(cls, payload: dict[str, object] | None) -> int:
+        safe_payload = {} if payload is None else dict(payload)
+        return cls._task_priority_rank(
+            task_kind=safe_payload.get("task_kind"),
+            verification_source=safe_payload.get("verification_source"),
+            compile_only=safe_payload.get("compile_only"),
+        )
+
+    @classmethod
+    def _task_priority_for_row(cls, row: dict[str, object]) -> int:
+        payload = row.get("payload")
+        if isinstance(payload, dict):
+            return cls._task_priority_for_payload(payload)
+        return cls._task_priority_rank(task_kind="", verification_source="", compile_only=False)
+
+    @classmethod
+    def _queued_task_sort_key(cls, row: dict[str, object]) -> tuple[int, str, str]:
+        return (
+            cls._task_priority_for_row(row),
+            str(row.get("created_at") or ""),
+            str(row.get("id") or ""),
+        )
+
+    def _queued_higher_priority_exists(self, current_priority: int) -> bool:
+        with self._s.state_lock:
+            for task in self._s.tasks_by_id.values():
+                if task["status"] != self.STATUS_QUEUED:
+                    continue
+                if self._task_priority_for_row(task) < int(current_priority):
+                    return True
+        return False
+
+    def _release_host_task_leases(self, hostname: str, *, now_text: str) -> int:
+        released_tasks = 0
+        with self._s.state_lock:
+            for task in self._s.tasks_by_id.values():
+                if task["lease_owner"] != hostname:
+                    continue
+                task_status = task["status"]
+                if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+                    continue
+                task["status"] = self.STATUS_QUEUED
+                task["lease_owner"] = ""
+                task["lease_expires_at"] = ""
+                task["updated_at"] = now_text
+                released_tasks += 1
+        return released_tasks
 
     def _run_ids_with_leased_cases(self, run_ids: list[str]) -> set[str]:
         progress = self._s.judgehost_state_store.case_progress_for_runs(run_ids)
@@ -60,7 +132,7 @@ class TaskQueue:
                 if task["status"] == self.STATUS_QUEUED
                 and str((task.get("payload") or {}).get("domjudge_group_key") or "") == safe_group_key
             ]
-            queued.sort(key=lambda item: item["created_at"])
+            queued.sort(key=self._queued_task_sort_key)
             if not queued:
                 return None
             task = queued[0]
@@ -166,7 +238,7 @@ class TaskQueue:
                     for task in self._s.tasks_by_id.values()
                     if task["status"] == self.STATUS_QUEUED
                 ]
-                queued.sort(key=lambda item: item["created_at"])
+                queued.sort(key=self._queued_task_sort_key)
                 lease_until = now_iso_after(self._s.lease_sec)
                 now_text = now_iso()
                 for task in queued[:1]:
@@ -739,17 +811,7 @@ class TaskQueue:
                 "update_count": int(current_row.get("update_count") or 0) + 1,
             }
             if not enabled:
-                for task in self._s.tasks_by_id.values():
-                    if task["lease_owner"] != hostname:
-                        continue
-                    task_status = task["status"]
-                    if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                        continue
-                    task["status"] = self.STATUS_QUEUED
-                    task["lease_owner"] = ""
-                    task["lease_expires_at"] = ""
-                    task["updated_at"] = now_text
-                    released_tasks += 1
+                released_tasks = self._release_host_task_leases(hostname, now_text=now_text)
         released_jobs = 0
         released_cases = 0
         if not enabled:

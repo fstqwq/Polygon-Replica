@@ -444,8 +444,10 @@ def _run_problem_general_update(
         )
         with config.workspace_service.workspace_lock(workspace):
             has_head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
+            if not has_head:
+                raise RuntimeError("bulk TL/ML update requires an initialized repository; create the initial commit first")
             before = config.git_service.status_change_summary(workspace, limit=1)
-            if int(before.get("total", 0)) > 0 and has_head:
+            if int(before.get("total", 0)) > 0:
                 raise RuntimeError("workspace has uncommitted changes")
             payload, general_cfg, cfg_path = read_problem_config(workspace)
             safe_mode = normalize_problem_mode(general_cfg.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))

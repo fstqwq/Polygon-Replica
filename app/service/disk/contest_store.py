@@ -20,6 +20,7 @@ class ContestMemberRecord(TypedDict):
     username: str
     role: str
     created_at: str
+    is_system_admin: int
 
 
 class ContestPropertyRecord(TypedDict):
@@ -133,6 +134,53 @@ class ContestDiskStore:
         )
         return [dict(row) for row in rows]
 
+    def all_contest_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
+        rows = self.db.fetch_all(
+            """
+            SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,'admin' AS role,
+                   MAX(
+                       c.created_at,
+                       COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),
+                       COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),
+                       COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),
+                       COALESCE((
+                           SELECT MAX(w2.updated_at)
+                           FROM contest_problems cp2
+                           JOIN workspaces w2 ON w2.problem_id=cp2.problem_id AND w2.user_id=?
+                           WHERE cp2.contest_id=c.id
+                       ), '')
+                   ) AS last_updated_at,
+                   (
+                       SELECT COUNT(*)
+                       FROM contest_problems cp
+                       WHERE cp.contest_id=c.id
+                   ) AS problem_count,
+                   (
+                       SELECT group_concat(x.slug, ', ')
+                       FROM (
+                           SELECT p.slug AS slug
+                           FROM contest_problems cp
+                           JOIN problems p ON p.id=cp.problem_id
+                           WHERE cp.contest_id=c.id
+                           ORDER BY p.slug ASC
+                           LIMIT 5
+                       ) x
+                   ) AS problem_slugs_preview,
+                   (
+                       SELECT COUNT(*)
+                       FROM contest_problems cp3
+                       JOIN workspaces w ON w.problem_id=cp3.problem_id AND w.user_id=?
+                       WHERE cp3.contest_id=c.id
+                         AND COALESCE(w.dirty, 0) <> 0
+                   ) AS dirty_problem_count
+            FROM contests c
+            ORDER BY last_updated_at DESC, c.slug ASC
+            LIMIT ?
+            """,
+            [int(user_id), int(user_id), max(1, int(limit))],
+        )
+        return [dict(row) for row in rows]
+
     def contest_slug_exists(self, contest_slug: str) -> bool:
         row = self.db.fetch_one("SELECT id FROM contests WHERE slug=?", [contest_slug])
         return row is not None
@@ -214,7 +262,7 @@ class ContestDiskStore:
     def member_entries(self, contest_id: int) -> list[ContestMemberRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT u.username,m.role,m.created_at
+            SELECT u.username,m.role,m.created_at,COALESCE(u.is_system_admin, 0) AS is_system_admin
             FROM contest_members m
             JOIN users u ON u.id=m.user_id
             WHERE m.contest_id=?
@@ -227,7 +275,10 @@ class ContestDiskStore:
         return [dict(row) for row in rows]
 
     def user_id_by_username(self, username: str) -> int | None:
-        row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
+        row = self.db.fetch_one(
+            "SELECT id FROM users WHERE LOWER(username)=LOWER(?) ORDER BY id ASC LIMIT 1",
+            [username],
+        )
         if row is None:
             return None
         return int(row["id"])
@@ -248,11 +299,17 @@ class ContestDiskStore:
             SELECT u.id AS user_id,m.role
             FROM contest_members m
             JOIN users u ON u.id=m.user_id
-            WHERE m.contest_id=? AND u.username=?
+            WHERE m.contest_id=? AND LOWER(u.username)=LOWER(?)
             """,
             [int(contest_id), username],
         )
         return None if row is None else dict(row)
+
+    def is_system_admin(self, user_id: int) -> bool:
+        row = self.db.fetch_one("SELECT is_system_admin FROM users WHERE id=?", [int(user_id)])
+        if row is None:
+            return False
+        return int(row["is_system_admin"] or 0) == 1
 
     def revoke_member(self, contest_id: int, user_id: int) -> None:
         self.db.execute(
@@ -353,22 +410,41 @@ class ContestDiskStore:
         return items
 
     def available_problem_rows(self, contest_id: int, user_id: int, *, limit: int) -> list[ContestAvailableProblemRecord]:
-        rows = self.db.fetch_all(
-            """
-            SELECT p.id AS problem_id,p.slug AS problem_slug,a.role
-            FROM repo_acl a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE a.user_id=?
-              AND p.id NOT IN (
-                  SELECT cp.problem_id
-                  FROM contest_problems cp
-                  WHERE cp.contest_id=?
-              )
-            ORDER BY p.slug ASC
-            LIMIT ?
-            """,
-            [int(user_id), int(contest_id), max(1, int(limit))],
-        )
+        safe_contest_id = int(contest_id)
+        safe_user_id = int(user_id)
+        safe_limit = max(1, int(limit))
+        if self.is_system_admin(safe_user_id):
+            rows = self.db.fetch_all(
+                """
+                SELECT p.id AS problem_id,p.slug AS problem_slug,'admin' AS role
+                FROM problems p
+                WHERE p.id NOT IN (
+                    SELECT cp.problem_id
+                    FROM contest_problems cp
+                    WHERE cp.contest_id=?
+                )
+                ORDER BY p.slug ASC
+                LIMIT ?
+                """,
+                [safe_contest_id, safe_limit],
+            )
+        else:
+            rows = self.db.fetch_all(
+                """
+                SELECT p.id AS problem_id,p.slug AS problem_slug,a.role
+                FROM repo_acl a
+                JOIN problems p ON p.id=a.problem_id
+                WHERE a.user_id=?
+                  AND p.id NOT IN (
+                      SELECT cp.problem_id
+                      FROM contest_problems cp
+                      WHERE cp.contest_id=?
+                  )
+                ORDER BY p.slug ASC
+                LIMIT ?
+                """,
+                [safe_user_id, safe_contest_id, safe_limit],
+            )
         items: list[ContestAvailableProblemRecord] = []
         for row in rows:
             safe_slug = str(row["problem_slug"] or "")

@@ -108,6 +108,44 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertTrue(auth_token)
         return f"{AUTH_COOKIE_NAME}={auth_token}"
 
+    def test_system_admin_can_view_and_manage_all_problems(self) -> None:
+        problem = f"bob/admin-problem-{uuid.uuid4().hex[:8]}"
+        target_user = self.random_id("pread")
+        workspace_service.ensure_user(target_user)
+        workspace_service.ensure_problem(problem)
+        workspace_service.grant_repo_access(problem, "bob", "owner")
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+
+        root_page = problems_root_page(_request("/problems"), user="alice")
+        self.assertEqual(root_page.status_code, 200)
+        root_html = root_page.body.decode("utf-8", errors="replace")
+        self.assertIn(problem, root_html)
+        admin_access = workspace_service.access_context(
+            workspace_service.known_problem_id(problem),
+            workspace_service.known_user_id("alice"),
+        )
+        self.assertEqual(admin_access["role"], "admin")
+        self.assertTrue(admin_access["can_manage"])
+
+        admin_page = workspace_page(_request(f"/problems/{problem}/workspace"), problem, "alice")
+        self.assertEqual(admin_page.status_code, 200)
+
+        grant = workspace_access_grant(problem, "alice", target_user=target_user, role="read")
+        self.assertEqual(grant.status_code, 303)
+        acl_row = db_fetch_one(
+            """
+            SELECT role
+            FROM repo_acl
+            WHERE problem_id=(SELECT id FROM problems WHERE slug=?)
+              AND user_id=(SELECT id FROM users WHERE LOWER(username)=LOWER(?))
+            """,
+            [problem, target_user],
+        )
+        self.assertIsNotNone(acl_row)
+        self.assertEqual(str(acl_row["role"] or ""), "read")
+
     def test_workspace_delete_requires_sudo_then_deletes_copy(self) -> None:
         username = self.random_id("wsdel")
         password = "StrongPass123"
@@ -950,6 +988,26 @@ class TestUIWorkspace(UIBaseSuite):
         )
         self.assertIsNone(removed)
 
+    def test_problem_access_page_only_colors_system_admin_usernames_for_system_admin_viewers(self) -> None:
+        target = self.random_id("wsadmin")
+        self.assertEqual(_register_with_password_envelope(target, "StrongPass123", next_path="/").status_code, 303)
+        workspace_access_grant(problem="alice/sample", user="alice", target_user=target, role="read")
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", [target])
+        workspace_service.clear_identity_caches()
+
+        owner_page = access_page(_request("/problems/alice/sample/access"), "alice/sample", "alice")
+        self.assertEqual(owner_page.status_code, 200)
+        owner_html = owner_page.body.decode("utf-8", errors="replace")
+        self.assertNotIn(f'<code class="system-admin-username">{target}</code>', owner_html)
+
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username='alice'")
+        workspace_service.clear_identity_caches()
+        admin_page = access_page(_request("/problems/alice/sample/access"), "alice/sample", "alice")
+        self.assertEqual(admin_page.status_code, 200)
+        admin_html = admin_page.body.decode("utf-8", errors="replace")
+        self.assertIn(f'<code class="system-admin-username">{target}</code>', admin_html)
+
     def test_access_route_renders_with_request_injection(self) -> None:
         username = self.random_id("access")
         password = "StrongPass123"
@@ -1071,6 +1129,65 @@ class TestUIWorkspace(UIBaseSuite):
         ws = Path(workspace_service.ensure_workspace(f"{username.lower()}/{slug}", username))
         self.assertTrue(ws.exists())
 
+    def test_switch_workspace_opens_single_accessible_foreign_leaf_match_instead_of_creating_duplicate(self) -> None:
+        username = self.random_id("switchleaf")
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        leaf = f"ui-leaf-{uuid.uuid4().hex[:8]}"
+        foreign_problem = f"alice/{leaf}"
+        workspace_service.ensure_problem(foreign_problem)
+        workspace_service.grant_repo_access(foreign_problem, username, "read")
+
+        resp = switch_workspace(
+            _request_with_cookie("/switch-workspace", auth_cookie),
+            problem=leaf,
+            page="statement",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{foreign_problem}/statement", str(resp.headers.get("location", "")))
+        self.assertIsNone(workspace_service.known_problem_id(f"{username}/{leaf}"))
+
+    def test_switch_workspace_requires_full_problem_id_when_foreign_leaf_exists(self) -> None:
+        username = self.random_id("switchamb")
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        leaf = f"ui-amb-{uuid.uuid4().hex[:8]}"
+        foreign_problem = f"alice/{leaf}"
+        workspace_service.ensure_problem(foreign_problem)
+
+        resp = switch_workspace(
+            _request_with_cookie("/switch-workspace", auth_cookie),
+            problem=leaf,
+            page="statement",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("/problems", str(resp.headers.get("location", "")))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("already exists under another owner", messages[0])
+        self.assertIsNone(workspace_service.known_problem_id(f"{username}/{leaf}"))
+
+    def test_switch_workspace_allows_explicit_owned_problem_id_even_when_foreign_leaf_exists(self) -> None:
+        username = self.random_id("switchexpl")
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        leaf = f"ui-explicit-{uuid.uuid4().hex[:8]}"
+        foreign_problem = f"alice/{leaf}"
+        owned_problem = f"{username}/{leaf}"
+        workspace_service.ensure_problem(foreign_problem)
+
+        resp = switch_workspace(
+            _request_with_cookie("/switch-workspace", auth_cookie),
+            problem=owned_problem,
+            page="statement",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{owned_problem}/statement", str(resp.headers.get("location", "")))
+        self.assertIsNotNone(workspace_service.known_problem_id(owned_problem))
+
     def test_statement_page_title_does_not_use_name_tex(self) -> None:
         username = self.random_id("stmtitle")
         password = "StrongPass123"
@@ -1090,11 +1207,11 @@ class TestUIWorkspace(UIBaseSuite):
             )
         self.assertEqual(resp.status_code, 200, resp.text)
         html = resp.text
-        self.assertIn("<title>Statements - Polygon-Replica</title>", html)
+        self.assertIn("<title>Statements - qiulygon</title>", html)
         self.assertIn('<h1 class="page-title">Statements</h1>', html)
         self.assertIn('<strong class="submenu-status-heading">Statements</strong>', html)
-        self.assertNotIn("<title>Statement Name Tex Title - Polygon-Replica</title>", html)
-        self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
+        self.assertNotIn("<title>Statement Name Tex Title - qiulygon</title>", html)
+        self.assertNotIn("<title>sample - qiulygon</title>", html)
 
     def test_problem_pages_use_fixed_section_titles_in_html_title(self) -> None:
         username = self.random_id("sectiontitle")
@@ -1117,8 +1234,8 @@ class TestUIWorkspace(UIBaseSuite):
                 resp = client.get(path, headers={"cookie": auth_cookie}, follow_redirects=False)
                 self.assertEqual(resp.status_code, 200, f"{path}: {resp.text}")
                 html = resp.text
-                self.assertIn(f"<title>{title} - Polygon-Replica</title>", html)
-                self.assertNotIn("<title>sample - Polygon-Replica</title>", html)
+                self.assertIn(f"<title>{title} - qiulygon</title>", html)
+                self.assertNotIn("<title>sample - qiulygon</title>", html)
 
     def test_problems_page_shows_only_participating_problems(self) -> None:
         owner_problem = f"alice/ui-owner-{uuid.uuid4().hex[:8]}"

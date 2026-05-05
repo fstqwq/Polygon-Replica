@@ -27,6 +27,33 @@ class AuthService:
             iterations=int(iterations),
         )
 
+    def active_system_admin_count(self) -> int:
+        return self._store.active_system_admin_count()
+
+    def admin_user_rows(self, *, query: str, limit: int = 50) -> list[dict[str, object]]:
+        return [dict(row) for row in self._store.admin_user_rows(query=str(query or ""), limit=int(limit))]
+
+    def revoke_all_access_for_user(self, user_id: int) -> None:
+        self._store.revoke_all_access_for_user(int(user_id))
+
+    def set_system_admin(self, *, actor_user_id: int, username: str, enabled: bool) -> dict[str, object]:
+        return dict(
+            self._store.set_system_admin(
+                actor_user_id=int(actor_user_id),
+                username=str(username or ""),
+                enabled=bool(enabled),
+            )
+        )
+
+    def set_user_banned(self, *, actor_user_id: int, username: str, banned: bool) -> dict[str, object]:
+        return dict(
+            self._store.set_user_banned(
+                actor_user_id=int(actor_user_id),
+                username=str(username or ""),
+                banned=bool(banned),
+            )
+        )
+
     def create_user_with_password_verifier(
         self,
         username: str,

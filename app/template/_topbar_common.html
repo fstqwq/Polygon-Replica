@@ -1,11 +1,12 @@
+{% from "_user_display.html" import render_username %}
 <div class="brand-row">
   <div class="brand">
-    <a class="logo" href="/problems"><span class="accent-gradient-text logo-gradient-text">not polygon</span></a>
+    <a class="logo" href="/problems"><span class="accent-gradient-text logo-gradient-text">qiulygon</span></a>
     <div class="tagline">Unprofessional way to prepare programming contest problems</div>
   </div>
   <div id="top-event-slot" class="top-event-slot" aria-live="polite" aria-atomic="true"></div>
   <div class="top-actions">
-    <span class="session-user">{{ top_user.username }}</span>
+    {{ render_username(top_user.username, viewer_is_system_admin=top_user.is_system_admin, is_system_admin=top_user.is_system_admin, extra_class='session-user') }}
     {% if top_settings_href %}
     <a href="{{ top_settings_href }}">Settings</a>
     {% endif %}
