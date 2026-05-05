@@ -549,11 +549,23 @@ class ExportService:
             return "zh"
         return language
 
-    def _try_compile_statement_pdf(self, snapshot: Path, dst_statement: Path, *, problem_name: str) -> bool:
+    def _try_compile_statement_pdf(
+        self,
+        snapshot: Path,
+        dst_statement: Path,
+        *,
+        problem_name: str,
+    ) -> bool:
         compiled_any = False
+        include_sample_tests = self._load_problem_config(snapshot).get("mode") != "interactive"
         for language in self._statement_export_languages(snapshot):
             try:
-                rendered = render_statement_main(snapshot / "statement", problem_title=problem_name, language=language)
+                rendered = render_statement_main(
+                    snapshot / "statement",
+                    problem_title=problem_name,
+                    language=language,
+                    include_sample_tests=include_sample_tests,
+                )
             except Exception:
                 continue
             compile_result = self.tex_compile_service.compile_pdf(rendered)
@@ -689,6 +701,7 @@ class ExportService:
         package_root: Path,
         *,
         verification_id: str,
+        interactive: bool = False,
     ) -> None:
         secret_dir = package_root / "data" / "secret"
         sample_dir = package_root / "data" / "sample"
@@ -699,6 +712,15 @@ class ExportService:
             raise ValueError("export requires tests/spec.json entries")
         for row in entries:
             test_id = row["id"]
+            if interactive:
+                self._copy_required_test_input(
+                    snapshot,
+                    row,
+                    secret_dir / f"{test_id}.in",
+                    verification_id=verification_id,
+                )
+                (secret_dir / f"{test_id}.ans").write_bytes(b"")
+                continue
             if not bool(row["sample"]):
                 self._copy_required_test_input(
                     snapshot,
@@ -786,8 +808,18 @@ class ExportService:
         pass_limit: int,
     ) -> None:
         package_root.mkdir(parents=True, exist_ok=True)
-        checker_source = None if mode == "interactive" else self._effective_checker_source(snapshot, strict=False)
-        interactor_source = self._effective_interactor_source(snapshot, strict=False) if mode == "interactive" else None
+        checker_source = (
+            None
+            if mode == "interactive"
+            else self._effective_checker_source(snapshot, strict=False)
+        )
+        interactor_source = (
+            self._effective_interactor_source(snapshot, strict=True)
+            if mode == "interactive"
+            else None
+        )
+        if mode == "interactive" and interactor_source is None:
+            raise ValueError("interactive export requires interactor source")
         (package_root / "problem.yaml").write_text(
             self._build_problem_yaml(
                 problem_name=problem_name,
@@ -799,11 +831,23 @@ class ExportService:
             encoding="utf-8",
         )
         (package_root / "domjudge-problem.ini").write_text(
-            self._build_domjudge_problem_ini(slug=self._public_problem_slug(problem_slug), snapshot=snapshot),
+            self._build_domjudge_problem_ini(
+                slug=self._public_problem_slug(problem_slug),
+                snapshot=snapshot,
+            ),
             encoding="utf-8",
         )
-        self._materialize_export_sample_display_payloads(snapshot, verification_id=verification_id)
-        self._copy_secret_and_sample_data(snapshot, package_root, verification_id=verification_id)
+        if mode != "interactive":
+            self._materialize_export_sample_display_payloads(
+                snapshot,
+                verification_id=verification_id,
+            )
+        self._copy_secret_and_sample_data(
+            snapshot,
+            package_root,
+            verification_id=verification_id,
+            interactive=mode == "interactive",
+        )
         self._try_compile_statement_pdf(
             snapshot,
             package_root / "problem_statement",
