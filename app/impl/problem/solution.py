@@ -9,7 +9,6 @@ from fastapi import Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response, set_flash_cookie, template_response
-from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.config import config
 from app.impl.problem.shared import (
     MAIN_CORRECT_EXPECTED_LABEL,
@@ -139,9 +138,6 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
         safe_content = enforce_textarea_max_bytes(content, label='solution source')
         selected_for_redirect = selected
         with config.workspace_service.workspace_lock(workspace):
-            selected_abs = safe_workspace_path(workspace, selected)
-            existed_before = selected_abs.exists() and selected_abs.is_file() and (not selected_abs.is_symlink())
-            previous_bytes = selected_abs.read_bytes() if existed_before else b''
             desc_path = desc_rel_path_for_source(selected)
             desc_abs = safe_workspace_path(workspace, desc_path)
             desc_existed_before = desc_abs.exists() and desc_abs.is_file() and (not desc_abs.is_symlink())
@@ -153,20 +149,6 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
                 if isinstance(note, str):
                     desc_note = note
             config.git_service.write_file(workspace, selected, safe_content)
-            compile_check_error = judgehost_compile_check_error(
-                problem=problem,
-                user=user,
-                workspace=workspace,
-                source_path=selected,
-                source_content=safe_content,
-                verification_source='problem.solution.save_source',
-            )
-            if compile_check_error:
-                if existed_before:
-                    selected_abs.write_bytes(previous_bytes)
-                else:
-                    config.git_service.delete_path(workspace, selected)
-                raise ValueError(compile_check_error)
             config.git_service.write_file(workspace, desc_path, render_solution_desc(normalized_expected, desc_note))
             metadata_created = not desc_existed_before
         if metadata_created:
@@ -312,8 +294,4 @@ def solutions_delete(problem: str, user: Annotated[str, Depends(require_session_
     except HTTPException as exc:
         msg = str(exc.detail)
     return redirect_response(f'/problems/{problem}/solutions', status_code=303, message=msg)
-
-
-
-
 

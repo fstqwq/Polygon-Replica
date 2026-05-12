@@ -422,8 +422,6 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
     selected_path = ''
     if requested_path and any((row.get('link_path') == requested_path for row in change_rows)):
         selected_path = requested_path
-    elif change_rows:
-        selected_path = cast(str | None, change_rows[0].get('link_path')) or ''
 
     selected_diff = ''
     selected_diff_truncated = False

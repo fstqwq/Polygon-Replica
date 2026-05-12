@@ -5,7 +5,17 @@ from fastapi.responses import HTMLResponse
 
 from app.impl.contest.access import contest_access_grant, contest_access_page, contest_access_revoke, contest_access_sync_all, contest_access_sync_user
 from app.impl.contest.overview import contest_overview_page
-from app.impl.contest.package import contest_packages_artifact_download, contest_packages_build_start, contest_packages_job_status, contest_packages_page, contest_packages_preview_start
+from app.impl.contest.package import (
+    contest_packages_artifact_download,
+    contest_packages_build_start,
+    contest_packages_job_status,
+    contest_packages_page,
+    contest_packages_preview_start,
+    contest_statement_source_delete,
+    contest_statement_source_file,
+    contest_statement_source_save,
+    contest_statement_source_upload,
+)
 from app.impl.contest.problem import contest_problems_add, contest_problems_change_general, contest_problems_page, contest_problems_remove, contest_problems_remove_selected, contest_problems_renumber, contest_problems_reorder
 from app.impl.contest.property import contest_properties_page, contest_properties_save
 
@@ -134,4 +144,28 @@ router.add_api_route(
     "/contests/{contest}/packages/artifacts/{artifact_id}",
     contest_packages_artifact_download,
     methods=["GET"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/packages/statement/files",
+    contest_statement_source_file,
+    methods=["GET"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/packages/statement/save",
+    contest_statement_source_save,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/packages/statement/upload",
+    contest_statement_source_upload,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/packages/statement/delete",
+    contest_statement_source_delete,
+    methods=["POST"],
 )

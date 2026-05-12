@@ -585,6 +585,54 @@ class TestPreview(SmokeBase):
         self.assertEqual(str(tests_spec[0].get("sample_output") or ""), "custom-sample-answer\n")
         self.assertFalse((ws / "tests" / "answers").exists())
 
+    def test_preview_sample_sync_skips_interactive_samples(self) -> None:
+        ws = self._workspace_path()
+        (ws / "config" / "problem.json").write_text(
+            json.dumps(
+                {
+                    "mode": "interactive",
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                    "pass_limit": 1,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / "tests" / "spec.json").write_text(
+            dumps_tests_spec(
+                [
+                    {
+                        "id": "901",
+                        "kind": "manual",
+                        "sample": True,
+                        "sample_input": "play\n3\n00\n1 3",
+                        "sample_output": "take\nignore",
+                        "sample_output_validate": True,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        class _FailingVerificationService:
+            def run_verification(self, *_args, **_kwargs):
+                raise AssertionError("interactive sample sync must not run verification")
+
+        old_verification_service = preview_service.verification_service
+        try:
+            preview_service.verification_service = _FailingVerificationService()
+            rows = preview_service._sample_verification_rows_from_spec(ws)
+            summary = preview_service._copy_sample_payloads_from_verification("alice/sample", "alice", ws)
+        finally:
+            preview_service.verification_service = old_verification_service
+
+        self.assertEqual(rows, [])
+        self.assertEqual(int(summary.get("sample_count") or 0), 0)
+        self.assertEqual(str(summary.get("skipped") or ""), "interactive")
+
     def test_compile_preview_with_samples_skips_cache_and_syncs_samples(self) -> None:
         ws = self._workspace_path()
         calls = {"find_cached": 0, "sync": 0}

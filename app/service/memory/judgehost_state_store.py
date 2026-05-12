@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from typing import TypedDict
 
 
@@ -71,8 +72,9 @@ class JudgehostCaseRow(TypedDict):
 
 
 class JudgehostStateStore:
-    def __init__(self, lock: threading.RLock | None = None):
+    def __init__(self, lock: threading.RLock | None = None, *, id_base: int | None = None):
         self._lock = threading.RLock() if lock is None else lock
+        self._id_base = max(1, int(id_base if id_base is not None else time.time() * 1000))
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.ensure_schema()
 
@@ -170,6 +172,19 @@ class JudgehostStateStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_jobs_lease ON judgehost_domjudge_jobs(lease_owner,updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_job ON judgehost_domjudge_cases(job_id,ordinal ASC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_status ON judgehost_domjudge_cases(status,job_id,ordinal ASC)")
+            for table_name in ("judgehost_domjudge_jobs", "judgehost_domjudge_cases"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES(?, ?)",
+                    [table_name, self._id_base],
+                )
+                conn.execute(
+                    """
+                    UPDATE sqlite_sequence
+                    SET seq=CASE WHEN seq < ? THEN ? ELSE seq END
+                    WHERE name=?
+                    """,
+                    [self._id_base, self._id_base, table_name],
+                )
             conn.commit()
 
     def reset(self) -> None:
@@ -270,6 +285,19 @@ class JudgehostStateStore:
         )
         return row is not None
 
+    def host_leased_case_count(self, hostname: str) -> int:
+        row = self._fetch_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM judgehost_domjudge_cases
+            WHERE lease_owner=? AND status='leased'
+            """,
+            [hostname],
+        )
+        if row is None:
+            return 0
+        return max(0, int(row["count"] or 0))
+
     def cases_for_job(self, job_id: int, *, status: str | None = None) -> list[JudgehostCaseRow]:
         if status:
             return self._fetch_all(
@@ -365,6 +393,18 @@ class JudgehostStateStore:
 
     def testcase_refs(self, testcase_id: int, *, hostname: str) -> tuple[dict[str, object] | None, str]:
         safe_host = str(hostname or "").strip()
+        token = int(testcase_id)
+        row = self._fetch_one(
+            """
+            SELECT input_ref,answer_ref
+            FROM judgehost_domjudge_cases
+            WHERE id=? AND status='leased'
+            LIMIT 1
+            """,
+            [token],
+        )
+        if row is not None:
+            return row, "leased-case-id"
         if not safe_host:
             return None, "missing-host"
         row = self._fetch_one(
@@ -375,7 +415,7 @@ class JudgehostStateStore:
             ORDER BY updated_at DESC, id DESC
             LIMIT 1
             """,
-            [int(testcase_id), safe_host],
+            [token, safe_host],
         )
         if row is not None:
             return row, "leased-host-testcase-id"
@@ -1164,6 +1204,19 @@ class JudgehostStateStore:
             )
             self._conn.commit()
         return (int(job_upd.rowcount or 0), int(case_upd.rowcount or 0))
+
+    def release_host_job_ownership(self, hostname: str, *, now_text: str) -> int:
+        with self._lock:
+            job_upd = self._conn.execute(
+                """
+                UPDATE judgehost_domjudge_jobs
+                SET lease_owner=NULL, status='queued', updated_at=?
+                WHERE lease_owner=? AND status IN ('leased','queued')
+                """,
+                [now_text, hostname],
+            )
+            self._conn.commit()
+        return int(job_upd.rowcount or 0)
 
     def forget_runs(self, run_ids: list[str]) -> int:
         safe_run_ids = [run_id for run_id in run_ids if run_id]

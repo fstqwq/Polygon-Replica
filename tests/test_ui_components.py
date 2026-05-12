@@ -1047,19 +1047,16 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(editor.status_code, 200)
 
         updated_content = "int main(){return 42;}\n"
-        with patch(
-            "app.impl.problem.solution.judgehost_compile_check_error", return_value=""
-        ):
-            saved = solutions_save_source(
-                _request(
-                    f"/problems/{self.problem}/solutions/save-source", method="POST"
-                ),
-                problem=self.problem,
-                user=self.user,
-                source_path=target_rel,
-                content=updated_content,
-                expected_behavior="wrong_answer",
-            )
+        saved = solutions_save_source(
+            _request(
+                f"/problems/{self.problem}/solutions/save-source", method="POST"
+            ),
+            problem=self.problem,
+            user=self.user,
+            source_path=target_rel,
+            content=updated_content,
+            expected_behavior="wrong_answer",
+        )
         self.assertEqual(saved.status_code, 303)
         saved_location = saved.headers.get("location", "")
         self.assertIn("/solutions/editor", saved_location)
@@ -1107,7 +1104,7 @@ class TestUIComponents(UIBaseSuite):
             html,
         )
 
-    def test_solutions_save_source_rejects_compile_error_and_keeps_previous_content(
+    def test_solutions_save_source_saves_incomplete_accepted_draft_without_compile_check(
         self,
     ) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1123,21 +1120,23 @@ class TestUIComponents(UIBaseSuite):
             user=self.user,
             source_path=target_rel,
             content="int main(){\n",
+            expected_behavior="accepted",
         )
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(
             resp.headers.get("location", ""),
             f"/problems/{self.problem}/solutions/editor?path=solutions%2Feditor_ce_case.cpp",
         )
-        self.assertEqual(source_abs.read_text(encoding="utf-8"), original_content)
+        self.assertEqual(source_abs.read_text(encoding="utf-8"), "int main(){\n")
+        self.assertIn(
+            "expected: accepted",
+            (ws / f"{target_rel}.desc").read_text(encoding="utf-8"),
+        )
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
-        message = messages[0].lower()
-        self.assertTrue(
-            ("error" in message) or ("compile" in message) or ("syntax" in message)
-        )
+        self.assertIn("solution source", messages[0])
 
-    def test_solutions_save_source_ajax_returns_error_without_persisting_ce_content(
+    def test_solutions_save_source_ajax_saves_incomplete_accepted_draft(
         self,
     ) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1158,12 +1157,39 @@ class TestUIComponents(UIBaseSuite):
             user=self.user,
             source_path=target_rel,
             content="int main(){\n",
+            expected_behavior="accepted",
         )
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8"))
-        self.assertFalse(bool(payload.get("ok")))
-        self.assertTrue(str(payload.get("error") or "").strip())
-        self.assertEqual(source_abs.read_text(encoding="utf-8"), original_content)
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertEqual(source_abs.read_text(encoding="utf-8"), "int main(){\n")
+
+    def test_solutions_save_source_allows_unknown_draft_without_compile_check(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        target_rel = "solutions/editor_unknown_draft.cpp"
+        source_abs = ws / target_rel
+        desc_abs = ws / f"{target_rel}.desc"
+        source_abs.parent.mkdir(parents=True, exist_ok=True)
+
+        req = _request(
+            f"/problems/{self.problem}/solutions/save-source",
+            method="POST",
+            headers=[(b"x-requested-with", b"fetch"), (b"accept", b"application/json")],
+        )
+        resp = solutions_save_source(
+            req,
+            problem=self.problem,
+            user=self.user,
+            source_path=target_rel,
+            content="int main(){\n",
+            expected_behavior="unknown",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertEqual(source_abs.read_text(encoding="utf-8"), "int main(){\n")
+        self.assertIn("expected: unknown", desc_abs.read_text(encoding="utf-8"))
 
     def test_solutions_save_source_ajax_success_returns_redirect(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1178,17 +1204,14 @@ class TestUIComponents(UIBaseSuite):
             headers=[(b"x-requested-with", b"fetch"), (b"accept", b"application/json")],
         )
         updated_content = "int main(){return 7;}\n"
-        with patch(
-            "app.impl.problem.solution.judgehost_compile_check_error", return_value=""
-        ):
-            resp = solutions_save_source(
-                req,
-                problem=self.problem,
-                user=self.user,
-                source_path=target_rel,
-                content=updated_content,
-                expected_behavior="accepted",
-            )
+        resp = solutions_save_source(
+            req,
+            problem=self.problem,
+            user=self.user,
+            source_path=target_rel,
+            content=updated_content,
+            expected_behavior="accepted",
+        )
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8"))
         self.assertTrue(bool(payload.get("ok")))
@@ -1214,19 +1237,16 @@ class TestUIComponents(UIBaseSuite):
         source_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
         desc_abs.write_text("expected: unknown\n", encoding="utf-8")
 
-        with patch(
-            "app.impl.problem.solution.judgehost_compile_check_error", return_value=""
-        ):
-            resp = solutions_save_source(
-                _request(
-                    f"/problems/{self.problem}/solutions/save-source", method="POST"
-                ),
-                problem=self.problem,
-                user=self.user,
-                source_path=target_rel,
-                content="int main(){return 7;}\n",
-                expected_behavior="accepted",
-            )
+        resp = solutions_save_source(
+            _request(
+                f"/problems/{self.problem}/solutions/save-source", method="POST"
+            ),
+            problem=self.problem,
+            user=self.user,
+            source_path=target_rel,
+            content="int main(){return 7;}\n",
+            expected_behavior="accepted",
+        )
 
         self.assertEqual(resp.status_code, 303)
         messages = _flash_messages_from_response(resp)

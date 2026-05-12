@@ -415,14 +415,24 @@ class VerificationService:
         rows: list[dict[str, object]],
     ) -> None:
         conn.execute("DELETE FROM verification_tests_meta WHERE verification_id=?", [verification_id])
+        seen_test_names: set[str] = set()
+        seen_ordinals: set[int] = set()
         for position, raw in enumerate(rows, start=1):
             item = dict(raw)
             ordinal = max(1, int(item.get("index") or position))
             test_name = str(item.get("test_name") or "")
+            if not test_name and item.get("index") is not None:
+                test_name = f"{ordinal:03d}.in"
             if (not test_name) and position <= len(selected_test_names):
                 test_name = str(selected_test_names[position - 1] or "")
             if not test_name:
                 test_name = f"{ordinal:03d}.in"
+            while ordinal in seen_ordinals:
+                ordinal += 1
+            if test_name in seen_test_names:
+                continue
+            seen_ordinals.add(ordinal)
+            seen_test_names.add(test_name)
             conn.execute(
                 """
                 INSERT INTO verification_tests_meta(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 from pathlib import Path, PurePosixPath
 
 from app.service.platform.git_process import run_git
@@ -109,7 +108,6 @@ class GitService:
         proc = run_git(["git", "-C", str(workspace), "status", "--short", "--branch"])
         filtered_lines: list[str] = []
         status_truncated = False
-        need_diff = False
         status_limit = max(1, int(self.STATUS_MAX_LINES))
         for raw in proc.stdout.splitlines():
             line = raw.rstrip("\n")
@@ -127,49 +125,12 @@ class GitService:
                     status_truncated = True
             else:
                 continue
-            # "??" entries are untracked-only and do not appear in `git diff`.
-            if line.startswith("??"):
-                continue
-            # Porcelain format: XY<space>PATH. Y != ' ' means unstaged worktree change.
-            if len(line) >= 2 and line[1] != " ":
-                need_diff = True
         if status_truncated:
             filtered_lines.append(f"... [truncated; showing first {status_limit} lines]")
         status_text = "\n".join(filtered_lines) + ("\n" if filtered_lines else "")
-        diff_truncated = False
         diff_limit = max(1, int(self.DIFF_MAX_CHARS))
-        if need_diff:
-            tmp_path: Path | None = None
-            try:
-                fd, tmp_name = tempfile.mkstemp(prefix="git-diff-", suffix=".patch")
-                os.close(fd)
-                tmp_path = Path(tmp_name)
-                diff_proc = run_git(
-                    [
-                        "git",
-                        "-C",
-                        str(workspace),
-                        "diff",
-                        "--",
-                        ".",
-                        ":(exclude).*",
-                        ":(exclude)**/.*",
-                    ],
-                    stdout_path=tmp_path,
-                )
-                if diff_proc.returncode == 0:
-                    diff_text, diff_truncated = self._read_text_prefix(tmp_path, diff_limit)
-                    if diff_truncated:
-                        diff_text = self._append_truncation_marker(diff_text, diff_limit)
-                else:
-                    raw_diff = run_git(["git", "-C", str(workspace), "diff", "--", "."]).stdout
-                    filtered_diff = self._filter_hidden_diff(raw_diff)
-                    diff_text, diff_truncated = self._truncate_text(filtered_diff, diff_limit)
-            finally:
-                if tmp_path is not None:
-                    tmp_path.unlink(missing_ok=True)
-        else:
-            diff_text = ""
+        diff_truncated = False
+        diff_text = ""
         rebase_active = self._rebase_active(workspace)
         conflicted_files = self._conflicted_files(workspace) if rebase_active else []
         return {

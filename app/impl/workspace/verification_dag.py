@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -50,6 +51,8 @@ _C = config.constants
 TASK_GENERATE_INPUT = "generate-input"
 TASK_MAIN_CORRECT = "main-correct"
 TASK_SOLUTION_RUN = "solution-run"
+_ARTIFACT_READY_TIMEOUT_SEC = 2.0
+_ARTIFACT_READY_INTERVAL_SEC = 0.05
 
 _COMPILE_DIAGNOSTICS_LIMIT = 64
 
@@ -110,14 +113,26 @@ def _require_online_judgehost() -> None:
         raise RuntimeError("judgehost is offline")
 
 
-def _verification_required_blob(verification_id: str, test_name: str, ref_key: str, *, label: str) -> bytes:
-    ref = config.verification_service.verification_artifact_ref(verification_id, test_name, ref_key)
-    if not ref:
-        raise RuntimeError(f"{label} is missing")
-    blob = config.verification_service.resolve_artifact_blob(ref)
-    if blob is None:
-        raise RuntimeError(f"{label} is missing")
-    return blob
+def _verification_required_blob(
+    verification_id: str,
+    test_name: str,
+    ref_key: str,
+    *,
+    label: str,
+    timeout_sec: float = _ARTIFACT_READY_TIMEOUT_SEC,
+    interval_sec: float = _ARTIFACT_READY_INTERVAL_SEC,
+) -> bytes:
+    deadline = time.monotonic() + max(0.0, float(timeout_sec))
+    while True:
+        ref = config.verification_service.verification_artifact_ref(verification_id, test_name, ref_key)
+        if ref:
+            blob = config.verification_service.resolve_artifact_blob(ref)
+            if blob is not None:
+                return blob
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(max(0.001, min(float(interval_sec), deadline - time.monotonic())))
+    raise RuntimeError(f"{label} is missing")
 
 
 def _build_graph(

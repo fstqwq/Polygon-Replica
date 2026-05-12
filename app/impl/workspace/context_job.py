@@ -302,7 +302,7 @@ def _icpc_verification_has_complete_artifacts(
         return False
     if str(record.get("source_commit") or "") != str(source_commit or ""):
         return False
-    refs = config.verification_service.verification_artifact_refs(safe_verification_id)
+    refs = _icpc_verification_artifact_refs_by_source_id(safe_verification_id)
     for test_id in test_ids:
         item = refs.get(f"{test_id}.in") or {}
         input_ref = str(item.get("input_ref") or "")
@@ -316,6 +316,18 @@ def _icpc_verification_has_complete_artifacts(
         if config.verification_service.resolve_artifact_blob(answer_ref) is None:
             return False
     return True
+
+
+def _icpc_verification_artifact_refs_by_source_id(verification_id: str) -> dict[str, dict[str, str]]:
+    refs = config.verification_service.verification_artifact_refs(verification_id)
+    resolved = dict(refs)
+    for row in config.verification_service._verification_tests_meta_rows(verification_id):
+        source_id = str(row.get("id") or "").strip()
+        test_name = str(row.get("test_name") or "").strip()
+        item = refs.get(test_name)
+        if source_id and item:
+            resolved[f"{source_id}.in"] = item
+    return resolved
 
 
 def _find_reusable_icpc_verification(

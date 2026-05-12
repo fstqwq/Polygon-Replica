@@ -383,6 +383,33 @@ class ContestDiskStore:
 
         self.db.write_transaction(tx)
 
+    def upsert_attachment_row(
+        self,
+        *,
+        contest_id: int,
+        key: str,
+        rel_path: str,
+        created_by_user_id: int,
+        created_at: str,
+    ) -> None:
+        self.db.execute(
+            """
+            INSERT INTO contest_attachments(contest_id,key,rel_path,created_at,created_by_user_id)
+            VALUES(?,?,?,?,?)
+            ON CONFLICT(contest_id,key) DO UPDATE SET
+                rel_path=excluded.rel_path,
+                created_at=excluded.created_at,
+                created_by_user_id=excluded.created_by_user_id
+            """,
+            [int(contest_id), str(key).strip(), str(rel_path).strip(), created_at, int(created_by_user_id)],
+        )
+
+    def delete_attachment_row(self, contest_id: int, key: str) -> None:
+        self.db.execute(
+            "DELETE FROM contest_attachments WHERE contest_id=? AND key=?",
+            [int(contest_id), str(key).strip()],
+        )
+
     def contest_problem_rows(self, contest_id: int) -> list[ContestProblemRecord]:
         rows = self.db.fetch_all(
             """
@@ -509,25 +536,53 @@ class ContestDiskStore:
         return int(self.db.write_transaction(tx))
 
     def reorder_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
-        safe_pairs = [(int(problem_id), idx) for problem_id, idx in pairs if idx]
+        safe_pairs = [(int(contest_problem_id), idx) for contest_problem_id, idx in pairs if idx]
         if not safe_pairs:
             return False
         def tx(conn: sqlite3.Connection) -> int:
-            updated = 0
-            for problem_id, idx in safe_pairs:
-                row_cursor = conn.execute(
-                    "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
-                    [int(contest_id), problem_id],
-                )
-                row = row_cursor.fetchone()
-                if row is None:
-                    continue
+            contest_problem_ids = [contest_problem_id for contest_problem_id, _ in safe_pairs]
+            if len(set(contest_problem_ids)) != len(contest_problem_ids):
+                return 0
+            if len({idx for _, idx in safe_pairs}) != len(safe_pairs):
+                return 0
+            placeholders = ",".join(("?" for _ in contest_problem_ids))
+            rows = conn.execute(
+                f"SELECT id FROM contest_problems WHERE contest_id=? AND id IN ({placeholders})",
+                [int(contest_id), *contest_problem_ids],
+            ).fetchall()
+            found_ids = {int(row["id"]) for row in rows}
+            if found_ids != set(contest_problem_ids):
+                return 0
+
+            target_indices = [idx for _, idx in safe_pairs]
+            idx_placeholders = ",".join(("?" for _ in target_indices))
+            conflicting = conn.execute(
+                f"""
+                SELECT id
+                FROM contest_problems
+                WHERE contest_id=?
+                  AND idx IN ({idx_placeholders})
+                  AND id NOT IN ({placeholders})
+                LIMIT 1
+                """,
+                [int(contest_id), *target_indices, *contest_problem_ids],
+            ).fetchone()
+            if conflicting is not None:
+                return 0
+
+            for pos, (contest_problem_id, _) in enumerate(safe_pairs, start=1):
+                # Move all affected rows out of the user-visible index namespace before
+                # writing final values, so A<->B swaps do not trip the unique index.
                 conn.execute(
-                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND problem_id=?",
-                    [idx, int(contest_id), problem_id],
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [f"~tmp-reorder-{int(contest_id)}-{contest_problem_id}-{pos}~", int(contest_id), contest_problem_id],
                 )
-                updated += 1
-            return updated
+            for contest_problem_id, idx in safe_pairs:
+                conn.execute(
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [idx, int(contest_id), contest_problem_id],
+                )
+            return len(safe_pairs)
         return int(self.db.write_transaction(tx)) > 0
 
     def renumber_problem_indices(self, contest_id: int) -> None:

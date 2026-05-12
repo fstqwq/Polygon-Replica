@@ -204,6 +204,39 @@ class TestVerificationTaskScheduler(SmokeBase):
             detail={"status": "running"},
         )
 
+    def test_required_verification_blob_waits_for_late_artifact_visibility(self) -> None:
+        from app.impl.workspace.verification_dag import _verification_required_blob
+
+        calls = {"ref": 0, "blob": 0}
+
+        def _late_ref(_verification_id: str, _test_name: str, _ref_key: str) -> str:
+            calls["ref"] += 1
+            return "cache://late-input" if calls["ref"] >= 2 else ""
+
+        def _late_blob(_ref: str) -> bytes | None:
+            calls["blob"] += 1
+            return b"generated\n" if calls["blob"] >= 2 else None
+
+        with patch.object(config.verification_service, "verification_artifact_ref", side_effect=_late_ref), patch.object(
+            config.verification_service,
+            "resolve_artifact_blob",
+            side_effect=_late_blob,
+        ):
+            self.assertEqual(
+                _verification_required_blob(
+                    "ver-late",
+                    "026.in",
+                    "input_ref",
+                    label="verification test 026.in",
+                    timeout_sec=0.2,
+                    interval_sec=0.001,
+                ),
+                b"generated\n",
+            )
+
+        self.assertGreaterEqual(calls["ref"], 3)
+        self.assertGreaterEqual(calls["blob"], 2)
+
     def test_effective_verification_status_waits_for_pending_sanity_checks(self) -> None:
         from app.impl.workspace.sanity_checks import effective_verification_status
 
@@ -967,6 +1000,92 @@ class TestVerificationTaskScheduler(SmokeBase):
             rows = {str(row["id"]): row for row in store.list_rows("ver-runtime")}
             self.assertEqual(str(rows["vt-generate"]["status"]), VerificationTaskStore.TASK_DONE)
             self.assertEqual(str(rows["vt-main"]["status"]), VerificationTaskStore.TASK_QUEUED)
+        finally:
+            coordinator.enqueue_cancel("test shutdown")
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
+
+    def test_runtime_coordinator_publishes_ready_batch_before_case_events(self) -> None:
+        total_tasks = 32
+        store = _InMemoryTaskStore(
+            rows=[
+                _task_row(
+                    f"vt-{index:03}",
+                    task_kind="generate-input",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=index + 1,
+                    source_path="generators/gen.cpp",
+                    test_name=f"{index + 1:03}.in",
+                )
+                for index in range(total_tasks)
+            ],
+            edges=[],
+        )
+        publish_order: list[str] = []
+        first_published = threading.Event()
+        final_result = TaskExecutionResult(
+            task_id="vt-000",
+            status=VerificationTaskStore.TASK_DONE,
+            verdict="OK",
+            run_id="r-vt-000",
+            judgehost_task_id="jt-vt-000",
+            runtime_sec=0.01,
+            cpu_sec=0.01,
+            wall_sec=0.01,
+            memory_kb=1,
+            compile_log="",
+            diagnostics_json="[]",
+            error_text="",
+            feedback_text="",
+            output_ref="",
+        )
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            publish_order.append(task_id)
+            if task_id == "vt-000":
+                first_published.set()
+            return TaskPublishResult(
+                task_id=task_id,
+                run_id=f"r-{task_id}",
+                judgehost_task_id=f"jt-{task_id}",
+            )
+
+        callbacks = VerificationRuntimeCallbacks(
+            publish_task=_publish,
+            resolve_case_result=lambda _task_id, _test_name: None,
+            cancel_queued_tasks=lambda _reason: None,
+            persist_state=lambda: {},
+        )
+        coordinator = VerificationRuntimeCoordinator(
+            "ver-large-batch",
+            task_store=store,
+            callbacks=callbacks,
+            edges=[],
+        )
+        thread = threading.Thread(target=coordinator.run, daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(first_published.wait(timeout=2.0))
+            coordinator.enqueue_case_reported(
+                "jt-vt-000",
+                "001.in",
+                {"final_result": final_result},
+            )
+            self._wait_until(
+                lambda: len(publish_order) == total_tasks,
+                timeout=2.0,
+                interval=0.01,
+                message="ready batch was not fully published before handling case events",
+            )
+            self._wait_until(
+                lambda: str({str(row["id"]): row for row in store.list_rows("ver-large-batch")}["vt-000"]["status"])
+                == VerificationTaskStore.TASK_DONE,
+                timeout=2.0,
+                interval=0.01,
+                message="case result was not handled after publishing ready batch",
+            )
+            self.assertEqual(len(publish_order), total_tasks)
         finally:
             coordinator.enqueue_cancel("test shutdown")
             thread.join(timeout=2.0)

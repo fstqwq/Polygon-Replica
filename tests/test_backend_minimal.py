@@ -20,6 +20,7 @@ from app.impl.preview.preview import (
     preview_run,
     preview_save,
     preview_status,
+    statement_tex_source,
     statement_compile_asset_upload,
     statement_attachment_delete,
     statement_attachment_upload,
@@ -77,6 +78,27 @@ class TestBackendMinimal(SmokeBase):
 
     def test_current_problem_schema_has_no_name_column(self) -> None:
         self.assertNotIn("name", CURRENT_SCHEMA_COLUMNS["problems"])
+
+    def test_audit_event_downgrades_missing_foreign_keys_to_null(self) -> None:
+        config.workspace_service.record_audit_event(
+            actor_user_id=987654321,
+            problem_id=987654322,
+            action="test.missing_fk",
+            details={"ok": True},
+        )
+        row = db_fetch_one(
+            """
+            SELECT actor_user_id,problem_id,action,details_json
+            FROM audit_log
+            WHERE action='test.missing_fk'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        )
+        self.assertIsNotNone(row)
+        self.assertIsNone(row["actor_user_id"])
+        self.assertIsNone(row["problem_id"])
+        self.assertEqual(str(row["action"]), "test.missing_fk")
 
     def test_current_workspace_schema_has_revision_summary_columns(self) -> None:
         workspace_columns = set(CURRENT_SCHEMA_COLUMNS["workspaces"])
@@ -185,6 +207,58 @@ class TestBackendMinimal(SmokeBase):
         self.assertIsInstance(tests_meta_rows, list)
         self.assertEqual(str((tests_meta_rows[1] or {}).get("test_name") or ""), "002.in")
         self.assertFalse((config.fs_manager.cache_artifacts_root / "verifications" / verification_id / "metadata.json").exists())
+
+    def test_verification_detail_partial_tests_meta_uses_index_not_selected_position(self) -> None:
+        config.workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        verification_id = self.random_id("ver-detail-partial-meta")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="sig-partial-meta",
+            kind="custom",
+            status="running",
+            detail={
+                "selected_test_names": ["002.in"],
+                "tests_meta_rows": [
+                    {"index": 1, "kind": "manual", "desc": "manual 1"},
+                    {"index": 2, "kind": "manual", "desc": "manual 2"},
+                    {"index": 3, "kind": "manual", "desc": "manual 3"},
+                ],
+            },
+        )
+
+        detail = config.verification_service.verification_detail(verification_id)
+        rows = detail.get("tests_meta_rows")
+        self.assertIsInstance(rows, list)
+        self.assertEqual([str(row.get("test_name") or "") for row in rows], ["001.in", "002.in", "003.in"])
+        self.assertEqual(detail.get("selected_test_names"), ["002.in"])
+
+    def test_verification_detail_skips_duplicate_tests_meta_names(self) -> None:
+        config.workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        verification_id = self.random_id("ver-detail-dup-meta")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="sig-dup-meta",
+            kind="custom",
+            status="running",
+            detail={
+                "selected_test_names": ["001.in"],
+                "tests_meta_rows": [
+                    {"index": 1, "test_name": "001.in", "kind": "manual", "desc": "manual 1"},
+                    {"index": 2, "test_name": "001.in", "kind": "manual", "desc": "manual duplicate"},
+                ],
+            },
+        )
+
+        detail = config.verification_service.verification_detail(verification_id)
+        rows = detail.get("tests_meta_rows")
+        self.assertIsInstance(rows, list)
+        self.assertEqual([str(row.get("test_name") or "") for row in rows], ["001.in"])
 
     def test_verification_artifact_refs_live_in_db_not_metadata(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
@@ -801,6 +875,72 @@ class TestBackendMinimal(SmokeBase):
         self.assertNotIn("PDF is ready.", html)
         self.assertNotIn("Open in a new tab", html)
         self.assertNotIn('class="pdf-preview"', html)
+
+    def test_statement_page_keeps_editor_single_column_with_external_preview_links(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        preview_id = self.random_id("p-preview-external")
+        preview_root = config.fs_manager.prepare_preview_layout(preview_id).root
+        (preview_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+        (preview_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%ok\n")
+        (preview_root / "logs").mkdir(parents=True, exist_ok=True)
+        (preview_root / "logs" / "latex.log").write_text("ok\n", encoding="utf-8")
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                str(ctx["workspace"].get("head_commit") or ""),
+                "main",
+                json.dumps(
+                    {
+                        "pdf": "statement_preview/statement.pdf",
+                        "language": "english",
+                        "statement_signature": statement_sources_signature(
+                            ws,
+                            problem_title=str(ctx["problem"]["name"]),
+                        ),
+                    }
+                ),
+            ],
+        )
+
+        resp = preview_page(
+            _request(f"/problems/{self.problem}/statement", f"language=english&preview_id={preview_id}"),
+            self.problem,
+            self.user,
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Save Statement", html)
+        self.assertIn("Open PDF", html)
+        self.assertIn(f"/problems/{self.problem}/artifacts/{preview_id}/statement_preview/statement.pdf", html)
+        self.assertIn("Open TeX", html)
+        self.assertIn(f"/problems/{self.problem}/statement/source.tex?language=english", html)
+        self.assertNotIn("Preview Output", html)
+        self.assertNotIn('class="pdf-preview"', html)
+
+    def test_statement_tex_source_opens_rendered_problem_tex(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        ensure_statement_language_sources(ws, "english")
+        (ws / "statement-sections" / "english" / "legend.tex").write_text("Rendered legend for LLM.\n", encoding="utf-8")
+
+        resp = statement_tex_source(self.problem, self.user, language="english")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/plain", str(resp.media_type))
+        self.assertIn('filename="statement-english.tex"', resp.headers.get("content-disposition", ""))
+        body = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Rendered legend for LLM.", body)
+        self.assertNotIn("statement_preview", body)
 
     def test_preview_status_projects_missing_when_ok_preview_pdf_is_gone(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

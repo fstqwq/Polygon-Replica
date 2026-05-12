@@ -2,14 +2,18 @@ from __future__ import annotations
 from app.impl.auth.session import require_session_user
 from typing import Annotated
 
-from urllib.parse import quote_plus
+from pathlib import Path
+from urllib.parse import quote_plus, urlencode
 
-from fastapi import HTTPException, Request, Depends
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from app.impl.auth.shared import template_response
 from app.impl.runtime.config import config
 from app.impl.workspace.context_operation import audit
+from app.main_util import enforce_textarea_max_bytes, read_upload_bytes_limited
+from app.service.statement.constant import DEFAULT_OLYMP_STY
+from app.service.statement.context import normalize_statement_language
 
 from .shared import (
     _CONTEST_JOB_TYPE_PACKAGE,
@@ -17,7 +21,103 @@ from .shared import (
     _contest_ctx,
     _contest_redirect,
     _queue_contest_job,
+    _resolve_contest_statement_language,
+    contest_default_statements_tex,
 )
+
+
+def _contest_packages_statement_query(*, language: str, source_path: str = "") -> str:
+    params = {"language": normalize_statement_language(language) or "english"}
+    if source_path:
+        params["source_path"] = source_path
+    return urlencode(params)
+
+
+def _contest_statement_language(contest_id: int, language: str) -> str:
+    return normalize_statement_language(language) or _resolve_contest_statement_language(int(contest_id))
+
+
+def _contest_statement_source_key(*, contest_id: int, language: str, path: str, default_filename: str = "statements.tex", upload_filename: str = "") -> str:
+    return config.contest_service.normalize_statement_source_key(
+        language=_contest_statement_language(int(contest_id), language),
+        path=path,
+        upload_filename=upload_filename,
+        default_filename=default_filename,
+    )
+
+
+def _contest_statement_display_path(key: str, language: str) -> str:
+    prefix = f"statements/{normalize_statement_language(language) or 'english'}/"
+    safe_key = str(key or "").strip()
+    if safe_key.startswith(prefix):
+        return safe_key[len(prefix):]
+    return safe_key
+
+
+def _contest_statement_language_options(contest_id: int, current_language: str) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for language in [current_language, config.contest_service.statement_default_language(int(contest_id)), "english"]:
+        safe = normalize_statement_language(language)
+        if safe and safe not in seen:
+            seen.add(safe)
+            result.append(safe)
+    for row in config.contest_service.statement_attachment_rows(int(contest_id)):
+        parts = Path(str(row.get("rel_path") or "")).parts
+        if len(parts) >= 3 and parts[0] == "statements":
+            safe = normalize_statement_language(parts[1])
+            if safe and safe not in seen:
+                seen.add(safe)
+                result.append(safe)
+    return result
+
+
+def _contest_default_statement_source_text(contest_id: int, contest_slug: str, language: str, display_path: str) -> str:
+    safe_display_path = str(display_path or "").strip()
+    if safe_display_path == "olymp.sty":
+        return DEFAULT_OLYMP_STY
+    if safe_display_path != "statements.tex":
+        return ""
+    return contest_default_statements_tex(
+        contest_id=int(contest_id),
+        contest_slug=contest_slug,
+        language=language,
+        problem_entries=[dict(row) for row in config.contest_service.contest_problems(int(contest_id))],
+        source_folder_map=config.contest_service.statement_problem_source_folders(int(contest_id)),
+    )
+
+
+def _contest_statement_source_rows(contest_id: int, contest_slug: str, language: str) -> list[dict[str, object]]:
+    prefix = f"statements/{language}/"
+    rows: list[dict[str, object]] = []
+    for row in config.contest_service.statement_attachment_rows(int(contest_id)):
+        key = str(row.get("rel_path") or "").strip()
+        if not key.startswith(prefix):
+            continue
+        display_path = key[len(prefix):]
+        size_bytes: int | None = None
+        exists = False
+        try:
+            source_path = config.contest_service.statement_file_path(contest_slug, key)
+            exists = source_path.exists() and source_path.is_file() and (not source_path.is_symlink())
+            if exists:
+                size_bytes = source_path.stat().st_size
+        except OSError:
+            exists = False
+        rows.append(
+            {
+                "key": key,
+                "display_path": display_path,
+                "display_path_q": quote_plus(display_path),
+                "is_text": config.contest_service.statement_source_is_text(key),
+                "exists": exists,
+                "size_bytes": size_bytes,
+                "created_at": str(row.get("created_at") or ""),
+                "download_href": f"/contests/{contest_slug}/packages/statement/files?{urlencode({'language': language, 'path': display_path})}",
+                "edit_href": f"/contests/{contest_slug}/packages?{urlencode({'language': language, 'source_path': display_path})}",
+            }
+        )
+    return sorted(rows, key=lambda item: str(item["display_path"]))
 
 
 def contest_packages_preview_start(contest: str, user: Annotated[str, Depends(require_session_user)]):
@@ -107,6 +207,9 @@ def contest_packages_job_status(contest: str, user: Annotated[str, Depends(requi
     if job is None:
         return JSONResponse({"ok": False, "running": False, "job_id": job_id.strip(), "status": "missing"}, status_code=404)
     status = job["status"]
+    summary = job.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
     return JSONResponse(
         {
             "ok": True,
@@ -114,6 +217,8 @@ def contest_packages_job_status(contest: str, user: Annotated[str, Depends(requi
             "job_id": job.get("id"),
             "job_type": job.get("job_type"),
             "status": status,
+            "error": str(summary.get("error") or ""),
+            "summary": summary,
             "created_at": job.get("created_at"),
             "finished_at": job.get("finished_at"),
         }
@@ -130,10 +235,195 @@ def contest_packages_artifact_download(contest: str, user: Annotated[str, Depend
     return FileResponse(file_path, filename=filename)
 
 
-def contest_packages_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], job_id: str = ""):
+def contest_statement_source_file(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    language: str = "",
+    path: str = "",
+):
+    ctx = _contest_ctx(contest, user, "packages")
+    contest_id = int(ctx["contest"]["id"])
+    current_language = _contest_statement_language(contest_id, language)
+    key = _contest_statement_source_key(contest_id=contest_id, language=current_language, path=path, default_filename="statements.tex")
+    display_path = _contest_statement_display_path(key, current_language)
+    source_path = config.contest_service.statement_file_path(str(ctx["contest"]["slug"]), key)
+    if source_path.exists() and source_path.is_file() and (not source_path.is_symlink()):
+        return FileResponse(source_path, filename=Path(display_path).name)
+    default_text = _contest_default_statement_source_text(contest_id, str(ctx["contest"]["slug"]), current_language, display_path)
+    if default_text and config.contest_service.statement_source_is_text(key):
+        return PlainTextResponse(
+            default_text,
+            media_type="text/plain; charset=utf-8",
+            headers={"content-disposition": f'inline; filename="{Path(display_path).name}"'},
+        )
+    raise HTTPException(status_code=404, detail="contest statement source not found")
+
+
+def contest_statement_source_save(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    language: Annotated[str, Form()] = "",
+    path: Annotated[str, Form()] = "statements.tex",
+    content: Annotated[str, Form()] = "",
+):
+    ctx = _contest_ctx(contest, user, "packages")
+    if not bool(ctx["access"].get("can_write")):
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
+    contest_id = int(ctx["contest"]["id"])
+    current_language = _contest_statement_language(contest_id, language)
+    message = "contest statement source saved"
+    display_path = str(path or "").strip() or "statements.tex"
+    try:
+        key = _contest_statement_source_key(contest_id=contest_id, language=current_language, path=display_path, default_filename="statements.tex")
+        display_path = _contest_statement_display_path(key, current_language)
+        if not config.contest_service.statement_source_is_text(key):
+            raise ValueError("contest statement source is not a text file")
+        text = enforce_textarea_max_bytes(content, label=f"contest statement source {display_path}")
+        config.contest_service.write_statement_source_file(
+            contest_id=contest_id,
+            contest_slug=str(ctx["contest"]["slug"]),
+            actor_user_id=int(ctx["user"]["id"]),
+            key=key,
+            package_bytes=text.encode("utf-8"),
+        )
+        audit(
+            int(ctx["user"]["id"]),
+            None,
+            "contest.statement.source.save",
+            {"contest_id": contest_id, "contest_slug": str(ctx["contest"]["slug"]), "path": key},
+        )
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "packages",
+        query=_contest_packages_statement_query(language=current_language, source_path=display_path),
+        message=message,
+    )
+
+
+async def contest_statement_source_upload(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    language: Annotated[str, Form()] = "",
+    path: Annotated[str, Form()] = "",
+    upload: Annotated[UploadFile, File()] = ...,
+):
+    ctx = _contest_ctx(contest, user, "packages")
+    if not bool(ctx["access"].get("can_write")):
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
+    contest_id = int(ctx["contest"]["id"])
+    current_language = _contest_statement_language(contest_id, language)
+    message = "contest statement source uploaded"
+    display_path = ""
+    try:
+        key = _contest_statement_source_key(
+            contest_id=contest_id,
+            language=current_language,
+            path=path,
+            default_filename="",
+            upload_filename=upload.filename or "",
+        )
+        display_path = _contest_statement_display_path(key, current_language)
+        payload = await read_upload_bytes_limited(upload, label="contest statement source")
+        config.contest_service.write_statement_source_file(
+            contest_id=contest_id,
+            contest_slug=str(ctx["contest"]["slug"]),
+            actor_user_id=int(ctx["user"]["id"]),
+            key=key,
+            package_bytes=payload,
+        )
+        audit(
+            int(ctx["user"]["id"]),
+            None,
+            "contest.statement.source.upload",
+            {"contest_id": contest_id, "contest_slug": str(ctx["contest"]["slug"]), "path": key, "bytes": len(payload)},
+        )
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    finally:
+        await upload.close()
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "packages",
+        query=_contest_packages_statement_query(language=current_language, source_path=display_path or "statements.tex"),
+        message=message,
+    )
+
+
+def contest_statement_source_delete(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    language: Annotated[str, Form()] = "",
+    path: Annotated[str, Form()] = "",
+):
+    ctx = _contest_ctx(contest, user, "packages")
+    if not bool(ctx["access"].get("can_write")):
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
+    contest_id = int(ctx["contest"]["id"])
+    current_language = _contest_statement_language(contest_id, language)
+    message = "contest statement source deleted"
+    try:
+        key = _contest_statement_source_key(contest_id=contest_id, language=current_language, path=path, default_filename="")
+        display_path = _contest_statement_display_path(key, current_language)
+        config.contest_service.delete_statement_source_file(
+            contest_id=contest_id,
+            contest_slug=str(ctx["contest"]["slug"]),
+            key=key,
+        )
+        audit(
+            int(ctx["user"]["id"]),
+            None,
+            "contest.statement.source.delete",
+            {"contest_id": contest_id, "contest_slug": str(ctx["contest"]["slug"]), "path": key},
+        )
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+        display_path = "statements.tex"
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "packages",
+        query=_contest_packages_statement_query(language=current_language, source_path=display_path),
+        message=message,
+    )
+
+
+def contest_packages_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], job_id: str = "", language: str = "", source_path: str = ""):
     ctx = _contest_ctx(contest, user, "packages")
     contest_id = int(ctx["contest"]["id"])
     requested_job_id = str(job_id).strip()
+    current_language = _contest_statement_language(contest_id, language)
+    selected_source_error = ""
+    try:
+        selected_source_key = _contest_statement_source_key(
+            contest_id=contest_id,
+            language=current_language,
+            path=source_path,
+            default_filename="statements.tex",
+        )
+    except ValueError as exc:
+        selected_source_error = str(exc)
+        selected_source_key = _contest_statement_source_key(
+            contest_id=contest_id,
+            language=current_language,
+            path="statements.tex",
+            default_filename="statements.tex",
+        )
+    selected_display_path = _contest_statement_display_path(selected_source_key, current_language)
+    selected_is_text = config.contest_service.statement_source_is_text(selected_source_key)
+    selected_source_exists = False
+    selected_source_text = ""
+    if selected_is_text:
+        default_text = _contest_default_statement_source_text(contest_id, str(ctx["contest"]["slug"]), current_language, selected_display_path)
+        try:
+            selected_path = config.contest_service.statement_file_path(str(ctx["contest"]["slug"]), selected_source_key)
+            if selected_path.exists() and selected_path.is_file() and (not selected_path.is_symlink()):
+                selected_source_text = selected_path.read_text(encoding="utf-8", errors="replace")
+                selected_source_exists = True
+            else:
+                selected_source_text = default_text
+        except OSError:
+            selected_source_text = default_text
     artifact_rows = config.contest_service.list_artifacts(contest_id, limit=50)
     job_rows = config.contest_service.list_jobs(contest_id, limit=20)
     selected_job = config.contest_service.load_job(contest_id, requested_job_id)
@@ -159,5 +449,14 @@ def contest_packages_page(request: Request, contest: str, user: Annotated[str, D
             "selected_job": selected_job,
             "problem_count": config.contest_service.problem_count(contest_id),
             "requested_job_id": requested_job_id,
+            "contest_statement_language": current_language,
+            "contest_statement_language_options": _contest_statement_language_options(contest_id, current_language),
+            "contest_statement_source_rows": _contest_statement_source_rows(contest_id, str(ctx["contest"]["slug"]), current_language),
+            "contest_statement_selected_path": selected_display_path,
+            "contest_statement_selected_key": selected_source_key,
+            "contest_statement_selected_is_text": selected_is_text,
+            "contest_statement_selected_exists": selected_source_exists,
+            "contest_statement_selected_text": selected_source_text,
+            "contest_statement_source_error": selected_source_error,
         },
     )
