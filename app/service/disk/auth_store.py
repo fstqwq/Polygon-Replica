@@ -237,7 +237,6 @@ class AuthStore:
 
     def set_system_admin(self, *, actor_user_id: int, username: str, enabled: bool) -> AuthUserRow:
         safe_username = username.strip()
-        now_text = now_iso()
 
         def _tx(conn: sqlite3.Connection) -> AuthUserRow:
             row = conn.execute(

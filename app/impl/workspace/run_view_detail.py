@@ -683,7 +683,6 @@ def build_run_detail_context(
         }
 
     workspace = Path(ctx['workspace']['path'])
-    workspace_id = int(ctx['workspace']['id'])
     problem_id = int(ctx['problem']['id'])
     problem_slug = ctx['problem']['slug']
     username = ctx['user']['username']

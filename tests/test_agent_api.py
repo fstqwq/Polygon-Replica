@@ -21,6 +21,7 @@ class TestAgentAPI(SmokeBase):
     def _issue_auth_cookie(self, username: str, password: str = "StrongPass123") -> tuple[str, str]:
         reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
+        db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", [username])
         auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(auth_token)
         return (password, f"{AUTH_COOKIE_NAME}={auth_token}")

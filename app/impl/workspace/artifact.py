@@ -193,6 +193,10 @@ def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
             return
         raise HTTPException(status_code=404, detail="artifact not found in workspace")
     verification_row = config.verification_service.verification_record(str(artifact_id or "").strip())
-    if verification_row is not None and int(verification_row["problem_id"] or 0) == problem_id:
+    if (
+        verification_row is not None
+        and int(verification_row["problem_id"] or 0) == problem_id
+        and int(verification_row["workspace_id"] or 0) == workspace_id
+    ):
         return
     raise HTTPException(status_code=404, detail="artifact not found in workspace")
