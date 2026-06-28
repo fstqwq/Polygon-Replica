@@ -2041,8 +2041,7 @@
     });
   }
 
-  function initSettingsPasswordEnvelopeForm() {
-    var form = document.getElementById("settings-password-form");
+  function initPreparedPasswordEnvelopeForm(form, options) {
     if (!form) return;
 
     form.addEventListener("submit", function (ev) {
@@ -2056,33 +2055,50 @@
       form.dataset.passwordPending = "1";
 
       (async function () {
-        var currentEl = form.querySelector("input[name='current_password']");
         var nextEl = form.querySelector("input[name='new_password']");
         var confirmEl = form.querySelector("input[name='new_password_confirm']");
         var csrfEl = form.querySelector("input[name='csrf_token']");
-        var currentSaltEl = form.querySelector("input[name='current_password_salt']");
-        var currentItersEl = form.querySelector("input[name='current_password_iters']");
-        var currentKeyIdEl = form.querySelector("input[name='current_password_key_id']");
-        var currentEnvelopeTokenEl = form.querySelector("input[name='current_password_envelope_token']");
-        var currentEncryptedVerifierEl = form.querySelector("input[name='current_password_encrypted_verifier']");
         var newSaltEl = form.querySelector("input[name='new_password_salt']");
         var newItersEl = form.querySelector("input[name='new_password_iters']");
         var newKeyIdEl = form.querySelector("input[name='new_password_key_id']");
         var newEnvelopeTokenEl = form.querySelector("input[name='new_password_envelope_token']");
         var newEncryptedVerifierEl = form.querySelector("input[name='new_password_encrypted_verifier']");
+        var currentEl = options.currentPasswordName
+          ? form.querySelector("input[name='" + options.currentPasswordName + "']")
+          : null;
+        var currentSaltEl = options.currentSaltName
+          ? form.querySelector("input[name='" + options.currentSaltName + "']")
+          : null;
+        var currentItersEl = options.currentItersName
+          ? form.querySelector("input[name='" + options.currentItersName + "']")
+          : null;
+        var currentKeyIdEl = options.currentKeyIdName
+          ? form.querySelector("input[name='" + options.currentKeyIdName + "']")
+          : null;
+        var currentEnvelopeTokenEl = options.currentEnvelopeTokenName
+          ? form.querySelector("input[name='" + options.currentEnvelopeTokenName + "']")
+          : null;
+        var currentEncryptedVerifierEl = options.currentEncryptedVerifierName
+          ? form.querySelector("input[name='" + options.currentEncryptedVerifierName + "']")
+          : null;
 
-        if (!currentEl || !nextEl || !confirmEl || !csrfEl || !currentSaltEl || !currentItersEl || !currentKeyIdEl || !currentEnvelopeTokenEl || !currentEncryptedVerifierEl || !newSaltEl || !newItersEl || !newKeyIdEl || !newEnvelopeTokenEl || !newEncryptedVerifierEl) {
+        if (!nextEl || !confirmEl || !csrfEl || !newSaltEl || !newItersEl || !newKeyIdEl || !newEnvelopeTokenEl || !newEncryptedVerifierEl) {
+          delete form.dataset.passwordPending;
+          window.alert("Password envelope fields are missing.");
+          return;
+        }
+        if (options.requireCurrentPassword && (!currentEl || !currentSaltEl || !currentItersEl || !currentKeyIdEl || !currentEnvelopeTokenEl || !currentEncryptedVerifierEl)) {
           delete form.dataset.passwordPending;
           window.alert("Password envelope fields are missing.");
           return;
         }
 
-        var currentPassword = String(currentEl.value || "");
         var nextPassword = String(nextEl.value || "");
         var confirmPassword = String(confirmEl.value || "");
         var csrfToken = String(csrfEl.value || "").trim();
-        var currentSalt = String(currentSaltEl.value || "").trim().toLowerCase();
-        var currentIters = Number(currentItersEl.value || 0);
+        var currentPassword = currentEl ? String(currentEl.value || "") : "";
+        var currentSalt = currentSaltEl ? String(currentSaltEl.value || "").trim().toLowerCase() : "";
+        var currentIters = currentItersEl ? Number(currentItersEl.value || 0) : 0;
         var newSalt = String(newSaltEl.value || "").trim().toLowerCase();
         var newIters = Number(newItersEl.value || 0);
 
@@ -2091,7 +2107,7 @@
           delete form.dataset.passwordPending;
           return;
         }
-        if (!currentPassword || !nextPassword) {
+        if ((options.requireCurrentPassword && !currentPassword) || !nextPassword) {
           form.dataset.passwordPrepared = "1";
           delete form.dataset.passwordPending;
           form.submit();
@@ -2102,28 +2118,42 @@
           delete form.dataset.passwordPending;
           return;
         }
-        if (!/^[0-9a-f]{32}$/.test(currentSalt) || !/^[0-9a-f]{32}$/.test(newSalt)) {
+        if (!/^[0-9a-f]{32}$/.test(newSalt)) {
           window.alert("Invalid password metadata.");
           delete form.dataset.passwordPending;
           return;
         }
-        if (!Number.isFinite(currentIters) || currentIters <= 0 || !Number.isFinite(newIters) || newIters <= 0) {
+        if (!Number.isFinite(newIters) || newIters <= 0) {
           window.alert("Invalid password metadata.");
           delete form.dataset.passwordPending;
           return;
+        }
+        if (options.requireCurrentPassword) {
+          if (!/^[0-9a-f]{32}$/.test(currentSalt)) {
+            window.alert("Invalid password metadata.");
+            delete form.dataset.passwordPending;
+            return;
+          }
+          if (!Number.isFinite(currentIters) || currentIters <= 0) {
+            window.alert("Invalid password metadata.");
+            delete form.dataset.passwordPending;
+            return;
+          }
         }
 
-        var currentVerifier = await pbkdf2Hex(currentPassword, currentSalt, Math.floor(currentIters));
         var nextVerifier = await pbkdf2Hex(nextPassword, newSalt, Math.floor(newIters));
-        var currentEnvelope = await passwordEnvelope("settings-password", "settings-current", "", csrfToken, currentVerifier);
-        var newEnvelope = await passwordEnvelope("settings-password", "settings-new", "", csrfToken, nextVerifier);
-        currentKeyIdEl.value = currentEnvelope.keyId;
-        currentEnvelopeTokenEl.value = currentEnvelope.envelopeToken;
-        currentEncryptedVerifierEl.value = currentEnvelope.encryptedVerifier;
+        if (options.requireCurrentPassword) {
+          var currentVerifier = await pbkdf2Hex(currentPassword, currentSalt, Math.floor(currentIters));
+          var currentEnvelope = await passwordEnvelope(options.scope, options.currentPurpose, options.username(form), csrfToken, currentVerifier);
+          currentKeyIdEl.value = currentEnvelope.keyId;
+          currentEnvelopeTokenEl.value = currentEnvelope.envelopeToken;
+          currentEncryptedVerifierEl.value = currentEnvelope.encryptedVerifier;
+        }
+        var newEnvelope = await passwordEnvelope(options.scope, options.newPurpose, options.username(form), csrfToken, nextVerifier);
         newKeyIdEl.value = newEnvelope.keyId;
         newEnvelopeTokenEl.value = newEnvelope.envelopeToken;
         newEncryptedVerifierEl.value = newEnvelope.encryptedVerifier;
-        currentEl.value = "";
+        if (currentEl) currentEl.value = "";
         nextEl.value = "";
         confirmEl.value = "";
         form.dataset.passwordPrepared = "1";
@@ -2133,6 +2163,40 @@
         delete form.dataset.passwordPending;
         window.alert("Failed to prepare password envelope.");
       });
+    });
+  }
+
+  function initSettingsPasswordEnvelopeForm() {
+    initPreparedPasswordEnvelopeForm(document.getElementById("settings-password-form"), {
+      requireCurrentPassword: true,
+      scope: "settings-password",
+      currentPurpose: "settings-current",
+      newPurpose: "settings-new",
+      username: function () {
+        return "";
+      },
+      currentPasswordName: "current_password",
+      currentSaltName: "current_password_salt",
+      currentItersName: "current_password_iters",
+      currentKeyIdName: "current_password_key_id",
+      currentEnvelopeTokenName: "current_password_envelope_token",
+      currentEncryptedVerifierName: "current_password_encrypted_verifier",
+    });
+    initPreparedPasswordEnvelopeForm(document.getElementById("settings-admin-password-form"), {
+      requireCurrentPassword: false,
+      scope: "settings-admin-password",
+      currentPurpose: "",
+      newPurpose: "settings-admin-new",
+      username: function (activeForm) {
+        var usernameEl = activeForm.querySelector("input[name='target_username']");
+        return usernameEl ? String(usernameEl.value || "").trim() : "";
+      },
+      currentPasswordName: "",
+      currentSaltName: "",
+      currentItersName: "",
+      currentKeyIdName: "",
+      currentEnvelopeTokenName: "",
+      currentEncryptedVerifierName: "",
     });
   }
 

@@ -10,7 +10,7 @@ from typing import Annotated
 from urllib.parse import quote_plus, urlencode
 
 from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
@@ -29,6 +29,9 @@ from app.main_util import (
     write_upload_file_limited,
 )
 from app.service.statement.constant import (
+    DEFAULT_OLYMP_STY,
+    DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
+    DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_ASSETS_DIR,
     STATEMENT_PROBLEM_REL,
     STATEMENT_SECTIONS_DIR,
@@ -41,7 +44,7 @@ from app.service.statement.context import (
     pick_statement_language,
     statement_languages,
 )
-from app.service.statement.render import ensure_statement_language_sources
+from app.service.statement.render import ensure_statement_language_sources, render_statement_problem_assets_for_language
 from app.service.statement.signature import statement_sources_signature
 
 _C = config.constants
@@ -593,6 +596,33 @@ def preview_status(problem: str, user: Annotated[str, Depends(require_session_us
         }
     )
 
+
+def statement_tex_source(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    workspace = Path(ctx['workspace']['path'])
+    try:
+        current_language = selected_statement_language(workspace, language)
+        with tempfile.TemporaryDirectory(prefix='polygon-replica-statement-tex-') as tmp:
+            target_dir = Path(tmp) / "statement"
+            tex_path = render_statement_problem_assets_for_language(
+                workspace,
+                current_language,
+                target_dir,
+                problem_title=str(ctx["problem"]["name"]),
+            )
+            tex_text = tex_path.read_text(encoding='utf-8')
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    headers = {
+        "Content-Disposition": f'inline; filename="statement-{current_language}.tex"',
+    }
+    return PlainTextResponse(tex_text, media_type="text/plain; charset=utf-8", headers=headers)
+
+
 def preview_save(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
@@ -665,6 +695,53 @@ def preview_save(
         status_code=303,
         message=msg,
     )
+
+
+def statement_templates_reset(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    current_language = resolve_statement_page_language(workspace, language)
+    write_plan = {
+        STATEMENT_TEMPLATE_REL: DEFAULT_STATEMENT_TEMPLATE,
+        STATEMENT_PROBLEM_REL: DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
+        STATEMENT_STYLE_REL: DEFAULT_OLYMP_STY,
+    }
+    message = 'default statement templates restored'
+    try:
+        with config.workspace_service.workspace_lock(workspace):
+            for rel, content in write_plan.items():
+                target = safe_workspace_path(workspace, rel.as_posix())
+                if target.is_symlink():
+                    raise ValueError(f'{rel.as_posix()} must be a regular file')
+                if target.exists() and (not target.is_file()):
+                    raise ValueError(f'{rel.as_posix()} must be a regular file')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding='utf-8')
+        audit(
+            ctx['user']['id'],
+            ctx['problem']['id'],
+            'statement.templates.reset',
+            {
+                'paths': [rel.as_posix() for rel in write_plan],
+                'language': current_language,
+            },
+        )
+    except (ValueError, OSError, HTTPException) as exc:
+        message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+    return redirect_response(
+        statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
+
 
 def statement_compile_asset_delete(
     problem: str,

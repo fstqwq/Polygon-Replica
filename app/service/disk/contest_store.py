@@ -20,6 +20,7 @@ class ContestMemberRecord(TypedDict):
     username: str
     role: str
     created_at: str
+    is_system_admin: int
 
 
 class ContestPropertyRecord(TypedDict):
@@ -133,6 +134,53 @@ class ContestDiskStore:
         )
         return [dict(row) for row in rows]
 
+    def all_contest_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
+        rows = self.db.fetch_all(
+            """
+            SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,'admin' AS role,
+                   MAX(
+                       c.created_at,
+                       COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),
+                       COALESCE((SELECT MAX(pr.updated_at) FROM contest_properties pr WHERE pr.contest_id=c.id), ''),
+                       COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),
+                       COALESCE((
+                           SELECT MAX(w2.updated_at)
+                           FROM contest_problems cp2
+                           JOIN workspaces w2 ON w2.problem_id=cp2.problem_id AND w2.user_id=?
+                           WHERE cp2.contest_id=c.id
+                       ), '')
+                   ) AS last_updated_at,
+                   (
+                       SELECT COUNT(*)
+                       FROM contest_problems cp
+                       WHERE cp.contest_id=c.id
+                   ) AS problem_count,
+                   (
+                       SELECT group_concat(x.slug, ', ')
+                       FROM (
+                           SELECT p.slug AS slug
+                           FROM contest_problems cp
+                           JOIN problems p ON p.id=cp.problem_id
+                           WHERE cp.contest_id=c.id
+                           ORDER BY p.slug ASC
+                           LIMIT 5
+                       ) x
+                   ) AS problem_slugs_preview,
+                   (
+                       SELECT COUNT(*)
+                       FROM contest_problems cp3
+                       JOIN workspaces w ON w.problem_id=cp3.problem_id AND w.user_id=?
+                       WHERE cp3.contest_id=c.id
+                         AND COALESCE(w.dirty, 0) <> 0
+                   ) AS dirty_problem_count
+            FROM contests c
+            ORDER BY last_updated_at DESC, c.slug ASC
+            LIMIT ?
+            """,
+            [int(user_id), int(user_id), max(1, int(limit))],
+        )
+        return [dict(row) for row in rows]
+
     def contest_slug_exists(self, contest_slug: str) -> bool:
         row = self.db.fetch_one("SELECT id FROM contests WHERE slug=?", [contest_slug])
         return row is not None
@@ -214,7 +262,7 @@ class ContestDiskStore:
     def member_entries(self, contest_id: int) -> list[ContestMemberRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT u.username,m.role,m.created_at
+            SELECT u.username,m.role,m.created_at,COALESCE(u.is_system_admin, 0) AS is_system_admin
             FROM contest_members m
             JOIN users u ON u.id=m.user_id
             WHERE m.contest_id=?
@@ -227,7 +275,10 @@ class ContestDiskStore:
         return [dict(row) for row in rows]
 
     def user_id_by_username(self, username: str) -> int | None:
-        row = self.db.fetch_one("SELECT id FROM users WHERE username=?", [username])
+        row = self.db.fetch_one(
+            "SELECT id FROM users WHERE LOWER(username)=LOWER(?) ORDER BY id ASC LIMIT 1",
+            [username],
+        )
         if row is None:
             return None
         return int(row["id"])
@@ -248,11 +299,17 @@ class ContestDiskStore:
             SELECT u.id AS user_id,m.role
             FROM contest_members m
             JOIN users u ON u.id=m.user_id
-            WHERE m.contest_id=? AND u.username=?
+            WHERE m.contest_id=? AND LOWER(u.username)=LOWER(?)
             """,
             [int(contest_id), username],
         )
         return None if row is None else dict(row)
+
+    def is_system_admin(self, user_id: int) -> bool:
+        row = self.db.fetch_one("SELECT is_system_admin FROM users WHERE id=?", [int(user_id)])
+        if row is None:
+            return False
+        return int(row["is_system_admin"] or 0) == 1
 
     def revoke_member(self, contest_id: int, user_id: int) -> None:
         self.db.execute(
@@ -326,6 +383,33 @@ class ContestDiskStore:
 
         self.db.write_transaction(tx)
 
+    def upsert_attachment_row(
+        self,
+        *,
+        contest_id: int,
+        key: str,
+        rel_path: str,
+        created_by_user_id: int,
+        created_at: str,
+    ) -> None:
+        self.db.execute(
+            """
+            INSERT INTO contest_attachments(contest_id,key,rel_path,created_at,created_by_user_id)
+            VALUES(?,?,?,?,?)
+            ON CONFLICT(contest_id,key) DO UPDATE SET
+                rel_path=excluded.rel_path,
+                created_at=excluded.created_at,
+                created_by_user_id=excluded.created_by_user_id
+            """,
+            [int(contest_id), str(key).strip(), str(rel_path).strip(), created_at, int(created_by_user_id)],
+        )
+
+    def delete_attachment_row(self, contest_id: int, key: str) -> None:
+        self.db.execute(
+            "DELETE FROM contest_attachments WHERE contest_id=? AND key=?",
+            [int(contest_id), str(key).strip()],
+        )
+
     def contest_problem_rows(self, contest_id: int) -> list[ContestProblemRecord]:
         rows = self.db.fetch_all(
             """
@@ -353,22 +437,41 @@ class ContestDiskStore:
         return items
 
     def available_problem_rows(self, contest_id: int, user_id: int, *, limit: int) -> list[ContestAvailableProblemRecord]:
-        rows = self.db.fetch_all(
-            """
-            SELECT p.id AS problem_id,p.slug AS problem_slug,a.role
-            FROM repo_acl a
-            JOIN problems p ON p.id=a.problem_id
-            WHERE a.user_id=?
-              AND p.id NOT IN (
-                  SELECT cp.problem_id
-                  FROM contest_problems cp
-                  WHERE cp.contest_id=?
-              )
-            ORDER BY p.slug ASC
-            LIMIT ?
-            """,
-            [int(user_id), int(contest_id), max(1, int(limit))],
-        )
+        safe_contest_id = int(contest_id)
+        safe_user_id = int(user_id)
+        safe_limit = max(1, int(limit))
+        if self.is_system_admin(safe_user_id):
+            rows = self.db.fetch_all(
+                """
+                SELECT p.id AS problem_id,p.slug AS problem_slug,'admin' AS role
+                FROM problems p
+                WHERE p.id NOT IN (
+                    SELECT cp.problem_id
+                    FROM contest_problems cp
+                    WHERE cp.contest_id=?
+                )
+                ORDER BY p.slug ASC
+                LIMIT ?
+                """,
+                [safe_contest_id, safe_limit],
+            )
+        else:
+            rows = self.db.fetch_all(
+                """
+                SELECT p.id AS problem_id,p.slug AS problem_slug,a.role
+                FROM repo_acl a
+                JOIN problems p ON p.id=a.problem_id
+                WHERE a.user_id=?
+                  AND p.id NOT IN (
+                      SELECT cp.problem_id
+                      FROM contest_problems cp
+                      WHERE cp.contest_id=?
+                  )
+                ORDER BY p.slug ASC
+                LIMIT ?
+                """,
+                [safe_user_id, safe_contest_id, safe_limit],
+            )
         items: list[ContestAvailableProblemRecord] = []
         for row in rows:
             safe_slug = str(row["problem_slug"] or "")
@@ -433,25 +536,53 @@ class ContestDiskStore:
         return int(self.db.write_transaction(tx))
 
     def reorder_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
-        safe_pairs = [(int(problem_id), idx) for problem_id, idx in pairs if idx]
+        safe_pairs = [(int(contest_problem_id), idx) for contest_problem_id, idx in pairs if idx]
         if not safe_pairs:
             return False
         def tx(conn: sqlite3.Connection) -> int:
-            updated = 0
-            for problem_id, idx in safe_pairs:
-                row_cursor = conn.execute(
-                    "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
-                    [int(contest_id), problem_id],
-                )
-                row = row_cursor.fetchone()
-                if row is None:
-                    continue
+            contest_problem_ids = [contest_problem_id for contest_problem_id, _ in safe_pairs]
+            if len(set(contest_problem_ids)) != len(contest_problem_ids):
+                return 0
+            if len({idx for _, idx in safe_pairs}) != len(safe_pairs):
+                return 0
+            placeholders = ",".join(("?" for _ in contest_problem_ids))
+            rows = conn.execute(
+                f"SELECT id FROM contest_problems WHERE contest_id=? AND id IN ({placeholders})",
+                [int(contest_id), *contest_problem_ids],
+            ).fetchall()
+            found_ids = {int(row["id"]) for row in rows}
+            if found_ids != set(contest_problem_ids):
+                return 0
+
+            target_indices = [idx for _, idx in safe_pairs]
+            idx_placeholders = ",".join(("?" for _ in target_indices))
+            conflicting = conn.execute(
+                f"""
+                SELECT id
+                FROM contest_problems
+                WHERE contest_id=?
+                  AND idx IN ({idx_placeholders})
+                  AND id NOT IN ({placeholders})
+                LIMIT 1
+                """,
+                [int(contest_id), *target_indices, *contest_problem_ids],
+            ).fetchone()
+            if conflicting is not None:
+                return 0
+
+            for pos, (contest_problem_id, _) in enumerate(safe_pairs, start=1):
+                # Move all affected rows out of the user-visible index namespace before
+                # writing final values, so A<->B swaps do not trip the unique index.
                 conn.execute(
-                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND problem_id=?",
-                    [idx, int(contest_id), problem_id],
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [f"~tmp-reorder-{int(contest_id)}-{contest_problem_id}-{pos}~", int(contest_id), contest_problem_id],
                 )
-                updated += 1
-            return updated
+            for contest_problem_id, idx in safe_pairs:
+                conn.execute(
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [idx, int(contest_id), contest_problem_id],
+                )
+            return len(safe_pairs)
         return int(self.db.write_transaction(tx)) > 0
 
     def renumber_problem_indices(self, contest_id: int) -> None:

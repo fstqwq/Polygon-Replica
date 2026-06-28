@@ -6,6 +6,10 @@
 
 <section>
   <h2>Members</h2>
+  <p class="muted">
+    Contest access does not automatically grant problem access. Use sync to apply each member's contest role to all contest
+    problems you can write. Owners and system admins are preserved.
+  </p>
   {% if entries %}
   <table class="table-base">
     <tr>
@@ -22,6 +26,10 @@
       {% if ctx.access.can_manage %}
       <td>
         {% if row.role != "owner" %}
+        <form method="post" action="/contests/{{ ctx.contest.slug }}/access/sync-user" class="inline-form">
+          <input type="hidden" name="target_user" value="{{ row.username }}" />
+          <button class="btn" type="submit">Sync Problems</button>
+        </form>
         <form method="post" action="/contests/{{ ctx.contest.slug }}/access/revoke" class="inline-form">
           <input type="hidden" name="target_user" value="{{ row.username }}" />
           <button class="btn" type="submit" onclick="return confirm('Revoke access for {{ row.username }}? uncommitted changes will be lost.');">Revoke</button>
@@ -52,8 +60,15 @@
     </select>
     <button class="btn" type="submit">Grant / Update</button>
   </form>
+  <p class="muted">
+    After granting a member, remember to sync their problem access if they should actually open or edit contest problems.
+    Current writable contest problems: {{ sync_problem_candidate_count }}.
+  </p>
+  <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/access/sync-all">
+    <button class="btn" type="submit">Sync All Members To Writable Contest Problems</button>
+  </form>
 </section>
 {% else %}
-<p class="muted">Owner role is required for access management.</p>
+<p class="muted">Owner or system admin role is required for access management.</p>
 {% endif %}
 {% endblock %}

@@ -19,6 +19,19 @@ class AuthUserRow(TypedDict):
     password_hash: str
     password_salt: str
     password_iters: int
+    is_system_admin: int
+    is_banned: int
+    banned_at: str
+
+
+class AuthAdminUserListRow(TypedDict):
+    id: int
+    username: str
+    email: str
+    created_at: str
+    is_registered: int
+    is_system_admin: int
+    is_banned: int
 
 
 class AuthSessionIdentity(TypedDict):
@@ -83,7 +96,9 @@ class AuthStore:
             return None
         row = self.db.fetch_one(
             """
-            SELECT id,username,email,email_normalized,email_verified_at,password_hash,password_salt,password_iters
+            SELECT
+                id,username,email,email_normalized,email_verified_at,password_hash,password_salt,password_iters,
+                is_system_admin,is_banned,banned_at
             FROM users
             WHERE LOWER(username)=LOWER(?)
             ORDER BY id ASC
@@ -102,6 +117,9 @@ class AuthStore:
             "password_hash": str(row["password_hash"] or ""),
             "password_salt": str(row["password_salt"] or ""),
             "password_iters": int(row["password_iters"] or 0),
+            "is_system_admin": int(row["is_system_admin"] or 0),
+            "is_banned": int(row["is_banned"] or 0),
+            "banned_at": str(row["banned_at"] or ""),
         }
 
     def registration_conflict(self, username: str, email_normalized: str) -> str:
@@ -145,6 +163,217 @@ class AuthStore:
             """,
             [verifier_hex, salt_hex, int(iterations), now_iso(), int(user_id)],
         )
+
+    def active_system_admin_count(self) -> int:
+        row = self.db.fetch_one(
+            "SELECT COUNT(*) AS c FROM users WHERE is_system_admin=1 AND COALESCE(is_banned, 0)=0",
+            [],
+        )
+        if row is None:
+            return 0
+        return max(0, int(row["c"] or 0))
+
+    def admin_user_rows(self, *, query: str, limit: int) -> list[AuthAdminUserListRow]:
+        safe_query = str(query or "").strip().lower()
+        safe_limit = max(1, min(int(limit), 200))
+        params: list[object] = []
+        where_sql = ""
+        if safe_query:
+            like_pattern = f"%{safe_query}%"
+            where_sql = """
+            WHERE LOWER(username) LIKE ? OR LOWER(COALESCE(email, '')) LIKE ?
+            """
+            params.extend([like_pattern, like_pattern])
+        rows = self.db.fetch_all(
+            f"""
+            SELECT
+                id,
+                username,
+                COALESCE(email, '') AS email,
+                COALESCE(created_at, '') AS created_at,
+                CASE WHEN COALESCE(TRIM(password_hash), '') <> '' THEN 1 ELSE 0 END AS is_registered,
+                COALESCE(is_system_admin, 0) AS is_system_admin,
+                COALESCE(is_banned, 0) AS is_banned
+            FROM users
+            {where_sql}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        )
+        result: list[AuthAdminUserListRow] = []
+        for row in rows:
+            result.append(
+                {
+                    "id": int(row["id"] or 0),
+                    "username": str(row["username"] or ""),
+                    "email": str(row["email"] or ""),
+                    "created_at": str(row["created_at"] or ""),
+                    "is_registered": int(row["is_registered"] or 0),
+                    "is_system_admin": int(row["is_system_admin"] or 0),
+                    "is_banned": int(row["is_banned"] or 0),
+                }
+            )
+        return result
+
+    def revoke_all_access_for_user(self, user_id: int) -> None:
+        now_text = now_iso()
+        self.db.execute(
+            "UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            [now_text, int(user_id)],
+        )
+        self.db.execute(
+            "UPDATE sudo_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            [now_text, int(user_id)],
+        )
+        self.db.execute(
+            "UPDATE agent_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            [now_text, int(user_id)],
+        )
+        self.db.execute(
+            "UPDATE agent_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            [now_text, int(user_id)],
+        )
+
+    def set_system_admin(self, *, actor_user_id: int, username: str, enabled: bool) -> AuthUserRow:
+        safe_username = username.strip()
+        now_text = now_iso()
+
+        def _tx(conn: sqlite3.Connection) -> AuthUserRow:
+            row = conn.execute(
+                """
+                SELECT id,username,email,email_normalized,email_verified_at,password_hash,password_salt,password_iters,
+                       is_system_admin,COALESCE(is_banned, 0) AS is_banned,COALESCE(banned_at, '') AS banned_at
+                FROM users
+                WHERE LOWER(username)=LOWER(?)
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                [safe_username],
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"user {safe_username} not found")
+            target_id = int(row["id"])
+            current_admin = int(row["is_system_admin"] or 0) == 1
+            if (not bool(enabled)) and current_admin:
+                if target_id == int(actor_user_id):
+                    raise ValueError("cannot remove your own system admin access")
+                admin_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM users WHERE is_system_admin=1 AND COALESCE(is_banned, 0)=0"
+                    ).fetchone()[0]
+                    or 0
+                )
+                if int(row["is_banned"] or 0) == 0 and admin_count <= 1:
+                    raise ValueError("cannot remove the last active system admin")
+            conn.execute(
+                "UPDATE users SET is_system_admin=? WHERE id=?",
+                [1 if enabled else 0, target_id],
+            )
+            updated = conn.execute(
+                """
+                SELECT id,username,email,email_normalized,email_verified_at,password_hash,password_salt,password_iters,
+                       is_system_admin,COALESCE(is_banned, 0) AS is_banned,COALESCE(banned_at, '') AS banned_at
+                FROM users
+                WHERE id=?
+                """,
+                [target_id],
+            ).fetchone()
+            if updated is None:
+                raise RuntimeError("failed to update system admin state")
+            return {
+                "id": int(updated["id"]),
+                "username": str(updated["username"] or ""),
+                "email": str(updated["email"] or ""),
+                "email_normalized": str(updated["email_normalized"] or ""),
+                "email_verified_at": str(updated["email_verified_at"] or ""),
+                "password_hash": str(updated["password_hash"] or ""),
+                "password_salt": str(updated["password_salt"] or ""),
+                "password_iters": int(updated["password_iters"] or 0),
+                "is_system_admin": int(updated["is_system_admin"] or 0),
+                "is_banned": int(updated["is_banned"] or 0),
+                "banned_at": str(updated["banned_at"] or ""),
+            }
+
+        return self.db.write_transaction(_tx)
+
+    def set_user_banned(self, *, actor_user_id: int, username: str, banned: bool) -> AuthUserRow:
+        safe_username = username.strip()
+        now_text = now_iso()
+
+        def _tx(conn: sqlite3.Connection) -> AuthUserRow:
+            row = conn.execute(
+                """
+                SELECT id,username,email,email_normalized,email_verified_at,password_hash,password_salt,password_iters,
+                       is_system_admin,COALESCE(is_banned, 0) AS is_banned,COALESCE(banned_at, '') AS banned_at
+                FROM users
+                WHERE LOWER(username)=LOWER(?)
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                [safe_username],
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"user {safe_username} not found")
+            target_id = int(row["id"])
+            if bool(banned) and target_id == int(actor_user_id):
+                raise ValueError("cannot ban your own account")
+            if bool(banned) and int(row["is_system_admin"] or 0) == 1 and int(row["is_banned"] or 0) == 0:
+                admin_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM users WHERE is_system_admin=1 AND COALESCE(is_banned, 0)=0"
+                    ).fetchone()[0]
+                    or 0
+                )
+                if admin_count <= 1:
+                    raise ValueError("cannot ban the last active system admin")
+            conn.execute(
+                "UPDATE users SET is_banned=?, banned_at=? WHERE id=?",
+                [1 if banned else 0, now_text if banned else None, target_id],
+            )
+            if banned:
+                conn.execute(
+                    "UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                    [now_text, target_id],
+                )
+                conn.execute(
+                    "UPDATE sudo_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                    [now_text, target_id],
+                )
+                conn.execute(
+                    "UPDATE agent_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                    [now_text, target_id],
+                )
+                conn.execute(
+                    "UPDATE agent_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                    [now_text, target_id],
+                )
+            updated = conn.execute(
+                """
+                SELECT id,username,email,email_normalized,email_verified_at,password_hash,password_salt,password_iters,
+                       is_system_admin,COALESCE(is_banned, 0) AS is_banned,COALESCE(banned_at, '') AS banned_at
+                FROM users
+                WHERE id=?
+                """,
+                [target_id],
+            ).fetchone()
+            if updated is None:
+                raise RuntimeError("failed to update user ban state")
+            return {
+                "id": int(updated["id"]),
+                "username": str(updated["username"] or ""),
+                "email": str(updated["email"] or ""),
+                "email_normalized": str(updated["email_normalized"] or ""),
+                "email_verified_at": str(updated["email_verified_at"] or ""),
+                "password_hash": str(updated["password_hash"] or ""),
+                "password_salt": str(updated["password_salt"] or ""),
+                "password_iters": int(updated["password_iters"] or 0),
+                "is_system_admin": int(updated["is_system_admin"] or 0),
+                "is_banned": int(updated["is_banned"] or 0),
+                "banned_at": str(updated["banned_at"] or ""),
+            }
+
+        return self.db.write_transaction(_tx)
 
     def create_user_with_password_verifier(
         self,
@@ -546,7 +775,7 @@ class AuthStore:
             return None
         row = self.db.fetch_one(
             """
-            SELECT s.id AS session_id,s.user_id,s.expires_at,u.username
+            SELECT s.id AS session_id,s.user_id,s.expires_at,u.username,COALESCE(u.is_banned, 0) AS is_banned
             FROM auth_sessions s
             JOIN users u ON u.id=s.user_id
             WHERE s.token_hash=? AND s.revoked_at IS NULL
@@ -554,6 +783,9 @@ class AuthStore:
             [sha256_hex_text(raw_token)],
         )
         if row is None:
+            return None
+        if int(row["is_banned"] or 0) == 1:
+            self.revoke_auth_session(raw_token)
             return None
         expires_at = self._parse_iso_utc(str(row["expires_at"] or ""))
         if expires_at is None or expires_at <= datetime.now(timezone.utc):

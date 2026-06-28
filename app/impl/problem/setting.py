@@ -9,7 +9,16 @@ from fastapi import Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.impl.auth.session import create_session_for_user, revoke_sudo_sessions_for_user
-from app.impl.auth.shared import dummy_password_salt_hex, lookup_user_auth, normalize_password_iters, normalize_password_salt_hex, redirect_response, set_user_password_verifier, template_response
+from app.impl.auth.shared import (
+    dummy_password_salt_hex,
+    lookup_user_auth,
+    normalize_password_iters,
+    normalize_password_salt_hex,
+    normalize_username_required,
+    redirect_response,
+    set_user_password_verifier,
+    template_response,
+)
 from app.impl.auth.csrf import issue_password_form_csrf_token, verify_password_form_csrf_token
 from app.impl.auth.password_envelope import password_envelope_store
 from app.impl.runtime.config import config
@@ -21,6 +30,17 @@ from app.service.auth.password_hash import password_verifier_storage_hash
 from app.service.verification.runtime import coerce_int
 
 _C = config.constants
+
+
+def _settings_system_admin_ctx(user: str) -> tuple[dict[str, object], int]:
+    ctx = _settings_user_ctx(user)
+    require_system_admin(ctx)
+    actor_user_id = int(ctx["user"]["id"])
+    return ctx, actor_user_id
+
+
+def _admin_target_username(value: str) -> str:
+    return normalize_username_required(form_text(value))
 
 
 def settings_page(request: Request, user: Annotated[str, Depends(require_session_user)]):
@@ -45,6 +65,9 @@ def settings_page(request: Request, user: Annotated[str, Depends(require_session
     admin_runtime_controls: dict[str, dict[str, object]] = {}
     admin_default_category_slug = ""
     smtp_config: dict[str, object] = {}
+    active_system_admin_count = 0
+    admin_users_query = ""
+    admin_user_rows: list[dict[str, object]] = []
     default_problem = default_problem if isinstance(default_problem := ctx.get('default_problem'), str) else ''
     if (not default_problem) and problems:
         first_problem_slug = problems[0].get('slug')
@@ -77,6 +100,9 @@ def settings_page(request: Request, user: Annotated[str, Depends(require_session
             }
         judgehost_status = config.judgehost_task_service.status()
         smtp_config = config.smtp_config_service.snapshot().__dict__
+        active_system_admin_count = config.auth_service.active_system_admin_count()
+        admin_users_query = str(request.query_params.get("admin_users_query") or "").strip()
+        admin_user_rows = config.auth_service.admin_user_rows(query=admin_users_query, limit=50)
     return template_response(
         request,
         'settings.html',
@@ -97,6 +123,12 @@ def settings_page(request: Request, user: Annotated[str, Depends(require_session
             'judgehost_status': judgehost_status,
             'admin_runtime_controls': admin_runtime_controls,
             'smtp_config': smtp_config,
+            'active_system_admin_count': active_system_admin_count,
+            'admin_users_query': admin_users_query,
+            'admin_user_rows': admin_user_rows,
+            'admin_password_csrf_token': issue_password_form_csrf_token('settings-admin-password'),
+            'admin_password_iters': int(_C.PASSWORD_HASH_ITERS),
+            'admin_password_salt': secrets.token_hex(16),
         },
     )
 
@@ -428,3 +460,127 @@ def settings_password_update(
     except ValueError as exc:
         msg = str(exc)
     return redirect_response('/settings', status_code=303, message=msg)
+
+
+def settings_user_system_admin_update(
+    user: Annotated[str, Depends(require_session_user)],
+    target_username: str = Form(""),
+    action: str = Form("grant"),
+):
+    _ctx, actor_user_id = _settings_system_admin_ctx(user)
+    redirect_target = "/settings"
+    try:
+        safe_target = _admin_target_username(target_username)
+        safe_action = str(action or "").strip().lower()
+        if safe_action not in {"grant", "revoke"}:
+            raise ValueError("invalid system admin action")
+        enabled = safe_action == "grant"
+        updated = config.auth_service.set_system_admin(
+            actor_user_id=actor_user_id,
+            username=safe_target,
+            enabled=enabled,
+        )
+        audit(
+            actor_user_id,
+            None,
+            "system_admin.user_system_admin_update",
+            {
+                "target_username": str(updated["username"]),
+                "is_system_admin": int(updated["is_system_admin"] or 0),
+            },
+        )
+        msg = f"{safe_target} is now a system admin" if enabled else f"{safe_target} is no longer a system admin"
+    except ValueError as exc:
+        msg = str(exc)
+    return redirect_response(redirect_target, status_code=303, message=msg)
+
+
+def settings_user_ban_update(
+    user: Annotated[str, Depends(require_session_user)],
+    target_username: str = Form(""),
+    action: str = Form("ban"),
+):
+    _ctx, actor_user_id = _settings_system_admin_ctx(user)
+    redirect_target = "/settings"
+    try:
+        safe_target = _admin_target_username(target_username)
+        safe_action = str(action or "").strip().lower()
+        if safe_action not in {"ban", "unban"}:
+            raise ValueError("invalid ban action")
+        banned = safe_action == "ban"
+        updated = config.auth_service.set_user_banned(
+            actor_user_id=actor_user_id,
+            username=safe_target,
+            banned=banned,
+        )
+        audit(
+            actor_user_id,
+            None,
+            "system_admin.user_ban_update",
+            {
+                "target_username": str(updated["username"]),
+                "is_banned": int(updated["is_banned"] or 0),
+            },
+        )
+        msg = f"{safe_target} has been banned" if banned else f"{safe_target} has been unbanned"
+    except ValueError as exc:
+        msg = str(exc)
+    return redirect_response(redirect_target, status_code=303, message=msg)
+
+
+def settings_user_password_update(
+    user: Annotated[str, Depends(require_session_user)],
+    target_username: str = Form(""),
+    new_password: str = Form(""),
+    new_password_confirm: str = Form(""),
+    new_password_key_id: str = Form(""),
+    new_password_envelope_token: str = Form(""),
+    new_password_encrypted_verifier: str = Form(""),
+    csrf_token: str = Form(""),
+    new_password_salt: str = Form(""),
+    new_password_iters: str = Form(""),
+):
+    ctx, actor_user_id = _settings_system_admin_ctx(user)
+    redirect_target = "/settings"
+    _ = (new_password, new_password_confirm)
+    try:
+        safe_target = _admin_target_username(target_username)
+        if safe_target.lower() == str(user or "").strip().lower():
+            raise ValueError("use the account password form to change your own password")
+        target_row = lookup_user_auth(safe_target)
+        if target_row is None:
+            raise ValueError(f"user {safe_target} not found")
+        password_csrf = form_text(csrf_token).strip()
+        if not verify_password_form_csrf_token(password_csrf, 'settings-admin-password'):
+            raise ValueError('invalid password token')
+        try:
+            new_verifier = password_envelope_store.consume(
+                scope='settings-admin-password',
+                purpose='settings-admin-new',
+                username=safe_target,
+                csrf_token=password_csrf,
+                key_id=form_text(new_password_key_id),
+                envelope_token=form_text(new_password_envelope_token),
+                encrypted_verifier=form_text(new_password_encrypted_verifier),
+            )
+        except ValueError as exc:
+            raise ValueError('invalid new password envelope') from exc
+        new_salt = normalize_password_salt_hex(form_text(new_password_salt))
+        new_iters = normalize_password_iters(form_text(new_password_iters))
+        if new_iters != int(_C.PASSWORD_HASH_ITERS):
+            raise ValueError('invalid password iterations')
+        set_user_password_verifier(int(target_row['id']), new_verifier, new_salt, new_iters)
+        config.auth_service.revoke_all_access_for_user(int(target_row["id"]))
+        audit(
+            actor_user_id,
+            None,
+            "system_admin.user_password_update",
+            {
+                "target_username": safe_target,
+                "target_user_id": int(target_row["id"]),
+            },
+        )
+        msg = f"password updated for {safe_target}"
+    except ValueError as exc:
+        msg = str(exc)
+    return redirect_response(redirect_target, status_code=303, message=msg)

@@ -19,6 +19,7 @@ from app.service.platform.testlib_source import workspace_testlib_header
 
 from .core import JudgehostCore
 from .dispatch import DispatchHandler
+from .payload_retention import compact_task_row_payload
 from .result import ResultProcessor
 from .state import JudgehostState
 from .toolkit import DomjudgeToolkit
@@ -412,6 +413,10 @@ class TaskEnqueue:
             payload=payload,
             reactivated=reactivated,
         )
+        with self._s.state_lock:
+            row = self._s.tasks_by_id.get(task_id)
+            if row is not None:
+                compact_task_row_payload(row)
         return True
 
     def _restore_existing_task_work_root(

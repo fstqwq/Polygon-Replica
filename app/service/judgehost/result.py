@@ -986,28 +986,21 @@ class ResultProcessor:
                     case_id,
                 )
         else:
-            verification_task_store = VerificationTaskStore(self._s.db)
-            verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
-                safe_task_id,
-                str(row["test_name"] or ""),
-            )
-            if verification_task_row is not None:
-                try:
-                    case_result = self._queue.poll_task_case_result(safe_task_id, str(row["test_name"] or ""))
-                    if case_result is not None:
-                        final_result = finalize_verification_task_result(verification_task_row, result=case_result)
-                        notify_verification_case_reported(
-                            str(verification_task_row["verification_id"] or ""),
-                            safe_task_id,
-                            str(row["test_name"] or ""),
-                            final_result,
-                        )
-                except Exception:
-                    logger.exception(
-                        "failed to publish verification task result event task_id=%s case_id=%s",
-                        safe_task_id,
-                        case_id,
+            try:
+                safe_test_name = str(row["test_name"] or "")
+                case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
+                if case_result is not None:
+                    self._publish_verification_case_result(
+                        task_id=safe_task_id,
+                        test_name=safe_test_name,
+                        case_result=case_result,
                     )
+            except Exception:
+                logger.exception(
+                    "failed to publish verification task result event task_id=%s case_id=%s",
+                    safe_task_id,
+                    case_id,
+                )
 
         self._domjudge_finalize_if_ready(job_id)
         return 1

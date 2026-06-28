@@ -8,12 +8,14 @@ from app.impl.preview.preview import (
     preview_run,
     preview_save,
     preview_status,
+    statement_tex_source,
     statement_compile_asset_upload,
     statement_attachment_upload,
     statement_language_add,
     statement_language_delete,
     statement_attachment_delete,
     statement_compile_asset_delete,
+    statement_templates_reset,
 )
 
 router = APIRouter()
@@ -32,6 +34,11 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/preview/status",
     preview_status,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/statement/source.tex",
+    statement_tex_source,
     methods=["GET"],
 )
 router.add_api_route(
@@ -67,5 +74,10 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/statement/languages/delete",
     statement_language_delete,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/statement/templates/reset",
+    statement_templates_reset,
     methods=["POST"],
 )

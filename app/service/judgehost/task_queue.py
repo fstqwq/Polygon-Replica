@@ -18,6 +18,8 @@ from app.service.verification.task_scheduler import notify_verification_task_ter
 from app.service.verification.test_rows import build_verification_test_pass_row, build_verification_test_row
 
 from .core import JudgehostCore
+from .payload_retention import compact_payload_for_retention
+from .payload_retention import compact_task_row_payload
 from .state import JudgehostState
 from .toolkit import DomjudgeToolkit
 
@@ -28,12 +30,98 @@ class TaskQueue:
     STATUS_COMPLETED = "completed"
     STATUS_FAILED = "failed"
     STATUS_REPORTING = "reporting"
+    TERMINAL_STATUS_RETENTION_SEC = 15 * 60
     _TASK_KIND_MAIN_CORRECT = "main-correct"
+    _TASK_KIND_GENERATE_INPUT = "generate-input"
+    _TASK_KIND_COMPILE_ONLY = "compile-only"
 
     def __init__(self, state: JudgehostState, core: JudgehostCore, toolkit: DomjudgeToolkit) -> None:
         self._s = state
         self._core = core
         self._toolkit = toolkit
+        self._terminal_prune_next_ts = 0.0
+
+    @classmethod
+    def _task_priority_rank(
+        cls,
+        *,
+        task_kind: object,
+        verification_source: object,
+        compile_only: object,
+    ) -> int:
+        safe_task_kind = str(task_kind or "").strip().lower()
+        safe_source = str(verification_source or "").strip().lower()
+        compile_only_flag = bool(compile_only)
+        if compile_only_flag or safe_task_kind == cls._TASK_KIND_COMPILE_ONLY or safe_source == "compile.only":
+            return 0
+        if safe_task_kind == cls._TASK_KIND_GENERATE_INPUT or safe_source.endswith("generate-input"):
+            return 1
+        if safe_task_kind == cls._TASK_KIND_MAIN_CORRECT or safe_source == cls._TASK_KIND_MAIN_CORRECT:
+            return 2
+        if safe_source.startswith("sanity-check"):
+            return 3
+        return 10
+
+    @classmethod
+    def _task_priority_for_payload(cls, payload: dict[str, object] | None) -> int:
+        safe_payload = {} if payload is None else dict(payload)
+        return cls._task_priority_rank(
+            task_kind=safe_payload.get("task_kind"),
+            verification_source=safe_payload.get("verification_source"),
+            compile_only=safe_payload.get("compile_only"),
+        )
+
+    @classmethod
+    def _task_priority_for_row(cls, row: dict[str, object]) -> int:
+        payload = row.get("payload")
+        if isinstance(payload, dict):
+            return cls._task_priority_for_payload(payload)
+        return cls._task_priority_rank(task_kind="", verification_source="", compile_only=False)
+
+    @classmethod
+    def _queued_task_sort_key(cls, row: dict[str, object]) -> tuple[int, str, str]:
+        return (
+            cls._task_priority_for_row(row),
+            str(row.get("created_at") or ""),
+            str(row.get("id") or ""),
+        )
+
+    @staticmethod
+    def compact_payload_for_retention(payload: object) -> dict[str, object]:
+        return compact_payload_for_retention(payload)
+
+    def compact_task_payload(self, task_id: str) -> None:
+        if not task_id:
+            return
+        with self._s.state_lock:
+            row = self._s.tasks_by_id.get(task_id)
+            if row is not None:
+                compact_task_row_payload(row)
+
+    def _queued_higher_priority_exists(self, current_priority: int) -> bool:
+        with self._s.state_lock:
+            for task in self._s.tasks_by_id.values():
+                if task["status"] != self.STATUS_QUEUED:
+                    continue
+                if self._task_priority_for_row(task) < int(current_priority):
+                    return True
+        return False
+
+    def _release_host_task_leases(self, hostname: str, *, now_text: str) -> int:
+        released_tasks = 0
+        with self._s.state_lock:
+            for task in self._s.tasks_by_id.values():
+                if task["lease_owner"] != hostname:
+                    continue
+                task_status = task["status"]
+                if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+                    continue
+                task["status"] = self.STATUS_QUEUED
+                task["lease_owner"] = ""
+                task["lease_expires_at"] = ""
+                task["updated_at"] = now_text
+                released_tasks += 1
+        return released_tasks
 
     def _run_ids_with_leased_cases(self, run_ids: list[str]) -> set[str]:
         progress = self._s.judgehost_state_store.case_progress_for_runs(run_ids)
@@ -60,7 +148,7 @@ class TaskQueue:
                 if task["status"] == self.STATUS_QUEUED
                 and str((task.get("payload") or {}).get("domjudge_group_key") or "") == safe_group_key
             ]
-            queued.sort(key=lambda item: item["created_at"])
+            queued.sort(key=self._queued_task_sort_key)
             if not queued:
                 return None
             task = queued[0]
@@ -151,6 +239,7 @@ class TaskQueue:
     def fetch_work(self, hostname: str) -> list[dict[str, object]]:
         hostname = self._core.normalize_hostname(hostname)
         tasks: list[dict[str, object]] = []
+        self._maybe_prune_terminal_tasks()
         self._requeue_expired_leases()
         event_action = "fetch"
         event_task_id = ""
@@ -166,7 +255,7 @@ class TaskQueue:
                     for task in self._s.tasks_by_id.values()
                     if task["status"] == self.STATUS_QUEUED
                 ]
-                queued.sort(key=lambda item: item["created_at"])
+                queued.sort(key=self._queued_task_sort_key)
                 lease_until = now_iso_after(self._s.lease_sec)
                 now_text = now_iso()
                 for task in queued[:1]:
@@ -326,6 +415,7 @@ class TaskQueue:
         hostname: str,
         payload: dict[str, object],
         notify_terminal: bool = True,
+        allow_lease_owner_mismatch: bool = False,
     ) -> dict[str, object]:
         if not task_id:
             raise RuntimeError("task_id is required")
@@ -346,9 +436,24 @@ class TaskQueue:
                 raise RuntimeError("judgehost task not found")
             current_status = row["status"]
             lease_owner = row["lease_owner"]
+            if current_status in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
+                run_id = str(row.get("run_id") or "")
+                verification_id = str(row.get("verification_id") or "")
+                summary = row.get("summary")
+                return {
+                    "task_id": task_id,
+                    "verification_id": verification_id,
+                    "run_id": run_id,
+                    "artifact_path": "",
+                    "status": str(
+                        row.get("run_status")
+                        or ("ok" if current_status == self.STATUS_COMPLETED else "failed")
+                    ),
+                    "summary": dict(summary) if isinstance(summary, dict) else {},
+                }
             if current_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
                 raise RuntimeError(f"judgehost task is not reportable (status={current_status})")
-            if lease_owner and lease_owner != hostname:
+            if lease_owner and lease_owner != hostname and not bool(allow_lease_owner_mismatch):
                 raise RuntimeError("judgehost task lease owner mismatch")
             run_id = row["run_id"]
             verification_id = row["verification_id"]
@@ -399,7 +504,12 @@ class TaskQueue:
             row = self._s.tasks_by_id.get(task_id)
             if row is not None:
                 row["status"] = task_status
-                row["result"] = dict(payload)
+                row["payload"] = compact_payload_for_retention(row.get("payload"))
+                row["result"] = {
+                    "run_status": run_status,
+                    "error": error_text,
+                    "summary": dict(summary_obj),
+                }
                 row["summary"] = dict(summary_obj)
                 row["run_status"] = run_status
                 row["error_text"] = error_text
@@ -415,6 +525,7 @@ class TaskQueue:
         )
         if verification_id and notify_terminal:
             notify_verification_task_terminal(verification_id, task_id)
+        self._maybe_prune_terminal_tasks()
         return {
             "task_id": task_id,
             "verification_id": verification_id,
@@ -423,6 +534,36 @@ class TaskQueue:
             "status": run_status,
             "summary": summary_obj,
         }
+
+    def _prune_terminal_tasks(self) -> int:
+        now_dt = datetime.now(timezone.utc)
+        retention = max(60, int(self.TERMINAL_STATUS_RETENTION_SEC))
+        removed = 0
+        with self._s.state_lock:
+            for task_id, row in list(self._s.tasks_by_id.items()):
+                status = str(row.get("status") or "")
+                if status not in {self.STATUS_COMPLETED, self.STATUS_FAILED}:
+                    continue
+                completed_at = parse_iso_utc(row.get("completed_at")) or parse_iso_utc(row.get("updated_at"))
+                if completed_at is None:
+                    continue
+                if (now_dt - completed_at).total_seconds() < float(retention):
+                    continue
+                stale = self._s.tasks_by_id.pop(task_id, None)
+                if stale is None:
+                    continue
+                run_id = str(stale.get("run_id") or "")
+                if run_id and self._s.task_id_by_run.get(run_id) == task_id:
+                    self._s.task_id_by_run.pop(run_id, None)
+                removed += 1
+        return removed
+
+    def _maybe_prune_terminal_tasks(self, *, interval_sec: float = 30.0) -> int:
+        now_mono = time.monotonic()
+        if now_mono < float(self._terminal_prune_next_ts):
+            return 0
+        self._terminal_prune_next_ts = now_mono + max(1.0, float(interval_sec))
+        return self._prune_terminal_tasks()
 
     def wait_for_task_result(self, task_id: str, timeout_sec: float | None = None) -> dict[str, object]:
         if not task_id:
@@ -739,17 +880,7 @@ class TaskQueue:
                 "update_count": int(current_row.get("update_count") or 0) + 1,
             }
             if not enabled:
-                for task in self._s.tasks_by_id.values():
-                    if task["lease_owner"] != hostname:
-                        continue
-                    task_status = task["status"]
-                    if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                        continue
-                    task["status"] = self.STATUS_QUEUED
-                    task["lease_owner"] = ""
-                    task["lease_expires_at"] = ""
-                    task["updated_at"] = now_text
-                    released_tasks += 1
+                released_tasks = self._release_host_task_leases(hostname, now_text=now_text)
         released_jobs = 0
         released_cases = 0
         if not enabled:
@@ -764,6 +895,7 @@ class TaskQueue:
         }
 
     def status(self) -> dict[str, object]:
+        self._prune_terminal_tasks()
         counts = self._core.task_status_counts()
         host_rows, online_count = self._host_status_rows()
         return {
@@ -803,6 +935,7 @@ class TaskQueue:
                 if run_id in leased_run_ids:
                     continue
                 row["status"] = self.STATUS_FAILED
+                row["payload"] = compact_payload_for_retention(row.get("payload"))
                 row["result"] = {"cancelled": True, "reason": reason, "error": reason}
                 row["error_text"] = reason
                 row["lease_owner"] = ""
@@ -837,6 +970,7 @@ class TaskQueue:
                         }
                     )
                 row["status"] = self.STATUS_FAILED
+                row["payload"] = compact_payload_for_retention(row.get("payload"))
                 row["result"] = {"cancelled": True, "reason": reason, "error": reason}
                 row["error_text"] = reason
                 row["lease_owner"] = ""

@@ -286,6 +286,7 @@ def _tests_from_spec(
         if str(row["kind"]) == "manual" or use_custom_sample_input:
             tests_meta = {
                 "index": counter,
+                "test_name": test_name,
                 "kind": str(row["kind"]),
                 "id": test_id,
                 "sample": sample,
@@ -313,6 +314,7 @@ def _tests_from_spec(
                 raise RuntimeError(f"generator source is required for tests/spec.json entry {row['index']}")
             tests_meta = {
                 "index": counter,
+                "test_name": test_name,
                 "kind": "gen",
                 "id": test_id,
                 "sample": sample,
@@ -362,6 +364,7 @@ def _tests_without_spec(
             source_rel = manual_source.name
         tests_meta = {
             "index": counter,
+            "test_name": f"{counter:03d}.in",
             "kind": "manual",
             "desc": f"manual: {source_rel}",
             "source": source_rel,
@@ -388,6 +391,7 @@ def _tests_without_spec(
         for _ in range(generator_runs):
             tests_meta = {
                 "index": counter,
+                "test_name": f"{counter:03d}.in",
                 "kind": "gen",
                 "desc": f"gen: {source_label}" if not generator_args else f"gen: {source_label} {' '.join(generator_args)}",
                 "source": source_label,

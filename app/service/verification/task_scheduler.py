@@ -56,6 +56,7 @@ class _VerificationEvent:
 
 _COORDINATOR_LOCK = threading.Lock()
 _COORDINATORS_BY_VERIFICATION_ID: dict[str, "VerificationRuntimeCoordinator"] = {}
+_PUBLISH_READY_BATCH_SIZE = 256
 
 
 def _parent_status_by_child(
@@ -239,6 +240,7 @@ class VerificationRuntimeCoordinator:
         if self._task_store.fail_state(self.verification_id)[0]:
             return False
         changed = False
+        published_count = 0
         while True:
             rows = self._task_store.list_rows(self.verification_id)
             ready_rows = _ready_rows(rows, self._edges)
@@ -260,6 +262,10 @@ class VerificationRuntimeCoordinator:
                         result=published.terminal_result,
                     )
                 changed = True
+                published_count += 1
+                if published_count >= _PUBLISH_READY_BATCH_SIZE:
+                    self.enqueue_bootstrap()
+                    return changed
             if self._task_store.fail_state(self.verification_id)[0]:
                 break
         return changed

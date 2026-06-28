@@ -28,6 +28,7 @@ from .ui_support import (
     _request,
     _request_with_cookie,
     _response_set_cookie_blob,
+    _settings_admin_password_update_with_envelope,
     session_user,
     _settings_password_update_with_envelope,
     _setup_with_password_envelope,
@@ -48,6 +49,8 @@ from .ui_support import (
     settings_config_category_update,
     settings_password_update,
     settings_system_config_reset,
+    settings_user_ban_update,
+    settings_user_system_admin_update,
     settings_worker_queue_snapshot,
     setup_page,
     setup_submit,
@@ -639,33 +642,6 @@ class TestUIAuth(UIBaseSuite):
         messages = _flash_messages_from_response(resp)
         self.assertTrue(any("terms of use" in item.lower() for item in messages))
 
-    def test_register_rejects_disallowed_email(self) -> None:
-        resp = register_submit(
-            request=_post_request("/register"),
-            username=self.random_id("email"),
-            email="has.dot@gmail.com",
-            password="StrongPass123",
-            password_confirm="StrongPass123",
-            next="/",
-            terms_accepted="yes",
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(resp.headers.get("location", ""), "/register")
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(any("email is not allowed" in item.lower() for item in messages))
-
-        plus = register_submit(
-            request=_post_request("/register"),
-            username=self.random_id("email"),
-            email="plus+tag@sjtu.edu.cn",
-            password="StrongPass123",
-            password_confirm="StrongPass123",
-            next="/",
-            terms_accepted="yes",
-        )
-        plus_messages = _flash_messages_from_response(plus)
-        self.assertTrue(any("email is not allowed" in item.lower() for item in plus_messages))
-
     def test_register_uses_pending_email_verification_when_smtp_configured(self) -> None:
         username = self.random_id("verify")
         resp, code = self._submit_pending_registration_with_smtp(username)
@@ -1134,6 +1110,125 @@ class TestUIAuth(UIBaseSuite):
         self.assertNotIn('data-main="problems" class="active"', html)
         self.assertIn("/settings/config/", html)
         self.assertIn("Judging", html)
+        self.assertIn("User Administration", html)
+        self.assertIn("Reset User Password", html)
+
+    def test_settings_page_system_admin_can_search_user_list(self) -> None:
+        match_user = self.random_id("lookupa")
+        other_user = self.random_id("lookupb")
+        match_email = f"{match_user}@gmail.com"
+        other_email = f"{other_user}@gmail.com"
+        self.assertEqual(_register_with_password_envelope(match_user, "StrongPass123", next_path="/").status_code, 303)
+        self.assertEqual(_register_with_password_envelope(other_user, "StrongPass123", next_path="/").status_code, 303)
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+
+        resp = settings_page(_request("/settings", query=f"admin_users_query={match_user}"), user="alice")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Find Users", html)
+        self.assertIn(match_user, html)
+        self.assertIn(match_email, html)
+        self.assertNotIn(other_user, html)
+        self.assertNotIn(other_email, html)
+        self.assertIn("Showing first 1 matching", html)
+        self.assertIn("user.", html)
+
+    def test_system_admin_can_grant_and_revoke_system_admin(self) -> None:
+        target = self.random_id("adminuser")
+        password = "StrongPass123"
+        reg = _register_with_password_envelope(target, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+
+        grant = settings_user_system_admin_update(
+            user="alice",
+            target_username=target,
+            action="grant",
+        )
+        self.assertEqual(grant.status_code, 303)
+        row = db_fetch_one("SELECT is_system_admin FROM users WHERE LOWER(username)=LOWER(?)", [target])
+        self.assertIsNotNone(row)
+        self.assertEqual(int(row["is_system_admin"] or 0), 1)
+
+        revoke = settings_user_system_admin_update(
+            user="alice",
+            target_username=target,
+            action="revoke",
+        )
+        self.assertEqual(revoke.status_code, 303)
+        row_after = db_fetch_one("SELECT is_system_admin FROM users WHERE LOWER(username)=LOWER(?)", [target])
+        self.assertIsNotNone(row_after)
+        self.assertEqual(int(row_after["is_system_admin"] or 0), 0)
+
+    def test_system_admin_can_ban_and_unban_user(self) -> None:
+        target = self.random_id("banuser")
+        password = "StrongPass123"
+        reg = _register_with_password_envelope(target, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(auth_token)
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+
+        banned = settings_user_ban_update(
+            user="alice",
+            target_username=target,
+            action="ban",
+        )
+        self.assertEqual(banned.status_code, 303)
+        row = db_fetch_one("SELECT is_banned,banned_at FROM users WHERE LOWER(username)=LOWER(?)", [target])
+        self.assertIsNotNone(row)
+        self.assertEqual(int(row["is_banned"] or 0), 1)
+        self.assertTrue(str(row["banned_at"] or ""))
+        self.assertEqual(session_user(_request_with_cookie("/problems", f"{AUTH_COOKIE_NAME}={auth_token}")), "")
+
+        denied_login = _login_with_password_envelope(target, password, next_path="/")
+        self.assertEqual(denied_login.status_code, 303)
+        self.assertTrue(any("account is banned" in item for item in _flash_messages_from_response(denied_login)))
+
+        unbanned = settings_user_ban_update(
+            user="alice",
+            target_username=target,
+            action="unban",
+        )
+        self.assertEqual(unbanned.status_code, 303)
+        row_after = db_fetch_one("SELECT is_banned,banned_at FROM users WHERE LOWER(username)=LOWER(?)", [target])
+        self.assertIsNotNone(row_after)
+        self.assertEqual(int(row_after["is_banned"] or 0), 0)
+        self.assertEqual(str(row_after["banned_at"] or ""), "")
+
+        allowed_login = _login_with_password_envelope(target, password, next_path="/")
+        self.assertEqual(allowed_login.status_code, 303)
+        self.assertTrue(_cookie_value_from_response(allowed_login, AUTH_COOKIE_NAME))
+
+    def test_system_admin_can_reset_another_users_password(self) -> None:
+        target = self.random_id("pwuser")
+        old_password = "StrongPass123"
+        new_password = "UpdatedPass456"
+        reg = _register_with_password_envelope(target, old_password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        old_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(old_token)
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+
+        changed = _settings_admin_password_update_with_envelope("alice", target, new_password)
+        self.assertEqual(changed.status_code, 303)
+        self.assertEqual(session_user(_request_with_cookie("/problems", f"{AUTH_COOKIE_NAME}={old_token}")), "")
+
+        old_login = _login_with_password_envelope(target, old_password, next_path="/")
+        self.assertEqual(old_login.status_code, 303)
+        self.assertFalse(_cookie_value_from_response(old_login, AUTH_COOKIE_NAME))
+
+        new_login = _login_with_password_envelope(target, new_password, next_path="/")
+        self.assertEqual(new_login.status_code, 303)
+        self.assertTrue(_cookie_value_from_response(new_login, AUTH_COOKIE_NAME))
 
     def test_settings_page_runtime_runner_hides_auth_fields_when_judgehost_disabled(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")

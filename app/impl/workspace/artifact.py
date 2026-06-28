@@ -182,10 +182,17 @@ def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
 
 
 def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
-    if config.verification_service.workspace_artifact_exists(
-        int(ctx["problem"]["id"]),
-        int(ctx["workspace"]["id"]),
-        artifact_id,
-    ):
+    problem_id = int(ctx["problem"]["id"])
+    workspace_id = int(ctx["workspace"]["id"])
+    if str(artifact_id or "").startswith("p-"):
+        if config.verification_service.workspace_artifact_exists(
+            problem_id,
+            workspace_id,
+            artifact_id,
+        ):
+            return
+        raise HTTPException(status_code=404, detail="artifact not found in workspace")
+    verification_row = config.verification_service.verification_record(str(artifact_id or "").strip())
+    if verification_row is not None and int(verification_row["problem_id"] or 0) == problem_id:
         return
     raise HTTPException(status_code=404, detail="artifact not found in workspace")

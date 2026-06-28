@@ -82,7 +82,7 @@ def user_participating_problems(user_id: int, limit: int=_C.API_PROBLEMS_LIST_LI
     return items
 
 def normalize_contest_role(raw: str | None) -> str:
-    if raw in {'owner', 'write', 'read'}:
+    if raw in {'admin', 'owner', 'write', 'read'}:
         return raw
     return 'read'
 

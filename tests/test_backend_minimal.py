@@ -20,6 +20,7 @@ from app.impl.preview.preview import (
     preview_run,
     preview_save,
     preview_status,
+    statement_tex_source,
     statement_compile_asset_upload,
     statement_attachment_delete,
     statement_attachment_upload,
@@ -32,10 +33,12 @@ from app.impl.runtime.config import config
 from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job import _run_export_create_worker
+from app.service.verification.types import Kind, Status
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.render import default_statement_title_for_workspace, ensure_statement_language_sources
 from app.service.statement.signature import statement_sources_signature
 from app.service.disk.verification_store import VerificationStore
+from app.service.platform.git_process import run_git
 
 
 class TestBackendMinimal(SmokeBase):
@@ -76,6 +79,27 @@ class TestBackendMinimal(SmokeBase):
     def test_current_problem_schema_has_no_name_column(self) -> None:
         self.assertNotIn("name", CURRENT_SCHEMA_COLUMNS["problems"])
 
+    def test_audit_event_downgrades_missing_foreign_keys_to_null(self) -> None:
+        config.workspace_service.record_audit_event(
+            actor_user_id=987654321,
+            problem_id=987654322,
+            action="test.missing_fk",
+            details={"ok": True},
+        )
+        row = db_fetch_one(
+            """
+            SELECT actor_user_id,problem_id,action,details_json
+            FROM audit_log
+            WHERE action='test.missing_fk'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        )
+        self.assertIsNotNone(row)
+        self.assertIsNone(row["actor_user_id"])
+        self.assertIsNone(row["problem_id"])
+        self.assertEqual(str(row["action"]), "test.missing_fk")
+
     def test_current_workspace_schema_has_revision_summary_columns(self) -> None:
         workspace_columns = set(CURRENT_SCHEMA_COLUMNS["workspaces"])
         self.assertTrue(
@@ -97,6 +121,36 @@ class TestBackendMinimal(SmokeBase):
         self.assertIn("status", CURRENT_SCHEMA_COLUMNS["verification_sanity_checks"])
         self.assertIn("checked_count", CURRENT_SCHEMA_COLUMNS["verification_sanity_checks"])
         self.assertIn("verification_sanity_check_messages", CURRENT_SCHEMA_COLUMNS)
+
+    def test_ensure_workspace_repairs_unborn_clone_after_origin_main_appears(self) -> None:
+        problem = f"alice/repair-unborn-{self.random_id('p')}"
+        workspace_service = config.workspace_service
+        workspace_service.ensure_problem(problem)
+        workspace_service.grant_repo_access(problem, "alice", "owner")
+        workspace_service.grant_repo_access(problem, "bob", "write")
+
+        alice_ws = Path(workspace_service.ensure_workspace(problem, "alice"))
+        self.assertNotEqual(
+            run_git(["git", "-C", str(alice_ws), "rev-parse", "--verify", "HEAD"]).returncode,
+            0,
+        )
+
+        bob_ws = Path(workspace_service.ensure_workspace(problem, "bob"))
+        cfg_path = bob_ws / "config" / "problem.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text('{"time_limit_ms":1000,"memory_limit_mb":256,"mode":"pass-fail","pass_limit":1}\n', encoding="utf-8")
+        commit_id = config.git_service.commit(bob_ws, "init", "bob", "bob@polygonlike.local")
+        self.assertRegex(commit_id, r"^[0-9a-f]{40}$")
+        config.git_service.push(bob_ws, "main")
+
+        repaired_ws = Path(workspace_service.ensure_workspace(problem, "alice"))
+        repaired_head = run_git(["git", "-C", str(repaired_ws), "rev-parse", "--verify", "HEAD"])
+        self.assertEqual(repaired_head.returncode, 0)
+        self.assertRegex(repaired_head.stdout.strip(), r"^[0-9a-f]{40}$")
+        current_branch = run_git(["git", "-C", str(repaired_ws), "branch", "--show-current"]).stdout.strip()
+        self.assertEqual(current_branch, "main")
+        origin_main = run_git(["git", "-C", str(repaired_ws), "show-ref", "--verify", "refs/remotes/origin/main"])
+        self.assertEqual(origin_main.returncode, 0)
 
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
@@ -153,6 +207,58 @@ class TestBackendMinimal(SmokeBase):
         self.assertIsInstance(tests_meta_rows, list)
         self.assertEqual(str((tests_meta_rows[1] or {}).get("test_name") or ""), "002.in")
         self.assertFalse((config.fs_manager.cache_artifacts_root / "verifications" / verification_id / "metadata.json").exists())
+
+    def test_verification_detail_partial_tests_meta_uses_index_not_selected_position(self) -> None:
+        config.workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        verification_id = self.random_id("ver-detail-partial-meta")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="sig-partial-meta",
+            kind="custom",
+            status="running",
+            detail={
+                "selected_test_names": ["002.in"],
+                "tests_meta_rows": [
+                    {"index": 1, "kind": "manual", "desc": "manual 1"},
+                    {"index": 2, "kind": "manual", "desc": "manual 2"},
+                    {"index": 3, "kind": "manual", "desc": "manual 3"},
+                ],
+            },
+        )
+
+        detail = config.verification_service.verification_detail(verification_id)
+        rows = detail.get("tests_meta_rows")
+        self.assertIsInstance(rows, list)
+        self.assertEqual([str(row.get("test_name") or "") for row in rows], ["001.in", "002.in", "003.in"])
+        self.assertEqual(detail.get("selected_test_names"), ["002.in"])
+
+    def test_verification_detail_skips_duplicate_tests_meta_names(self) -> None:
+        config.workspace_service.ensure_workspace("alice/sample", "alice")
+        ctx = config.workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        verification_id = self.random_id("ver-detail-dup-meta")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature="sig-dup-meta",
+            kind="custom",
+            status="running",
+            detail={
+                "selected_test_names": ["001.in"],
+                "tests_meta_rows": [
+                    {"index": 1, "test_name": "001.in", "kind": "manual", "desc": "manual 1"},
+                    {"index": 2, "test_name": "001.in", "kind": "manual", "desc": "manual duplicate"},
+                ],
+            },
+        )
+
+        detail = config.verification_service.verification_detail(verification_id)
+        rows = detail.get("tests_meta_rows")
+        self.assertIsInstance(rows, list)
+        self.assertEqual([str(row.get("test_name") or "") for row in rows], ["001.in"])
 
     def test_verification_artifact_refs_live_in_db_not_metadata(self) -> None:
         config.workspace_service.ensure_workspace("alice/sample", "alice")
@@ -770,6 +876,72 @@ class TestBackendMinimal(SmokeBase):
         self.assertNotIn("Open in a new tab", html)
         self.assertNotIn('class="pdf-preview"', html)
 
+    def test_statement_page_keeps_editor_single_column_with_external_preview_links(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        preview_id = self.random_id("p-preview-external")
+        preview_root = config.fs_manager.prepare_preview_layout(preview_id).root
+        (preview_root / "statement_preview").mkdir(parents=True, exist_ok=True)
+        (preview_root / "statement_preview" / "statement.pdf").write_bytes(b"%PDF-1.4\n%ok\n")
+        (preview_root / "logs").mkdir(parents=True, exist_ok=True)
+        (preview_root / "logs" / "latex.log").write_text("ok\n", encoding="utf-8")
+        db_execute(
+            (
+                "INSERT INTO previews("
+                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
+                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
+            ),
+            [
+                preview_id,
+                int(ctx["problem"]["id"]),
+                int(ctx["workspace"]["id"]),
+                "ok",
+                str(ctx["workspace"].get("head_commit") or ""),
+                "main",
+                json.dumps(
+                    {
+                        "pdf": "statement_preview/statement.pdf",
+                        "language": "english",
+                        "statement_signature": statement_sources_signature(
+                            ws,
+                            problem_title=str(ctx["problem"]["name"]),
+                        ),
+                    }
+                ),
+            ],
+        )
+
+        resp = preview_page(
+            _request(f"/problems/{self.problem}/statement", f"language=english&preview_id={preview_id}"),
+            self.problem,
+            self.user,
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Save Statement", html)
+        self.assertIn("Open PDF", html)
+        self.assertIn(f"/problems/{self.problem}/artifacts/{preview_id}/statement_preview/statement.pdf", html)
+        self.assertIn("Open TeX", html)
+        self.assertIn(f"/problems/{self.problem}/statement/source.tex?language=english", html)
+        self.assertNotIn("Preview Output", html)
+        self.assertNotIn('class="pdf-preview"', html)
+
+    def test_statement_tex_source_opens_rendered_problem_tex(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ws = Path(str(ctx["workspace"]["path"]))
+        ensure_statement_language_sources(ws, "english")
+        (ws / "statement-sections" / "english" / "legend.tex").write_text("Rendered legend for LLM.\n", encoding="utf-8")
+
+        resp = statement_tex_source(self.problem, self.user, language="english")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/plain", str(resp.media_type))
+        self.assertIn('filename="statement-english.tex"', resp.headers.get("content-disposition", ""))
+        body = resp.body.decode("utf-8", errors="replace")
+        self.assertIn("Rendered legend for LLM.", body)
+        self.assertNotIn("statement_preview", body)
+
     def test_preview_status_projects_missing_when_ok_preview_pdf_is_gone(self) -> None:
         ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         ws = Path(str(ctx["workspace"]["path"]))
@@ -923,6 +1095,178 @@ class TestBackendMinimal(SmokeBase):
                 requested_verification_id="",
                 requested_export_type="invalid-type",
             )
+
+    def test_icpc_export_reuses_complete_artifacts_without_verification(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        ws = Path(str(ctx["workspace"]["path"]))
+        (ws / "export-marker.txt").write_text("export artifact reuse\n", encoding="utf-8")
+        source_commit = config.git_service.commit(ws, "export artifact reuse", self.user, f"{self.user}@polygonlike.local")
+        verification_id = self.random_id("ver-export-artifacts")
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            source_commit=source_commit,
+            kind=Kind.ALL.value,
+            status=Status.FAILED.value,
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"input_ref": "fresh-input", "answer_ref": "fresh-answer"},
+        )
+        with (
+            patch("app.impl.workspace.context_job._icpc_required_test_ids_for_commit", return_value=["001"]),
+            patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=AssertionError("full verification should not run")),
+            patch.object(config.verification_service, "resolve_artifact_blob", return_value=b"payload"),
+            patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
+        ):
+            _run_export_create_worker(
+                self.problem,
+                self.user,
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=source_commit,
+                requested_verification_id="",
+                requested_export_type="icpc",
+            )
+        create_export.assert_called_once()
+        self.assertEqual(create_export.call_args.args[1], verification_id)
+
+    def test_icpc_export_does_not_reuse_stale_artifact_refs(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        ws = Path(str(ctx["workspace"]["path"]))
+        (ws / "export-marker.txt").write_text("export stale artifact refs\n", encoding="utf-8")
+        source_commit = config.git_service.commit(ws, "export stale artifact refs", self.user, f"{self.user}@polygonlike.local")
+        stale_verification_id = self.random_id("ver-export-stale")
+        config.verification_service.begin_verification_record(
+            verification_id=stale_verification_id,
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            source_commit=source_commit,
+            kind=Kind.ALL.value,
+            status=Status.OK.value,
+        )
+        config.verification_service.update_verification_artifact_refs(
+            stale_verification_id,
+            "001.in",
+            {"input_ref": "stale-input", "answer_ref": "stale-answer"},
+        )
+        seen: dict[str, object] = {}
+
+        def fake_resolve_artifact_blob(token: str):
+            safe_token = str(token or "")
+            if safe_token.startswith("fresh-"):
+                return b"payload"
+            return None
+
+        def fake_run_workspace_verification_dag(*args, **kwargs):
+            verification_id = str(kwargs["verification_id"])
+            seen["verification_id"] = verification_id
+            config.verification_service.begin_verification_record(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=source_commit,
+                kind=Kind.CUSTOM.value,
+                status=Status.OK.value,
+            )
+            config.verification_service.update_verification_artifact_refs(
+                verification_id,
+                "001.in",
+                {"input_ref": "fresh-input", "answer_ref": "fresh-answer"},
+            )
+
+        with (
+            patch("app.impl.workspace.context_job._icpc_required_test_ids_for_commit", return_value=["001"]),
+            patch(
+                "app.impl.workspace.context_job.build_full_verification_targets",
+                return_value=([{"path": "solutions/std.cpp", "expected_behavior": "accepted", "run_id": "r-ok"}], "solutions/std.cpp"),
+            ),
+            patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=fake_run_workspace_verification_dag),
+            patch.object(config.verification_service, "resolve_artifact_blob", side_effect=fake_resolve_artifact_blob),
+            patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
+        ):
+            _run_export_create_worker(
+                self.problem,
+                self.user,
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=source_commit,
+                requested_verification_id="",
+                requested_export_type="icpc",
+            )
+        self.assertTrue(seen["verification_id"])
+        create_export.assert_called_once()
+        self.assertEqual(create_export.call_args.args[1], seen["verification_id"])
+        self.assertNotEqual(create_export.call_args.args[1], stale_verification_id)
+
+    def test_icpc_export_generates_data_only_when_artifacts_missing(self) -> None:
+        ctx = config.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        problem_id = int(ctx["problem"]["id"])
+        workspace_id = int(ctx["workspace"]["id"])
+        ws = Path(str(ctx["workspace"]["path"]))
+        (ws / "export-marker.txt").write_text("export data generation\n", encoding="utf-8")
+        source_commit = config.git_service.commit(ws, "export data generation", self.user, f"{self.user}@polygonlike.local")
+        seen: dict[str, object] = {}
+
+        def fake_run_workspace_verification_dag(*args, **kwargs):
+            verification_id = str(kwargs["verification_id"])
+            seen["verification_id"] = verification_id
+            seen["targets"] = list(kwargs["targets"])
+            seen["kind"] = kwargs["kind"]
+            seen["skip_sanity"] = kwargs["skip_sanity"]
+            config.verification_service.begin_verification_record(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=source_commit,
+                kind=Kind.CUSTOM.value,
+                status=Status.OK.value,
+            )
+            config.verification_service.update_verification_artifact_refs(
+                verification_id,
+                "001.in",
+                {"input_ref": "blob-input", "answer_ref": "blob-answer"},
+            )
+
+        with (
+            patch("app.impl.workspace.context_job._icpc_required_test_ids_for_commit", return_value=["001"]),
+            patch(
+                "app.impl.workspace.context_job.build_full_verification_targets",
+                return_value=(
+                    [
+                        {"path": "solutions/std.cpp", "expected_behavior": "accepted", "run_id": "r-ok"},
+                        {"path": "solutions/wrong.cpp", "expected_behavior": "wrong-answer", "run_id": "r-wa"},
+                    ],
+                    "solutions/std.cpp",
+                ),
+            ),
+            patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=fake_run_workspace_verification_dag),
+            patch.object(config.verification_service, "resolve_artifact_blob", return_value=b"payload"),
+            patch.object(config.export_service, "create_export", return_value=Path("package.zip")) as create_export,
+        ):
+            _run_export_create_worker(
+                self.problem,
+                self.user,
+                actor_user_id=int(ctx["user"]["id"]),
+                problem_id=problem_id,
+                workspace_id=workspace_id,
+                source_commit=source_commit,
+                requested_verification_id="",
+                requested_export_type="icpc",
+            )
+        self.assertEqual(seen["kind"], Kind.CUSTOM.value)
+        self.assertTrue(seen["skip_sanity"])
+        self.assertEqual(seen["targets"], [{"path": "solutions/std.cpp", "expected_behavior": "accepted", "run_id": "r-ok"}])
+        create_export.assert_called_once()
+        self.assertEqual(create_export.call_args.args[1], seen["verification_id"])
 
     def test_db_conn_enables_foreign_keys(self) -> None:
         with db_connection() as conn:

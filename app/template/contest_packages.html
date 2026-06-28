@@ -24,6 +24,92 @@
 </section>
 
 <section>
+  <h2>Contest Statement Sources</h2>
+  <p class="muted">These files are copied into <code>statements/{{ contest_statement_language }}/</code> when building the contest PDF. Edit text sources such as <code>statements.tex</code> or <code>olymp.sty</code>, and upload external resources such as logos or images for TeX to reference.</p>
+  {% if contest_statement_source_error %}
+  <p class="flash">{{ contest_statement_source_error }}</p>
+  {% endif %}
+  <form class="form-row" method="get" action="/contests/{{ ctx.contest.slug }}/packages">
+    <label for="contest-statement-language">Language</label>
+    <select id="contest-statement-language" name="language">
+      {% for language in contest_statement_language_options %}
+      <option value="{{ language }}" {% if language == contest_statement_language %}selected{% endif %}>{{ language }}</option>
+      {% endfor %}
+    </select>
+    <input type="hidden" name="source_path" value="{{ contest_statement_selected_path }}" />
+    <button class="btn" type="submit">Switch</button>
+  </form>
+
+  <div class="form-row">
+    <a class="btn" href="/contests/{{ ctx.contest.slug }}/packages?language={{ contest_statement_language }}&source_path=statements.tex">Edit statements.tex</a>
+    <a class="btn" href="/contests/{{ ctx.contest.slug }}/packages?language={{ contest_statement_language }}&source_path=olymp.sty">Edit olymp.sty</a>
+  </div>
+
+  {% if ctx.access.can_write %}
+  <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/packages/statement/save">
+    <input type="hidden" name="language" value="{{ contest_statement_language }}" />
+    <label for="contest-statement-source-path">Text source path under <code>statements/{{ contest_statement_language }}/</code></label>
+    <input id="contest-statement-source-path" type="text" name="path" value="{{ contest_statement_selected_path }}" placeholder="statements.tex" required />
+    {% if contest_statement_selected_is_text %}
+    <label for="contest-statement-source-content">Content{% if not contest_statement_selected_exists %} <span class="muted">(default, not saved yet)</span>{% endif %}</label>
+    <textarea id="contest-statement-source-content" name="content" rows="18" spellcheck="false">{{ contest_statement_selected_text }}</textarea>
+    <button class="btn primary-action" type="submit">Save Source</button>
+    {% else %}
+    <p class="muted">Selected file is not a text source. Upload a replacement below.</p>
+    {% endif %}
+  </form>
+
+  <form class="form-stack" method="post" enctype="multipart/form-data" action="/contests/{{ ctx.contest.slug }}/packages/statement/upload">
+    <input type="hidden" name="language" value="{{ contest_statement_language }}" />
+    <label for="contest-statement-upload-path">Upload target under <code>statements/{{ contest_statement_language }}/</code></label>
+    <input id="contest-statement-upload-path" type="text" name="path" placeholder="logo.png or figures/logo.png" />
+    <label for="contest-statement-upload-file">Local file</label>
+    <input id="contest-statement-upload-file" type="file" name="upload" required />
+    <button class="btn" type="submit">Upload Source/Resource</button>
+  </form>
+  {% else %}
+  <p class="muted">Write access is required to edit contest statement sources.</p>
+  {% endif %}
+
+  <h3>Stored Files</h3>
+  {% if contest_statement_source_rows %}
+  <table class="table-base">
+    <tr>
+      <th>Path</th>
+      <th>Type</th>
+      <th>Size</th>
+      <th>Created</th>
+      <th>Actions</th>
+    </tr>
+    {% for row in contest_statement_source_rows %}
+    <tr>
+      <td><code>{{ row.display_path }}</code></td>
+      <td>{{ "text" if row.is_text else "binary" }}</td>
+      <td>{{ row.size_bytes if row.size_bytes is not none else "-" }}</td>
+      <td>{{ row.created_at | local_time }}</td>
+      <td>
+        <a href="{{ row.download_href }}" target="_blank" rel="noopener">open</a>
+        {% if row.is_text %}
+        · <a href="{{ row.edit_href }}">edit</a>
+        {% endif %}
+        {% if ctx.access.can_write %}
+        ·
+        <form class="inline-action" method="post" action="/contests/{{ ctx.contest.slug }}/packages/statement/delete" data-confirm-message="Delete contest statement source {{ row.display_path }}?">
+          <input type="hidden" name="language" value="{{ contest_statement_language }}" />
+          <input type="hidden" name="path" value="{{ row.display_path }}" />
+          <button class="link-button danger-link" type="submit">delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No stored contest statement source files for this language. The build will use generated defaults until you save or upload files.</p>
+  {% endif %}
+</section>
+
+<section>
   <h2>Recent Jobs</h2>
   {% if job_rows %}
   <table class="table-base">
@@ -58,7 +144,7 @@
   {% endif %}
 </section>
 
-{% if selected_job and selected_job.summary and selected_job.summary.get("results") %}
+{% if selected_job and selected_job.summary %}
 <section>
   <h2>Selected Job Report</h2>
   <p><strong>Job:</strong> <code>{{ selected_job.id }}</code> / {{ selected_job.job_type }} / {{ selected_job.status | status_label }}</p>
@@ -71,6 +157,11 @@
   {% if selected_job.summary.get("pdf_file") %}
   <p><strong>PDF:</strong> <code>{{ selected_job.summary.get("pdf_file") }}</code></p>
   {% endif %}
+  {% if selected_job.summary.get("error") %}
+  <p class="danger"><strong>Error:</strong> {{ selected_job.summary.get("error") }}</p>
+  {% endif %}
+  {% set selected_results = selected_job.summary.get("results") or [] %}
+  {% if selected_results %}
   <table class="table-base">
     <tr>
       <th>Idx</th>
@@ -79,16 +170,19 @@
       <th>Source</th>
       <th>Error</th>
     </tr>
-    {% for row in selected_job.summary.get("results") %}
+    {% for row in selected_results %}
     <tr>
       <td><code>{{ row.get("idx", "") }}</code></td>
       <td><code>{{ row.get("problem_slug", "") }}</code></td>
       <td>{{ row.get("status", "") | status_label }}</td>
       <td><code>{{ row.get("source_commit", row.get("verification_id", "")) }}</code></td>
-      <td>{{ row.get("error", "") }}</td>
+      <td>{{ row.get("error", "") or row.get("warning", "") }}</td>
     </tr>
     {% endfor %}
   </table>
+  {% else %}
+  <p class="muted">No per-problem report was produced for this job.</p>
+  {% endif %}
 </section>
 {% endif %}
 

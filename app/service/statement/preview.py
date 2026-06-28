@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import re
 import shutil
 import uuid
@@ -25,6 +26,7 @@ from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.repository.workspace import WorkspaceService
 from app.service.statement.context import normalize_statement_language
+from app.service.verification.runtime import normalize_problem_mode
 
 if TYPE_CHECKING:
     from app.service.verification.service import VerificationService
@@ -93,7 +95,20 @@ class PreviewService:
             return None
         return row
 
+    def _problem_mode(self, workspace: Path) -> str:
+        cfg_path = workspace / "config" / "problem.json"
+        if not cfg_path.exists() or cfg_path.is_symlink() or not cfg_path.is_file():
+            return "pass-fail"
+        try:
+            payload = json.loads(cfg_path.read_text(encoding="utf-8")) or {}
+            raw_mode = dict(payload).get("mode")
+        except Exception:
+            raw_mode = ""
+        return normalize_problem_mode(raw_mode, "pass-fail")
+
     def _sample_verification_rows_from_spec(self, workspace: Path) -> list[_SampleVerificationRow]:
+        if self._problem_mode(workspace) == "interactive":
+            return []
         spec_path = workspace / TESTS_SPEC_REL
         try:
             entries = load_tests_spec(spec_path)
@@ -148,6 +163,8 @@ class PreviewService:
         return rows
 
     def _copy_sample_payloads_from_verification(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
+        if self._problem_mode(snapshot) == "interactive":
+            return {"sample_count": 0, "copied": 0, "verification_id": "", "skipped": "interactive"}
         rows = self._sample_verification_rows_from_spec(snapshot)
         if not rows:
             return {"sample_count": 0, "copied": 0, "verification_id": ""}

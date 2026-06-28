@@ -4251,6 +4251,139 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(answer_download.status_code, 200)
         self.assertEqual(answer_download.body, b"6\n")
 
+    def test_collaborator_can_view_foreign_workspace_run_details_and_artifacts(self) -> None:
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        workspace_service.ensure_workspace("alice/sample", "bob")
+
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        problem_id = int(alice_ctx["problem"]["id"])
+        alice_workspace_id = int(alice_ctx["workspace"]["id"])
+        verification_id = f"ver-collab-detail-{uuid.uuid4().hex[:8]}"
+        artifact_root = config.fs_manager.prepare_verification_root(verification_id).resolve()
+        artifact_root.mkdir(parents=True, exist_ok=True)
+
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=problem_id,
+            workspace_id=alice_workspace_id,
+            build_id=verification_id,
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-05-04T00:00:00Z",
+            finished_at="2026-05-04T00:00:01Z",
+            runs=[
+                {
+                    "id": "r-collab-detail",
+                    "status": "ok",
+                    "artifact_path": str(artifact_root),
+                    "source_label": "solutions/std.cpp",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/std.cpp",
+                        "tests": [],
+                        "compile_log": "",
+                        "compile_diagnostics": [],
+                    },
+                }
+            ],
+            summary_extra={
+                "tests_meta_rows": [
+                    {
+                        "index": 1,
+                        "test_name": "001.in",
+                        "kind": "manual",
+                        "id": "001",
+                        "sample": False,
+                        "sample_input_custom": False,
+                        "sample_output_custom": False,
+                        "sample_output_validate": False,
+                        "desc": "",
+                        "source": "",
+                    }
+                ],
+            },
+        )
+        output_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="output",
+            file_name="001.out",
+            payload=b"6\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {
+                "input_ref": config.verification_service.store_verification_blob(
+                    verification_id=verification_id,
+                    test_name="001.in",
+                    role="input",
+                    file_name="001.in",
+                    payload=b"1 2 3\n",
+                ),
+                "answer_ref": config.verification_service.store_verification_blob(
+                    verification_id=verification_id,
+                    test_name="001.in",
+                    role="answer",
+                    file_name="001.ans",
+                    payload=b"6\n",
+                ),
+            },
+        )
+        VerificationTaskStore(config.db).replace_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": f"vt-collab-detail-{uuid.uuid4().hex[:8]}",
+                    "task_kind": "solution-run",
+                    "source_path": "solutions/std.cpp",
+                    "logical_run_id": "std.cpp",
+                    "test_name": "001.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStore.TASK_DONE,
+                    "verdict": "OK",
+                    "runtime_sec": 0.003,
+                    "cpu_sec": 0.002,
+                    "wall_sec": 0.003,
+                    "memory_kb": 1024,
+                    "compile_log": "",
+                    "diagnostics_json": "[]",
+                    "error_text": "",
+                    "feedback_text": "",
+                    "output_ref": output_ref,
+                }
+            ],
+            edges=[],
+        )
+
+        page = run_details_page(
+            _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+            "alice/sample",
+            "bob",
+        )
+        self.assertEqual(page.status_code, 200)
+        page_html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("std.cpp", page_html)
+
+        detail = run_details_test_fragment(
+            _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+            "alice/sample",
+            "bob",
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_html = detail.body.decode("utf-8", errors="replace")
+        self.assertIn("Input 001.in", detail_html)
+        self.assertIn("Answer", detail_html)
+
+        input_download = run_export_impl.artifact_file(
+            "alice/sample",
+            "bob",
+            verification_id,
+            "tests/001.in",
+        )
+        self.assertEqual(input_download.status_code, 200)
+        self.assertEqual(input_download.body, b"1 2 3\n")
+
     def test_run_test_detail_fragment_hides_ok_generation_validation_details(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)

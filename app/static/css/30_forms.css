@@ -326,6 +326,30 @@ form {
   min-width: 120px;
 }
 
+.statement-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.statement-preview-status {
+  margin-left: var(--space-1);
+}
+
+.statement-preview-message {
+  margin-bottom: var(--space-4);
+}
+
+.statement-editor-main {
+  width: 100%;
+}
+
+.statement-preview-diagnostics {
+  margin-top: var(--space-5);
+}
+
 .statement-assets-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

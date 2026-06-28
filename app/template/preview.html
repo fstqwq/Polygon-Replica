@@ -39,6 +39,14 @@
     <span class="muted"><strong>Language</strong>: missing</span>
     {% endif %}
     <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
+    <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/templates/reset" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This overwrites imported template/style files but keeps statement sections and attachments.">
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
+      <input type="hidden" name="language" value="{{ current_language }}" />
+      {% if preview_id %}
+      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+      {% endif %}
+      <a href="#" class="linkish danger-link" data-submit-form="1">Restore default templates</a>
+    </form>
     {% if current_language %}
     <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/statement/languages/delete" data-confirm-message="Delete statement language {{ current_language }}? This removes all statement section files for that language.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
@@ -59,154 +67,136 @@
   Add a language to start editing or compiling statements.
 </div>
 {% else %}
-<div class="grid">
-  <section>
-    <form
-      method="post"
-      action="/problems/{{ ctx.problem.slug }}/preview/save"
-      data-statement-draft-form="1"
-      data-draft-scope-problem="{{ ctx.problem.slug }}"
-      data-draft-scope-user="{{ ctx.user.username }}"
-      data-draft-scope-page="{{ return_page if return_page is defined else 'preview' }}"
-      data-draft-scope-language="{{ current_language }}"
-    >
-      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <input type="hidden" name="language" value="{{ current_language }}" />
-      {% if preview_id %}
-      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-      {% endif %}
-      {% for section in statement_sections %}
-      {% if section.enabled %}
-      {% if section.key == 'name' %}
-      <div class="statement-editor-field statement-editor-field-inline">
-        <label for="statement-title-input">{{ section.label }}</label>
-        <div class="statement-editor-inline-input">
-          <input
-            id="statement-title-input"
-            type="text"
-            name="{{ section.field_name }}"
-            value="{{ section.content }}"
-            autocomplete="off"
-            spellcheck="false"
-          />
-        </div>
-      </div>
-      {% else %}
-      <div class="statement-editor-field">
-        <div class="statement-editor-field-head">
-          <label>{{ section.label }}</label>
-        </div>
-        <div class="statement-editor-field-body">
-          <a
-            href="#statement-draft-popup"
-            class="linkish statement-draft-inline-trigger"
-            data-popup-open="statement-draft-popup"
-            data-statement-draft-trigger="1"
-            data-draft-field="{{ section.field_name }}"
-            data-draft-label="{{ section.label }}"
-            aria-label="Open local draft history for {{ section.label }}"
-          >Draft</a>
-          <textarea
-            name="{{ section.field_name }}"
-            rows="12"
-            data-code-editor="1"
-            data-code-path="{{ section.path }}"
-            data-code-autosize="1"
-            data-code-wrap="1"
-          >{{ section.content }}</textarea>
-        </div>
-      </div>
-      {% endif %}
-      {% if section.truncated %}
-      <p><em>{{ section.label }} text is truncated in editor (showing first {{ editor_char_limit }} chars).</em></p>
-      {% endif %}
-      {% endif %}
-      {% endfor %}
-      {% if not interaction_section_enabled %}
-      <p class="muted">Interaction Protocol section is disabled because current mode is <code>{{ statement_mode }}</code>. Switch mode to <code>interactive</code> to edit it.</p>
-      {% endif %}
-      <button class="btn" type="submit">Save Statement</button>
-    </form>
-  </section>
-  <section>
-    <h2>Preview Output</h2>
-    {% if not (preview_id and pdf_exists) %}
-    <form
-      method="post"
-      action="/problems/{{ ctx.problem.slug }}/preview/run"
-      data-preview-compile-form="1"
-    >
-      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <input type="hidden" name="language" value="{{ current_language }}" />
-      <button class="btn primary-action" type="submit" data-preview-compile-button="1">Compile Statement</button>
-    </form>
+<div class="statement-preview-toolbar">
+  <form
+    class="inline-form"
+    method="post"
+    action="/problems/{{ ctx.problem.slug }}/preview/run"
+    data-preview-compile-form="1"
+  >
+    <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+    <input type="hidden" name="language" value="{{ current_language }}" />
+    <button class="btn primary-action" type="submit" data-preview-compile-button="1">{{ "Recompile Statement" if preview_id else "Compile Statement" }}</button>
+  </form>
+  <a class="btn" href="/problems/{{ ctx.problem.slug }}/statement/source.tex?language={{ current_language }}" target="_blank" rel="noopener">Open TeX</a>
+  {% if preview_id and pdf_exists %}
+  <a class="btn" href="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open PDF</a>
+  {% endif %}
+  {% if latex_log_href %}
+  <a class="btn" href="{{ latex_log_href }}" target="_blank" rel="noopener">Open latex.log</a>
+  {% endif %}
+  {% if preview_id and pdf_exists %}
+  <span class="muted statement-preview-status">{{ "PDF is stale; recompile after source changes." if preview_is_stale else "PDF is ready." }}</span>
+  {% endif %}
+</div>
+{% if preview_compile_failed %}
+<div class="flash statement-preview-message">
+  <strong>{{ preview_failure_title }}</strong>
+  {% if preview_failure_detail %}
+  <pre class="preview-log">{{ preview_failure_detail }}</pre>
+  {% endif %}
+</div>
+{% endif %}
+{% if preview_is_missing %}
+<p class="muted statement-preview-message">Preview artifacts expired from cache. Recompile to regenerate the PDF and latex.log.</p>
+{% endif %}
+{% if preview_id and (not pdf_exists) and (not preview_is_missing) and (not preview_compile_failed) %}
+<p class="muted statement-preview-message">Latest preview has no PDF output.</p>
+{% endif %}
+<section class="statement-editor-main">
+  <form
+    method="post"
+    action="/problems/{{ ctx.problem.slug }}/preview/save"
+    data-statement-draft-form="1"
+    data-draft-scope-problem="{{ ctx.problem.slug }}"
+    data-draft-scope-user="{{ ctx.user.username }}"
+    data-draft-scope-page="{{ return_page if return_page is defined else 'preview' }}"
+    data-draft-scope-language="{{ current_language }}"
+  >
+    <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+    <input type="hidden" name="language" value="{{ current_language }}" />
+    {% if preview_id %}
+    <input type="hidden" name="preview_id" value="{{ preview_id }}" />
     {% endif %}
-    {% if preview_compile_failed %}
-    <div class="flash">
-      <strong>{{ preview_failure_title }}</strong>
-      {% if preview_failure_detail %}
-      <pre class="preview-log">{{ preview_failure_detail }}</pre>
-      {% endif %}
-      {% if latex_log_href %}
-      <a href="{{ latex_log_href }}" target="_blank" rel="noopener">Open full latex.log</a>
-      {% endif %}
+    {% for section in statement_sections %}
+    {% if section.enabled %}
+    {% if section.key == 'name' %}
+    <div class="statement-editor-field statement-editor-field-inline">
+      <label for="statement-title-input">{{ section.label }}</label>
+      <div class="statement-editor-inline-input">
+        <input
+          id="statement-title-input"
+          type="text"
+          name="{{ section.field_name }}"
+          value="{{ section.content }}"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+    </div>
+    {% else %}
+    <div class="statement-editor-field">
+      <div class="statement-editor-field-head">
+        <label>{{ section.label }}</label>
+      </div>
+      <div class="statement-editor-field-body">
+        <a
+          href="#statement-draft-popup"
+          class="linkish statement-draft-inline-trigger"
+          data-popup-open="statement-draft-popup"
+          data-statement-draft-trigger="1"
+          data-draft-field="{{ section.field_name }}"
+          data-draft-label="{{ section.label }}"
+          aria-label="Open local draft history for {{ section.label }}"
+        >Draft</a>
+        <textarea
+          name="{{ section.field_name }}"
+          rows="12"
+          data-code-editor="1"
+          data-code-path="{{ section.path }}"
+          data-code-autosize="1"
+          data-code-wrap="1"
+        >{{ section.content }}</textarea>
+      </div>
     </div>
     {% endif %}
-    {% if preview_is_missing %}
-    <p class="muted">Preview artifacts expired from cache. Recompile to regenerate the PDF and latex.log.</p>
+    {% if section.truncated %}
+    <p><em>{{ section.label }} text is truncated in editor (showing first {{ editor_char_limit }} chars).</em></p>
     {% endif %}
-    {% if preview_id %}
-    {% if pdf_exists %}
-    {% if preview_is_stale %}
-    <p class="muted">
-      PDF is ready, but statement is stale (sources have changed).
-      <a href="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
-    </p>
-    {% else %}
-    <p class="muted">
-      PDF is ready.
-      <a href="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf" target="_blank" rel="noopener">Open in a new tab</a>
-    </p>
     {% endif %}
-    <iframe class="pdf-preview" src="/problems/{{ ctx.problem.slug }}/artifacts/{{ preview_id }}/statement_preview/statement.pdf"></iframe>
-    <form
-      method="post"
-      action="/problems/{{ ctx.problem.slug }}/preview/run"
-      data-preview-compile-form="1"
-    >
-      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-      <input type="hidden" name="language" value="{{ current_language }}" />
-      <button class="btn primary-action" type="submit" data-preview-compile-button="1">Recompile</button>
-    </form>
-    {% elif not preview_is_missing and not preview_compile_failed %}
-    <p class="muted">Latest preview has no PDF output.</p>
+    {% endfor %}
+    {% if not interaction_section_enabled %}
+    <p class="muted">Interaction Protocol section is disabled because current mode is <code>{{ statement_mode }}</code>. Switch mode to <code>interactive</code> to edit it.</p>
     {% endif %}
-    {% if log_refs %}
-    <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
-      <summary>Log References ({{ log_refs_total }})</summary>
-      {% if log_refs_truncated %}
-      <p><em>Showing first {{ log_refs_limit }} references ({{ log_refs_total }} total).</em></p>
-      {% endif %}
-      <ul>
-        {% for r in log_refs %}
-        <li><a href="/problems/{{ ctx.problem.slug }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
-        {% endfor %}
-      </ul>
-    </details>
+    <button class="btn" type="submit">Save Statement</button>
+  </form>
+</section>
+{% if log_refs or log %}
+<section class="statement-preview-diagnostics">
+  {% if log_refs %}
+  <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
+    <summary>Log References ({{ log_refs_total }})</summary>
+    {% if log_refs_truncated %}
+    <p><em>Showing first {{ log_refs_limit }} references ({{ log_refs_total }} total).</em></p>
     {% endif %}
-    {% if log %}
-    <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
-      <summary>latex.log</summary>
-      {% if log_truncated %}
-      <p><em>Showing first {{ log_char_limit }} characters.</em></p>
-      {% endif %}
-      <pre class="preview-log">{{ log }}</pre>
-    </details>
+    <ul>
+      {% for r in log_refs %}
+      <li><a href="/problems/{{ ctx.problem.slug }}/files?path={{ r.file }}&line={{ r.line }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  {% if log %}
+  <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
+    <summary>latex.log</summary>
+    {% if log_truncated %}
+    <p><em>Showing first {{ log_char_limit }} characters.</em></p>
     {% endif %}
-    {% else %}
-    {% endif %}
-  </section>
-</div>
+    <pre class="preview-log">{{ log }}</pre>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
 {% endif %}
 
 {% call ui_popup('statement-draft-popup', 'Draft History', overlay_class='statement-draft-popup') %}

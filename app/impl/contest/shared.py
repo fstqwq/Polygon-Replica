@@ -17,6 +17,8 @@ from app.impl.workspace.context_verification import latest_workspace_signature_v
 from app.impl.workspace.access import workspace_access_context
 from app.service.repository.revision import workspace_revision_info
 from app.service.sandbox.base import ExecResult
+from app.service.statement.constant import DEFAULT_OLYMP_STY
+from app.service.statement.context import normalize_statement_language
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.platform.git_process import run_git
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
@@ -32,6 +34,14 @@ _CONTEST_JOB_TYPE_PACKAGE = "package"
 _CONTEST_EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}
 _CONTEST_LATEX_JOB_NAME = "statements"
 _CONTEST_LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
+_CONTEST_CJK_PREAMBLE_LINES = [
+    r"% --- Engine-adaptive font loading ---",
+    r"\usepackage{fontspec}",
+    r"\usepackage{xeCJK}",
+    r"\setCJKmainfont{Noto Serif CJK SC}[ItalicFont=Noto Serif CJK SC]",
+    r"\setCJKsansfont{Noto Sans CJK SC}[ItalicFont=Noto Sans CJK SC]",
+    r"\setCJKmonofont{Noto Sans CJK SC}",
+]
 
 
 def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str]]:
@@ -157,9 +167,271 @@ def _contest_compile_target(root: Path, *parts: str) -> Path:
     return target
 
 
+def _contest_latex_escape_text(value: object) -> str:
+    text = str(value or "")
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    return "".join(replacements.get(ch, ch) for ch in text)
+
+
+def _contest_statement_languages(contest_id: int) -> list[str]:
+    languages: list[str] = []
+    seen: set[str] = set()
+    for row in config.contest_service.statement_attachment_rows(int(contest_id)):
+        parts = Path(str(row.get("rel_path") or "")).parts
+        if len(parts) < 3 or parts[0] != "statements" or parts[2] != "statements.tex":
+            continue
+        language = normalize_statement_language(parts[1])
+        if language and language not in seen:
+            seen.add(language)
+            languages.append(language)
+    return languages
+
+
+def _resolve_contest_statement_language(contest_id: int) -> str:
+    configured = normalize_statement_language(config.contest_service.statement_default_language(int(contest_id)))
+    if configured:
+        return configured
+    languages = _contest_statement_languages(int(contest_id))
+    if "english" in languages:
+        return "english"
+    if languages:
+        return languages[0]
+    return "english"
+
+
+def _contest_problem_source_folder(entry: dict[str, object], source_folder_map: dict[int, str]) -> str:
+    problem_id = int(entry["problem_id"])
+    mapped = str(source_folder_map.get(problem_id, "") or "").strip()
+    if mapped:
+        return mapped
+    idx_token = re.sub(r"[^A-Za-z0-9._-]+", "-", str(entry.get("idx") or "").strip().lower()).strip("-")
+    slug_token = _contest_problem_slug_file_token(str(entry.get("problem_slug") or ""))
+    if idx_token:
+        return f"{idx_token}-{slug_token}"
+    return slug_token
+
+
+def contest_default_statements_tex(
+    *,
+    contest_id: int,
+    contest_slug: str,
+    language: str,
+    problem_entries: list[dict[str, object]],
+    source_folder_map: dict[int, str],
+) -> str:
+    contest_row = config.contest_service.contest_context(contest_slug) or {}
+    props = config.contest_service.overview_properties_map(int(contest_id), contest_slug)
+    lines = [
+        r"\documentclass[11pt,a4paper,oneside]{article}",
+        *_CONTEST_CJK_PREAMBLE_LINES,
+        r"\usepackage{amsmath}",
+        r"\usepackage{amssymb}",
+        r"\usepackage{olymp}",
+        r"\usepackage{comment}",
+        r"\usepackage{epigraph}",
+        r"\usepackage{expdlist}",
+        r"\usepackage{import}",
+        r"\usepackage{graphicx}",
+        r"\usepackage{tikz}",
+        r"\usepackage{pgfplots}",
+        r"\usepackage{multirow}",
+        r"\usepackage{siunitx}",
+        r"\usepackage[normalem]{ulem}",
+        r"\usepackage{xparse}",
+        r"\usepackage{wrapfig}",
+        r"\usepackage{algorithm}",
+        r"\usepackage{algpseudocode}",
+        r"\intentionallyblankpagestrue",
+        r"\begin{document}",
+        r"\contest",
+        "{" + _contest_latex_escape_text(contest_row.get("title", "")) + "}%",
+        "{" + _contest_latex_escape_text(props.get("location", "")) + "}%",
+        "{" + _contest_latex_escape_text(props.get("date", "")) + "}%",
+        r"\binoppenalty=10000",
+        r"\relpenalty=10000",
+        "",
+    ]
+    for entry in problem_entries:
+        source_folder = _contest_problem_source_folder(entry, source_folder_map)
+        import_path = f"../../problems/{source_folder}/statements/{language}/"
+        lines.extend(
+            [
+                r"\clearpage",
+                r"\graphicspath{{" + import_path + r"}}",
+                r"\def\ProblemIndex{" + _contest_latex_escape_text(entry.get("idx", "")) + "}",
+                r"\import{" + import_path + r"}{./problem.tex}",
+                "",
+            ]
+        )
+    lines.append(r"\end{document}")
+    return "\n".join(lines) + "\n"
+
+
+def _latex_uses_package(text: str, package: str) -> bool:
+    package_re = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}")
+    for match in package_re.finditer(text):
+        names = [name.strip() for name in str(match.group(1) or "").split(",")]
+        if package in names:
+            return True
+    return False
+
+
+def _ensure_contest_statements_tex_cjk_support(statements_tex: Path) -> None:
+    """Patch the compile copy only, so custom contest sources are not rewritten."""
+    text = statements_tex.read_text(encoding="utf-8", errors="replace")
+    insert_lines: list[str] = []
+    if not _latex_uses_package(text, "fontspec"):
+        insert_lines.append(r"\usepackage{fontspec}")
+    if not _latex_uses_package(text, "xeCJK"):
+        insert_lines.append(r"\usepackage{xeCJK}")
+    if r"\setCJKmainfont" not in text:
+        insert_lines.append(r"\setCJKmainfont{Noto Serif CJK SC}[ItalicFont=Noto Serif CJK SC]")
+    if r"\setCJKsansfont" not in text:
+        insert_lines.append(r"\setCJKsansfont{Noto Sans CJK SC}[ItalicFont=Noto Sans CJK SC]")
+    if r"\setCJKmonofont" not in text:
+        insert_lines.append(r"\setCJKmonofont{Noto Sans CJK SC}")
+    if not insert_lines:
+        return
+
+    block = "% --- CJK support for XeLaTeX contest compilation ---\n" + "\n".join(insert_lines) + "\n"
+    documentclass_match = re.search(r"\\documentclass\s*(?:\[[^\]\n]*\])?\s*\{[^}\n]+\}\s*", text)
+    if documentclass_match is None:
+        statements_tex.write_text(block + text, encoding="utf-8")
+        return
+    insert_at = documentclass_match.end()
+    statements_tex.write_text(text[:insert_at] + "\n" + block + text[insert_at:], encoding="utf-8")
+
+
+_TIKZ_LIBRARY_LINE_RE = re.compile(
+    r"(?m)^[ \t]*\\usetikzlibrary\s*(?:\[[^\]\n]*\])?\s*\{([^}\n]+)\}[ \t]*%?[ \t]*(?:\r?\n)?"
+)
+_COLOR_DEFINITION_LINE_RE = re.compile(
+    r"(?m)^[ \t]*\\(?:definecolor|providecolor|colorlet)\s*(?:\[[^\]\n]*\])?\{[^}\n]+\}(?:\s*\{[^}\n]*\}){1,2}[ \t]*%?[ \t]*(?:\r?\n)?"
+)
+
+
+def _insert_contest_preamble_lines(statements_tex: Path, lines: list[str]) -> None:
+    if not lines:
+        return
+    text = statements_tex.read_text(encoding="utf-8", errors="replace")
+    begin_match = re.search(r"\\begin\s*\{document\}", text)
+    preamble = text[: begin_match.start()] if begin_match is not None else text
+    missing = [line for line in lines if line not in preamble]
+    if not missing:
+        return
+    block = "% --- Hoisted from problem statement bodies for contest compilation ---\n" + "\n".join(missing) + "\n"
+    if begin_match is None:
+        statements_tex.write_text(text.rstrip() + "\n" + block, encoding="utf-8")
+        return
+    insert_at = begin_match.start()
+    statements_tex.write_text(text[:insert_at] + block + text[insert_at:], encoding="utf-8")
+
+
+def _hoist_problem_body_tikz_libraries(problem_tex: Path) -> list[str]:
+    if problem_tex.is_symlink() or (not problem_tex.exists()) or (not problem_tex.is_file()):
+        return []
+    text = problem_tex.read_text(encoding="utf-8", errors="replace")
+    libraries: list[str] = []
+
+    def _remove(match: re.Match[str]) -> str:
+        for raw_name in str(match.group(1) or "").split(","):
+            name = raw_name.strip()
+            if name and name not in libraries:
+                libraries.append(name)
+        return ""
+
+    updated = _TIKZ_LIBRARY_LINE_RE.sub(_remove, text)
+    if updated != text:
+        problem_tex.write_text(updated, encoding="utf-8")
+    return libraries
+
+
+def _extract_latex_color_definition_lines(path: Path) -> list[str]:
+    if path.is_symlink() or (not path.exists()) or (not path.is_file()):
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines: list[str] = []
+    for match in _COLOR_DEFINITION_LINE_RE.finditer(text):
+        line = str(match.group(0) or "").strip()
+        if line and line not in lines:
+            lines.append(line)
+    return lines
+
+
+def _hoist_contest_problem_preamble_commands(
+    *,
+    compile_root: Path,
+    statements_root: Path,
+    language: str,
+    results: list[dict[str, object]],
+) -> None:
+    tikz_libraries: list[str] = []
+    color_definitions: list[str] = []
+    for row in results:
+        if str(row.get("status") or "") != "success":
+            continue
+        problem_tex = _contest_compile_target(
+            compile_root,
+            "problems",
+            str(row.get("source_folder") or ""),
+            "statements",
+            language,
+            "problem.tex",
+        )
+        for library in _hoist_problem_body_tikz_libraries(problem_tex):
+            if library not in tikz_libraries:
+                tikz_libraries.append(library)
+        for line in list(row.get("preamble_lines") or []):
+            safe_line = str(line or "").strip()
+            if safe_line and safe_line not in color_definitions:
+                color_definitions.append(safe_line)
+        for line in _extract_latex_color_definition_lines(problem_tex):
+            if line not in color_definitions:
+                color_definitions.append(line)
+    if not tikz_libraries and not color_definitions:
+        return
+    statements_tex = statements_root / "statements.tex"
+    lines: list[str] = []
+    statements_text = statements_tex.read_text(encoding="utf-8", errors="replace")
+    if color_definitions and not (
+        _latex_uses_package(statements_text, "xcolor") or _latex_uses_package(statements_text, "color")
+    ):
+        lines.append(r"\usepackage{xcolor}")
+    lines.extend(color_definitions)
+    if tikz_libraries and not _latex_uses_package(statements_text, "tikz"):
+        lines.append(r"\usepackage{tikz}")
+    if tikz_libraries:
+        lines.append(r"\usetikzlibrary{" + ",".join(tikz_libraries) + "}")
+    _insert_contest_preamble_lines(statements_tex, lines)
+
+
+def _read_contest_compile_log_tail(statements_root: Path) -> str:
+    log_path = statements_root / f"{_CONTEST_LATEX_JOB_NAME}.log"
+    try:
+        if log_path.is_symlink() or (not log_path.exists()) or (not log_path.is_file()):
+            return ""
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[-20000:]
+
+
 def _contest_latex_compile_error_detail(output_text: str, returncode: int | None) -> str:
     text = str(output_text or "")
     low = text.lower()
+    if ("can't find the format file" in low) and ("xelatex.fmt" in low):
+        return "missing LaTeX format xelatex.fmt"
     if ("can't find the format file" in low) and ("latex.fmt" in low):
         return "missing LaTeX format latex.fmt"
     if ("can't find the format file" in low) and ("mpost.fmt" in low):
@@ -171,6 +443,17 @@ def _contest_latex_compile_error_detail(output_text: str, returncode: int | None
         pkg_name = str(missing_pkg.group(1) or "").strip()
         if pkg_name:
             return f"missing LaTeX package {pkg_name}"
+    package_error = re.search(r"^!\s*(?:Package\s+)?([^:\n]+?)\s+Error:\s*(.+)$", text, flags=re.MULTILINE)
+    if package_error is not None:
+        name = str(package_error.group(1) or "").strip()
+        detail = str(package_error.group(2) or "").strip()
+        if name and detail:
+            return f"{name} Error: {detail}"
+    bang_error = re.search(r"^!\s*(.+)$", text, flags=re.MULTILINE)
+    if bang_error is not None:
+        detail = str(bang_error.group(1) or "").strip()
+        if detail:
+            return detail
     if int(returncode or 0) != 0:
         return "latex compile failed"
     return ""
@@ -246,12 +529,12 @@ def _prepare_contest_graphics_bounding_boxes(
 def _write_contest_latex_wrapper(statements_root: Path) -> Path:
     wrapper_path = (statements_root / _CONTEST_LATEX_WRAPPER_NAME).resolve()
     wrapper_path.write_text(
-        "\\PassOptionsToPackage{dvipdfmx}{graphicx}\n"
-        "\\PassOptionsToPackage{dvipdfmx}{color}\n"
-        "\\PassOptionsToPackage{dvipdfmx}{hyperref}\n"
         "\\AtBeginDocument{%\n"
         "  \\providecommand{\\url}[1]{\\texttt{#1}}%\n"
         "  \\providecommand{\\href}[2]{#2}%\n"
+        "  \\ifdefined\\intentionallyblankpagestrue\n"
+        "    \\intentionallyblankpagestrue\n"
+        "  \\fi\n"
         "}\n"
         "\\input{statements.tex}\n",
         encoding="utf-8",
@@ -283,6 +566,8 @@ def _copy_contest_statement_language_tree(
     contest_slug: str,
     language: str,
     compile_root: Path,
+    problem_entries: list[dict[str, object]],
+    source_folder_map: dict[int, str],
 ) -> Path:
     prefix = f"statements/{language}/"
     copied = 0
@@ -297,12 +582,26 @@ def _copy_contest_statement_language_tree(
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, target_path)
         copied += 1
-    if copied <= 0:
-        raise RuntimeError(f"contest statement tree missing for language: {language}")
     statements_root = _contest_compile_target(compile_root, "statements", language)
+    statements_root.mkdir(parents=True, exist_ok=True)
+    olymp_sty = statements_root / "olymp.sty"
+    if olymp_sty.is_symlink() or (not olymp_sty.exists()):
+        (statements_root / "olymp.sty").write_text(DEFAULT_OLYMP_STY, encoding="utf-8")
     statements_tex = statements_root / "statements.tex"
+    if statements_tex.is_symlink() or (not statements_tex.exists()):
+        (statements_root / "statements.tex").write_text(
+            contest_default_statements_tex(
+                contest_id=contest_id,
+                contest_slug=contest_slug,
+                language=language,
+                problem_entries=problem_entries,
+                source_folder_map=source_folder_map,
+            ),
+            encoding="utf-8",
+        )
     if statements_tex.is_symlink() or (not statements_tex.exists()) or (not statements_tex.is_file()):
         raise RuntimeError(f"contest statements.tex missing for language: {language}")
+    _ensure_contest_statements_tex_cjk_support(statements_tex)
     return statements_root
 
 
@@ -348,13 +647,16 @@ def _prepare_contest_pdf_problem(
             workspace_head=head_commit,
             workspace_dirty=False,
         )
-        sample_sync = config.preview_service.sync_sample_payloads_for_snapshot(
-            problem_slug,
-            actor_username,
-            snapshot_root,
-        )
-        if int(sample_sync.get("sample_count", 0)) > 0:
-            item["sample_sync"] = sample_sync
+        try:
+            sample_sync = config.preview_service.sync_sample_payloads_for_snapshot(
+                problem_slug,
+                actor_username,
+                snapshot_root,
+            )
+            if int(sample_sync.get("sample_count", 0)) > 0:
+                item["sample_sync"] = sample_sync
+        except Exception as exc:
+            item["warning"] = f"sample sync skipped: {exc}"
         target_dir = _contest_compile_target(
             compile_root,
             "problems",
@@ -368,6 +670,7 @@ def _prepare_contest_pdf_problem(
             target_dir,
             problem_title=problem_name,
         )
+        item["preamble_lines"] = _extract_latex_color_definition_lines(snapshot_root / "statement" / "olymp.sty")
         item["source_commit"] = head_commit
         item["status"] = "success"
     except Exception as exc:
@@ -444,8 +747,10 @@ def _run_problem_general_update(
         )
         with config.workspace_service.workspace_lock(workspace):
             has_head = run_git(["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]).returncode == 0
+            if not has_head:
+                raise RuntimeError("bulk TL/ML update requires an initialized repository; create the initial commit first")
             before = config.git_service.status_change_summary(workspace, limit=1)
-            if int(before.get("total", 0)) > 0 and has_head:
+            if int(before.get("total", 0)) > 0:
                 raise RuntimeError("workspace has uncommitted changes")
             payload, general_cfg, cfg_path = read_problem_config(workspace)
             safe_mode = normalize_problem_mode(general_cfg.get("mode"), str(_C.GENERAL_CONFIG_DEFAULTS["mode"]))
@@ -527,19 +832,20 @@ def _run_contest_pdf_job_worker(
     contest_mounts = (compile_root,)
     contest_tex_env = _contest_tex_env(compile_root)
     log_path = job_root / "logs" / "contest-pdf.log"
-    language = config.contest_service.statement_default_language(contest_id)
-    if not language:
-        raise RuntimeError("contest statement default language is missing")
+    language = _resolve_contest_statement_language(contest_id)
+    source_folder_map = config.contest_service.statement_problem_source_folders(contest_id)
+    entries = config.contest_service.contest_problems(contest_id)
     statements_root = _copy_contest_statement_language_tree(
         contest_id=contest_id,
         contest_slug=contest_slug,
         language=language,
         compile_root=compile_root,
+        problem_entries=[dict(entry) for entry in entries],
+        source_folder_map=source_folder_map,
     )
-    source_folder_map = config.contest_service.statement_problem_source_folders(contest_id)
-    entries = config.contest_service.contest_problems(contest_id)
     results: list[dict[str, object]] = []
     for entry in entries:
+        source_folder = _contest_problem_source_folder(dict(entry), source_folder_map)
         item = _prepare_contest_pdf_problem(
             compile_root=compile_root,
             actor_user_id=actor_user_id,
@@ -548,7 +854,7 @@ def _run_contest_pdf_job_worker(
             problem_slug=str(entry["problem_slug"]),
             problem_name=str(entry["problem_name"]),
             idx=str(entry["idx"]),
-            source_folder=str(source_folder_map.get(int(entry["problem_id"]), "") or "").strip(),
+            source_folder=source_folder,
             language=language,
         )
         results.append(item)
@@ -584,6 +890,12 @@ def _run_contest_pdf_job_worker(
             },
         )
         return
+    _hoist_contest_problem_preamble_commands(
+        compile_root=compile_root,
+        statements_root=statements_root,
+        language=language,
+        results=results,
+    )
     for row in results:
         problem_root = _contest_compile_target(
             compile_root,
@@ -624,26 +936,24 @@ def _run_contest_pdf_job_worker(
     for command, title in (
         (
             [
-                "latex",
+                "xelatex",
                 "-interaction=nonstopmode",
                 "-halt-on-error",
                 f"-jobname={_CONTEST_LATEX_JOB_NAME}",
                 latex_wrapper.name,
             ],
-            "latex pass 1",
+            "xelatex pass 1",
         ),
         (
             [
-                "latex",
+                "xelatex",
                 "-interaction=nonstopmode",
                 "-halt-on-error",
                 f"-jobname={_CONTEST_LATEX_JOB_NAME}",
                 latex_wrapper.name,
             ],
-            "latex pass 2",
+            "xelatex pass 2",
         ),
-        (["dvips", "statements.dvi"], "dvips"),
-        (["dvipdfmx", "-p", "a4", "statements.dvi"], "dvipdfmx"),
     ):
         proc = _run_contest_tex_command(
             command,
@@ -653,7 +963,12 @@ def _run_contest_pdf_job_worker(
             extra_mounts=contest_mounts,
             env=contest_tex_env,
         )
-        final_output = f"{proc.stdout}\n{proc.stderr}".strip()
+        log_output = _read_contest_compile_log_tail(statements_root)
+        final_output = "\n".join(
+            part
+            for part in (str(proc.stdout or ""), str(proc.stderr or ""), log_output)
+            if part
+        ).strip()
         if proc.timed_out:
             summary["error"] = f"{title} timeout"
             config.contest_service.update_job(contest_id, job_id, "failed", summary, finished=True)

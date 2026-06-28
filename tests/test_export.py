@@ -18,7 +18,7 @@ from .ui_support import _flash_messages_from_response, _request
 from app.impl.run_export import export as export_page_module
 from app.impl.run_export import import_source as export_import_module
 from app.impl.run_export.import_source import import_package_as_new_problem
-from app.impl.workspace.context_job import _run_export_create_worker
+from app.impl.workspace.context_job import _icpc_verification_has_complete_artifacts, _run_export_create_worker
 from app.impl.runtime.config import config
 from app.service.importing import native as native_import_module
 from app.service.platform.git_process import run_git
@@ -45,6 +45,28 @@ class TestExport(SmokeBase):
             encoding="utf-8",
         )
         return tracked
+
+    def _insert_complete_export_artifacts(self, verification_id: str, test_id: str = "001") -> None:
+        test_name = f"{test_id}.in"
+        input_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name=test_name,
+            role="input",
+            file_name=test_name,
+            payload=b"1\n",
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name=test_name,
+            role="answer",
+            file_name=f"{test_id}.ans",
+            payload=b"1\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            test_name,
+            {"input_ref": input_ref, "answer_ref": answer_ref},
+        )
 
     def _insert_exportable_verification(self, verification_id: str, signature: str) -> None:
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
@@ -254,6 +276,7 @@ class TestExport(SmokeBase):
                 fail_reason="",
                 finished=True,
             )
+            self._insert_complete_export_artifacts(verification_id)
 
         with patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=_fake_dag):
             _run_export_create_worker(
@@ -364,6 +387,7 @@ class TestExport(SmokeBase):
                 fail_reason="",
                 finished=True,
             )
+            self._insert_complete_export_artifacts(verification_id)
 
         with patch("app.impl.workspace.context_job.run_workspace_verification_dag", side_effect=_fake_dag):
             _run_export_create_worker(
@@ -710,6 +734,114 @@ class TestExport(SmokeBase):
         self.assertEqual(int(summary.get("tests_total") or 0), 2)
         self.assertEqual(int(summary.get("solutions_total") or 0), 1)
 
+    def test_icpc_export_keeps_multi_pass_samples_out_of_sample_data(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        accepted = f"solutions/ac_multipass_{token}.cpp"
+        checker = f"checkers/checker_multipass_{token}.cpp"
+        (ws / accepted).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{accepted}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / checker).write_text("#include \"testlib.h\"\nint main(){return 0;}\n", encoding="utf-8")
+        (ws / "config" / "problem.json").write_text(
+            json.dumps(
+                {
+                    "mode": "pass-fail",
+                    "pass_limit": 2,
+                    "time_limit_ms": 2000,
+                    "memory_limit_mb": 1024,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / "config" / "build.json").write_text(
+            json.dumps(
+                {
+                    "accepted_solution_source": accepted,
+                    "checker_source": checker,
+                    "generator_sources": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (ws / "tests" / "manual" / "001.in").write_text("sample input\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {
+                            "id": "001",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_output": "statement-only answer\n",
+                        }
+                    ]
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [
+                accepted,
+                f"{accepted}.desc",
+                checker,
+                "config/problem.json",
+                "config/build.json",
+                "tests/manual/001.in",
+                "tests/spec.json",
+            ],
+            f"test icpc multipass sample layout {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-multipass-{token}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature=head,
+            source_commit=head,
+            kind="all",
+            status="ok",
+            detail={"sanity_status": "passed", "validation_status": "passed"},
+        )
+        answer_ref = config.verification_service.store_verification_blob(
+            verification_id=verification_id,
+            test_name="001.in",
+            role="answer",
+            file_name="001.ans",
+            payload=b"verified answer\n",
+        )
+        config.verification_service.update_verification_artifact_refs(
+            verification_id,
+            "001.in",
+            {"answer_ref": answer_ref},
+        )
+
+        archive = export_service.create_export(
+            self.problem,
+            verification_id,
+            "icpc",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
+
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+            self.assertIn("validation_passes: 2", zf.read("problem.yaml").decode("utf-8", errors="replace"))
+            self.assertNotIn("data/sample/001.in", names)
+            self.assertNotIn("data/sample/001.ans", names)
+            self.assertEqual(zf.read("data/secret/001.in"), b"sample input\n")
+            self.assertEqual(zf.read("data/secret/001.ans"), b"verified answer\n")
+
     def test_icpc_export_requires_answers_for_secret_tests(self) -> None:
         ws = Path(self._workspace_path())
         token = uuid.uuid4().hex[:8]
@@ -848,6 +980,98 @@ class TestExport(SmokeBase):
         with zipfile.ZipFile(archive, "r") as zf:
             self.assertEqual(zf.read("data/secret/001.in"), b"2\n0 0 0\n0 0 0\n0 0 0\n")
             self.assertEqual(zf.read("data/secret/001.ans"), b"0\n")
+
+    def test_icpc_export_maps_verification_artifacts_by_spec_id_not_runtime_order(self) -> None:
+        ws = Path(self._workspace_path())
+        token = uuid.uuid4().hex[:8]
+        rel = f"solutions/ac_artifact_id_map_{token}.cpp"
+        (ws / rel).write_text("int main(){return 0;}\n", encoding="utf-8")
+        (ws / f"{rel}.desc").write_text("expected: accepted\n", encoding="utf-8")
+        (ws / "tests" / "manual" / "001.in").write_text("manual input\n", encoding="utf-8")
+        (ws / "tests" / "generator" / "003.in").write_text("gen_team random 2 20 303\n", encoding="utf-8")
+        (ws / "tests" / "spec.json").write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {"id": "001", "kind": "manual", "sample": False},
+                        {"id": "003", "kind": "gen", "sample": False},
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        head = self._commit_workspace_paths(
+            ws,
+            [rel, f"{rel}.desc", "tests/manual/001.in", "tests/generator/003.in", "tests/spec.json"],
+            f"test icpc artifact id map {token}",
+        )
+        ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = f"ver-export-id-map-{token}"
+        config.verification_service.begin_verification_record(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            signature=head,
+            source_commit=head,
+            kind="all",
+            status="ok",
+            detail={
+                "sanity_status": "passed",
+                "validation_status": "passed",
+                "tests_meta_rows": [
+                    {"index": 1, "test_name": "001.in", "kind": "manual", "id": "001"},
+                    {"index": 2, "test_name": "002.in", "kind": "gen", "id": "003"},
+                ],
+            },
+        )
+        for test_name, input_bytes, answer_bytes in (
+            ("001.in", b"manual input\n", b"manual answer\n"),
+            ("002.in", b"generated input for spec 003\n", b"generated answer for spec 003\n"),
+        ):
+            input_ref = config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name=test_name,
+                role="input",
+                file_name=test_name,
+                payload=input_bytes,
+            )
+            answer_ref = config.verification_service.store_verification_blob(
+                verification_id=verification_id,
+                test_name=test_name,
+                role="answer",
+                file_name=f"{Path(test_name).stem}.ans",
+                payload=answer_bytes,
+            )
+            config.verification_service.update_verification_artifact_refs(
+                verification_id,
+                test_name,
+                {"input_ref": input_ref, "answer_ref": answer_ref},
+            )
+
+        self.assertTrue(
+            _icpc_verification_has_complete_artifacts(
+                verification_id,
+                problem_id=int(ctx["problem"]["id"]),
+                workspace_id=int(ctx["workspace"]["id"]),
+                source_commit=head,
+                test_ids=["001", "003"],
+            )
+        )
+        archive = export_service.create_export(
+            self.problem,
+            verification_id,
+            "icpc",
+            workspace_id=int(ctx["workspace"]["id"]),
+            source_commit=head,
+        )
+        with zipfile.ZipFile(archive, "r") as zf:
+            self.assertEqual(zf.read("data/secret/001.in"), b"manual input\n")
+            self.assertEqual(zf.read("data/secret/001.ans"), b"manual answer\n")
+            self.assertEqual(zf.read("data/secret/003.in"), b"generated input for spec 003\n")
+            self.assertEqual(zf.read("data/secret/003.ans"), b"generated answer for spec 003\n")
+            self.assertNotIn("data/secret/002.in", zf.namelist())
 
     def test_icpc_export_requires_generated_input_artifact(self) -> None:
         ws = Path(self._workspace_path())
@@ -1780,8 +2004,15 @@ class TestExport(SmokeBase):
         )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
 
-        def _compile_ok(_statement_root: Path, dst_statement: Path, *, problem_name: str) -> bool:
+        def _compile_ok(
+            _statement_root: Path,
+            dst_statement: Path,
+            *,
+            problem_name: str,
+            include_sample_tests: bool = True,
+        ) -> bool:
             self.assertTrue(str(problem_name or "").strip())
+            self.assertTrue(include_sample_tests)
             dst_statement.mkdir(parents=True, exist_ok=True)
             (dst_statement / "problem.en.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             return True
@@ -1995,8 +2226,15 @@ class TestExport(SmokeBase):
         )
         ctx = workspace_service.workspace_context(self.problem, self.user, include_recent=False)
 
-        def _compile_ok(_statement_root: Path, dst_statement: Path, *, problem_name: str) -> bool:
+        def _compile_ok(
+            _statement_root: Path,
+            dst_statement: Path,
+            *,
+            problem_name: str,
+            include_sample_tests: bool = True,
+        ) -> bool:
             self.assertTrue(str(problem_name or "").strip())
+            self.assertTrue(include_sample_tests)
             dst_statement.mkdir(parents=True, exist_ok=True)
             for name in ("problem.en.pdf", "problem.zh.pdf", "problem.japanese.pdf"):
                 (dst_statement / name).write_bytes(b"%PDF-1.4\n%%EOF\n")

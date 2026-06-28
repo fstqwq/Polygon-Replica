@@ -51,6 +51,7 @@ class WorkspaceService:
     PROBLEM_CACHE_MAX_ENTRIES = 512
     USER_CACHE_MAX_ENTRIES = 2048
     REPO_ROLES = {"owner", "write", "read"}
+    ACCESS_ROLES = {"admin", "owner", "write", "read"}
 
     def __init__(self, db: DB, settings: Settings):
         self.db = db
@@ -226,13 +227,34 @@ class WorkspaceService:
         user_id = self.known_user_id(username)
         if user_id is None:
             return ""
-        items = self._store.user_problem_slugs(user_id, limit=max(1, int(limit)))
+        if self.user_is_system_admin(int(user_id)):
+            items = self._store.all_problem_slugs(limit=max(1, int(limit)))
+        else:
+            items = self._store.user_problem_slugs(user_id, limit=max(1, int(limit)))
         return items[0] if items else ""
 
     def accessible_problem_slugs(self, user_id: int, *, limit: int = 1) -> list[str]:
+        if self.user_is_system_admin(int(user_id)):
+            return self._store.all_problem_slugs(limit=max(1, int(limit)))
         return self._store.user_problem_slugs(int(user_id), limit=max(1, int(limit)))
 
+    def accessible_problem_slugs_by_leaf(self, user_id: int, leaf: str, *, limit: int = 20) -> list[str]:
+        safe_leaf = str(leaf or "").strip()
+        if not safe_leaf:
+            return []
+        if self.user_is_system_admin(int(user_id)):
+            return self._store.problem_slugs_by_leaf(safe_leaf, limit=max(1, int(limit)))
+        return self._store.user_problem_slugs_by_leaf(int(user_id), safe_leaf, limit=max(1, int(limit)))
+
+    def problem_slugs_by_leaf(self, leaf: str, *, limit: int = 20) -> list[str]:
+        safe_leaf = str(leaf or "").strip()
+        if not safe_leaf:
+            return []
+        return self._store.problem_slugs_by_leaf(safe_leaf, limit=max(1, int(limit)))
+
     def participating_problem_rows(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
+        if self.user_is_system_admin(int(user_id)):
+            return self._store.all_problem_rows(int(user_id), limit=max(1, int(limit)))
         return self._store.user_problem_rows(int(user_id), limit=max(1, int(limit)))
 
     def workspace_path(self, problem_id: int, workspace_id: int) -> str:
@@ -254,6 +276,16 @@ class WorkspaceService:
         )
 
     def access_context(self, problem_id: int, user_id: int) -> dict[str, object]:
+        if self.user_is_system_admin(int(user_id)):
+            return {
+                "role": "admin",
+                "can_read": True,
+                "can_write": True,
+                "can_manage": True,
+                "read_block_reason": "",
+                "write_block_reason": "",
+                "manage_block_reason": "",
+            }
         role = self._store.repo_role(int(problem_id), int(user_id))
         if role is None:
             return {
@@ -263,19 +295,19 @@ class WorkspaceService:
                 "can_manage": False,
                 "read_block_reason": "you do not have access to this problem",
                 "write_block_reason": "write access required",
-                "manage_block_reason": "owner access required",
+                "manage_block_reason": "owner or admin access required",
             }
-        if role not in self.REPO_ROLES:
+        if role not in self.ACCESS_ROLES:
             raise RuntimeError("invalid repo role")
-        can_write = role in {"owner", "write"}
+        can_write = role in {"admin", "owner", "write"}
         return {
             "role": role,
             "can_read": True,
             "can_write": can_write,
-            "can_manage": role == "owner",
+            "can_manage": role in {"admin", "owner"},
             "read_block_reason": "",
             "write_block_reason": "" if can_write else "read-only access",
-            "manage_block_reason": "" if role == "owner" else "owner access required",
+            "manage_block_reason": "" if role in {"admin", "owner"} else "owner or admin access required",
         }
 
     def access_entries(self, problem_id: int) -> list[dict[str, str]]:
@@ -374,6 +406,7 @@ class WorkspaceService:
         if workspace_id is not None and workspace.exists() and (workspace / ".git").is_dir():
             if refresh_status:
                 with self.workspace_lock(workspace):
+                    self._ensure_main_checkout(workspace)
                     self._refresh_workspace_status_with_ids(workspace, int(p["id"]), int(u["id"]))
             return workspace
 
@@ -407,6 +440,9 @@ class WorkspaceService:
         return workspace
 
     def _ensure_main_checkout(self, workspace: Path) -> None:
+        has_head = run_git(
+            ["git", "-C", str(workspace), "rev-parse", "--verify", "HEAD"]
+        ).returncode == 0
         has_local_main = run_git(
             ["git", "-C", str(workspace), "show-ref", "--verify", "--quiet", "refs/heads/main"]
         ).returncode == 0
@@ -417,8 +453,29 @@ class WorkspaceService:
         has_origin_main = run_git(
             ["git", "-C", str(workspace), "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"]
         ).returncode == 0
+        if (not has_origin_main) and (not has_head):
+            run_git(
+                [
+                    "git",
+                    "-C",
+                    str(workspace),
+                    "fetch",
+                    "--quiet",
+                    "origin",
+                    "refs/heads/main:refs/remotes/origin/main",
+                ]
+            )
+            has_origin_main = run_git(
+                ["git", "-C", str(workspace), "show-ref", "--verify", "--quiet", "refs/remotes/origin/main"]
+            ).returncode == 0
         if has_origin_main:
-            run_git(["git", "-C", str(workspace), "switch", "--quiet", "-c", "main", "--track", "origin/main"])
+            if not has_head:
+                # The initial unborn workspace contains seeded untracked files.
+                # Once origin/main exists, remote Git history is authoritative.
+                run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
+                run_git(["git", "-C", str(workspace), "reset", "--hard", "origin/main"])
+                return
+            run_git(["git", "-C", str(workspace), "switch", "--quiet", "-C", "main", "--track", "origin/main"])
             return
 
         # Keep empty repositories on unborn main branch.

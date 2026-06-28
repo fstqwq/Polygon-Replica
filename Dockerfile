@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         texlive-latex-base \
         texlive-latex-recommended \
         texlive-latex-extra \
+        texlive-plain-generic \
         texlive-xetex \
         texlive-science \
         texlive-lang-chinese \

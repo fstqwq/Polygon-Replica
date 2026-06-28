@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from typing import TypedDict
 
 
@@ -71,8 +72,9 @@ class JudgehostCaseRow(TypedDict):
 
 
 class JudgehostStateStore:
-    def __init__(self, lock: threading.RLock | None = None):
+    def __init__(self, lock: threading.RLock | None = None, *, id_base: int | None = None):
         self._lock = threading.RLock() if lock is None else lock
+        self._id_base = max(1, int(id_base if id_base is not None else time.time() * 1000))
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.ensure_schema()
 
@@ -170,6 +172,19 @@ class JudgehostStateStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_jobs_lease ON judgehost_domjudge_jobs(lease_owner,updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_job ON judgehost_domjudge_cases(job_id,ordinal ASC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_status ON judgehost_domjudge_cases(status,job_id,ordinal ASC)")
+            for table_name in ("judgehost_domjudge_jobs", "judgehost_domjudge_cases"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO sqlite_sequence(name, seq) VALUES(?, ?)",
+                    [table_name, self._id_base],
+                )
+                conn.execute(
+                    """
+                    UPDATE sqlite_sequence
+                    SET seq=CASE WHEN seq < ? THEN ? ELSE seq END
+                    WHERE name=?
+                    """,
+                    [self._id_base, self._id_base, table_name],
+                )
             conn.commit()
 
     def reset(self) -> None:
@@ -184,7 +199,15 @@ class JudgehostStateStore:
             SELECT j.*
             FROM judgehost_domjudge_jobs j
             WHERE j.lease_owner=? AND j.status IN ('leased','queued')
-            ORDER BY j.job_id ASC
+            ORDER BY
+              CASE
+                WHEN j.verification_source='compile.only' THEN 0
+                WHEN j.verification_source LIKE '%generate-input' THEN 1
+                WHEN j.verification_source='main-correct' THEN 2
+                WHEN j.verification_source LIKE 'sanity-check%' THEN 3
+                ELSE 10
+              END ASC,
+              j.job_id ASC
             LIMIT 1
             """,
             [hostname],
@@ -199,6 +222,11 @@ class JudgehostStateStore:
             WHERE (
                 (j.lease_owner=? AND j.status IN ('leased','queued'))
                 OR ((j.lease_owner IS NULL OR TRIM(j.lease_owner)='') AND j.status='queued')
+                OR (
+                    j.status='leased'
+                    AND COALESCE(j.compile_success, 0)=1
+                    AND COALESCE(TRIM(j.lease_owner), '')<>'prequeue-cache'
+                )
             )
               AND EXISTS (
                 SELECT 1
@@ -207,6 +235,13 @@ class JudgehostStateStore:
               )
             ORDER BY
               CASE WHEN j.lease_owner=? THEN 0 ELSE 1 END,
+              CASE
+                WHEN j.verification_source='compile.only' THEN 0
+                WHEN j.verification_source LIKE '%generate-input' THEN 1
+                WHEN j.verification_source='main-correct' THEN 2
+                WHEN j.verification_source LIKE 'sanity-check%' THEN 3
+                ELSE 10
+              END ASC,
               CASE WHEN j.status='leased' THEN 0 ELSE 1 END,
               j.created_at ASC,
               j.job_id ASC
@@ -215,6 +250,53 @@ class JudgehostStateStore:
             [hostname, hostname],
         )
         return rows[0] if rows else None
+
+    def higher_priority_pending_job_exists(self, *, exclude_job_id: int, priority_lt: int) -> bool:
+        row = self._fetch_one(
+            """
+            SELECT 1 AS found
+            FROM judgehost_domjudge_jobs j
+            WHERE j.job_id<>?
+              AND (
+                ((j.lease_owner IS NULL OR TRIM(j.lease_owner)='') AND j.status='queued')
+                OR (
+                    j.status='leased'
+                    AND COALESCE(j.compile_success, 0)=1
+                    AND COALESCE(TRIM(j.lease_owner), '')<>'prequeue-cache'
+                )
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM judgehost_domjudge_cases c
+                WHERE c.job_id=j.job_id AND c.status='pending'
+              )
+              AND (
+                CASE
+                  WHEN j.verification_source='compile.only' THEN 0
+                  WHEN j.verification_source LIKE '%generate-input' THEN 1
+                  WHEN j.verification_source='main-correct' THEN 2
+                  WHEN j.verification_source LIKE 'sanity-check%' THEN 3
+                  ELSE 10
+                END
+              ) < ?
+            LIMIT 1
+            """,
+            [int(exclude_job_id), int(priority_lt)],
+        )
+        return row is not None
+
+    def host_leased_case_count(self, hostname: str) -> int:
+        row = self._fetch_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM judgehost_domjudge_cases
+            WHERE lease_owner=? AND status='leased'
+            """,
+            [hostname],
+        )
+        if row is None:
+            return 0
+        return max(0, int(row["count"] or 0))
 
     def cases_for_job(self, job_id: int, *, status: str | None = None) -> list[JudgehostCaseRow]:
         if status:
@@ -243,6 +325,10 @@ class JudgehostStateStore:
 
     def job_for_task(self, task_id: str) -> JudgehostJobRow | None:
         row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE task_id=? LIMIT 1", [task_id])
+        return None if row is None else row
+
+    def job_for_run(self, run_id: str) -> JudgehostJobRow | None:
+        row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE run_id=? LIMIT 1", [run_id])
         return None if row is None else row
 
     def job_for_group_key(self, group_key: str) -> JudgehostJobRow | None:
@@ -307,6 +393,18 @@ class JudgehostStateStore:
 
     def testcase_refs(self, testcase_id: int, *, hostname: str) -> tuple[dict[str, object] | None, str]:
         safe_host = str(hostname or "").strip()
+        token = int(testcase_id)
+        row = self._fetch_one(
+            """
+            SELECT input_ref,answer_ref
+            FROM judgehost_domjudge_cases
+            WHERE id=? AND status='leased'
+            LIMIT 1
+            """,
+            [token],
+        )
+        if row is not None:
+            return row, "leased-case-id"
         if not safe_host:
             return None, "missing-host"
         row = self._fetch_one(
@@ -317,7 +415,7 @@ class JudgehostStateStore:
             ORDER BY updated_at DESC, id DESC
             LIMIT 1
             """,
-            [int(testcase_id), safe_host],
+            [token, safe_host],
         )
         if row is not None:
             return row, "leased-host-testcase-id"
@@ -1106,6 +1204,19 @@ class JudgehostStateStore:
             )
             self._conn.commit()
         return (int(job_upd.rowcount or 0), int(case_upd.rowcount or 0))
+
+    def release_host_job_ownership(self, hostname: str, *, now_text: str) -> int:
+        with self._lock:
+            job_upd = self._conn.execute(
+                """
+                UPDATE judgehost_domjudge_jobs
+                SET lease_owner=NULL, status='queued', updated_at=?
+                WHERE lease_owner=? AND status IN ('leased','queued')
+                """,
+                [now_text, hostname],
+            )
+            self._conn.commit()
+        return int(job_upd.rowcount or 0)
 
     def forget_runs(self, run_ids: list[str]) -> int:
         safe_run_ids = [run_id for run_id in run_ids if run_id]

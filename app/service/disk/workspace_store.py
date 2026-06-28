@@ -13,6 +13,7 @@ class ProblemAclEntry(TypedDict):
     username: str
     role: str
     created_at: str
+    is_system_admin: int
 
 
 class ProblemRow(TypedDict):
@@ -28,6 +29,7 @@ class UserRow(TypedDict):
     username: str
     created_at: str
     is_system_admin: int
+    is_banned: int
 
 
 class WorkspaceRow(TypedDict):
@@ -163,7 +165,13 @@ class WorkspaceDiskStore:
 
     def user_row_by_username(self, username: str) -> UserRow | None:
         row = self.db.fetch_one(
-            "SELECT id,username,created_at,is_system_admin FROM users WHERE LOWER(username)=LOWER(?) ORDER BY id ASC LIMIT 1",
+            """
+            SELECT id,username,created_at,is_system_admin,COALESCE(is_banned, 0) AS is_banned
+            FROM users
+            WHERE LOWER(username)=LOWER(?)
+            ORDER BY id ASC
+            LIMIT 1
+            """,
             [username],
         )
         if row is None:
@@ -173,11 +181,16 @@ class WorkspaceDiskStore:
             "username": str(row["username"] or ""),
             "created_at": str(row["created_at"] or ""),
             "is_system_admin": int(row["is_system_admin"] or 0),
+            "is_banned": int(row["is_banned"] or 0),
         }
 
     def user_row_by_id_username(self, user_id: int, username: str) -> UserRow | None:
         row = self.db.fetch_one(
-            "SELECT id,username,created_at,is_system_admin FROM users WHERE id=? AND username=?",
+            """
+            SELECT id,username,created_at,is_system_admin,COALESCE(is_banned, 0) AS is_banned
+            FROM users
+            WHERE id=? AND username=?
+            """,
             [int(user_id), username],
         )
         if row is None:
@@ -187,6 +200,7 @@ class WorkspaceDiskStore:
             "username": str(row["username"] or ""),
             "created_at": str(row["created_at"] or ""),
             "is_system_admin": int(row["is_system_admin"] or 0),
+            "is_banned": int(row["is_banned"] or 0),
         }
 
     def ensure_user_row(self, username: str) -> UserRow:
@@ -245,7 +259,7 @@ class WorkspaceDiskStore:
     def problem_acl_entries(self, problem_id: int) -> list[ProblemAclEntry]:
         rows = self.db.fetch_all(
             """
-            SELECT u.username,a.role,a.created_at
+            SELECT u.username,a.role,a.created_at,COALESCE(u.is_system_admin, 0) AS is_system_admin
             FROM repo_acl a
             JOIN users u ON u.id=a.user_id
             WHERE a.problem_id=?
@@ -262,6 +276,7 @@ class WorkspaceDiskStore:
                     "username": str(row["username"]),
                     "role": str(row["role"]),
                     "created_at": str(row["created_at"]),
+                    "is_system_admin": int(row["is_system_admin"] or 0),
                 }
             )
         return entries
@@ -292,6 +307,61 @@ class WorkspaceDiskStore:
                 result.append(slug)
         return result
 
+    def all_problem_slugs(self, *, limit: int) -> list[str]:
+        rows = self.db.fetch_all(
+            """
+            SELECT slug
+            FROM problems
+            ORDER BY created_at DESC, slug ASC
+            LIMIT ?
+            """,
+            [max(1, int(limit))],
+        )
+        result: list[str] = []
+        for row in rows:
+            slug = str(row["slug"] or "")
+            if slug:
+                result.append(slug)
+        return result
+
+    def problem_slugs_by_leaf(self, leaf: str, *, limit: int) -> list[str]:
+        rows = self.db.fetch_all(
+            """
+            SELECT slug
+            FROM problems
+            WHERE slug LIKE ?
+            ORDER BY slug ASC
+            LIMIT ?
+            """,
+            [f"%/{str(leaf or '').strip()}", max(1, int(limit))],
+        )
+        result: list[str] = []
+        for row in rows:
+            slug = str(row["slug"] or "")
+            if slug:
+                result.append(slug)
+        return result
+
+    def user_problem_slugs_by_leaf(self, user_id: int, leaf: str, *, limit: int) -> list[str]:
+        rows = self.db.fetch_all(
+            """
+            SELECT p.slug
+            FROM repo_acl a
+            JOIN problems p ON p.id=a.problem_id
+            WHERE a.user_id=?
+              AND p.slug LIKE ?
+            ORDER BY p.slug ASC
+            LIMIT ?
+            """,
+            [int(user_id), f"%/{str(leaf or '').strip()}", max(1, int(limit))],
+        )
+        result: list[str] = []
+        for row in rows:
+            slug = str(row["slug"] or "")
+            if slug:
+                result.append(slug)
+        return result
+
     def user_problem_rows(self, user_id: int, *, limit: int) -> list[UserProblemRow]:
         rows = self.db.fetch_all(
             """
@@ -308,6 +378,48 @@ class WorkspaceDiskStore:
             LIMIT ?
             """,
             [int(user_id), int(user_id), max(1, int(limit))],
+        )
+        items: list[UserProblemRow] = []
+        for row in rows:
+            workspace_id_raw = row["workspace_id"]
+            safe_slug = str(row["slug"] or "")
+            items.append(
+                {
+                    "slug": safe_slug,
+                    "name": problem_slug_leaf(safe_slug),
+                    "role": str(row["role"] or ""),
+                    "workspace_id": None if workspace_id_raw is None else int(workspace_id_raw),
+                    "path": str(row["path"] or ""),
+                    "branch": str(row["branch"] or ""),
+                    "head_commit": str(row["head_commit"] or ""),
+                    "dirty": int(row["dirty"] or 0),
+                    "revision_local": self._optional_int(row["revision_local"]),
+                    "revision_upstream": self._optional_int(row["revision_upstream"]),
+                    "revision_missing": int(row["revision_missing"] if row["revision_missing"] is not None else 1),
+                    "revision_highlight": int(row["revision_highlight"] if row["revision_highlight"] is not None else 1),
+                    "revision_upstream_higher": int(row["revision_upstream_higher"] or 0),
+                    "revision_ahead_count": self._optional_int(row["revision_ahead_count"]),
+                    "revision_behind_count": self._optional_int(row["revision_behind_count"]),
+                    "updated_at": str(row["updated_at"] or ""),
+                    "last_updated_at": str(row["last_updated_at"] or ""),
+                }
+            )
+        return items
+
+    def all_problem_rows(self, user_id: int, *, limit: int) -> list[UserProblemRow]:
+        rows = self.db.fetch_all(
+            """
+            SELECT p.slug,'admin' AS role,
+                   w.id AS workspace_id,w.path,w.branch,w.head_commit,w.dirty,w.updated_at,
+                   w.revision_local,w.revision_upstream,w.revision_missing,w.revision_highlight,
+                   w.revision_upstream_higher,w.revision_ahead_count,w.revision_behind_count,
+                   COALESCE(NULLIF(w.updated_at, ''), p.created_at) AS last_updated_at
+            FROM problems p
+            LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
+            ORDER BY last_updated_at DESC, p.slug ASC
+            LIMIT ?
+            """,
+            [int(user_id), max(1, int(limit))],
         )
         items: list[UserProblemRow] = []
         for row in rows:
@@ -668,10 +780,22 @@ class WorkspaceDiskStore:
         action: str,
         details: dict[str, object],
     ) -> None:
-        self.db.execute(
-            "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
-            [None if actor_user_id is None else int(actor_user_id), problem_id, action, json.dumps(details), now_iso()],
-        )
+        safe_actor_user_id = None if actor_user_id is None else int(actor_user_id)
+        safe_problem_id = None if problem_id is None else int(problem_id)
+        if safe_actor_user_id is not None and self.db.fetch_one("SELECT 1 FROM users WHERE id=?", [safe_actor_user_id]) is None:
+            safe_actor_user_id = None
+        if safe_problem_id is not None and self.db.fetch_one("SELECT 1 FROM problems WHERE id=?", [safe_problem_id]) is None:
+            safe_problem_id = None
+        try:
+            self.db.execute(
+                "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+                [safe_actor_user_id, safe_problem_id, action, json.dumps(details), now_iso()],
+            )
+        except sqlite3.IntegrityError:
+            self.db.execute(
+                "INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at) VALUES(?,?,?,?,?)",
+                [None, None, action, json.dumps(details), now_iso()],
+            )
 
     def delete_problem_metadata(self, problem_id: int) -> list[str]:
         def _tx(conn: sqlite3.Connection) -> list[str]:

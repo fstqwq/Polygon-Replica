@@ -555,9 +555,9 @@ class ExportService:
         dst_statement: Path,
         *,
         problem_name: str,
+        include_sample_tests: bool = True,
     ) -> bool:
         compiled_any = False
-        include_sample_tests = self._load_problem_config(snapshot).get("mode") != "interactive"
         for language in self._statement_export_languages(snapshot):
             try:
                 rendered = render_statement_main(
@@ -581,15 +581,37 @@ class ExportService:
             compiled_any = True
         return compiled_any
 
-    def _verification_blob(self, verification_id: str, test_id: str, ref_key: str) -> bytes | None:
+    def _verification_artifact_ref_candidates(
+        self,
+        verification_id: str,
+        test_id: str,
+        ref_key: str,
+    ) -> list[str]:
         safe_verification_id = str(verification_id or "").strip()
         safe_test_id = str(test_id or "").strip()
         safe_ref_key = str(ref_key or "").strip()
         if safe_ref_key not in {"input_ref", "answer_ref"}:
             raise ValueError(f"invalid verification artifact ref: {safe_ref_key}")
         if not safe_verification_id or not safe_test_id:
-            return None
-        row = self.db.fetch_one(
+            return []
+        refs: list[str] = []
+        mapped_rows = self.db.fetch_all(
+            f"""
+            SELECT r.{safe_ref_key} AS artifact_ref
+            FROM verification_tests_meta m
+            JOIN verification_artifact_refs r
+              ON r.verification_id=m.verification_id
+             AND r.test_name=m.test_name
+            WHERE m.verification_id=? AND m.source_id=?
+            ORDER BY m.ordinal ASC
+            """,
+            [safe_verification_id, safe_test_id],
+        )
+        for row in mapped_rows:
+            artifact_ref = str(row["artifact_ref"] or "")
+            if artifact_ref and artifact_ref not in refs:
+                refs.append(artifact_ref)
+        direct_row = self.db.fetch_one(
             f"""
             SELECT {safe_ref_key}
             FROM verification_artifact_refs
@@ -597,12 +619,18 @@ class ExportService:
             """,
             [safe_verification_id, f"{safe_test_id}.in"],
         )
-        if row is None:
-            return None
-        artifact_ref = str(row[safe_ref_key] or "")
-        if not artifact_ref:
-            return None
-        return self.artifact_blob_resolver(artifact_ref)
+        if direct_row is not None:
+            artifact_ref = str(direct_row[safe_ref_key] or "")
+            if artifact_ref and artifact_ref not in refs:
+                refs.append(artifact_ref)
+        return refs
+
+    def _verification_blob(self, verification_id: str, test_id: str, ref_key: str) -> bytes | None:
+        for artifact_ref in self._verification_artifact_ref_candidates(verification_id, test_id, ref_key):
+            blob = self.artifact_blob_resolver(artifact_ref)
+            if blob is not None:
+                return blob
+        return None
 
     def _verification_input_blob(self, verification_id: str, test_id: str) -> bytes | None:
         return self._verification_blob(verification_id, test_id, "input_ref")
@@ -695,13 +723,22 @@ class ExportService:
         if changed:
             spec_path.write_text(dumps_tests_spec(entries), encoding="utf-8")
 
+    @staticmethod
+    def _keep_samples_out_of_domjudge_sample_data(mode: str, pass_limit: int) -> bool:
+        try:
+            safe_pass_limit = int(pass_limit)
+        except Exception:
+            safe_pass_limit = 1
+        return str(mode or "").strip() == "interactive" or safe_pass_limit > 1
+
     def _copy_secret_and_sample_data(
         self,
         snapshot: Path,
         package_root: Path,
         *,
         verification_id: str,
-        interactive: bool = False,
+        samples_as_secret: bool = False,
+        blank_secret_answers: bool = False,
     ) -> None:
         secret_dir = package_root / "data" / "secret"
         sample_dir = package_root / "data" / "sample"
@@ -712,28 +749,22 @@ class ExportService:
             raise ValueError("export requires tests/spec.json entries")
         for row in entries:
             test_id = row["id"]
-            if interactive:
+            if samples_as_secret or (not bool(row["sample"])):
                 self._copy_required_test_input(
                     snapshot,
                     row,
                     secret_dir / f"{test_id}.in",
                     verification_id=verification_id,
                 )
-                (secret_dir / f"{test_id}.ans").write_bytes(b"")
-                continue
-            if not bool(row["sample"]):
-                self._copy_required_test_input(
-                    snapshot,
-                    row,
-                    secret_dir / f"{test_id}.in",
-                    verification_id=verification_id,
-                )
-                self._copy_required_answer(
-                    snapshot,
-                    test_id,
-                    secret_dir / f"{test_id}.ans",
-                    verification_id=verification_id,
-                )
+                if blank_secret_answers:
+                    (secret_dir / f"{test_id}.ans").write_bytes(b"")
+                else:
+                    self._copy_required_answer(
+                        snapshot,
+                        test_id,
+                        secret_dir / f"{test_id}.ans",
+                        verification_id=verification_id,
+                    )
                 continue
             self._copy_sample_input(
                 snapshot,
@@ -837,7 +868,8 @@ class ExportService:
             ),
             encoding="utf-8",
         )
-        if mode != "interactive":
+        samples_as_secret = self._keep_samples_out_of_domjudge_sample_data(mode, pass_limit)
+        if not samples_as_secret:
             self._materialize_export_sample_display_payloads(
                 snapshot,
                 verification_id=verification_id,
@@ -846,12 +878,14 @@ class ExportService:
             snapshot,
             package_root,
             verification_id=verification_id,
-            interactive=mode == "interactive",
+            samples_as_secret=samples_as_secret,
+            blank_secret_answers=mode == "interactive",
         )
         self._try_compile_statement_pdf(
             snapshot,
             package_root / "problem_statement",
             problem_name=problem_name,
+            include_sample_tests=not samples_as_secret,
         )
         self._copy_output_validator_component(
             interactor_source if mode == "interactive" else checker_source,

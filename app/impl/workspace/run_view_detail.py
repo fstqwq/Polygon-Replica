@@ -714,7 +714,7 @@ def build_run_detail_context(
     has_task_graph = False
     source_verification_id = verification_id_hint if is_canonical_artifact_id(verification_id_hint) else ''
     verification_record = config.verification_service.verification_record(verification_id_hint) if verification_id_hint else None
-    if verification_record is not None and verification_record['workspace_id'] == workspace_id:
+    if verification_record is not None and int(verification_record['problem_id'] or 0) == problem_id:
         task_rows = VerificationTaskStore(config.db).list_rows(verification_id_hint)
         has_task_graph = bool(task_rows)
         verification_detail_payload = config.verification_service.verification_detail(verification_id_hint)

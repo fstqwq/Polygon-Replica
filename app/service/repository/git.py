@@ -109,7 +109,6 @@ class GitService:
         proc = run_git(["git", "-C", str(workspace), "status", "--short", "--branch"])
         filtered_lines: list[str] = []
         status_truncated = False
-        need_diff = False
         status_limit = max(1, int(self.STATUS_MAX_LINES))
         for raw in proc.stdout.splitlines():
             line = raw.rstrip("\n")
@@ -127,49 +126,12 @@ class GitService:
                     status_truncated = True
             else:
                 continue
-            # "??" entries are untracked-only and do not appear in `git diff`.
-            if line.startswith("??"):
-                continue
-            # Porcelain format: XY<space>PATH. Y != ' ' means unstaged worktree change.
-            if len(line) >= 2 and line[1] != " ":
-                need_diff = True
         if status_truncated:
             filtered_lines.append(f"... [truncated; showing first {status_limit} lines]")
         status_text = "\n".join(filtered_lines) + ("\n" if filtered_lines else "")
-        diff_truncated = False
         diff_limit = max(1, int(self.DIFF_MAX_CHARS))
-        if need_diff:
-            tmp_path: Path | None = None
-            try:
-                fd, tmp_name = tempfile.mkstemp(prefix="git-diff-", suffix=".patch")
-                os.close(fd)
-                tmp_path = Path(tmp_name)
-                diff_proc = run_git(
-                    [
-                        "git",
-                        "-C",
-                        str(workspace),
-                        "diff",
-                        "--",
-                        ".",
-                        ":(exclude).*",
-                        ":(exclude)**/.*",
-                    ],
-                    stdout_path=tmp_path,
-                )
-                if diff_proc.returncode == 0:
-                    diff_text, diff_truncated = self._read_text_prefix(tmp_path, diff_limit)
-                    if diff_truncated:
-                        diff_text = self._append_truncation_marker(diff_text, diff_limit)
-                else:
-                    raw_diff = run_git(["git", "-C", str(workspace), "diff", "--", "."]).stdout
-                    filtered_diff = self._filter_hidden_diff(raw_diff)
-                    diff_text, diff_truncated = self._truncate_text(filtered_diff, diff_limit)
-            finally:
-                if tmp_path is not None:
-                    tmp_path.unlink(missing_ok=True)
-        else:
-            diff_text = ""
+        diff_truncated = False
+        diff_text = ""
         rebase_active = self._rebase_active(workspace)
         conflicted_files = self._conflicted_files(workspace) if rebase_active else []
         return {
@@ -352,6 +314,19 @@ class GitService:
             raise RuntimeError("unable to resolve committed head")
         return resolved_head
 
+    def _sync_local_origin_head(self, workspace: Path, branch: str) -> None:
+        branch_name = str(branch or "").strip() or "main"
+        remote_url_proc = run_git(["git", "-C", str(workspace), "remote", "get-url", "origin"])
+        if remote_url_proc.returncode != 0:
+            return
+        remote_url = remote_url_proc.stdout.strip()
+        if not remote_url:
+            return
+        remote_path = Path(remote_url)
+        if not remote_path.is_absolute() or (not remote_path.exists()) or (not remote_path.is_dir()):
+            return
+        run_git(["git", "--git-dir", str(remote_path), "symbolic-ref", "HEAD", f"refs/heads/{branch_name}"])
+
     def rollback_last_commit(self, workspace: Path, expected_head: str = "") -> str:
         if self._rebase_active(workspace):
             raise RuntimeError("rebase in progress; resolve conflicts and continue/abort rebase first")
@@ -381,6 +356,7 @@ class GitService:
         proc = run_git(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
+        self._sync_local_origin_head(workspace, branch)
         return proc.stdout + proc.stderr
 
     def _status_entries(self, workspace: Path) -> list[dict[str, str]]:

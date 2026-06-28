@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import secrets
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
 from app.db import DB, now_iso
@@ -12,6 +12,7 @@ from app.service.disk.contest_store import ContestDiskStore
 from app.service.disk.verification_store import VerificationStore
 from app.service.platform.hashing import sha256_file
 from app.service.platform.process import is_canonical_artifact_id
+from app.service.statement.context import normalize_statement_language
 from app.setting import Settings
 
 
@@ -29,6 +30,7 @@ class ContestMemberEntry(TypedDict):
     username: str
     role: str
     created_at: str
+    is_system_admin: int
 
 
 class ContestMembership(TypedDict):
@@ -113,7 +115,7 @@ class ContestVerificationStage(TypedDict):
 
 
 class ContestService:
-    _ACCESS_ROLES = {"owner", "write", "read"}
+    _ACCESS_ROLES = {"admin", "owner", "write", "read"}
     _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
     _STATEMENT_SOURCE_FOLDERS_KEY = "statement_source_folders"
     _LOCATION_KEY = "location"
@@ -125,6 +127,7 @@ class ContestService:
         ".cfg",
         ".cls",
         ".def",
+        ".ftl",
         ".ltx",
         ".mp",
         ".sh",
@@ -208,6 +211,103 @@ class ContestService:
         normalized = text.replace("\r\n", "\n").replace("\r", "\n")
         return normalized.encode("utf-8")
 
+    def statement_source_is_text(self, key: str) -> bool:
+        return Path(str(key or "").strip()).suffix.lower() in self._TEXT_SOURCE_SUFFIXES
+
+    def normalize_statement_source_key(
+        self,
+        *,
+        language: str,
+        path: str,
+        upload_filename: str = "",
+        default_filename: str = "",
+    ) -> str:
+        safe_language = normalize_statement_language(language) or "english"
+        raw_path = str(path or "").strip().replace("\\", "/")
+        upload_name = Path(str(upload_filename or "").strip().replace("\\", "/")).name
+        if raw_path.endswith("/") and upload_name:
+            raw_path = f"{raw_path}{upload_name}"
+        if (not raw_path) and upload_name:
+            raw_path = upload_name
+        if (not raw_path) and default_filename:
+            raw_path = str(default_filename).strip().replace("\\", "/")
+        if not raw_path:
+            raise ValueError("contest statement source path is required")
+        prefix = f"statements/{safe_language}/"
+        if raw_path.startswith(prefix):
+            rel = raw_path[len(prefix):]
+        elif raw_path.startswith("statements/"):
+            raise ValueError(f"contest statement source path must be under {prefix}")
+        else:
+            rel = raw_path
+        pure = PurePosixPath(rel)
+        if pure.is_absolute():
+            raise ValueError("invalid contest statement source path")
+        parts: list[str] = []
+        for part in pure.parts:
+            item = str(part).strip()
+            if not item or item == ".":
+                continue
+            if item == "..":
+                raise ValueError("invalid contest statement source path")
+            if item.startswith("."):
+                raise ValueError("hidden contest statement source path is not allowed")
+            parts.append(item)
+        if not parts:
+            raise ValueError("contest statement source path is required")
+        return f"{prefix}{PurePosixPath(*parts).as_posix()}"
+
+    def _normalize_existing_statement_source_key(self, key: str) -> str:
+        parts = PurePosixPath(str(key or "").strip().replace("\\", "/")).parts
+        if len(parts) >= 3 and parts[0] == "statements":
+            return self.normalize_statement_source_key(language=parts[1], path=str(key), default_filename="")
+        return self.normalize_statement_source_key(language="english", path=str(key), default_filename="")
+
+    def write_statement_source_file(
+        self,
+        *,
+        contest_id: int,
+        contest_slug: str,
+        actor_user_id: int,
+        key: str,
+        package_bytes: bytes,
+    ) -> str:
+        safe_key = self._normalize_existing_statement_source_key(key)
+        root = self.contest_source_root(contest_slug)
+        target = (root / safe_key).resolve()
+        if not self._path_within(root, target):
+            raise ValueError("invalid contest source file path")
+        if target.exists() and target.is_dir():
+            raise ValueError("contest source target must be a file path")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self._normalize_statement_source_bytes(safe_key, bytes(package_bytes)))
+        self._store.upsert_attachment_row(
+            contest_id=int(contest_id),
+            key=safe_key,
+            rel_path=safe_key,
+            created_by_user_id=int(actor_user_id),
+            created_at=now_iso(),
+        )
+        return safe_key
+
+    def delete_statement_source_file(self, *, contest_id: int, contest_slug: str, key: str) -> str:
+        safe_key = self._normalize_existing_statement_source_key(key)
+        target = self.statement_file_path(contest_slug, safe_key)
+        if target.exists():
+            if target.is_dir():
+                raise ValueError("contest source target must be a file path")
+            target.unlink()
+            root = self.contest_source_root(contest_slug)
+            current = target.parent
+            while current != root and self._path_within(root, current):
+                try:
+                    current.rmdir()
+                except OSError:
+                    break
+                current = current.parent
+        self._store.delete_attachment_row(int(contest_id), safe_key)
+        return safe_key
+
     def _job_payload(self, row: dict[str, object]) -> ContestJob:
         return {
             "id": str(row["id"]),
@@ -270,7 +370,11 @@ class ContestService:
 
     def user_contests_overview(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
-        for row in self._store.user_contest_rows(int(user_id), limit=max(1, int(limit))):
+        if self._store.is_system_admin(int(user_id)):
+            rows = self._store.all_contest_rows(int(user_id), limit=max(1, int(limit)))
+        else:
+            rows = self._store.user_contest_rows(int(user_id), limit=max(1, int(limit)))
+        for row in rows:
             problem_count = max(0, int(row["problem_count"]))
             dirty_problem_count = max(0, int(row["dirty_problem_count"]))
             items.append(
@@ -340,6 +444,16 @@ class ContestService:
         }
 
     def access_context(self, contest_id: int, user_id: int) -> ContestAccessContext:
+        if self._store.is_system_admin(int(user_id)):
+            return {
+                "role": "admin",
+                "can_read": True,
+                "can_write": True,
+                "can_manage": True,
+                "read_block_reason": "",
+                "write_block_reason": "",
+                "manage_block_reason": "",
+            }
         role = self._store.contest_role(int(contest_id), int(user_id))
         if role is None:
             return {
@@ -349,18 +463,18 @@ class ContestService:
                 "can_manage": False,
                 "read_block_reason": "you do not have access to this contest",
                 "write_block_reason": "write access required",
-                "manage_block_reason": "owner access required",
+                "manage_block_reason": "owner or admin access required",
             }
         safe_role = self._normalize_role(role)
-        can_write = safe_role in {"owner", "write"}
+        can_write = safe_role in {"admin", "owner", "write"}
         return {
             "role": safe_role,
             "can_read": True,
             "can_write": can_write,
-            "can_manage": safe_role == "owner",
+            "can_manage": safe_role in {"admin", "owner"},
             "read_block_reason": "",
             "write_block_reason": "" if can_write else "read-only access",
-            "manage_block_reason": "" if safe_role == "owner" else "owner access required",
+            "manage_block_reason": "" if safe_role in {"admin", "owner"} else "owner or admin access required",
         }
 
     def owner_count(self, contest_id: int) -> int:
@@ -377,6 +491,7 @@ class ContestService:
                     "username": str(row["username"]),
                     "role": self._normalize_role(str(row["role"])),
                     "created_at": str(row["created_at"]),
+                    "is_system_admin": int(row["is_system_admin"] or 0),
                 }
             )
         return result

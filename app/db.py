@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS users (
     password_iters INTEGER,
     password_updated_at TEXT,
     is_system_admin INTEGER NOT NULL DEFAULT 0,
+    is_banned INTEGER NOT NULL DEFAULT 0,
+    banned_at TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -509,6 +511,8 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "password_iters",
         "password_updated_at",
         "is_system_admin",
+        "is_banned",
+        "banned_at",
         "created_at",
     ),
     "auth_sessions": (

@@ -30,17 +30,33 @@ def switch_workspace(
     try:
         if not raw_problem:
             raise ValueError('problem id is required')
-        problem_owner = active_user.lower()
-        if "/" in raw_problem:
-            safe_problem = raw_problem
-        else:
-            safe_problem = f"{problem_owner}/{raw_problem}"
-        if len(safe_problem) > _C.PROBLEM_ID_MAX_LEN or not _C.PROBLEM_IDENT_RE.fullmatch(safe_problem):
-            raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
         user_id = config.workspace_service.known_user_id(active_user)
         if user_id is None:
             ensured = config.workspace_service.ensure_user(active_user)
             user_id = int(ensured["id"])
+        problem_owner = active_user.lower()
+        if "/" in raw_problem:
+            safe_problem = raw_problem
+        else:
+            owned_problem = f"{problem_owner}/{raw_problem}"
+            owned_problem_id = config.workspace_service.known_problem_id(owned_problem)
+            if owned_problem_id is not None:
+                safe_problem = owned_problem
+            else:
+                global_leaf_matches = config.workspace_service.problem_slugs_by_leaf(raw_problem, limit=20)
+                accessible_leaf_matches = config.workspace_service.accessible_problem_slugs_by_leaf(user_id or 0, raw_problem, limit=20)
+                foreign_accessible_matches = [slug for slug in accessible_leaf_matches if slug != owned_problem]
+                if len(global_leaf_matches) == 1 and len(foreign_accessible_matches) == 1:
+                    safe_problem = foreign_accessible_matches[0]
+                elif global_leaf_matches:
+                    raise ValueError(
+                        f"problem slug '{raw_problem}' already exists under another owner; use the full problem id to open it "
+                        f"or enter {owned_problem} explicitly to create your own copy"
+                    )
+                else:
+                    safe_problem = owned_problem
+        if len(safe_problem) > _C.PROBLEM_ID_MAX_LEN or not _C.PROBLEM_IDENT_RE.fullmatch(safe_problem):
+            raise ValueError(_C.PROBLEM_ID_RULE_MESSAGE)
         problem_id = config.workspace_service.known_problem_id(safe_problem)
         if problem_id is None:
             config.workspace_service.ensure_problem(safe_problem)

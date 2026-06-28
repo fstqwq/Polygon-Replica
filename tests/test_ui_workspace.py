@@ -15,8 +15,13 @@ from fastapi import HTTPException
 
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
-from app.service.platform.git_process import run_git
+from app.service.platform.git_process import GitCommandResult, run_git
 from app.service.repository.revision import workspace_revision_info
+from app.service.statement.constant import (
+    DEFAULT_OLYMP_STY,
+    DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
+    DEFAULT_STATEMENT_TEMPLATE,
+)
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
 
@@ -54,6 +59,8 @@ from .ui_support import (
     problems_root_import,
     problems_root_import_slug_hint,
     problems_root_page,
+    preview_page,
+    statement_templates_reset,
     switch_workspace,
     uuid,
     workspace_access_grant,
@@ -107,6 +114,44 @@ class TestUIWorkspace(UIBaseSuite):
         auth_token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(auth_token)
         return f"{AUTH_COOKIE_NAME}={auth_token}"
+
+    def test_system_admin_can_view_and_manage_all_problems(self) -> None:
+        problem = f"bob/admin-problem-{uuid.uuid4().hex[:8]}"
+        target_user = self.random_id("pread")
+        workspace_service.ensure_user(target_user)
+        workspace_service.ensure_problem(problem)
+        workspace_service.grant_repo_access(problem, "bob", "owner")
+        db_execute("UPDATE users SET is_system_admin=0")
+        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
+        workspace_service.clear_identity_caches()
+
+        root_page = problems_root_page(_request("/problems"), user="alice")
+        self.assertEqual(root_page.status_code, 200)
+        root_html = root_page.body.decode("utf-8", errors="replace")
+        self.assertIn(problem, root_html)
+        admin_access = workspace_service.access_context(
+            workspace_service.known_problem_id(problem),
+            workspace_service.known_user_id("alice"),
+        )
+        self.assertEqual(admin_access["role"], "admin")
+        self.assertTrue(admin_access["can_manage"])
+
+        admin_page = workspace_page(_request(f"/problems/{problem}/workspace"), problem, "alice")
+        self.assertEqual(admin_page.status_code, 200)
+
+        grant = workspace_access_grant(problem, "alice", target_user=target_user, role="read")
+        self.assertEqual(grant.status_code, 303)
+        acl_row = db_fetch_one(
+            """
+            SELECT role
+            FROM repo_acl
+            WHERE problem_id=(SELECT id FROM problems WHERE slug=?)
+              AND user_id=(SELECT id FROM users WHERE LOWER(username)=LOWER(?))
+            """,
+            [problem, target_user],
+        )
+        self.assertIsNotNone(acl_row)
+        self.assertEqual(str(acl_row["role"] or ""), "read")
 
     def test_workspace_delete_requires_sudo_then_deletes_copy(self) -> None:
         username = self.random_id("wsdel")
@@ -650,6 +695,27 @@ class TestUIWorkspace(UIBaseSuite):
         workspace_status = workspace_service.read_workspace_status(ws)
         self.assertEqual(int(workspace_status.get("dirty") or 0), 0)
 
+    def test_git_status_does_not_compute_full_workspace_diff(self) -> None:
+        def fake_run_git(args, **kwargs):
+            normalized = list(args)
+            if normalized[:4] == ["git", "-C", "/tmp/ws", "status"]:
+                return GitCommandResult(
+                    args=normalized,
+                    returncode=0,
+                    stdout="## main\n M solutions/std.cpp\n",
+                    stderr="",
+                    elapsed_ms=1,
+                )
+            if "diff" in normalized:
+                raise AssertionError("workspace status must not compute a full diff")
+            return GitCommandResult(args=normalized, returncode=0, stdout="", stderr="", elapsed_ms=1)
+
+        with patch("app.service.repository.git.run_git", side_effect=fake_run_git):
+            status = git_service.status(Path("/tmp/ws"))
+
+        self.assertIn("solutions/std.cpp", str(status.get("status") or ""))
+        self.assertEqual(status.get("diff"), "")
+
     def test_workspace_snapshot_copy_excludes_hidden_paths(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         visible = ws / f"notes/snapshot-visible-{uuid.uuid4().hex[:8]}.txt"
@@ -743,6 +809,24 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(f"Selected: <code>{rel}</code>", html)
         self.assertIn("base", html)
         self.assertIn("changed", html)
+
+    def test_workspace_page_does_not_auto_diff_first_changed_file(self) -> None:
+        self._ensure_committed_head("alice/sample", "alice")
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        rel = f"notes/workspace-no-auto-diff-{uuid.uuid4().hex[:8]}.txt"
+        target = ws / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("base\n", encoding="utf-8")
+        git_service.commit(ws, f"workspace-no-auto-diff-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
+        target.write_text("base\nchanged\n", encoding="utf-8")
+
+        with patch.object(git_service, "diff_for_path", side_effect=AssertionError("unexpected file diff")):
+            resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8", errors="replace")
+        self.assertIn(rel, html)
+        self.assertNotIn("Selected:", html)
 
     def test_workspace_page_shows_discard_local_changes_for_selected_path(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1024,6 +1108,8 @@ class TestUIWorkspace(UIBaseSuite):
         username = self.random_id("switchdeny")
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
+        db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", [username])
+        workspace_service.clear_identity_caches()
         private_problem = f"alice/ui-switch-private-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(private_problem)
         workspace_service.grant_repo_access(private_problem, "bob", "owner")
@@ -1070,6 +1156,96 @@ class TestUIWorkspace(UIBaseSuite):
         self.assertIn(f"/problems/{username.lower()}/{slug}/statement", str(resp.headers.get("location", "")))
         ws = Path(workspace_service.ensure_workspace(f"{username.lower()}/{slug}", username))
         self.assertTrue(ws.exists())
+
+    def test_switch_workspace_opens_single_accessible_foreign_leaf_match_instead_of_creating_duplicate(self) -> None:
+        username = self.random_id("switchleaf")
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        leaf = f"ui-leaf-{uuid.uuid4().hex[:8]}"
+        foreign_problem = f"alice/{leaf}"
+        workspace_service.ensure_problem(foreign_problem)
+        workspace_service.grant_repo_access(foreign_problem, username, "read")
+
+        resp = switch_workspace(
+            _request_with_cookie("/switch-workspace", auth_cookie),
+            problem=leaf,
+            page="statement",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{foreign_problem}/statement", str(resp.headers.get("location", "")))
+        self.assertIsNone(workspace_service.known_problem_id(f"{username}/{leaf}"))
+
+    def test_switch_workspace_requires_full_problem_id_when_foreign_leaf_exists(self) -> None:
+        username = self.random_id("switchamb")
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", [username])
+        workspace_service.clear_identity_caches()
+        leaf = f"ui-amb-{uuid.uuid4().hex[:8]}"
+        foreign_problem = f"alice/{leaf}"
+        workspace_service.ensure_problem(foreign_problem)
+
+        resp = switch_workspace(
+            _request_with_cookie("/switch-workspace", auth_cookie),
+            problem=leaf,
+            page="statement",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn("/problems", str(resp.headers.get("location", "")))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(messages)
+        self.assertIn("already exists under another owner", messages[0])
+        self.assertIsNone(workspace_service.known_problem_id(f"{username}/{leaf}"))
+
+    def test_switch_workspace_allows_explicit_owned_problem_id_even_when_foreign_leaf_exists(self) -> None:
+        username = self.random_id("switchexpl")
+        password = "StrongPass123"
+        auth_cookie = self._issue_auth_cookie_header(username, password)
+        leaf = f"ui-explicit-{uuid.uuid4().hex[:8]}"
+        foreign_problem = f"alice/{leaf}"
+        owned_problem = f"{username}/{leaf}"
+        workspace_service.ensure_problem(foreign_problem)
+
+        resp = switch_workspace(
+            _request_with_cookie("/switch-workspace", auth_cookie),
+            problem=owned_problem,
+            page="statement",
+        )
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertIn(f"/problems/{owned_problem}/statement", str(resp.headers.get("location", "")))
+        self.assertIsNotNone(workspace_service.known_problem_id(owned_problem))
+
+    def test_statement_templates_reset_restores_only_default_template_files(self) -> None:
+        problem = f"alice/stmtreset-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace_service.grant_repo_access(problem, "alice", "owner")
+        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
+        ensure_statement_language_sources(ws, "english")
+        (ws / "statement" / "statements.ftl").write_text("custom statements template\n", encoding="utf-8")
+        (ws / "statement" / "problem.tex").write_text("custom problem template\n", encoding="utf-8")
+        (ws / "statement" / "olymp.sty").write_text("custom olymp style\n", encoding="utf-8")
+        legend_path = ws / "statement-sections" / "english" / "legend.tex"
+        legend_path.write_text("custom legend section\n", encoding="utf-8")
+
+        page = preview_page(_request(f"/problems/{problem}/statement", "language=english"), problem, "alice")
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("Restore default templates", html)
+        self.assertIn(f"/problems/{problem}/statement/templates/reset", html)
+
+        resp = statement_templates_reset(problem=problem, user="alice", page="statement", language="english")
+
+        self.assertEqual(resp.status_code, 303)
+        self.assertEqual(f"/problems/{problem}/statement?language=english", resp.headers.get("location", ""))
+        messages = _flash_messages_from_response(resp)
+        self.assertTrue(any("default statement templates restored" in item for item in messages))
+        self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), DEFAULT_STATEMENT_TEMPLATE)
+        self.assertEqual((ws / "statement" / "problem.tex").read_text(encoding="utf-8"), DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
+        self.assertEqual((ws / "statement" / "olymp.sty").read_text(encoding="utf-8"), DEFAULT_OLYMP_STY)
+        self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
 
     def test_statement_page_title_does_not_use_name_tex(self) -> None:
         username = self.random_id("stmtitle")
