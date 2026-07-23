@@ -223,6 +223,24 @@ class WorkspaceService:
     def known_problem_id(self, slug: str) -> int | None:
         return self._store.problem_id_by_slug(self._validate_identifier(slug, "problem"))
 
+    def committed_statement_languages(self, problem: str) -> list[str]:
+        problem_row = self._problem_row(problem)
+        bare_repo = self.settings.bare_root / str(problem_row["repo_name"])
+        proc = run_git(
+            [
+                "git",
+                "--git-dir",
+                str(bare_repo),
+                "ls-tree",
+                "-d",
+                "--name-only",
+                "refs/heads/main:statement-sections",
+            ]
+        )
+        if proc.returncode != 0:
+            return []
+        return sorted({line.strip() for line in proc.stdout.splitlines() if line.strip()})
+
     def default_problem_slug_for_username(self, username: str, *, limit: int = 1) -> str:
         user_id = self.known_user_id(username)
         if user_id is None:

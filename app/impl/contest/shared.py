@@ -51,7 +51,12 @@ def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str]]:
         {"key": "problems", "label": "Problems", "href": f"{base}/problems", "active": "1" if active == "problems" else "0"},
         {"key": "properties", "label": "Properties", "href": f"{base}/properties", "active": "1" if active == "properties" else "0"},
         {"key": "access", "label": "Access", "href": f"{base}/access", "active": "1" if active == "access" else "0"},
-        {"key": "packages", "label": "Packages", "href": f"{base}/packages", "active": "1" if active == "packages" else "0"},
+        {
+            "key": "packages",
+            "label": "Build PDF",
+            "href": f"{base}/packages",
+            "active": "1" if active == "packages" else "0",
+        },
     ]
 
 
@@ -823,6 +828,7 @@ def _run_contest_pdf_job_worker(
     actor_user_id: int,
     actor_username: str,
     job_id: str,
+    language: str,
 ) -> None:
     job_root = config.contest_service.job_root(contest_slug, job_id)
     compile_root = (job_root / "contest-pdf-src").resolve()
@@ -832,7 +838,6 @@ def _run_contest_pdf_job_worker(
     contest_mounts = (compile_root,)
     contest_tex_env = _contest_tex_env(compile_root)
     log_path = job_root / "logs" / "contest-pdf.log"
-    language = _resolve_contest_statement_language(contest_id)
     source_folder_map = config.contest_service.statement_problem_source_folders(contest_id)
     entries = config.contest_service.contest_problems(contest_id)
     statements_root = _copy_contest_statement_language_tree(
@@ -1173,16 +1178,25 @@ def _queue_contest_job(
     actor_user_id: int,
     actor_username: str,
     job_type: str,
+    language: str = "",
 ) -> tuple[str, bool, str]:
     active_id = config.contest_service.running_job_id(contest_id, job_type)
     if active_id:
         return (active_id, False, "already_running")
+    job_language = ""
+    if job_type == _CONTEST_JOB_TYPE_PDF:
+        job_language = (
+            normalize_statement_language(language)
+            or _resolve_contest_statement_language(contest_id)
+        )
     initial_summary = {
         "job_type": str(job_type or "").strip(),
         "contest_slug": str(contest_slug or "").strip(),
         "status": "running",
         "results": [],
     }
+    if job_language:
+        initial_summary["language"] = job_language
     job_id = config.contest_service.create_job(
         contest_id,
         actor_user_id,
@@ -1201,6 +1215,7 @@ def _queue_contest_job(
                     actor_user_id=actor_user_id,
                     actor_username=actor_username,
                     job_id=job_id,
+                    language=job_language,
                 )
                 return
             if job_type == _CONTEST_JOB_TYPE_PACKAGE:

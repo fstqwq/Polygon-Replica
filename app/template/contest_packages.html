@@ -14,6 +14,7 @@
   {% else %}
   <div class="form-row">
     <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/preview/start">
+      <input type="hidden" name="language" value="{{ contest_statement_language }}" />
       <button class="btn" type="submit">Build Contest PDF</button>
     </form>
     <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">
@@ -124,7 +125,7 @@
     {% for row in job_rows %}
     {% set totals = row.summary.get("totals", {}) if row.summary else {} %}
     <tr>
-      <td><a href="/contests/{{ ctx.contest.slug }}/packages?job_id={{ row.id }}"><code>{{ row.id }}</code></a></td>
+      <td><a href="/contests/{{ ctx.contest.slug }}/packages?job_id={{ row.id }}&language={{ contest_statement_language }}"><code>{{ row.id }}</code></a></td>
       <td>{{ "pdf" if row.job_type == "pdf" else row.job_type }}</td>
       <td>{{ row.status | status_label }}</td>
       <td>

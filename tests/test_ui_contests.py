@@ -559,6 +559,7 @@ class TestUIContests(UIBaseSuite):
         self.assertEqual(packages_page.status_code, 200)
         packages_html = packages_page.body.decode("utf-8", errors="replace")
         self.assertIn("Contest Packages", packages_html)
+        self.assertIn('<span class="submenu-title">Build PDF</span>', packages_html)
 
     def test_contest_overview_best_effort_infers_location_and_date_from_statements(self) -> None:
         contest_slug = f"ui-contest-overview-{uuid.uuid4().hex[:8]}"
@@ -706,6 +707,48 @@ class TestUIContests(UIBaseSuite):
             path="logos/logo.png",
         )
         self.assertEqual(file_resp.status_code, 200)
+
+    def test_contest_packages_queues_selected_problem_language(self) -> None:
+        problem_slug = f"alice/contest-language-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem_slug)
+        workspace_service.grant_repo_access(problem_slug, "alice", "owner")
+        workspace = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
+        ensure_statement_language_sources(workspace, "chinese")
+        git_service.commit(workspace, "add chinese statement", "alice", "alice@polygonlike.local")
+        git_service.push(workspace, "main")
+
+        contest_slug = f"contest-language-{uuid.uuid4().hex[:8]}"
+        self._create_contest(contest_slug, "Language Contest")
+        contest_problems_add(
+            contest=contest_slug,
+            user="alice",
+            problem_slugs=[problem_slug],
+            q="",
+        )
+
+        page = contest_packages_page(
+            _request(f"/contests/{contest_slug}/packages"),
+            contest_slug,
+            "alice",
+        )
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn('<option value="chinese"', html)
+
+        with patch(
+            "app.impl.contest.package._queue_contest_job",
+            return_value=("pdf-language-job", True, "queued"),
+        ) as queue_job:
+            response = contest_packages_preview_start(
+                contest=contest_slug,
+                user="alice",
+                language="chinese",
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(queue_job.call_args.kwargs["language"], "chinese")
+        redirect_query = parse_qs(urlparse(str(response.headers["location"])).query)
+        self.assertEqual(redirect_query["language"], ["chinese"])
+        self.assertEqual(redirect_query["job_id"], ["pdf-language-job"])
 
     def test_contest_pdf_and_package_jobs_create_artifacts(self) -> None:
         problem_slug = f"alice/ui-contest-pack-{uuid.uuid4().hex[:8]}"
@@ -856,7 +899,11 @@ class TestUIContests(UIBaseSuite):
             patch.object(config.verification_service, "run_verification", side_effect=_fake_run_build),
             patch.object(config.export_service, "create_export", side_effect=_fake_create_export),
         ):
-            preview_start = contest_packages_preview_start(contest=contest_slug, user="alice")
+            preview_start = contest_packages_preview_start(
+                contest=contest_slug,
+                user="alice",
+                language="english",
+            )
             self.assertEqual(preview_start.status_code, 303)
             preview_q = parse_qs(urlparse(str(preview_start.headers.get("location", ""))).query)
             preview_job_id = str((preview_q.get("job_id") or [""])[0])

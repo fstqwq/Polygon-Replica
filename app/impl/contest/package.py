@@ -26,10 +26,17 @@ from .shared import (
 )
 
 
-def _contest_packages_statement_query(*, language: str, source_path: str = "") -> str:
+def _contest_packages_statement_query(
+    *,
+    language: str,
+    source_path: str = "",
+    job_id: str = "",
+) -> str:
     params = {"language": normalize_statement_language(language) or "english"}
     if source_path:
         params["source_path"] = source_path
+    if job_id:
+        params["job_id"] = job_id
     return urlencode(params)
 
 
@@ -57,18 +64,30 @@ def _contest_statement_display_path(key: str, language: str) -> str:
 def _contest_statement_language_options(contest_id: int, current_language: str) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
-    for language in [current_language, config.contest_service.statement_default_language(int(contest_id)), "english"]:
-        safe = normalize_statement_language(language)
+
+    def _append(raw_language: object) -> None:
+        safe = normalize_statement_language(raw_language)
         if safe and safe not in seen:
             seen.add(safe)
             result.append(safe)
+
+    for language in [
+        current_language,
+        config.contest_service.statement_default_language(int(contest_id)),
+        "english",
+    ]:
+        _append(language)
     for row in config.contest_service.statement_attachment_rows(int(contest_id)):
         parts = Path(str(row.get("rel_path") or "")).parts
         if len(parts) >= 3 and parts[0] == "statements":
-            safe = normalize_statement_language(parts[1])
-            if safe and safe not in seen:
-                seen.add(safe)
-                result.append(safe)
+            _append(parts[1])
+    problem_languages: set[str] = set()
+    for row in config.contest_service.contest_problems(int(contest_id)):
+        problem_languages.update(
+            config.workspace_service.committed_statement_languages(str(row["problem_slug"]))
+        )
+    for language in sorted(problem_languages):
+        _append(language)
     return result
 
 
@@ -120,11 +139,16 @@ def _contest_statement_source_rows(contest_id: int, contest_slug: str, language:
     return sorted(rows, key=lambda item: str(item["display_path"]))
 
 
-def contest_packages_preview_start(contest: str, user: Annotated[str, Depends(require_session_user)]):
+def contest_packages_preview_start(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    language: Annotated[str, Form()] = "",
+):
     ctx = _contest_ctx(contest, user, "packages")
     if not bool(ctx["access"].get("can_write")):
         raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
     contest_id = int(ctx["contest"]["id"])
+    current_language = _contest_statement_language(contest_id, language)
     if config.contest_service.problem_count(contest_id) <= 0:
         return _contest_redirect(str(ctx["contest"]["slug"]), "packages", message="add at least one problem first")
     job_id, queued, reason = _queue_contest_job(
@@ -133,6 +157,7 @@ def contest_packages_preview_start(contest: str, user: Annotated[str, Depends(re
         actor_user_id=int(ctx["user"]["id"]),
         actor_username=str(ctx["user"]["username"]),
         job_type=_CONTEST_JOB_TYPE_PDF,
+        language=current_language,
     )
     if queued:
         message = "contest pdf build queued"
@@ -148,6 +173,7 @@ def contest_packages_preview_start(contest: str, user: Annotated[str, Depends(re
             "contest_id": contest_id,
             "contest_slug": str(ctx["contest"]["slug"]),
             "job_id": job_id,
+            "language": current_language,
             "queued": bool(queued),
             "reason": reason,
         },
@@ -155,7 +181,10 @@ def contest_packages_preview_start(contest: str, user: Annotated[str, Depends(re
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "packages",
-        query=f"job_id={quote_plus(job_id)}" if job_id else "",
+        query=_contest_packages_statement_query(
+            language=current_language,
+            job_id=job_id,
+        ),
         message=message,
     )
 
