@@ -86,7 +86,7 @@
   <a class="btn" href="{{ latex_log_href }}" target="_blank" rel="noopener">Open latex.log</a>
   {% endif %}
   {% if preview_id and pdf_exists %}
-  <span class="muted statement-preview-status">{{ "PDF is stale; recompile after source changes." if preview_is_stale else "PDF is ready." }}</span>
+  <span class="{{ 'warn' if preview_is_stale else 'muted' }} statement-preview-status">{{ "PDF is stale; recompile after source changes." if preview_is_stale else "PDF is ready." }}</span>
   {% endif %}
 </div>
 {% if preview_compile_failed %}

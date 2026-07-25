@@ -910,6 +910,10 @@ class TestBackendMinimal(SmokeBase):
                 ),
             ],
         )
+        (ws / "statement-sections" / "english" / "legend.tex").write_text(
+            "Changed after preview.\n",
+            encoding="utf-8",
+        )
 
         resp = preview_page(
             _request(f"/problems/{self.problem}/statement", f"language=english&preview_id={preview_id}"),
@@ -924,6 +928,11 @@ class TestBackendMinimal(SmokeBase):
         self.assertIn(f"/problems/{self.problem}/artifacts/{preview_id}/statement_preview/statement.pdf", html)
         self.assertIn("Open TeX", html)
         self.assertIn(f"/problems/{self.problem}/statement/source.tex?language=english", html)
+        self.assertIn(
+            '<span class="warn statement-preview-status">'
+            "PDF is stale; recompile after source changes.</span>",
+            html,
+        )
         self.assertNotIn("Preview Output", html)
         self.assertNotIn('class="pdf-preview"', html)
 
