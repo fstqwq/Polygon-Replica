@@ -15,6 +15,10 @@
   <div class="form-row">
     <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/preview/start">
       <input type="hidden" name="language" value="{{ contest_statement_language }}" />
+      <label>
+        <input type="checkbox" name="insert_blank_pages" value="true" />
+        Insert blank pages after odd statements
+      </label>
       <button class="btn" type="submit">Build Contest PDF</button>
     </form>
     <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">

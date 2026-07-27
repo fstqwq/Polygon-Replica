@@ -28,7 +28,7 @@
 \usepackage {wrapfig}
 \usepackage {comment}
 
-\intentionallyblankpagestrue
+%\intentionallyblankpagestrue
 
 \begin {document}
 

@@ -34,6 +34,8 @@ _CONTEST_JOB_TYPE_PACKAGE = "package"
 _CONTEST_EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}
 _CONTEST_LATEX_JOB_NAME = "statements"
 _CONTEST_LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
+_CONTEST_BLANK_PAGES_MARKER = r"%\intentionallyblankpagestrue"
+_CONTEST_BLANK_PAGES_ENABLED = _CONTEST_BLANK_PAGES_MARKER.removeprefix("%")
 _CONTEST_CJK_PREAMBLE_LINES = [
     r"% --- Engine-adaptive font loading ---",
     r"\usepackage{fontspec}",
@@ -257,7 +259,7 @@ def contest_default_statements_tex(
         r"\usepackage{wrapfig}",
         r"\usepackage{algorithm}",
         r"\usepackage{algpseudocode}",
-        r"\intentionallyblankpagestrue",
+        _CONTEST_BLANK_PAGES_MARKER,
         r"\begin{document}",
         r"\contest",
         "{" + _contest_latex_escape_text(contest_row.get("title", "")) + "}%",
@@ -537,9 +539,6 @@ def _write_contest_latex_wrapper(statements_root: Path) -> Path:
         "\\AtBeginDocument{%\n"
         "  \\providecommand{\\url}[1]{\\texttt{#1}}%\n"
         "  \\providecommand{\\href}[2]{#2}%\n"
-        "  \\ifdefined\\intentionallyblankpagestrue\n"
-        "    \\intentionallyblankpagestrue\n"
-        "  \\fi\n"
         "}\n"
         "\\input{statements.tex}\n",
         encoding="utf-8",
@@ -829,6 +828,7 @@ def _run_contest_pdf_job_worker(
     actor_username: str,
     job_id: str,
     language: str,
+    insert_blank_pages: bool,
 ) -> None:
     job_root = config.contest_service.job_root(contest_slug, job_id)
     compile_root = (job_root / "contest-pdf-src").resolve()
@@ -848,6 +848,15 @@ def _run_contest_pdf_job_worker(
         problem_entries=[dict(entry) for entry in entries],
         source_folder_map=source_folder_map,
     )
+    if insert_blank_pages:
+        statements_tex = statements_root / "statements.tex"
+        payload = statements_tex.read_bytes()
+        statements_tex.write_bytes(
+            payload.replace(
+                _CONTEST_BLANK_PAGES_MARKER.encode("ascii"),
+                _CONTEST_BLANK_PAGES_ENABLED.encode("ascii"),
+            )
+        )
     results: list[dict[str, object]] = []
     for entry in entries:
         source_folder = _contest_problem_source_folder(dict(entry), source_folder_map)
@@ -1179,6 +1188,7 @@ def _queue_contest_job(
     actor_username: str,
     job_type: str,
     language: str = "",
+    insert_blank_pages: bool = False,
 ) -> tuple[str, bool, str]:
     active_id = config.contest_service.running_job_id(contest_id, job_type)
     if active_id:
@@ -1216,6 +1226,7 @@ def _queue_contest_job(
                     actor_username=actor_username,
                     job_id=job_id,
                     language=job_language,
+                    insert_blank_pages=insert_blank_pages,
                 )
                 return
             if job_type == _CONTEST_JOB_TYPE_PACKAGE:

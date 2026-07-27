@@ -143,6 +143,7 @@ def contest_packages_preview_start(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
     language: Annotated[str, Form()] = "",
+    insert_blank_pages: Annotated[bool, Form()] = False,
 ):
     ctx = _contest_ctx(contest, user, "packages")
     if not bool(ctx["access"].get("can_write")):
@@ -158,6 +159,7 @@ def contest_packages_preview_start(
         actor_username=str(ctx["user"]["username"]),
         job_type=_CONTEST_JOB_TYPE_PDF,
         language=current_language,
+        insert_blank_pages=insert_blank_pages,
     )
     if queued:
         message = "contest pdf build queued"

@@ -733,6 +733,7 @@ class TestUIContests(UIBaseSuite):
         )
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('<option value="chinese"', html)
+        self.assertIn("Insert blank pages after odd statements", html)
 
         with patch(
             "app.impl.contest.package._queue_contest_job",
@@ -742,10 +743,12 @@ class TestUIContests(UIBaseSuite):
                 contest=contest_slug,
                 user="alice",
                 language="chinese",
+                insert_blank_pages=True,
             )
 
         self.assertEqual(response.status_code, 303)
         self.assertEqual(queue_job.call_args.kwargs["language"], "chinese")
+        self.assertTrue(queue_job.call_args.kwargs["insert_blank_pages"])
         redirect_query = parse_qs(urlparse(str(response.headers["location"])).query)
         self.assertEqual(redirect_query["language"], ["chinese"])
         self.assertEqual(redirect_query["job_id"], ["pdf-language-job"])
@@ -801,7 +804,7 @@ class TestUIContests(UIBaseSuite):
                 {
                     "key": "statements/english/statements.tex",
                     "language": "english",
-                    "package_bytes": b"\\\\documentclass{article}\n\\\\usepackage{olymp}\n\\\\begin{document}\n\\\\import{../../problems/src-problem/statements/}{./problem.tex}\n\\\\end{document}\n",
+                    "package_bytes": b"\\\\documentclass{article}\n\\\\usepackage{olymp}\n%\\intentionallyblankpagestrue\n\\\\begin{document}\n\\\\import{../../problems/src-problem/statements/}{./problem.tex}\n\\\\end{document}\n",
                 },
                 {
                     "key": "statements/english/olymp.sty",
@@ -903,6 +906,7 @@ class TestUIContests(UIBaseSuite):
                 contest=contest_slug,
                 user="alice",
                 language="english",
+                insert_blank_pages=True,
             )
             self.assertEqual(preview_start.status_code, 303)
             preview_q = parse_qs(urlparse(str(preview_start.headers.get("location", ""))).query)
@@ -964,6 +968,8 @@ class TestUIContests(UIBaseSuite):
         contest_job_root = config.contest_service.job_root(contest_slug, preview_job_id)
         compile_root = contest_job_root / "contest-pdf-src"
         contest_statements_text = (compile_root / "statements" / "english" / "statements.tex").read_text(encoding="utf-8")
+        self.assertIn("\\intentionallyblankpagestrue", contest_statements_text.splitlines())
+        self.assertNotIn("%\\intentionallyblankpagestrue", contest_statements_text.splitlines())
         self.assertIn("\\usepackage{xeCJK}", contest_statements_text)
         self.assertIn("\\setCJKmainfont{Noto Serif CJK SC}", contest_statements_text)
         self.assertIn("\\definecolor{gapfill}{RGB}{255,225,225}", contest_statements_text)
@@ -1015,7 +1021,7 @@ class TestUIContests(UIBaseSuite):
         self.assertIn("\\AtBeginDocument", wrapper_text)
         self.assertIn("\\providecommand{\\url}[1]", wrapper_text)
         self.assertIn("\\providecommand{\\href}[2]", wrapper_text)
-        self.assertIn("\\intentionallyblankpagestrue", wrapper_text)
+        self.assertNotIn("\\intentionallyblankpagestrue", wrapper_text)
 
     def test_contest_packages_surfaces_top_level_job_error(self) -> None:
         contest_slug = f"ui-contest-job-error-{uuid.uuid4().hex[:8]}"
@@ -1133,7 +1139,8 @@ class TestUIContests(UIBaseSuite):
         self.assertIn("\\usepackage{pgfplots}", statements_text)
         self.assertIn("\\usepackage{algorithm}", statements_text)
         self.assertIn("\\usepackage{algpseudocode}", statements_text)
-        self.assertIn("\\intentionallyblankpagestrue", statements_text)
+        self.assertIn("%\\intentionallyblankpagestrue", statements_text.splitlines())
+        self.assertNotIn("\\intentionallyblankpagestrue", statements_text.splitlines())
         self.assertIn("/statements/english/", statements_text)
         self.assertTrue((statements_tex.parent / "olymp.sty").is_file())
         self.assertEqual((statements_tex.parent / "logo.png").read_bytes(), b"PNG")
