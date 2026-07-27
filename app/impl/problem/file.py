@@ -1,20 +1,30 @@
 from __future__ import annotations
-from app.impl.auth.session import require_session_user
 
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
 
-from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
+from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
+from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.runtime.config import config
-from app.impl.workspace.context_operation import audit, build_line_focus_context, build_repo_browser_entries, default_files_selected_path, files_browse_query_tail, kind_for_path, parse_line_param, template_for_kind
-from app.impl.workspace.solution import ensure_solution_metadata_for_source
 from app.impl.workspace.access import require_write_access
+from app.impl.workspace.context_operation import (
+    audit,
+    build_line_focus_context,
+    build_repo_browser_entries,
+    default_files_selected_path,
+    files_browse_query_tail,
+    kind_for_path,
+    parse_line_param,
+    template_for_kind,
+)
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.solution import ensure_solution_metadata_for_source
 from app.main_util import normalize_workspace_rel_path, safe_workspace_path
+from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
 _C = config.constants
 
@@ -81,13 +91,22 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     selected_media_type = selected_view.media_type
     content = selected_view.content
     content_truncated = selected_view.content_truncated
+    selected_can_restore_default = (
+        selected in STATEMENT_DEFAULT_FILES
+        and not selected_is_dir
+        and (selected_missing or not selected_is_binary)
+    )
     selected_template_kind = kind_for_path(selected)
     selected_parent = str(Path(selected).parent)
     if selected_parent in {'.', ''}:
         selected_parent = ''
     requested_dir = request.query_params.get('dir')
     browse_dir_default = ''
-    browse_dir, browse_parent, browse_dirs, browse_files, browse_total = build_repo_browser_entries(workspace, files, requested_dir if requested_dir is not None else browse_dir_default)
+    browse_dir, browse_parent, browse_dirs, browse_files, browse_total = build_repo_browser_entries(
+        workspace,
+        files,
+        requested_dir if requested_dir is not None else browse_dir_default,
+    )
     browse_query_tail = files_browse_query_tail(browse_dir)
     line_focus = build_line_focus_context(content, selected_line) if line_raw else None
     line_jump_requested = bool(line_raw)
@@ -95,7 +114,36 @@ def files_page(request: Request, problem: str, user: Annotated[str, Depends(requ
     message = ''
     if not message and auto_message:
         message = auto_message
-    return template_response(request, 'files.html', {'ctx': ctx, 'files': files, 'files_truncated': files_truncated, 'file_limit': _C.WORKSPACE_FILE_LIST_LIMIT, 'selected': selected, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'selected_line': selected_line, 'selected_parent': selected_parent, 'browse_dir': browse_dir, 'browse_parent': browse_parent, 'browse_dirs': browse_dirs, 'browse_files': browse_files, 'browse_total': browse_total, 'browse_query_tail': browse_query_tail, 'line_focus': line_focus, 'line_jump_requested': line_jump_requested, 'line_jump_missing': line_jump_missing, 'selected_missing': selected_missing, 'selected_is_dir': selected_is_dir, 'selected_is_binary': selected_is_binary, 'selected_is_pdf': selected_is_pdf, 'selected_media_type': selected_media_type, 'selected_template_kind': selected_template_kind, 'message': message})
+    template_context = {
+        'ctx': ctx,
+        'files': files,
+        'files_truncated': files_truncated,
+        'file_limit': _C.WORKSPACE_FILE_LIST_LIMIT,
+        'selected': selected,
+        'content': content,
+        'content_truncated': content_truncated,
+        'content_char_limit': _C.WORKSPACE_FILE_VIEW_CHAR_LIMIT,
+        'selected_line': selected_line,
+        'selected_parent': selected_parent,
+        'browse_dir': browse_dir,
+        'browse_parent': browse_parent,
+        'browse_dirs': browse_dirs,
+        'browse_files': browse_files,
+        'browse_total': browse_total,
+        'browse_query_tail': browse_query_tail,
+        'line_focus': line_focus,
+        'line_jump_requested': line_jump_requested,
+        'line_jump_missing': line_jump_missing,
+        'selected_missing': selected_missing,
+        'selected_is_dir': selected_is_dir,
+        'selected_is_binary': selected_is_binary,
+        'selected_is_pdf': selected_is_pdf,
+        'selected_media_type': selected_media_type,
+        'selected_template_kind': selected_template_kind,
+        'selected_can_restore_default': selected_can_restore_default,
+        'message': message,
+    }
+    return template_response(request, 'files.html', template_context)
 
 def files_save(
     problem: str,
@@ -176,6 +224,54 @@ def files_create_template(
         status_code=303,
         message=msg,
     )
+
+
+def files_restore_default(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    path: Annotated[str, Form()],
+    dir: Annotated[str, Form()] = '',
+):
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=False,
+    )
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    selected = path
+    message = 'default statement file restored'
+    try:
+        selected = config.workspace_file_service.normalize_path(
+            path,
+            require_allowed_root=False,
+        )
+        content = STATEMENT_DEFAULT_FILES.get(selected)
+        if content is None:
+            raise ValueError('default restore is not available for this path')
+        with config.workspace_service.workspace_lock(workspace):
+            config.git_service.write_file(workspace, selected, content)
+        audit(
+            ctx['user']['id'],
+            ctx['problem']['id'],
+            'files.restore_default',
+            {'path': selected},
+        )
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    return redirect_response(
+        _files_redirect_href(
+            problem,
+            user,
+            path=selected,
+            browse_tail=files_browse_query_tail(dir),
+        ),
+        status_code=303,
+        message=message,
+    )
+
 
 async def files_upload(
     problem: str,
@@ -265,8 +361,4 @@ def files_download(problem: str, user: Annotated[str, Depends(require_session_us
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return FileResponse(file_path, filename=file_path.name)
-
-
-
-
 

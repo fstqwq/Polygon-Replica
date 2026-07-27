@@ -29,10 +29,8 @@ from app.main_util import (
     write_upload_file_limited,
 )
 from app.service.statement.constant import (
-    DEFAULT_OLYMP_STY,
-    DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
-    DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_ASSETS_DIR,
+    STATEMENT_DEFAULT_FILES,
     STATEMENT_PROBLEM_REL,
     STATEMENT_SECTIONS_DIR,
     STATEMENT_STYLE_REL,
@@ -709,20 +707,15 @@ def statement_templates_reset(
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     current_language = resolve_statement_page_language(workspace, language)
-    write_plan = {
-        STATEMENT_TEMPLATE_REL: DEFAULT_STATEMENT_TEMPLATE,
-        STATEMENT_PROBLEM_REL: DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
-        STATEMENT_STYLE_REL: DEFAULT_OLYMP_STY,
-    }
     message = 'default statement templates restored'
     try:
         with config.workspace_service.workspace_lock(workspace):
-            for rel, content in write_plan.items():
-                target = safe_workspace_path(workspace, rel.as_posix())
+            for rel, content in STATEMENT_DEFAULT_FILES.items():
+                target = safe_workspace_path(workspace, rel)
                 if target.is_symlink():
-                    raise ValueError(f'{rel.as_posix()} must be a regular file')
+                    raise ValueError(f'{rel} must be a regular file')
                 if target.exists() and (not target.is_file()):
-                    raise ValueError(f'{rel.as_posix()} must be a regular file')
+                    raise ValueError(f'{rel} must be a regular file')
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content, encoding='utf-8')
         audit(
@@ -730,7 +723,7 @@ def statement_templates_reset(
             ctx['problem']['id'],
             'statement.templates.reset',
             {
-                'paths': [rel.as_posix() for rel in write_plan],
+                'paths': list(STATEMENT_DEFAULT_FILES),
                 'language': current_language,
             },
         )

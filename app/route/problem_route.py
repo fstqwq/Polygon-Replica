@@ -15,7 +15,17 @@ from app.impl.problem.checker import (
     checker_set_standard,
     checker_view_standard,
 )
-from app.impl.problem.file import files_create_template, files_delete, files_download, files_new, files_page, files_rename, files_save, files_upload
+from app.impl.problem.file import (
+    files_create_template,
+    files_delete,
+    files_download,
+    files_new,
+    files_page,
+    files_rename,
+    files_restore_default,
+    files_save,
+    files_upload,
+)
 from app.impl.problem.general import general_save
 from app.impl.problem.generator import (
     generator_create_template,
@@ -311,6 +321,11 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/files/create-template",
     files_create_template,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/files/restore-default",
+    files_restore_default,
     methods=["POST"],
 )
 router.add_api_route(

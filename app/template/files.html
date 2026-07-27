@@ -41,6 +41,16 @@
       <p><strong>File:</strong> <code>{{ selected }}</code></p>
       <a class="button-link" href="/problems/{{ ctx.problem.slug }}/files/download?path={{ selected }}">Download file</a>
     </div>
+    {% if selected_can_restore_default %}
+    <div class="inline-meta-row">
+      <p class="muted">Restore the canonical template. Current file contents will be overwritten.</p>
+      <form class="inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/files/restore-default" data-confirm-message="Restore the default contents of {{ selected }}? Current file contents will be overwritten.">
+        <input type="hidden" name="path" value="{{ selected }}" />
+        <input type="hidden" name="dir" value="{{ browse_dir }}" />
+        <button class="btn" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Restore default</button>
+      </form>
+    </div>
+    {% endif %}
     {% if selected_missing %}
     <p class="flash">Selected file does not exist yet.</p>
     {% if selected_template_kind %}

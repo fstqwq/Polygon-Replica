@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 
 STATEMENT_DIR = Path("statement")
@@ -105,6 +107,13 @@ DEFAULT_OLYMP_STY = _load_repo_required_text(
     WF_STYLE_OLYMP_REL,
     label=f"canonical olymp style ({WF_STYLE_OLYMP_REL.as_posix()})",
 )
+STATEMENT_DEFAULT_FILES: Mapping[str, str] = MappingProxyType(
+    {
+        STATEMENT_TEMPLATE_REL.as_posix(): DEFAULT_STATEMENT_TEMPLATE,
+        STATEMENT_PROBLEM_REL.as_posix(): DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
+        STATEMENT_STYLE_REL.as_posix(): DEFAULT_OLYMP_STY,
+    }
+)
 
 
 def is_canonical_statement_section_entry(rel_path: str | Path) -> bool:
@@ -115,4 +124,3 @@ def is_canonical_statement_section_entry(rel_path: str | Path) -> bool:
 def is_ignored_statement_section_entry(rel_path: str | Path) -> bool:
     rel = Path(rel_path)
     return len(rel.parts) == 1 and rel.name in STATEMENT_IGNORED_SECTION_FILES
-
