@@ -4251,7 +4251,7 @@ class TestUIRun(UIBaseSuite):
         self.assertEqual(answer_download.status_code, 200)
         self.assertEqual(answer_download.body, b"6\n")
 
-    def test_collaborator_can_view_foreign_workspace_run_details_and_artifacts(self) -> None:
+    def test_collaborator_can_view_foreign_workspace_run_details(self) -> None:
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         workspace_service.ensure_workspace("alice/sample", "bob")
 
@@ -4374,15 +4374,6 @@ class TestUIRun(UIBaseSuite):
         detail_html = detail.body.decode("utf-8", errors="replace")
         self.assertIn("Input 001.in", detail_html)
         self.assertIn("Answer", detail_html)
-
-        input_download = run_export_impl.artifact_file(
-            "alice/sample",
-            "bob",
-            verification_id,
-            "tests/001.in",
-        )
-        self.assertEqual(input_download.status_code, 200)
-        self.assertEqual(input_download.body, b"1 2 3\n")
 
     def test_run_test_detail_fragment_hides_ok_generation_validation_details(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

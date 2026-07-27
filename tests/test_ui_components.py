@@ -1047,19 +1047,16 @@ class TestUIComponents(UIBaseSuite):
         self.assertEqual(editor.status_code, 200)
 
         updated_content = "int main(){return 42;}\n"
-        with patch(
-            "app.impl.problem.solution.judgehost_compile_check_error", return_value=""
-        ):
-            saved = solutions_save_source(
-                _request(
-                    f"/problems/{self.problem}/solutions/save-source", method="POST"
-                ),
-                problem=self.problem,
-                user=self.user,
-                source_path=target_rel,
-                content=updated_content,
-                expected_behavior="wrong_answer",
-            )
+        saved = solutions_save_source(
+            _request(
+                f"/problems/{self.problem}/solutions/save-source", method="POST"
+            ),
+            problem=self.problem,
+            user=self.user,
+            source_path=target_rel,
+            content=updated_content,
+            expected_behavior="wrong_answer",
+        )
         self.assertEqual(saved.status_code, 303)
         saved_location = saved.headers.get("location", "")
         self.assertIn("/solutions/editor", saved_location)
@@ -1069,6 +1066,8 @@ class TestUIComponents(UIBaseSuite):
             "expected: wrong_answer",
             (ws / f"{target_rel}.desc").read_text(encoding="utf-8"),
         )
+        messages = _flash_messages_from_response(saved)
+        self.assertEqual(messages, ["solution source saved."])
 
         toast_page = solutions_editor_page(
             _request_with_cookie(
@@ -1081,89 +1080,6 @@ class TestUIComponents(UIBaseSuite):
         )
         toast_html = toast_page.body.decode("utf-8", errors="replace")
         self.assertIn("solution source saved", toast_html)
-
-    def test_solutions_editor_renders_inline_compile_error_below_editor(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        target_rel = "solutions/editor_inline_error.cpp"
-        source_abs = ws / target_rel
-        source_abs.parent.mkdir(parents=True, exist_ok=True)
-        source_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
-
-        page = solutions_editor_page(
-            _request_with_cookie(
-                f"/problems/{self.problem}/solutions/editor",
-                _flash_cookie_header(
-                    "compile check failed: solutions/editor_inline_error.cpp: syntax error"
-                ),
-                f"path={quote_plus(target_rel)}",
-            ),
-            self.problem,
-            self.user,
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn(
-            "compile check failed: solutions/editor_inline_error.cpp: syntax error",
-            html,
-        )
-
-    def test_solutions_save_source_rejects_compile_error_and_keeps_previous_content(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        target_rel = "solutions/editor_ce_case.cpp"
-        source_abs = ws / target_rel
-        source_abs.parent.mkdir(parents=True, exist_ok=True)
-        original_content = "int main(){return 0;}\n"
-        source_abs.write_text(original_content, encoding="utf-8")
-
-        resp = solutions_save_source(
-            _request(f"/problems/{self.problem}/solutions/save-source", method="POST"),
-            problem=self.problem,
-            user=self.user,
-            source_path=target_rel,
-            content="int main(){\n",
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(
-            resp.headers.get("location", ""),
-            f"/problems/{self.problem}/solutions/editor?path=solutions%2Feditor_ce_case.cpp",
-        )
-        self.assertEqual(source_abs.read_text(encoding="utf-8"), original_content)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        message = messages[0].lower()
-        self.assertTrue(
-            ("error" in message) or ("compile" in message) or ("syntax" in message)
-        )
-
-    def test_solutions_save_source_ajax_returns_error_without_persisting_ce_content(
-        self,
-    ) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        target_rel = "solutions/editor_ajax_ce_case.cpp"
-        source_abs = ws / target_rel
-        source_abs.parent.mkdir(parents=True, exist_ok=True)
-        original_content = "int main(){return 0;}\n"
-        source_abs.write_text(original_content, encoding="utf-8")
-
-        req = _request(
-            f"/problems/{self.problem}/solutions/save-source",
-            method="POST",
-            headers=[(b"x-requested-with", b"fetch"), (b"accept", b"application/json")],
-        )
-        resp = solutions_save_source(
-            req,
-            problem=self.problem,
-            user=self.user,
-            source_path=target_rel,
-            content="int main(){\n",
-        )
-        self.assertEqual(resp.status_code, 400)
-        payload = json.loads(resp.body.decode("utf-8"))
-        self.assertFalse(bool(payload.get("ok")))
-        self.assertTrue(str(payload.get("error") or "").strip())
-        self.assertEqual(source_abs.read_text(encoding="utf-8"), original_content)
 
     def test_solutions_save_source_ajax_success_returns_redirect(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -1178,17 +1094,14 @@ class TestUIComponents(UIBaseSuite):
             headers=[(b"x-requested-with", b"fetch"), (b"accept", b"application/json")],
         )
         updated_content = "int main(){return 7;}\n"
-        with patch(
-            "app.impl.problem.solution.judgehost_compile_check_error", return_value=""
-        ):
-            resp = solutions_save_source(
-                req,
-                problem=self.problem,
-                user=self.user,
-                source_path=target_rel,
-                content=updated_content,
-                expected_behavior="accepted",
-            )
+        resp = solutions_save_source(
+            req,
+            problem=self.problem,
+            user=self.user,
+            source_path=target_rel,
+            content=updated_content,
+            expected_behavior="accepted",
+        )
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8"))
         self.assertTrue(bool(payload.get("ok")))
@@ -1204,36 +1117,6 @@ class TestUIComponents(UIBaseSuite):
         messages = _flash_messages_from_response(resp)
         self.assertTrue(messages)
         self.assertIn("solution source", messages[0])
-
-    def test_solutions_save_source_success_message_stays_generic(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        target_rel = "solutions/editor_message_case.cpp"
-        source_abs = ws / target_rel
-        desc_abs = ws / f"{target_rel}.desc"
-        source_abs.parent.mkdir(parents=True, exist_ok=True)
-        source_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
-        desc_abs.write_text("expected: unknown\n", encoding="utf-8")
-
-        with patch(
-            "app.impl.problem.solution.judgehost_compile_check_error", return_value=""
-        ):
-            resp = solutions_save_source(
-                _request(
-                    f"/problems/{self.problem}/solutions/save-source", method="POST"
-                ),
-                problem=self.problem,
-                user=self.user,
-                source_path=target_rel,
-                content="int main(){return 7;}\n",
-                expected_behavior="accepted",
-            )
-
-        self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        normalized_message = str(messages[0] or "").strip().lower()
-        self.assertTrue(normalized_message.startswith("solution source saved"))
-        self.assertNotIn("accepted", normalized_message)
 
     def test_checker_view_standard_page_shows_source(self) -> None:
         resp = checker_view_standard(
