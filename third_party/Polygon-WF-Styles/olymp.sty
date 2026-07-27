@@ -25,7 +25,7 @@
   \RequirePackage{fontspec}
   \setmainfont{TeX Gyre Termes}
   \setsansfont{TeX Gyre Heros}
-  \setmonofont{TeX Gyre Cursor}
+  \setmonofont{TeX Gyre Cursor}[Ligatures=NoCommon]
 \else
   \RequirePackage{times}
   \RequirePackage[T1]{fontenc}
@@ -768,6 +768,7 @@
 }
 
 \newenvironment{interactzigzag}{
+    \ttfamily\obeylines\obeyspaces\frenchspacing
     \ifdefined\NoExamples\else%
         \ifnum\value{exmpnum}=0\relax
             \vspace{0.6\baselineskip}%
@@ -791,6 +792,7 @@
 }
 
 \newenvironment{interactzigzagtwice}{
+    \ttfamily\obeylines\obeyspaces\frenchspacing
     \ifdefined\NoExamples\else%
         \ifnum\value{exmpnumtwice}=0\relax
             \vspace{0.6\baselineskip}%
