@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import cast
 
 from app.service.judgehost.shared import (
-    domjudge_task_lease_owner,
     domjudge_text,
     domjudge_lower_text,
 )
@@ -33,7 +32,7 @@ from app.service.verification.test_rows import (
     upsert_verification_test_row,
 )
 from app.service.verification.task_result_finalize import finalize_verification_task_result
-from app.service.verification.task_scheduler import notify_verification_case_reported, notify_verification_task_terminal
+from app.service.verification.task_scheduler import notify_verification_case_reported
 from app.service.verification.task_store import VerificationTaskStore
 
 from .core import JudgehostCore
@@ -55,6 +54,8 @@ class ResultProcessor:
     STATUS_LEASED = "leased"
     STATUS_ENQUEUING = "enqueuing"
     STATUS_REPORTING = "reporting"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
     CASE_CACHE_KIND = DomjudgeToolkit.CASE_CACHE_KIND
     _TASK_KIND_COMPILE_ONLY = "compile-only"
 
@@ -305,11 +306,6 @@ class ResultProcessor:
             debug_text=safe_error,
             now_text=now_text,
         )
-        self._s.judgehost_state_store.mark_job_cases_reported(
-            int(job_id),
-            runresult="internal-error",
-            updated_at=now_text,
-        )
         self._domjudge_finalize_if_ready(int(job_id), force_failed=True, error_text=safe_error)
 
     def domjudge_get_executable_files(
@@ -358,37 +354,14 @@ class ResultProcessor:
         _ = domjudge_text(runner)
         return {}
 
-    def _domjudge_task_lease_owner(self, task_id: str) -> str:
-        return domjudge_task_lease_owner(self._core.task_by_id(task_id), default="judgehost")
-
-    def _domjudge_finalize_case_task(self, *, task_id: str, test_name: str, hostname: str) -> None:
+    def _domjudge_publish_reported_case(self, *, task_id: str, test_name: str) -> None:
         safe_task_id = domjudge_text(task_id)
         safe_test_name = domjudge_text(test_name)
         if (not safe_task_id) or (not safe_test_name):
             return
-        task_row = self._core.task_by_id(safe_task_id)
-        if task_row is None:
-            return
-        task_status = domjudge_lower_text(task_row["status"])
-        if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-            return
         case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
         if case_result is None:
             return
-        self._queue.report_result(
-            task_id=safe_task_id,
-            hostname=self._core.normalize_hostname(hostname),
-            payload={
-                "run_status": str(case_result.get("status") or "failed"),
-                "error": str(case_result.get("error") or ""),
-                "summary": dict(case_result.get("summary") or {}),
-            },
-            notify_terminal=False,
-            # A grouped job may lease its task on one host and distribute the
-            # individual case to another. The reported case lease is the
-            # authority for this internal completion path.
-            allow_lease_owner_mismatch=True,
-        )
         self._publish_verification_case_result(
             task_id=safe_task_id,
             test_name=safe_test_name,
@@ -408,10 +381,6 @@ class ResultProcessor:
             test_name,
         )
         if verification_task_row is None:
-            task_row = self._core.task_by_id(task_id)
-            verification_id = str(case_result.get("verification_id") or (task_row or {}).get("verification_id") or "")
-            if verification_id:
-                notify_verification_task_terminal(verification_id, task_id)
             return
         final_result = finalize_verification_task_result(verification_task_row, result=case_result)
         notified = notify_verification_case_reported(
@@ -443,64 +412,24 @@ class ResultProcessor:
                     str(verification_task_row["verification_id"] or ""),
                     reason=final_result.fail_flag_reason,
                 )
-        notify_verification_task_terminal(str(verification_task_row["verification_id"] or ""), task_id)
 
-    def _domjudge_finalize_if_ready(self, job_id: int, *, force_failed: bool = False, error_text: str = "") -> None:
-        job_row = self._s.judgehost_state_store.job_finalize_row(int(job_id))
-        if job_row is None:
-            return
-        current_status = domjudge_lower_text(job_row["status"])
-        if current_status in {"completed", "failed"}:
-            return
-        cases = self._s.judgehost_state_store.cases_for_job(int(job_id))
-        if not cases:
-            return
-        task_id = domjudge_text(job_row["task_id"])
-        task_payload = self._core.task_payload(task_id) if task_id else {}
+    def _domjudge_task_result_payload(
+        self,
+        *,
+        task_id: str,
+        job_row: dict[str, object],
+        cases: list[dict[str, object]],
+        force_failed: bool,
+        error_text: str,
+    ) -> dict[str, object]:
+        task_row = self._core.task_by_id(task_id)
+        if task_row is None:
+            raise RuntimeError("judgehost task not found")
+        task_payload = self._core.task_payload(task_id)
         task_kind = self._toolkit.task_kind(task_payload)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
         compile_success_raw = job_row["compile_success"]
-        compile_success = None
-        if compile_success_raw is not None:
-            try:
-                compile_success = int(compile_success_raw)
-            except Exception:
-                compile_success = None
-        ready = force_failed or compile_success == 0
-        if not ready:
-            ready = all(domjudge_lower_text(row["status"]) in {"reported", "cancelled"} for row in cases)
-        if not ready:
-            return
-        grouped_job = bool(domjudge_text(job_row["group_key"]))
-        if grouped_job:
-            if force_failed and compile_success != 0:
-                forced_at = now_iso()
-                self._s.judgehost_state_store.mark_job_cases_reported(
-                    int(job_id),
-                    runresult="internal-error",
-                    updated_at=forced_at,
-                )
-                cases = self._s.judgehost_state_store.cases_for_job(int(job_id))
-            has_cancelled_cases = False
-            for row in cases:
-                if domjudge_lower_text(row["status"]) == "cancelled":
-                    has_cancelled_cases = True
-                    continue
-                self._domjudge_finalize_case_task(
-                    task_id=domjudge_text(row["task_id"]),
-                    test_name=domjudge_text(row["test_name"]),
-                    hostname=self._domjudge_task_lease_owner(domjudge_text(row["task_id"])),
-                )
-            finished_at = now_iso()
-            self._s.judgehost_state_store.set_job_terminal_status(
-                int(job_id),
-                status="failed" if (force_failed or compile_success == 0 or has_cancelled_cases) else "completed",
-                completed_at=finished_at,
-                updated_at=finished_at,
-            )
-            shutil.rmtree(Path(domjudge_text(job_row["work_root"])).resolve(), ignore_errors=True)
-            return
-
+        compile_success = None if compile_success_raw is None else int(compile_success_raw)
         tests: list[dict[str, object]] = []
         internal_failure_error = ""
         cancelled_cases = 0
@@ -534,6 +463,12 @@ class ResultProcessor:
                 output_diff_rel=row["output_diff_rel"],
                 team_message_rel=row["team_message_rel"],
             )
+            if not feedback_text:
+                debug_text = (
+                    domjudge_text(row["debug_text"])
+                    or domjudge_text(job_row["debug_text"])
+                )
+                feedback_text = domjudge_feedback_text_from_text(debug_text)
             output_ref = domjudge_text(row["output_run_rel"])
             compare_meta_blob = self._toolkit.read_artifact_blob(work_root, domjudge_text(row["compare_metadata_rel"]))
             compare_exit_code = -1
@@ -578,6 +513,14 @@ class ResultProcessor:
                 if not detail:
                     detail = runresult_token.replace("-", " ")
                 internal_failure_error = f"{test_name}: {detail}" if test_name else detail
+            if (
+                compile_success != 0
+                and (not internal_failure_error)
+                and task_kind == "main-correct"
+                and verdict != "OK"
+            ):
+                detail = domjudge_text(feedback_text) or f"main correct failed on {test_name}"
+                internal_failure_error = detail
         if cancelled_cases > 0 and (not internal_failure_error):
             internal_failure_error = "judgehost task cancelled"
 
@@ -607,7 +550,7 @@ class ResultProcessor:
         run_status = "failed" if (force_failed or compile_success == 0) else "ok"
         if (not force_failed) and internal_failure_error:
             run_status = "failed"
-        summary = self._queue.load_run_summary(domjudge_text(job_row["run_id"]))
+        summary = self._queue.load_run_summary(domjudge_text(task_row["run_id"]))
         summary["tests"] = tests
         summary["compile_log"] = compile_log
         summary["compile_diagnostics"] = compile_diag
@@ -640,24 +583,226 @@ class ResultProcessor:
             result_payload["error"] = compile_error_task
         elif internal_failure_error:
             result_payload["error"] = internal_failure_error
-        try:
-            self._queue.report_result(
-                task_id=task_id,
-                hostname=self._domjudge_task_lease_owner(task_id),
-                payload=result_payload,
+        return result_payload
+
+    def _domjudge_finalize_task_if_ready(
+        self,
+        task_id: str,
+        *,
+        job_row: dict[str, object],
+        force_failed: bool = False,
+        error_text: str = "",
+    ) -> bool:
+        safe_task_id = domjudge_text(task_id)
+        cases = self._s.judgehost_state_store.cases_for_task(safe_task_id)
+        if not cases or any(
+            domjudge_lower_text(row["status"]) not in {"reported", "cancelled"}
+            for row in cases
+        ):
+            return False
+        # Keep result extraction, terminal notification, and the task state
+        # transition together. A concurrent job finalizer must not delete the
+        # shared work root while another case callback is still reporting.
+        with self._s.state_lock:
+            task_row = self._s.tasks_by_id.get(safe_task_id)
+            if task_row is None:
+                return False
+            task_status = domjudge_lower_text(task_row["status"])
+            if task_status in {"completed", "failed"}:
+                return True
+            if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+                return False
+            payload = self._domjudge_task_result_payload(
+                task_id=safe_task_id,
+                job_row=job_row,
+                cases=cases,
+                force_failed=force_failed,
+                error_text=error_text,
             )
-        except RuntimeError as exc:
-            logger.warning("failed to finalize DOMjudge job %s via report_result: %s", int(job_id), exc)
-        finished_at = now_iso()
-        self._s.judgehost_state_store.set_job_terminal_status(
-            int(job_id),
-            status="failed" if (force_failed or cancelled_cases > 0) else "completed",
-            completed_at=finished_at,
-            updated_at=finished_at,
-        )
-        shutil.rmtree(work_root, ignore_errors=True)
+            cancelled_case_result = {
+                "task_id": safe_task_id,
+                "verification_id": domjudge_text(task_row["verification_id"]),
+                "run_id": domjudge_text(task_row["run_id"]),
+                "artifact_path": "",
+                "status": "failed",
+                "task_status": self.STATUS_FAILED,
+                "missing_case_result": True,
+                "error": domjudge_text(payload.get("error"), default="judgehost task cancelled"),
+                "summary": dict(cast(dict[str, object], payload["summary"])),
+            }
+            for case_row in cases:
+                if domjudge_lower_text(case_row["status"]) != "cancelled":
+                    continue
+                self._publish_verification_case_result(
+                    task_id=safe_task_id,
+                    test_name=domjudge_text(case_row["test_name"]),
+                    case_result=cancelled_case_result,
+                )
+            self._queue.finalize_domjudge_task(task_id=safe_task_id, payload=payload)
+            return True
+
+    def _domjudge_publish_and_finalize_ready_tasks(
+        self,
+        *,
+        job_id: int,
+        job_row: dict[str, object],
+        cases: list[dict[str, object]],
+        force_failed: bool,
+        error_text: str,
+    ) -> bool:
+        for row in cases:
+            if domjudge_lower_text(row["status"]) != "reported":
+                continue
+            try:
+                self._domjudge_publish_reported_case(
+                    task_id=domjudge_text(row["task_id"]),
+                    test_name=domjudge_text(row["test_name"]),
+                )
+            except Exception:
+                logger.exception(
+                    "failed to publish terminal DOMjudge case job_id=%s case_id=%s",
+                    int(job_id),
+                    int(row["id"]),
+                )
+                return False
+
+        task_ids = list(dict.fromkeys(
+            task_id
+            for row in cases
+            if (task_id := domjudge_text(row["task_id"]))
+        ))
+        for task_id in task_ids:
+            try:
+                self._domjudge_finalize_task_if_ready(
+                    task_id,
+                    job_row=job_row,
+                    force_failed=force_failed,
+                    error_text=error_text,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to finalize DOMjudge task task_id=%s job_id=%s",
+                    task_id,
+                    int(job_id),
+                )
+                return False
+        return True
+
+    def _domjudge_finalize_if_ready(
+        self,
+        job_id: int,
+        *,
+        force_failed: bool = False,
+        error_text: str = "",
+    ) -> None:
+        with self._s.state_lock:
+            claim = self._s.judgehost_state_store.claim_job_finalization(
+                int(job_id),
+                now_text=now_iso(),
+                force_runresult="internal-error" if force_failed else "",
+            )
+            if claim is None:
+                current_job = self._s.judgehost_state_store.job_finalize_row(int(job_id))
+                if current_job is None or domjudge_lower_text(current_job["status"]) not in {
+                    "queued",
+                    "leased",
+                }:
+                    return
+                active_cases = [
+                    dict(row)
+                    for row in self._s.judgehost_state_store.cases_for_job(int(job_id))
+                ]
+                self._domjudge_publish_and_finalize_ready_tasks(
+                    job_id=int(job_id),
+                    job_row=dict(current_job),
+                    cases=active_cases,
+                    force_failed=force_failed,
+                    error_text=error_text,
+                )
+                return
+            job_row = dict(claim["job"])
+            cases = [dict(row) for row in claim["cases"]]
+            task_ids = list(dict.fromkeys(
+                task_id
+                for row in cases
+                if (task_id := domjudge_text(row["task_id"]))
+            ))
+            if not self._domjudge_publish_and_finalize_ready_tasks(
+                job_id=int(job_id),
+                job_row=job_row,
+                cases=cases,
+                force_failed=force_failed,
+                error_text=error_text,
+            ):
+                return
+            unfinished_task_ids = [
+                task_id
+                for task_id in task_ids
+                if (
+                    (task_row := self._s.tasks_by_id.get(task_id)) is None
+                    or domjudge_lower_text(task_row["status"]) not in {"completed", "failed"}
+                )
+            ]
+            if unfinished_task_ids:
+                unfinished_statuses = {
+                    task_id: (
+                        "<missing>"
+                        if self._s.tasks_by_id.get(task_id) is None
+                        else domjudge_lower_text(self._s.tasks_by_id[task_id]["status"])
+                    )
+                    for task_id in unfinished_task_ids
+                }
+                transient_statuses = set(unfinished_statuses.values()) <= {
+                    self.STATUS_ENQUEUING,
+                    self.STATUS_REPORTING,
+                }
+                log = logger.debug if transient_statuses else logger.error
+                log(
+                    "DOMjudge job remains finalizing because tasks are not terminal "
+                    "job_id=%s task_statuses=%s",
+                    int(job_id),
+                    unfinished_statuses,
+                )
+                return
+            compile_success = job_row["compile_success"]
+            compile_failed = compile_success is not None and int(compile_success) == 0
+            has_cancelled_cases = any(
+                domjudge_lower_text(row["status"]) == "cancelled"
+                for row in cases
+            )
+            has_failed_tasks = any(
+                domjudge_lower_text(self._s.tasks_by_id[task_id]["status"]) == self.STATUS_FAILED
+                for task_id in task_ids
+            )
+            finished_at = now_iso()
+            terminal_status = (
+                "failed"
+                if force_failed or compile_failed or has_cancelled_cases or has_failed_tasks
+                else "completed"
+            )
+            updated = self._s.judgehost_state_store.set_job_terminal_status(
+                int(job_id),
+                status=terminal_status,
+                completed_at=finished_at,
+                updated_at=finished_at,
+            )
+            if not updated:
+                logger.error("DOMjudge job finalization claim disappeared job_id=%s", int(job_id))
+                return
+            shutil.rmtree(Path(domjudge_text(job_row["work_root"])).resolve(), ignore_errors=True)
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
+        # Result extraction and final cleanup share this lock so a finalizer
+        # cannot remove the work root while another callback still consumes it.
+        with self._s.state_lock:
+            self._domjudge_update_judging_locked(hostname, judgetask_id, payload)
+
+    def _domjudge_update_judging_locked(
+        self,
+        hostname: str,
+        judgetask_id: int,
+        payload: dict[str, object],
+    ) -> None:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
         case_row = self._s.judgehost_state_store.case_execution_row(case_id)
@@ -667,11 +812,18 @@ class ResultProcessor:
             # idempotent no-op so daemon can continue without fatal retries.
             logger.info("ignoring update for unknown judging run id: %s", case_id)
             return
-        if domjudge_lower_text(case_row["job_status"]) not in {"queued", "leased"}:
+        job_status = domjudge_lower_text(case_row["job_status"])
+        if job_status == "finalizing":
+            self._domjudge_finalize_if_ready(int(case_row["job_id"]))
+            return
+        if job_status not in {"queued", "leased"}:
             logger.info("ignoring update for terminal DOMjudge job case id: %s", case_id)
             return
         if domjudge_lower_text(case_row["case_status"]) != "leased":
             logger.info("ignoring update for non-leased DOMjudge case id: %s", case_id)
+            return
+        if domjudge_text(case_row["case_lease_owner"]) != safe_host:
+            logger.info("ignoring update from non-owner DOMjudge host for case id: %s", case_id)
             return
         safe_task_id = domjudge_text(case_row["task_id"])
         if not self._domjudge_task_accepts_case_updates(safe_task_id):
@@ -704,10 +856,18 @@ class ResultProcessor:
                 logger.info("ignoring compile update for terminal DOMjudge job case id: %s", case_id)
                 return
             if compile_success == 0:
-                self._s.judgehost_state_store.mark_compile_failed_cases(job_id, updated_at=updated_at)
                 self._domjudge_finalize_if_ready(job_id)
 
     def domjudge_add_judging_run(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> int:
+        with self._s.state_lock:
+            return self._domjudge_add_judging_run_locked(hostname, judgetask_id, payload)
+
+    def _domjudge_add_judging_run_locked(
+        self,
+        hostname: str,
+        judgetask_id: int,
+        payload: dict[str, object],
+    ) -> int:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
         row = self._s.judgehost_state_store.case_execution_row(case_id)
@@ -716,14 +876,23 @@ class ResultProcessor:
             # gracefully to avoid hard-failing judgedaemon retries.
             logger.info("ignoring add_judging_run for unknown judging run id: %s", case_id)
             return case_id
-        if domjudge_lower_text(row["job_status"]) not in {"queued", "leased"}:
+        job_status = domjudge_lower_text(row["job_status"])
+        if job_status == "finalizing":
+            self._domjudge_finalize_if_ready(int(row["job_id"]))
+            return case_id
+        if job_status not in {"queued", "leased"}:
             logger.info("ignoring add_judging_run for terminal DOMjudge job id: %s", case_id)
             return case_id
         if domjudge_lower_text(row["case_status"]) != "leased":
             logger.info("ignoring add_judging_run for non-leased DOMjudge case id: %s", case_id)
             return case_id
+        if domjudge_text(row["case_lease_owner"]) != safe_host:
+            logger.info(
+                "ignoring add_judging_run from non-owner DOMjudge host for case id: %s",
+                case_id,
+            )
+            return case_id
         job_id = int(row["job_id"])
-        grouped_job = bool(domjudge_text(row["group_key"]))
         safe_task_id = domjudge_text(row["task_id"])
         if not self._domjudge_task_accepts_case_updates(safe_task_id):
             logger.info("ignoring add_judging_run for cancelled DOMjudge task id: %s", case_id)
@@ -976,36 +1145,17 @@ class ResultProcessor:
                     safe_task_id,
                     case_id,
                 )
-        if grouped_job:
-            try:
-                self._domjudge_finalize_case_task(
-                    task_id=safe_task_id,
-                    test_name=str(row["test_name"] or ""),
-                    hostname=safe_host,
-                )
-            except Exception:
-                logger.exception(
-                    "failed to finalize grouped DOMjudge case task_id=%s case_id=%s",
-                    safe_task_id,
-                    case_id,
-                )
-        else:
-            try:
-                safe_test_name = str(row["test_name"] or "")
-                case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
-                if case_result is not None:
-                    self._publish_verification_case_result(
-                        task_id=safe_task_id,
-                        test_name=safe_test_name,
-                        case_result=case_result,
-                    )
-            except Exception:
-                logger.exception(
-                    "failed to publish verification task result event task_id=%s case_id=%s",
-                    safe_task_id,
-                    case_id,
-                )
-
+        try:
+            self._domjudge_publish_reported_case(
+                task_id=safe_task_id,
+                test_name=domjudge_text(row["test_name"]),
+            )
+        except Exception:
+            logger.exception(
+                "failed to publish verification case result task_id=%s case_id=%s",
+                safe_task_id,
+                case_id,
+            )
         self._domjudge_finalize_if_ready(job_id)
         return 1
 
@@ -1255,6 +1405,21 @@ class ResultProcessor:
                 if safe_task_id and safe_test_name and str(case_row["status"] or "") == "reported":
                     case_result = self._queue.poll_task_case_result(safe_task_id, safe_test_name)
                     if case_result is not None:
+                        case_summary = dict(case_result["summary"])
+                        test_rows = [
+                            dict(row)
+                            for row in cast(list[dict[str, object]], case_summary["tests"])
+                        ]
+                        for test_row in test_rows:
+                            if domjudge_text(test_row["test"]) == safe_test_name:
+                                test_row["message"] = debug_text
+                        case_summary["error"] = debug_text
+                        case_summary["tests"] = test_rows
+                        case_result = {
+                            **case_result,
+                            "error": debug_text,
+                            "summary": case_summary,
+                        }
                         verification_task_store = VerificationTaskStore(self._s.db)
                         verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
                             safe_task_id,

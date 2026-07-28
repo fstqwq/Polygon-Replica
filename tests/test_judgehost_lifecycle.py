@@ -1,0 +1,536 @@
+from __future__ import annotations
+
+import shutil
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+from unittest.mock import patch
+
+from app.service.judgehost.api import Judgehost
+from app.service.memory.judgehost_state_store import JudgehostStateStore
+
+from .common import SmokeBase, config
+
+
+_NOW = "2026-07-29T00:00:00+00:00"
+_HASH = "1" * 64
+
+
+def _case_row(
+    task_id: str,
+    run_id: str,
+    test_name: str,
+    ordinal: int,
+    *,
+    status: str = "pending",
+) -> dict[str, object]:
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "test_name": test_name,
+        "ordinal": ordinal,
+        "testcase_id": None,
+        "testcase_hash": _HASH,
+        "testcase_input_hash": _HASH,
+        "testcase_answer_hash": _HASH,
+        "input_ref": "",
+        "answer_ref": "",
+        "status": status,
+    }
+
+
+def _create_job(
+    store: JudgehostStateStore,
+    *,
+    task_id: str,
+    run_id: str,
+    work_root: str,
+    case_rows: list[dict[str, object]],
+    group_key: str = "",
+) -> int:
+    return store.create_job_with_cases(
+        task_id=task_id,
+        run_id=run_id,
+        group_key=group_key,
+        submit_id=f"pending-{uuid.uuid4().hex}",
+        contest_id="default",
+        mode="pass-fail",
+        source_name="solution.cpp",
+        source_path=f"{work_root}/source/solution.cpp",
+        work_root=work_root,
+        compile_hash="2" * 32,
+        run_hash="3" * 32,
+        compare_hash="4" * 32,
+        source_hash=_HASH,
+        compile_config_json="{}",
+        run_config_json="{}",
+        compare_config_json="{}",
+        expected_behavior="accepted",
+        verification_source="run.execute",
+        force_recompile=0,
+        lease_owner="",
+        status="queued",
+        created_at=_NOW,
+        case_rows=case_rows,
+    )
+
+
+class TestJudgehostStateLifecycle(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = JudgehostStateStore(id_base=100)
+
+    def test_append_and_finalization_claim_are_serializable(self) -> None:
+        append_first_job = _create_job(
+            self.store,
+            task_id="task-append-first",
+            run_id="run-append-first",
+            work_root="/tmp/append-first",
+            case_rows=[_case_row("task-append-first", "run-append-first", "001.in", 1, status="reported")],
+        )
+        appended = self.store.append_cases_to_job(
+            job_id=append_first_job,
+            case_rows=[_case_row("task-later", "run-later", "002.in", 1)],
+            now_text=_NOW,
+        )
+        self.assertEqual(appended["outcome"], "appended")
+        self.assertIsNone(self.store.claim_job_finalization(append_first_job, now_text=_NOW))
+
+        claim_first_job = _create_job(
+            self.store,
+            task_id="task-claim-first",
+            run_id="run-claim-first",
+            work_root="/tmp/claim-first",
+            case_rows=[_case_row("task-claim-first", "run-claim-first", "001.in", 1, status="reported")],
+        )
+        self.assertIsNotNone(self.store.claim_job_finalization(claim_first_job, now_text=_NOW))
+        closed = self.store.append_cases_to_job(
+            job_id=claim_first_job,
+            case_rows=[_case_row("task-too-late", "run-too-late", "002.in", 1)],
+            now_text=_NOW,
+        )
+        self.assertEqual(closed["outcome"], "closed")
+        self.assertEqual(len(self.store.cases_for_job(claim_first_job)), 1)
+
+    def test_task_cases_cannot_span_jobs(self) -> None:
+        first_job = _create_job(
+            self.store,
+            task_id="task-first-job",
+            run_id="run-first-job",
+            work_root="/tmp/first-job",
+            case_rows=[_case_row("task-first-job", "run-first-job", "001.in", 1)],
+        )
+        second_job = _create_job(
+            self.store,
+            task_id="task-second-job",
+            run_id="run-second-job",
+            work_root="/tmp/second-job",
+            case_rows=[_case_row("task-second-job", "run-second-job", "001.in", 1)],
+        )
+        self.assertNotEqual(first_job, second_job)
+        with self.assertRaisesRegex(RuntimeError, "already belong"):
+            self.store.append_cases_to_job(
+                job_id=second_job,
+                case_rows=[_case_row("task-first-job", "run-first-job", "002.in", 2)],
+                now_text=_NOW,
+            )
+        duplicate = self.store.append_cases_to_job(
+            job_id=first_job,
+            case_rows=[_case_row("task-first-job", "run-first-job", "001.in", 1)],
+            now_text=_NOW,
+        )
+        self.assertEqual(duplicate["outcome"], "duplicate")
+        with self.assertRaisesRegex(RuntimeError, "case set is immutable"):
+            self.store.append_cases_to_job(
+                job_id=first_job,
+                case_rows=[
+                    _case_row("task-first-job", "run-first-job", "001.in", 1),
+                    _case_row("task-first-job", "run-first-job", "002.in", 2),
+                ],
+                now_text=_NOW,
+            )
+
+
+class TestJudgehostLifecycle(SmokeBase):
+    def _service(self) -> Judgehost:
+        service = Judgehost(
+            config.db,
+            config.workspace_service,
+            config.fs_manager,
+            config.settings,
+            config.constants,
+            judge_fs_index_service=config.judge_fs_index_service,
+        )
+        service.state.enabled = True
+        service.state.api_token = "test-token"
+        service.state.api_username = "judgehost"
+        service.state.include_build_payload = True
+        return service
+
+    def _work_root(self) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="judgehost-lifecycle-")).resolve()
+        (root / "source").mkdir()
+        (root / "source" / "solution.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+        self.addCleanup(shutil.rmtree, root, True)
+        return root
+
+    @staticmethod
+    def _add_task(service: Judgehost, task_id: str, run_id: str, *, lease_owner: str) -> None:
+        with service.state.state_lock:
+            service.state.tasks_by_id[task_id] = {
+                "id": task_id,
+                "run_id": run_id,
+                "problem_slug": "owner/problem",
+                "username": "owner",
+                "artifact_verification_id": "",
+                "verification_id": "",
+                "mode": "pass-fail",
+                "status": service.STATUS_LEASED,
+                "payload": {
+                    "task_kind": "solution-run",
+                    "verification_source": "run.execute",
+                    "source_path": "solutions/ac.cpp",
+                },
+                "result": {},
+                "persist_verification_run": False,
+                "error_text": "",
+                "lease_owner": lease_owner,
+                "lease_expires_at": "",
+                "created_at": _NOW,
+                "updated_at": _NOW,
+                "completed_at": "",
+                "attempt_count": 1,
+                "summary": {
+                    "source": "solutions/ac.cpp",
+                    "tests": [],
+                    "compile_diagnostics": [],
+                },
+                "enqueue_fingerprint": "",
+            }
+            service.state.task_id_by_run[run_id] = task_id
+
+    @staticmethod
+    def _report_case(store: JudgehostStateStore, case_id: int, hostname: str) -> bool:
+        return store.report_case_result(
+            case_id,
+            lease_owner=hostname,
+            runresult="correct",
+            runtime_sec=0.001,
+            cpu_sec=0.001,
+            wall_sec=0.002,
+            memory_kb=1024,
+            output_run_rel="",
+            output_error_rel="",
+            output_system_rel="",
+            output_diff_rel="",
+            metadata_rel="",
+            compare_metadata_rel="",
+            team_message_rel="",
+            score_text="",
+            updated_at=_NOW,
+        )
+
+    def test_task_waits_for_all_own_cases_before_job_cleanup(self) -> None:
+        service = self._service()
+        store = service.state.judgehost_state_store
+        task_id, run_id = "task-two-cases", "run-two-cases"
+        self._add_task(service, task_id, run_id, lease_owner="host-a")
+        work_root = self._work_root()
+        job_id = _create_job(
+            store,
+            task_id=task_id,
+            run_id=run_id,
+            work_root=str(work_root),
+            case_rows=[
+                _case_row(task_id, run_id, "001.in", 1),
+                _case_row(task_id, run_id, "002.in", 2),
+            ],
+        )
+        store.record_compile_result(
+            job_id,
+            compile_success=1,
+            compile_output_b64="",
+            compile_metadata_b64="",
+            lease_owner="host-a",
+            updated_at=_NOW,
+        )
+        cases = store.lease_cases(job_id, hostname="host-a", limit=2, now_text=_NOW)
+
+        self.assertTrue(self._report_case(store, int(cases[0]["id"]), "host-a"))
+        service.result._domjudge_finalize_if_ready(job_id)
+        self.assertEqual(service.state.tasks_by_id[task_id]["status"], service.STATUS_LEASED)
+        self.assertEqual(store.fetch_job(job_id)["status"], "leased")
+        self.assertTrue(work_root.is_dir())
+
+        self.assertTrue(self._report_case(store, int(cases[1]["id"]), "host-a"))
+        service.result._domjudge_finalize_if_ready(job_id)
+        self.assertEqual(service.state.tasks_by_id[task_id]["status"], service.STATUS_COMPLETED)
+        self.assertEqual(store.fetch_job(job_id)["status"], "completed")
+        self.assertFalse(work_root.exists())
+
+    def test_grouped_job_finalizes_each_task_once_across_hosts(self) -> None:
+        service = self._service()
+        store = service.state.judgehost_state_store
+        first_task, first_run = "task-group-a", "run-group-a"
+        second_task, second_run = "task-group-b", "run-group-b"
+        self._add_task(service, first_task, first_run, lease_owner="host-a")
+        self._add_task(service, second_task, second_run, lease_owner="host-b")
+        work_root = self._work_root()
+        job_id = _create_job(
+            store,
+            task_id=first_task,
+            run_id=first_run,
+            work_root=str(work_root),
+            group_key="shared-group",
+            case_rows=[_case_row(first_task, first_run, "001.in", 1)],
+        )
+        appended = store.append_cases_to_job(
+            job_id=job_id,
+            case_rows=[_case_row(second_task, second_run, "002.in", 1)],
+            now_text=_NOW,
+        )
+        self.assertEqual(appended["outcome"], "appended")
+        self.assertEqual(store.job_for_task(second_task)["job_id"], job_id)
+        store.record_compile_result(
+            job_id,
+            compile_success=1,
+            compile_output_b64="",
+            compile_metadata_b64="",
+            lease_owner="host-a",
+            updated_at=_NOW,
+        )
+        first_case = store.lease_cases(job_id, hostname="host-a", limit=1, now_text=_NOW)[0]
+        second_case = store.lease_cases(job_id, hostname="host-b", limit=1, now_text=_NOW)[0]
+        service.state.tasks_by_id[second_task]["lease_expires_at"] = "2000-01-01T00:00:00+00:00"
+        service.queue._requeue_expired_leases(force=True)
+        self.assertEqual(service.state.tasks_by_id[second_task]["status"], service.STATUS_LEASED)
+        self.assertEqual(service.state.tasks_by_id[second_task]["lease_owner"], "host-b")
+
+        published: list[tuple[str, str]] = []
+        original_publish = service.result._publish_verification_case_result
+        original_finalize = service.queue.finalize_domjudge_task
+
+        def record_publish(*, task_id: str, test_name: str, case_result: dict[str, object]) -> None:
+            published.append((task_id, test_name))
+            original_publish(task_id=task_id, test_name=test_name, case_result=case_result)
+
+        with (
+            patch.object(service.result, "_publish_verification_case_result", side_effect=record_publish),
+            patch.object(service.queue, "finalize_domjudge_task", wraps=original_finalize) as finalize_task,
+        ):
+            self.assertFalse(self._report_case(store, int(first_case["id"]), "host-b"))
+            self.assertTrue(self._report_case(store, int(first_case["id"]), "host-a"))
+            service.result._domjudge_finalize_if_ready(job_id)
+            self.assertEqual(service.state.tasks_by_id[first_task]["status"], service.STATUS_COMPLETED)
+            self.assertEqual(service.state.tasks_by_id[second_task]["status"], service.STATUS_LEASED)
+            self.assertTrue(work_root.exists())
+            service.state.tasks_by_id[first_task]["completed_at"] = "2000-01-01T00:00:00+00:00"
+            self.assertEqual(service.queue._prune_terminal_tasks(), 0)
+            self.assertIn(first_task, service.state.tasks_by_id)
+
+            self.assertTrue(self._report_case(store, int(second_case["id"]), "host-b"))
+            service.result._domjudge_finalize_if_ready(job_id)
+
+        self.assertEqual(finalize_task.call_count, 2)
+        self.assertEqual(
+            {first_task, second_task},
+            {
+                task_id
+                for task_id in (first_task, second_task)
+                if service.state.tasks_by_id[task_id]["status"] == service.STATUS_COMPLETED
+            },
+        )
+        self.assertEqual(service.state.tasks_by_id[first_task]["lease_owner"], "")
+        self.assertEqual(service.state.tasks_by_id[second_task]["lease_owner"], "")
+        self.assertNotIn("internal-finalizer", service.state.hosts_state)
+        self.assertTrue({(first_task, "001.in"), (second_task, "002.in")}.issubset(set(published)))
+        self.assertEqual(store.fetch_job(job_id)["status"], "completed")
+        self.assertFalse(work_root.exists())
+
+    def test_finalizing_job_retries_incomplete_steps_before_cleanup(self) -> None:
+        service = self._service()
+        store = service.state.judgehost_state_store
+        task_id, run_id = "task-finalize-retry", "run-finalize-retry"
+        self._add_task(service, task_id, run_id, lease_owner="host-a")
+        work_root = self._work_root()
+        job_id = _create_job(
+            store,
+            task_id=task_id,
+            run_id=run_id,
+            work_root=str(work_root),
+            case_rows=[_case_row(task_id, run_id, "001.in", 1)],
+        )
+        case_row = store.lease_cases(job_id, hostname="host-a", limit=1, now_text=_NOW)[0]
+        self.assertTrue(self._report_case(store, int(case_row["id"]), "host-a"))
+
+        with patch.object(
+            service.result,
+            "_domjudge_publish_reported_case",
+            side_effect=RuntimeError("transient publish failure"),
+        ), patch("app.service.judgehost.result.logger.exception"):
+            service.result._domjudge_finalize_if_ready(job_id)
+
+        self.assertEqual(store.fetch_job(job_id)["status"], "finalizing")
+        self.assertEqual(store.finalizing_job_ids(), [job_id])
+        self.assertEqual(service.state.tasks_by_id[task_id]["status"], service.STATUS_LEASED)
+        self.assertTrue(work_root.exists())
+
+        with patch.object(
+            service.result,
+            "_domjudge_finalize_task_if_ready",
+            side_effect=RuntimeError("transient aggregation failure"),
+        ), patch("app.service.judgehost.result.logger.exception"), patch(
+            "app.service.judgehost.result.logger.error"
+        ):
+            service.result._domjudge_finalize_if_ready(job_id)
+
+        self.assertEqual(store.fetch_job(job_id)["status"], "finalizing")
+        self.assertEqual(service.state.tasks_by_id[task_id]["status"], service.STATUS_LEASED)
+        self.assertTrue(work_root.exists())
+
+        service.result._domjudge_finalize_if_ready(job_id)
+
+        self.assertEqual(store.fetch_job(job_id)["status"], "completed")
+        self.assertEqual(service.state.tasks_by_id[task_id]["status"], service.STATUS_COMPLETED)
+        self.assertFalse(work_root.exists())
+
+    def test_cache_compile_failure_and_cancel_use_common_finalizer(self) -> None:
+        for scenario in ("cache", "compile-failure", "cancel"):
+            with self.subTest(scenario=scenario):
+                service = self._service()
+                store = service.state.judgehost_state_store
+                task_id, run_id = f"task-{scenario}", f"run-{scenario}"
+                self._add_task(service, task_id, run_id, lease_owner="host-a")
+                work_root = self._work_root()
+                job_id = _create_job(
+                    store,
+                    task_id=task_id,
+                    run_id=run_id,
+                    work_root=str(work_root),
+                    case_rows=[
+                        _case_row(task_id, run_id, "001.in", 1),
+                        *(
+                            [_case_row(task_id, run_id, "002.in", 2)]
+                            if scenario == "cancel"
+                            else []
+                        ),
+                    ],
+                )
+                if scenario == "cache":
+                    case_id = int(store.cases_for_job(job_id)[0]["id"])
+                    store.apply_cached_case_results(
+                        cached_rows=[
+                            {
+                                "case_id": case_id,
+                                "runresult": "correct",
+                                "runtime_sec": 0.001,
+                                "cpu_sec": 0.001,
+                                "wall_sec": 0.002,
+                                "memory_kb": 1024,
+                                "output_run_rel": "",
+                                "output_error_rel": "",
+                                "output_system_rel": "",
+                                "output_diff_rel": "",
+                                "metadata_rel": "",
+                                "compare_metadata_rel": "",
+                                "team_message_rel": "",
+                                "score_text": "",
+                            }
+                        ],
+                        lease_owner="cache",
+                        now_text=_NOW,
+                    )
+                elif scenario == "compile-failure":
+                    store.record_compile_result(
+                        job_id,
+                        compile_success=0,
+                        compile_output_b64="",
+                        compile_metadata_b64="",
+                        lease_owner="host-a",
+                        updated_at=_NOW,
+                    )
+                else:
+                    leased = store.lease_cases(
+                        job_id,
+                        hostname="host-a",
+                        limit=1,
+                        now_text=_NOW,
+                    )
+                    self.assertEqual(len(leased), 1)
+
+                with patch.object(
+                    service.result,
+                    "_publish_verification_case_result",
+                    wraps=service.result._publish_verification_case_result,
+                ) as publish_case:
+                    if scenario == "cancel":
+                        self.assertEqual(
+                            service.cancel_tasks_for_runs(
+                                [run_id],
+                                reason="verification cancelled by user",
+                            ),
+                            0,
+                        )
+                        self.assertEqual(
+                            service.state.tasks_by_id[task_id]["status"],
+                            service.STATUS_LEASED,
+                        )
+                        self.assertEqual(service.cancel_domjudge_jobs_for_runs([run_id]), 1)
+                    else:
+                        service.result._domjudge_finalize_if_ready(job_id)
+                expected = service.STATUS_COMPLETED if scenario == "cache" else service.STATUS_FAILED
+                self.assertEqual(service.state.tasks_by_id[task_id]["status"], expected)
+                self.assertEqual(store.fetch_job(job_id)["status"], "completed" if scenario == "cache" else "failed")
+                if scenario == "cancel":
+                    self.assertEqual(publish_case.call_count, 2)
+                self.assertTrue(
+                    all(row["status"] in {"reported", "cancelled"} for row in store.cases_for_task(task_id))
+                )
+                self.assertFalse(work_root.exists())
+
+    def test_run_id_is_idempotent_only_for_identical_payload(self) -> None:
+        service = self._service()
+        sequence = 0
+
+        def build_payload(**kwargs) -> dict[str, object]:
+            nonlocal sequence
+            sequence += 1
+            return {
+                "source_name": "solution.cpp",
+                "source_label": "solution.cpp",
+                "source_b64": "eA==",
+                "task_kind": "solution-run",
+                "verification_payload": {},
+                "selected_tests": list(kwargs["selected_tests"]),
+                "enqueued_at": f"{_NOW}-{sequence}",
+            }
+
+        args = {
+            "problem": self.problem,
+            "username": self.user,
+            "artifact_verification_id": "artifact",
+            "mode": "pass-fail",
+            "submission_path": "solutions/ac.cpp",
+            "upload_content": None,
+            "upload_filename": None,
+            "run_id": "run-idempotent",
+            "selected_tests": ["001.in"],
+            "verification_id": "verification-idempotent",
+            "verification_run_ids": ["run-idempotent"],
+            "expected_behavior": "accepted",
+            "verification_source": "run.execute",
+        }
+        with (
+            patch.object(service.enqueue, "_build_task_payload", side_effect=build_payload),
+            patch.object(
+                service.enqueue,
+                "_domjudge_precomputed_fields_from_payload",
+                return_value={"run_config": {"pass_limit": 1}},
+            ),
+            patch.object(service.toolkit, "group_key", return_value=""),
+            patch.object(service.dispatch, "_domjudge_try_prequeue_cache_finalize", return_value=None),
+        ):
+            task_id = service.enqueue_task(**args)
+            self.assertEqual(service.enqueue_task(**args), task_id)
+            with self.assertRaisesRegex(RuntimeError, "run id reused with different payload"):
+                service.enqueue_task(**{**args, "selected_tests": ["002.in"]})

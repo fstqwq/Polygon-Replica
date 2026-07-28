@@ -152,6 +152,38 @@ Current important endpoints:
 
 Authentication is separate from session auth and uses judgehost credentials.
 
+## Judgehost Lifecycle
+
+The runtime keeps four distinct lifecycle layers:
+
+- `verification_tasks` rows are durable per-case product results. A case report updates its matching row immediately and only once.
+- A judgehost task has an immutable case set. It becomes terminal only after all of its own cases are `reported` or `cancelled`.
+- A DOMjudge case is leased independently. A disconnected host may release `leased` back to `pending`; a result moves it to `reported`.
+- A DOMjudge job is a temporary execution batch. Grouped jobs may contain several tasks, but they are not verification boundaries.
+
+Cancellation moves both pending and leased cases for the cancelled run directly
+to `cancelled`; late judgedaemon callbacks are acknowledged without reviving
+the case. A compact terminal task remains retained with its runtime-scoped job,
+so task retention cannot break later job aggregation or `run_id` fingerprint
+checks.
+
+Job closure is an atomic claim. The state store rechecks all job cases and changes
+`queued/leased` to `finalizing` under the same lock and transaction used by case
+append. A task arriving after that claim receives a new grouped job instead of
+reopening the old one.
+
+Later judgehost polls and duplicate result callbacks retry jobs already in
+`finalizing`. A transient publication failure therefore retains the work root
+instead of stranding an unresumable job.
+
+Case publication, task result aggregation, and task-terminal notification finish
+before the job becomes `completed/failed`. Only then is the job work root removed.
+Executable scripts have a different lifetime: they remain runtime-scoped and are
+cleared at service startup, not when an individual job or verification finishes.
+
+`run_id` identifies one immutable judgehost task. Repeating the same request is
+idempotent; reusing the same `run_id` with a different payload is rejected.
+
 ## Cache Behavior
 
 Current cache behavior for execution results:

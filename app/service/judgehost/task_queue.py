@@ -25,6 +25,7 @@ from .toolkit import DomjudgeToolkit
 
 
 class TaskQueue:
+    STATUS_ENQUEUING = "enqueuing"
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
     STATUS_COMPLETED = "completed"
@@ -116,6 +117,8 @@ class TaskQueue:
                 task_status = task["status"]
                 if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
                     continue
+                if self._s.judgehost_state_store.job_for_task(str(task["id"])) is not None:
+                    continue
                 task["status"] = self.STATUS_QUEUED
                 task["lease_owner"] = ""
                 task["lease_expires_at"] = ""
@@ -187,6 +190,11 @@ class TaskQueue:
                     continue
                 lease_exp = parse_iso_utc(task.get("lease_expires_at"))
                 if lease_exp is None or lease_exp >= now_dt:
+                    continue
+                # Once a task owns immutable cases, the DOMjudge job/case
+                # lifecycle is authoritative. Requeueing the top-level task
+                # would submit the same case set a second time.
+                if self._s.judgehost_state_store.job_for_task(str(task["id"])) is not None:
                     continue
                 task["status"] = self.STATUS_QUEUED
                 task["lease_owner"] = ""
@@ -322,6 +330,17 @@ class TaskQueue:
             )
             return True
 
+    def renew_domjudge_task_lease(self, task_id: str) -> bool:
+        if not task_id:
+            return False
+        with self._s.state_lock:
+            task = self._s.tasks_by_id.get(task_id)
+            if task is None or task["status"] != self.STATUS_LEASED:
+                return False
+            task["lease_expires_at"] = now_iso_after(self._s.lease_sec)
+            task["updated_at"] = now_iso()
+            return True
+
     def load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
         if not run_id:
             return {}
@@ -415,7 +434,41 @@ class TaskQueue:
         hostname: str,
         payload: dict[str, object],
         notify_terminal: bool = True,
-        allow_lease_owner_mismatch: bool = False,
+    ) -> dict[str, object]:
+        return self._report_result(
+            task_id=task_id,
+            hostname=hostname,
+            payload=payload,
+            notify_terminal=notify_terminal,
+            enforce_lease_owner=True,
+            record_host_event=True,
+        )
+
+    def finalize_domjudge_task(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, object],
+        notify_terminal: bool = True,
+    ) -> dict[str, object]:
+        return self._report_result(
+            task_id=task_id,
+            hostname="internal-finalizer",
+            payload=payload,
+            notify_terminal=notify_terminal,
+            enforce_lease_owner=False,
+            record_host_event=False,
+        )
+
+    def _report_result(
+        self,
+        *,
+        task_id: str,
+        hostname: str,
+        payload: dict[str, object],
+        notify_terminal: bool,
+        enforce_lease_owner: bool,
+        record_host_event: bool,
     ) -> dict[str, object]:
         if not task_id:
             raise RuntimeError("task_id is required")
@@ -453,7 +506,7 @@ class TaskQueue:
                 }
             if current_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
                 raise RuntimeError(f"judgehost task is not reportable (status={current_status})")
-            if lease_owner and lease_owner != hostname and not bool(allow_lease_owner_mismatch):
+            if enforce_lease_owner and lease_owner and lease_owner != hostname:
                 raise RuntimeError("judgehost task lease owner mismatch")
             run_id = row["run_id"]
             verification_id = row["verification_id"]
@@ -513,16 +566,17 @@ class TaskQueue:
                 row["summary"] = dict(summary_obj)
                 row["run_status"] = run_status
                 row["error_text"] = error_text
-                row["lease_owner"] = hostname
+                row["lease_owner"] = hostname if record_host_event else ""
                 row["lease_expires_at"] = ""
                 row["updated_at"] = finished_at
                 row["completed_at"] = finished_at
-        self._record_host_event_conn(
-            hostname=hostname,
-            action="report",
-            task_id=task_id,
-            run_id=run_id,
-        )
+        if record_host_event:
+            self._record_host_event_conn(
+                hostname=hostname,
+                action="report",
+                task_id=task_id,
+                run_id=run_id,
+            )
         if verification_id and notify_terminal:
             notify_verification_task_terminal(verification_id, task_id)
         self._maybe_prune_terminal_tasks()
@@ -548,6 +602,12 @@ class TaskQueue:
                 if completed_at is None:
                     continue
                 if (now_dt - completed_at).total_seconds() < float(retention):
+                    continue
+                job_row = self._s.judgehost_state_store.job_for_task(task_id)
+                # Jobs are runtime-scoped and already retain the run identity.
+                # Keep their compact task rows for the same lifetime so a
+                # repeated run_id can still be checked against its fingerprint.
+                if job_row is not None:
                     continue
                 stale = self._s.tasks_by_id.pop(task_id, None)
                 if stale is None:
@@ -921,7 +981,6 @@ class TaskQueue:
             return 0
         now_text = now_iso()
         affected = 0
-        leased_run_ids = self._run_ids_with_leased_cases(run_ids)
         with self._s.state_lock:
             for run_id in run_ids:
                 task_id = self._s.task_id_by_run.get(run_id)
@@ -930,9 +989,16 @@ class TaskQueue:
                 row = self._s.tasks_by_id.get(task_id)
                 if row is None:
                     continue
-                if row["status"] not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+                if row["status"] not in {
+                    self.STATUS_ENQUEUING,
+                    self.STATUS_QUEUED,
+                    self.STATUS_LEASED,
+                }:
                     continue
-                if run_id in leased_run_ids:
+                # A task with immutable DOMjudge cases must terminate through
+                # case cancellation so every durable verification row is
+                # published before the task-terminal notification.
+                if self._s.judgehost_state_store.job_for_task(task_id) is not None:
                     continue
                 row["status"] = self.STATUS_FAILED
                 row["payload"] = compact_payload_for_retention(row.get("payload"))
@@ -956,7 +1022,11 @@ class TaskQueue:
         with self._s.state_lock:
             for row in self._s.tasks_by_id.values():
                 status = row["status"]
-                if status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+                if status not in {
+                    self.STATUS_ENQUEUING,
+                    self.STATUS_QUEUED,
+                    self.STATUS_LEASED,
+                }:
                     continue
                 run_id = row["run_id"]
                 verification_id = row["verification_id"]
@@ -969,6 +1039,8 @@ class TaskQueue:
                             "verification_id": verification_id,
                         }
                     )
+                if self._s.judgehost_state_store.job_for_task(str(row["id"])) is not None:
+                    continue
                 row["status"] = self.STATUS_FAILED
                 row["payload"] = compact_payload_for_retention(row.get("payload"))
                 row["result"] = {"cancelled": True, "reason": reason, "error": reason}
@@ -1000,15 +1072,14 @@ class TaskQueue:
         return removed
 
 
-    def cancel_domjudge_jobs_for_runs(self, run_ids: list[str], *, final_status: str = "failed") -> int:
+    def cancel_domjudge_jobs_for_runs(self, run_ids: list[str]) -> list[int]:
         return self._s.judgehost_state_store.cancel_jobs_for_runs(
             run_ids=run_ids,
-            final_status=(final_status or "failed"),
             now_text=now_iso(),
         )
 
 
-    def cancel_all_domjudge_inflight(self) -> int:
+    def cancel_all_domjudge_inflight(self) -> list[int]:
         return self._s.judgehost_state_store.cancel_all_inflight(now_text=now_iso())
 
     def forget_domjudge_runs(self, run_ids: list[str]) -> int:

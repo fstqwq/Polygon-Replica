@@ -71,6 +71,17 @@ class JudgehostCaseRow(TypedDict):
     updated_at: str
 
 
+class JudgehostJobAppendResult(TypedDict):
+    job_id: int
+    outcome: str
+    inserted: int
+
+
+class JudgehostJobFinalizationClaim(TypedDict):
+    job: JudgehostJobRow
+    cases: list[JudgehostCaseRow]
+
+
 class JudgehostStateStore:
     def __init__(self, lock: threading.RLock | None = None, *, id_base: int | None = None):
         self._lock = threading.RLock() if lock is None else lock
@@ -171,6 +182,14 @@ class JudgehostStateStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_jobs_group_key ON judgehost_domjudge_jobs(group_key)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_jobs_lease ON judgehost_domjudge_jobs(lease_owner,updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_job ON judgehost_domjudge_cases(job_id,ordinal ASC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jh_cases_task "
+                "ON judgehost_domjudge_cases(task_id,ordinal ASC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jh_cases_run "
+                "ON judgehost_domjudge_cases(run_id,ordinal ASC)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jh_cases_status ON judgehost_domjudge_cases(status,job_id,ordinal ASC)")
             for table_name in ("judgehost_domjudge_jobs", "judgehost_domjudge_cases"):
                 conn.execute(
@@ -319,16 +338,47 @@ class JudgehostStateStore:
             [int(job_id)],
         )
 
+    def cases_for_task(self, task_id: str) -> list[JudgehostCaseRow]:
+        return self._fetch_all(
+            """
+            SELECT *
+            FROM judgehost_domjudge_cases
+            WHERE task_id=?
+            ORDER BY ordinal ASC, id ASC
+            """,
+            [task_id],
+        )
+
     def fetch_job(self, job_id: int) -> JudgehostJobRow | None:
         row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE job_id=? LIMIT 1", [int(job_id)])
         return None if row is None else row
 
     def job_for_task(self, task_id: str) -> JudgehostJobRow | None:
-        row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE task_id=? LIMIT 1", [task_id])
+        row = self._fetch_one(
+            """
+            SELECT j.*
+            FROM judgehost_domjudge_jobs j
+            JOIN judgehost_domjudge_cases c ON c.job_id=j.job_id
+            WHERE c.task_id=?
+            ORDER BY j.job_id DESC
+            LIMIT 1
+            """,
+            [task_id],
+        )
         return None if row is None else row
 
     def job_for_run(self, run_id: str) -> JudgehostJobRow | None:
-        row = self._fetch_one("SELECT * FROM judgehost_domjudge_jobs WHERE run_id=? LIMIT 1", [run_id])
+        row = self._fetch_one(
+            """
+            SELECT j.*
+            FROM judgehost_domjudge_jobs j
+            JOIN judgehost_domjudge_cases c ON c.job_id=j.job_id
+            WHERE c.run_id=?
+            ORDER BY j.job_id DESC
+            LIMIT 1
+            """,
+            [run_id],
+        )
         return None if row is None else row
 
     def job_for_group_key(self, group_key: str) -> JudgehostJobRow | None:
@@ -445,21 +495,121 @@ class JudgehostStateStore:
     def job_finalize_row(self, job_id: int) -> dict[str, object] | None:
         return self._fetch_one(
             """
-            SELECT task_id,run_id,group_key,status,compile_success,compile_output_b64,compile_metadata_b64,work_root,run_config_json,
-                   source_path,source_name,compile_hash,run_hash,compare_hash
+            SELECT
+                task_id,run_id,group_key,status,compile_success,
+                compile_output_b64,compile_metadata_b64,debug_text,
+                work_root,run_config_json,source_path,source_name,
+                compile_hash,run_hash,compare_hash
             FROM judgehost_domjudge_jobs
             WHERE job_id=?
             """,
             [int(job_id)],
         )
 
-    def set_job_terminal_status(self, job_id: int, *, status: str, completed_at: str, updated_at: str) -> None:
+    def finalizing_job_ids(self) -> list[int]:
+        rows = self._fetch_all(
+            """
+            SELECT job_id
+            FROM judgehost_domjudge_jobs
+            WHERE status='finalizing'
+            ORDER BY updated_at ASC, job_id ASC
+            """,
+            [],
+        )
+        return [int(row["job_id"]) for row in rows]
+
+    def claim_job_finalization(
+        self,
+        job_id: int,
+        *,
+        now_text: str,
+        force_runresult: str = "",
+    ) -> JudgehostJobFinalizationClaim | None:
         with self._lock:
-            self._conn.execute(
-                "UPDATE judgehost_domjudge_jobs SET status=?, completed_at=?, updated_at=? WHERE job_id=?",
+            job_cursor = self._conn.execute(
+                "SELECT * FROM judgehost_domjudge_jobs WHERE job_id=? LIMIT 1",
+                [int(job_id)],
+            )
+            job_row = self._row_to_dict(job_cursor, job_cursor.fetchone())
+            if job_row is None:
+                return None
+            job_status = str(job_row["status"] or "")
+            if job_status not in {"queued", "leased", "finalizing"}:
+                return None
+            if job_status != "finalizing":
+                terminal_runresult = force_runresult
+                compile_success = job_row["compile_success"]
+                if compile_success is not None and int(compile_success) == 0:
+                    terminal_runresult = "compiler-error"
+                if terminal_runresult:
+                    self._conn.execute(
+                        """
+                        UPDATE judgehost_domjudge_cases
+                        SET status='reported', runresult=?, runtime_sec=0, cpu_sec=0,
+                            wall_sec=0, memory_kb=0, updated_at=?
+                        WHERE job_id=? AND status IN ('pending','leased')
+                        """,
+                        [terminal_runresult, now_text, int(job_id)],
+                    )
+            cases_cursor = self._conn.execute(
+                """
+                SELECT *
+                FROM judgehost_domjudge_cases
+                WHERE job_id=?
+                ORDER BY ordinal ASC, id ASC
+                """,
+                [int(job_id)],
+            )
+            cases = self._rows_to_dicts(cases_cursor, cases_cursor.fetchall())
+            if not cases or any(
+                str(row["status"] or "") not in {"reported", "cancelled"}
+                for row in cases
+            ):
+                self._conn.commit()
+                return None
+            if job_status != "finalizing":
+                claimed = self._conn.execute(
+                    """
+                    UPDATE judgehost_domjudge_jobs
+                    SET status='finalizing', lease_owner=NULL, updated_at=?
+                    WHERE job_id=? AND status IN ('queued','leased')
+                    """,
+                    [now_text, int(job_id)],
+                )
+                if int(claimed.rowcount or 0) != 1:
+                    self._conn.rollback()
+                    return None
+                job_row = {
+                    **job_row,
+                    "status": "finalizing",
+                    "lease_owner": "",
+                    "updated_at": now_text,
+                }
+            self._conn.commit()
+        return {
+            "job": job_row,
+            "cases": cases,
+        }
+
+    def set_job_terminal_status(
+        self,
+        job_id: int,
+        *,
+        status: str,
+        completed_at: str,
+        updated_at: str,
+    ) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                UPDATE judgehost_domjudge_jobs
+                SET status=?, completed_at=?, updated_at=?
+                WHERE job_id=? AND status='finalizing'
+                """,
                 [status, completed_at, updated_at, int(job_id)],
             )
             self._conn.commit()
+        return int(cursor.rowcount or 0) == 1
 
     def record_compile_result(
         self,
@@ -483,27 +633,12 @@ class JudgehostStateStore:
             self._conn.commit()
         return int(cursor.rowcount or 0) > 0
 
-    def mark_compile_failed_cases(self, job_id: int, *, updated_at: str) -> None:
-        self.mark_job_cases_reported(job_id, runresult="compiler-error", updated_at=updated_at)
-
-    def mark_job_cases_reported(self, job_id: int, *, runresult: str, updated_at: str) -> None:
-        with self._lock:
-            self._conn.execute(
-                """
-                UPDATE judgehost_domjudge_cases
-                SET status='reported', runresult=?, runtime_sec=0, cpu_sec=0, wall_sec=0, memory_kb=0, updated_at=?
-                WHERE job_id=? AND status<>'reported'
-                """,
-                [runresult, updated_at, int(job_id)],
-            )
-            self._conn.commit()
-
     def case_execution_row(self, case_id: int) -> dict[str, object] | None:
         return self._fetch_one(
             """
             SELECT
                 c.id,c.job_id,c.task_id,c.test_name,c.testcase_hash,c.testcase_input_hash,c.testcase_answer_hash,
-                c.input_ref,c.answer_ref,c.status AS case_status,
+                c.input_ref,c.answer_ref,c.status AS case_status,c.lease_owner AS case_lease_owner,
                 j.run_id,j.work_root,j.mode,j.source_name,j.source_path,j.status AS job_status,
                 j.group_key,
                 j.source_hash,j.compile_hash,j.run_hash,j.compare_hash,
@@ -572,7 +707,7 @@ class JudgehostStateStore:
                 UPDATE judgehost_domjudge_cases
                 SET status='reported', lease_owner=?, runresult=?, runtime_sec=?, cpu_sec=?, wall_sec=?, memory_kb=?,
                     output_run_rel=?, output_error_rel=?, output_system_rel=?, output_diff_rel=?, metadata_rel=?, compare_metadata_rel=?, team_message_rel=?, score_text=?, updated_at=?
-                WHERE id=? AND status='leased'
+                WHERE id=? AND status='leased' AND lease_owner=?
                 """,
                 [
                     lease_owner,
@@ -591,6 +726,7 @@ class JudgehostStateStore:
                     score_text,
                     updated_at,
                     int(case_id),
+                    lease_owner,
                 ],
             )
             self._conn.commit()
@@ -683,6 +819,13 @@ class JudgehostStateStore:
         case_rows: list[dict[str, object]],
     ) -> int:
         with self._lock:
+            case_task_ids = {
+                str(case_row.get("task_id") or task_id)
+                for case_row in case_rows
+            }
+            for case_task_id in case_task_ids:
+                if self._task_case_job_id_locked(case_task_id) is not None:
+                    raise RuntimeError("judgehost task cases already belong to another job")
             self._conn.execute(
                 """
                     INSERT INTO judgehost_domjudge_jobs(
@@ -758,13 +901,27 @@ class JudgehostStateStore:
             self._conn.commit()
         return job_id
 
+    def _task_case_job_id_locked(self, task_id: str) -> int | None:
+        cursor = self._conn.execute(
+            """
+            SELECT job_id
+            FROM judgehost_domjudge_cases
+            WHERE task_id=?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            [task_id],
+        )
+        row = self._row_to_dict(cursor, cursor.fetchone())
+        return None if row is None else int(row["job_id"])
+
     def append_cases_to_job(
         self,
         *,
         job_id: int,
         case_rows: list[dict[str, object]],
         now_text: str,
-    ) -> dict[str, object]:
+    ) -> JudgehostJobAppendResult:
         with self._lock:
             job_cursor = self._conn.execute(
                 """
@@ -777,9 +934,64 @@ class JudgehostStateStore:
             )
             job_row = self._row_to_dict(job_cursor, job_cursor.fetchone())
             if job_row is None:
-                return {"job_id": 0, "inserted": 0, "reactivated": False}
+                return {"job_id": 0, "outcome": "closed", "inserted": 0}
             job_status = str(job_row["status"] or "")
+            if job_status not in {"queued", "leased"}:
+                return {"job_id": int(job_id), "outcome": "closed", "inserted": 0}
             compile_success = job_row["compile_success"]
+            case_task_ids = {
+                str(case_row.get("task_id") or "")
+                for case_row in case_rows
+                if str(case_row.get("task_id") or "")
+            }
+            for case_task_id in case_task_ids:
+                existing_job_id = self._task_case_job_id_locked(case_task_id)
+                if existing_job_id is not None and existing_job_id != int(job_id):
+                    raise RuntimeError("judgehost task cases already belong to another job")
+                if existing_job_id is None:
+                    continue
+                existing_task_cursor = self._conn.execute(
+                    """
+                    SELECT
+                        run_id,test_name,testcase_id,testcase_hash,
+                        testcase_input_hash,testcase_answer_hash,input_ref,answer_ref
+                    FROM judgehost_domjudge_cases
+                    WHERE task_id=?
+                    ORDER BY test_name ASC, id ASC
+                    """,
+                    [case_task_id],
+                )
+                existing_task_rows = self._rows_to_dicts(
+                    existing_task_cursor,
+                    existing_task_cursor.fetchall(),
+                )
+
+                def _case_identity(row: dict[str, object]) -> tuple[object, ...]:
+                    return (
+                        row.get("run_id"),
+                        row.get("test_name"),
+                        row.get("testcase_id"),
+                        row.get("testcase_hash"),
+                        row.get("testcase_input_hash"),
+                        row.get("testcase_answer_hash"),
+                        row.get("input_ref"),
+                        row.get("answer_ref"),
+                    )
+
+                requested_identities = sorted(
+                    (
+                        _case_identity(case_row)
+                        for case_row in case_rows
+                        if str(case_row.get("task_id") or "") == case_task_id
+                    ),
+                    key=repr,
+                )
+                existing_identities = sorted(
+                    (_case_identity(row) for row in existing_task_rows),
+                    key=repr,
+                )
+                if requested_identities != existing_identities:
+                    raise RuntimeError("judgehost task case set is immutable")
             existing_cursor = self._conn.execute(
                 """
                 SELECT task_id,test_name,ordinal
@@ -798,7 +1010,6 @@ class JudgehostStateStore:
             if existing_rows:
                 next_ordinal = max(int(row["ordinal"] or 0) for row in existing_rows) + 1
             inserted = 0
-            inserted_pending = 0
             for case_row in case_rows:
                 case_task_id = str(case_row.get("task_id") or "")
                 case_run_id = str(case_row.get("run_id") or "")
@@ -873,72 +1084,15 @@ class JudgehostStateStore:
                             now_text,
                         ],
                     )
-                    if case_status == "pending":
-                        inserted_pending += 1
                 inserted += 1
                 existing_pairs.add(pair)
                 next_ordinal += 1
-            reactivated = False
-            if inserted_pending > 0 and job_status in {"completed", "failed"}:
-                self._conn.execute(
-                    """
-                    UPDATE judgehost_domjudge_jobs
-                    SET status='queued', lease_owner=NULL, completed_at=NULL, updated_at=?
-                    WHERE job_id=?
-                    """,
-                    [now_text, int(job_id)],
-                )
-                reactivated = True
             self._conn.commit()
-        return {"job_id": int(job_id), "inserted": inserted, "reactivated": reactivated}
-
-    def append_cases_to_task(
-        self,
-        *,
-        task_id: str,
-        run_id: str,
-        case_rows: list[dict[str, object]],
-        now_text: str,
-    ) -> dict[str, object]:
-        with self._lock:
-            job_cursor = self._conn.execute(
-                """
-                SELECT job_id,status,compile_success
-                FROM judgehost_domjudge_jobs
-                WHERE task_id=?
-                LIMIT 1
-                """,
-                [task_id],
-            )
-            job_row = self._row_to_dict(job_cursor, job_cursor.fetchone())
-            if job_row is None:
-                return {"job_id": 0, "inserted": 0, "reactivated": False}
-            job_id = int(job_row["job_id"])
-            existing_cursor = self._conn.execute(
-                """
-                SELECT test_name,ordinal
-                FROM judgehost_domjudge_cases
-                WHERE job_id=?
-                ORDER BY ordinal ASC, id ASC
-                """,
-                [job_id],
-            )
-            existing_rows = self._rows_to_dicts(existing_cursor, existing_cursor.fetchall())
-            existing_names = {str(row["test_name"] or "") for row in existing_rows}
-            result = self.append_cases_to_job(
-                job_id=job_id,
-                case_rows=[
-                    {
-                        **dict(case_row),
-                        "task_id": task_id,
-                        "run_id": run_id,
-                    }
-                    for case_row in case_rows
-                    if str(case_row.get("test_name") or "") not in existing_names
-                ],
-                now_text=now_text,
-            )
-        return result
+        return {
+            "job_id": int(job_id),
+            "outcome": "appended" if inserted > 0 else "duplicate",
+            "inserted": inserted,
+        }
 
     def release_prepared_job_for_queue(self, job_id: int, *, lease_owner: str, now_text: str) -> None:
         with self._lock:
@@ -1000,6 +1154,18 @@ class JudgehostStateStore:
     def lease_cases(self, job_id: int, *, hostname: str, limit: int, now_text: str) -> list[JudgehostCaseRow]:
         cap = max(1, min(256, int(limit)))
         with self._lock:
+            job_cursor = self._conn.execute(
+                """
+                SELECT status
+                FROM judgehost_domjudge_jobs
+                WHERE job_id=?
+                LIMIT 1
+                """,
+                [int(job_id)],
+            )
+            job_row = self._row_to_dict(job_cursor, job_cursor.fetchone())
+            if job_row is None or str(job_row["status"] or "") not in {"queued", "leased"}:
+                return []
             rows_cursor = self._conn.execute(
                 """
                 SELECT *
@@ -1017,7 +1183,7 @@ class JudgehostStateStore:
                 """
                 UPDATE judgehost_domjudge_jobs
                 SET lease_owner=?, status='leased', updated_at=?
-                WHERE job_id=?
+                WHERE job_id=? AND status IN ('queued','leased')
                 """,
                 [hostname, now_text, int(job_id)],
             )
@@ -1105,10 +1271,10 @@ class JudgehostStateStore:
             progress[run_id] = {"total": total, "reported": reported, "leased": leased}
         return progress
 
-    def cancel_jobs_for_runs(self, run_ids: list[str], *, final_status: str, now_text: str) -> int:
+    def cancel_jobs_for_runs(self, run_ids: list[str], *, now_text: str) -> list[int]:
         safe_run_ids = [run_id for run_id in run_ids if run_id]
         if not safe_run_ids:
-            return 0
+            return []
         placeholders = ",".join(("?" for _ in safe_run_ids))
         with self._lock:
             job_rows_cursor = self._conn.execute(
@@ -1123,66 +1289,28 @@ class JudgehostStateStore:
             job_rows = self._rows_to_dicts(job_rows_cursor, job_rows_cursor.fetchall())
             job_ids = [int(row["job_id"]) for row in job_rows if row is not None and row["job_id"] is not None]
             if not job_ids:
-                return 0
+                return []
             self._conn.execute(
                 f"""
                 UPDATE judgehost_domjudge_cases
                 SET status='cancelled',
                     lease_owner=NULL,
                     updated_at=?
-                WHERE run_id IN ({placeholders}) AND status='pending'
+                WHERE run_id IN ({placeholders}) AND status IN ('pending','leased')
                 """,
                 [now_text, *safe_run_ids],
             )
-            for job_id in job_ids:
-                counts_cursor = self._conn.execute(
-                    """
-                    SELECT
-                        SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_count,
-                        SUM(CASE WHEN status='leased' THEN 1 ELSE 0 END) AS leased_count
-                    FROM judgehost_domjudge_cases
-                    WHERE job_id=?
-                    """,
-                    [job_id],
-                )
-                counts_row = self._row_to_dict(counts_cursor, counts_cursor.fetchone())
-                pending_count = 0 if counts_row is None else int(counts_row["pending_count"] or 0)
-                leased_count = 0 if counts_row is None else int(counts_row["leased_count"] or 0)
-                if leased_count > 0:
-                    self._conn.execute(
-                        """
-                        UPDATE judgehost_domjudge_jobs
-                        SET updated_at=?
-                        WHERE job_id=? AND status IN ('queued','leased')
-                        """,
-                        [now_text, job_id],
-                    )
-                    continue
-                if pending_count > 0:
-                    self._conn.execute(
-                        """
-                        UPDATE judgehost_domjudge_jobs
-                        SET status='queued',
-                            lease_owner=NULL,
-                            updated_at=?
-                        WHERE job_id=? AND status IN ('queued','leased')
-                        """,
-                        [now_text, job_id],
-                    )
-                    continue
-                self._conn.execute(
-                    """
-                    UPDATE judgehost_domjudge_jobs
-                    SET status=?,
-                        lease_owner=NULL,
-                        completed_at=COALESCE(completed_at, ?),
-                        updated_at=?
-                    WHERE job_id=? AND status IN ('queued','leased')
-                    """,
-                    [final_status, now_text, now_text, job_id],
-                )
+            placeholders_jobs = ",".join("?" for _ in job_ids)
+            self._conn.execute(
+                f"""
+                UPDATE judgehost_domjudge_jobs
+                SET updated_at=?
+                WHERE job_id IN ({placeholders_jobs}) AND status IN ('queued','leased')
+                """,
+                [now_text, *job_ids],
+            )
             self._conn.commit()
-        return len(job_ids)
+        return job_ids
 
     def release_host_leases(self, hostname: str, *, now_text: str) -> tuple[int, int]:
         with self._lock:
@@ -1238,20 +1366,29 @@ class JudgehostStateStore:
             self._conn.commit()
         return int(cur.rowcount or 0)
 
-    def cancel_all_inflight(self, *, now_text: str) -> int:
+    def cancel_all_inflight(self, *, now_text: str) -> list[int]:
         with self._lock:
+            job_cursor = self._conn.execute(
+                """
+                SELECT job_id
+                FROM judgehost_domjudge_jobs
+                WHERE status IN ('queued','leased')
+                ORDER BY job_id ASC
+                """
+            )
+            job_rows = self._rows_to_dicts(job_cursor, job_cursor.fetchall())
+            job_ids = [int(row["job_id"]) for row in job_rows]
+            if not job_ids:
+                return []
             self._conn.execute(
                 """
                 UPDATE judgehost_domjudge_jobs
-                SET status='failed',
-                    lease_owner=NULL,
-                    updated_at=?,
-                    completed_at=COALESCE(completed_at, ?)
+                SET updated_at=?
                 WHERE status IN ('queued','leased')
                 """,
-                [now_text, now_text],
+                [now_text],
             )
-            case_upd = self._conn.execute(
+            self._conn.execute(
                 """
                 UPDATE judgehost_domjudge_cases
                 SET status='cancelled',
@@ -1262,7 +1399,7 @@ class JudgehostStateStore:
                 [now_text],
             )
             self._conn.commit()
-        return int(case_upd.rowcount or 0)
+        return job_ids
 
     def _fetch_one(self, sql: str, params: list[object]) -> dict[str, object] | None:
         with self._lock:

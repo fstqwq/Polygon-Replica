@@ -13,14 +13,12 @@ from app.service.judgehost.domjudge.cache import domjudge_source_hash
 from app.service.judgehost.limits import compile_output_kb, run_output_kb
 from app.service.judgehost.shared import _RUN_ID_RE, _VERIFICATION_ID_RE, domjudge_lower_text, domjudge_path_name, domjudge_text
 from app.service.judgehost.runtime import domjudge_bool, domjudge_parse_int
-from app.service.platform.hashing import domjudge_executable_hash
+from app.service.platform.hashing import domjudge_executable_hash, sha256_hex_json
 from app.service.run.runtime import RUN_TEST_NAME_RE
 from app.service.platform.testlib_source import workspace_testlib_header
 
 from .core import JudgehostCore
 from .dispatch import DispatchHandler
-from .payload_retention import compact_task_row_payload
-from .result import ResultProcessor
 from .state import JudgehostState
 from .toolkit import DomjudgeToolkit
 
@@ -35,13 +33,11 @@ class TaskEnqueue:
         state: JudgehostState,
         core: JudgehostCore,
         dispatch: DispatchHandler,
-        result: ResultProcessor,
         toolkit: DomjudgeToolkit,
     ) -> None:
         self._s = state
         self._core = core
         self._dispatch = dispatch
-        self._result = result
         self._toolkit = toolkit
 
     _JAVA_CLASS_DECL_RE = re.compile(
@@ -298,162 +294,13 @@ class TaskEnqueue:
         return (f"{entry_point}.java", entry_point)
 
     @staticmethod
-    def _payload_verification_tests(payload: dict[str, object]) -> list[dict[str, object]]:
-        verification_payload = cast(dict[str, object] | None, payload.get("verification_payload"))
-        if verification_payload is None:
-            return []
-        raw_tests = cast(list[dict[str, object]] | None, verification_payload.get("tests"))
-        return [] if raw_tests is None else [dict(item) for item in raw_tests]
-
-    @staticmethod
-    def _payload_test_names(payload: dict[str, object]) -> list[str]:
-        names: list[str] = []
-        for item in TaskEnqueue._payload_verification_tests(payload):
-            test_name = domjudge_text(item.get("name"))
-            if (not test_name) or (test_name in names):
-                continue
-            names.append(test_name)
-        return names
-
-    def _merge_existing_task_payload(
-        self,
-        *,
-        task_id: str,
-        payload: dict[str, object],
-        reactivated: bool,
-    ) -> None:
-        with self._s.state_lock:
-            row = self._s.tasks_by_id.get(task_id)
-            if row is None:
-                return
-            existing_payload = cast(dict[str, object], row.get("payload") or {})
-            merged_payload = dict(existing_payload)
-            merged_tests = TaskEnqueue._payload_verification_tests(existing_payload)
-            seen_names = {domjudge_text(item.get("name")) for item in merged_tests}
-            for item in TaskEnqueue._payload_verification_tests(payload):
-                test_name = domjudge_text(item.get("name"))
-                if (not test_name) or (test_name in seen_names):
-                    continue
-                merged_tests.append(dict(item))
-                seen_names.add(test_name)
-            verification_payload = cast(dict[str, object] | None, merged_payload.get("verification_payload"))
-            if verification_payload is None:
-                verification_payload = {}
-            verification_payload = dict(verification_payload)
-            verification_payload["tests"] = merged_tests
-            merged_payload["verification_payload"] = verification_payload
-            selected_tests = self._normalize_list(
-                cast(list[str] | None, existing_payload.get("selected_tests")),
-                matcher=RUN_TEST_NAME_RE,
-            )
-            for test_name in TaskEnqueue._payload_test_names(payload):
-                if test_name not in selected_tests:
-                    selected_tests.append(test_name)
-            merged_payload["selected_tests"] = selected_tests
-            row["payload"] = merged_payload
-            summary = cast(dict[str, object], row.get("summary") or {})
-            merged_summary = dict(summary)
-            merged_summary["selected_tests"] = list(selected_tests)
-            merged_summary["selected_tests_count"] = len(selected_tests)
-            row["summary"] = merged_summary
-            row["updated_at"] = now_iso()
-            if reactivated:
-                row["status"] = self.STATUS_QUEUED
-                row["lease_owner"] = ""
-                row["lease_expires_at"] = ""
-                row["completed_at"] = ""
-                row["error_text"] = ""
-                row["result"] = {}
-
-    def _append_cases_to_existing_task(
-        self,
-        *,
-        task_id: str,
-        payload: dict[str, object],
-    ) -> bool:
-        compile_only = self._toolkit.task_kind(payload) == self._TASK_KIND_COMPILE_ONLY
-        prepared = self._dispatch._domjudge_prepare_payload(payload, compile_only=compile_only)
-        run_id = domjudge_text(payload.get("run_id"))
-        if not run_id:
-            raise RuntimeError("run id is required for judgehost enqueue")
-        case_rows = self._dispatch._domjudge_case_rows(
-            task_id=task_id,
-            run_id=run_id,
-            tests_rows=prepared["tests_rows"],
-            main_correct=prepared["main_correct"],
-        )
-        requested_test_names = [str(case_row["test_name"] or "") for case_row in case_rows if str(case_row["test_name"] or "")]
-        if self._s.judgehost_state_store.job_for_task(task_id) is None:
-            self._merge_existing_task_payload(
-                task_id=task_id,
-                payload=payload,
-                reactivated=False,
-            )
-            return True
-        append_result = self._s.judgehost_state_store.append_cases_to_task(
-            task_id=task_id,
-            run_id=run_id,
-            case_rows=case_rows,
-            now_text=now_iso(),
-        )
-        inserted = int(append_result.get("inserted") or 0)
-        reactivated = bool(append_result.get("reactivated"))
-        if inserted <= 0:
-            missing_names = [
-                test_name
-                for test_name in requested_test_names
-                if self._s.judgehost_state_store.case_for_task(task_id, test_name) is None
-            ]
-            if missing_names:
-                raise RuntimeError(f"shared judgehost job append failed for {', '.join(missing_names)}")
-        if reactivated:
-            self._restore_existing_task_work_root(task_id=task_id, payload=payload)
-        self._merge_existing_task_payload(
-            task_id=task_id,
-            payload=payload,
-            reactivated=reactivated,
-        )
-        with self._s.state_lock:
-            row = self._s.tasks_by_id.get(task_id)
-            if row is not None:
-                compact_task_row_payload(row)
-        return True
-
-    def _restore_existing_task_work_root(
-        self,
-        *,
-        task_id: str,
-        payload: dict[str, object],
-    ) -> None:
-        compile_only = self._toolkit.task_kind(payload) == self._TASK_KIND_COMPILE_ONLY
-        prepared = self._dispatch._domjudge_prepare_payload(payload, compile_only=compile_only)
-        work_root = self._toolkit.work_root(task_id)
-        source_dir = (work_root / "source").resolve()
-        source_dir.mkdir(parents=True, exist_ok=True)
-        source_name = prepared["source_name"]
-        source_bytes = prepared["source_bytes"]
-        source_path = (source_dir / source_name).resolve()
-        self._toolkit.ensure_bytes_file(source_path, source_bytes, executable=False)
-        for name, blob in prepared["extra_source_items"]:
-            target = (source_dir / name).resolve()
-            if target == source_path:
-                continue
-            self._toolkit.ensure_bytes_file(target, blob, executable=False)
-        self._toolkit.store_executable_cache(
-            kind="compile",
-            executable_hash=prepared["compile_hash"],
-            files=prepared["compile_files"],
-        )
-        self._toolkit.store_executable_cache(
-            kind="run",
-            executable_hash=prepared["run_hash"],
-            files=prepared["run_files"],
-        )
-        self._toolkit.store_executable_cache(
-            kind="compare",
-            executable_hash=prepared["compare_hash"],
-            files=prepared["compare_files"],
-        )
+    def _enqueue_fingerprint(payload: dict[str, object]) -> str:
+        stable_payload = dict(payload)
+        stable_payload.pop("enqueued_at", None)
+        # Precomputed executable fields contain bytes and are derived entirely
+        # from the canonical, base64-backed request payload.
+        stable_payload.pop("domjudge_precomputed", None)
+        return sha256_hex_json(stable_payload, ensure_ascii=False)
 
     @staticmethod
     def _verification_id(run_id: str, verification_id: str) -> str:
@@ -1142,28 +989,31 @@ class TaskEnqueue:
         safe_verification_id = TaskEnqueue._normalize_text(safe_verification_id_source)
         payload["verification_id"] = safe_verification_id
         payload["run_id"] = safe_run_id
+        enqueue_fingerprint = self._enqueue_fingerprint(payload)
         task_id = ""
         summary: dict[str, object] | None = None
         while True:
             with self._s.state_lock:
                 existing_task_id = (
-                        TaskEnqueue._normalize_text(existing_task_id_obj)
-                        if (existing_task_id_obj := self._s.task_id_by_run.get(safe_run_id))
-                        is not None
-                        else ""
-                    )
+                    TaskEnqueue._normalize_text(existing_task_id_obj)
+                    if (existing_task_id_obj := self._s.task_id_by_run.get(safe_run_id)) is not None
+                    else ""
+                )
                 if existing_task_id:
                     existing_task = self._s.tasks_by_id.get(existing_task_id)
                     if existing_task is None:
                         self._s.task_id_by_run.pop(safe_run_id, None)
                     else:
+                        existing_fingerprint = str(existing_task.get("enqueue_fingerprint") or "")
+                        if existing_fingerprint != enqueue_fingerprint:
+                            raise RuntimeError("judgehost run id reused with different payload")
                         existing_status = (
                             TaskEnqueue._normalize_status(existing_status_obj)
                             if (existing_status_obj := existing_task.get("status")) is not None
                             else ""
                         )
                         if existing_status != self.STATUS_ENQUEUING:
-                            break
+                            return existing_task_id
                 if not existing_task_id or existing_task_id not in self._s.tasks_by_id:
                     task_id = f"jt-{uuid.uuid4().hex[:12]}"
                     source_label_obj = payload.get("source_label")
@@ -1215,25 +1065,12 @@ class TaskEnqueue:
                         "completed_at": "",
                         "attempt_count": 0,
                         "summary": dict(summary),
+                        "enqueue_fingerprint": enqueue_fingerprint,
                     }
                     self._s.task_id_by_run[safe_run_id] = task_id
                     break
             # Another thread is creating the same run task; wait for terminal enqueue step.
             time.sleep(0.01)
-
-        if existing_task_id:
-            self._append_cases_to_existing_task(
-                task_id=existing_task_id,
-                payload=payload,
-            )
-            existing_job = self._s.judgehost_state_store.job_for_task(existing_task_id)
-            if existing_job is not None:
-                self._dispatch._domjudge_apply_cache_shortcuts_for_job(
-                    int(existing_job["job_id"]),
-                    hostname=self._core.normalize_hostname("prequeue-cache"),
-                )
-                self._result._domjudge_finalize_if_ready(int(existing_job["job_id"]))
-            return existing_task_id
 
         if summary is None or not task_id:
             raise RuntimeError("failed to allocate judgehost task")

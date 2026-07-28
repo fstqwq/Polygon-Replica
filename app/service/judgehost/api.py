@@ -50,7 +50,7 @@ class Judgehost:
         self._queue = TaskQueue(self._state, self._core, self._toolkit)
         self._result = ResultProcessor(self._state, self._core, self._queue, self._toolkit)
         self._dispatch = DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit)
-        self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._result, self._toolkit)
+        self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)
         self.apply_runtime_values(constants)
 
     @property
@@ -157,11 +157,17 @@ class Judgehost:
     def forget_problem_tasks(self, *args, **kwargs):
         return self._queue.forget_problem_tasks(*args, **kwargs)
 
-    def cancel_domjudge_jobs_for_runs(self, *args, **kwargs):
-        return self._queue.cancel_domjudge_jobs_for_runs(*args, **kwargs)
+    def cancel_domjudge_jobs_for_runs(self, run_ids: list[str]) -> int:
+        job_ids = self._queue.cancel_domjudge_jobs_for_runs(run_ids)
+        for job_id in job_ids:
+            self._result._domjudge_finalize_if_ready(job_id)
+        return len(job_ids)
 
-    def cancel_all_domjudge_inflight(self, *args, **kwargs):
-        return self._queue.cancel_all_domjudge_inflight(*args, **kwargs)
+    def cancel_all_domjudge_inflight(self) -> int:
+        job_ids = self._queue.cancel_all_domjudge_inflight()
+        for job_id in job_ids:
+            self._result._domjudge_finalize_if_ready(job_id)
+        return len(job_ids)
 
     def forget_domjudge_runs(self, *args, **kwargs):
         return self._queue.forget_domjudge_runs(*args, **kwargs)

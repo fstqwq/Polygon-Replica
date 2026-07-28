@@ -495,7 +495,7 @@ class DispatchHandler:
         self._queue.compact_task_payload(task_id)
         return job_id
 
-    def _domjudge_append_task_to_job(self, job_id: int, task: dict[str, object]) -> None:
+    def _domjudge_append_task_to_job(self, job_id: int, task: dict[str, object]) -> str:
         task_id, run_id, payload = self._domjudge_task_payload(task)
         latest_task_row = self._core.task_by_id(task_id)
         if latest_task_row is not None:
@@ -516,9 +516,12 @@ class DispatchHandler:
             case_rows=case_rows,
             now_text=now_iso(),
         )
+        outcome = str(append_result["outcome"])
+        if outcome == "closed":
+            return outcome
         if int(append_result.get("inserted") or 0) > 0:
             self._queue.compact_task_payload(task_id)
-            return
+            return outcome
         missing_names = [
             str(case_row.get("test_name") or "")
             for case_row in case_rows
@@ -527,16 +530,22 @@ class DispatchHandler:
         if missing_names:
             raise RuntimeError(f"grouped DOMjudge job append failed for {', '.join(missing_names)}")
         self._queue.compact_task_payload(task_id)
+        return outcome
 
     def _domjudge_absorb_grouped_tasks(self, *, job_id: int, hostname: str, group_key: str) -> int:
-        absorbed = 0
+        active_job_id = int(job_id)
         while True:
             leased_task = self._queue._lease_matching_group_task(hostname=hostname, group_key=group_key)
             if leased_task is None:
                 break
-            self._domjudge_append_task_to_job(int(job_id), leased_task)
-            absorbed += 1
-        return absorbed
+            outcome = self._domjudge_append_task_to_job(active_job_id, leased_task)
+            if outcome == "closed":
+                active_job_id = self._domjudge_prepare_job(
+                    hostname,
+                    leased_task,
+                    group_key=group_key,
+                )
+        return active_job_id
 
     def _domjudge_try_cache_shortcut(
         self,
@@ -645,10 +654,23 @@ class DispatchHandler:
         )
 
     def _domjudge_apply_cache_shortcuts_for_job(self, job_id: int, *, hostname: str) -> int:
+        # Cached artifacts participate in the same work-root lifetime as
+        # judgehost callbacks; finalization must not delete them mid-publish.
+        with self._s.state_lock:
+            return self._domjudge_apply_cache_shortcuts_for_job_locked(
+                job_id,
+                hostname=hostname,
+            )
+
+    def _domjudge_apply_cache_shortcuts_for_job_locked(
+        self,
+        job_id: int,
+        *,
+        hostname: str,
+    ) -> int:
         job_row = self._s.judgehost_state_store.fetch_job(int(job_id))
         if job_row is None:
             return 0
-        grouped_job = bool(domjudge_text(job_row["group_key"]))
         rows = self._s.judgehost_state_store.cases_for_job(int(job_id), status="pending")
         if not rows:
             return 0
@@ -738,16 +760,36 @@ class DispatchHandler:
                 feedback_files=feedback_files,
                 answer_correct=compare_exit_code == 42,
             )
-            if grouped_job:
-                self._result._domjudge_finalize_case_task(
+            try:
+                self._result._domjudge_publish_reported_case(
                     task_id=domjudge_text(cached["task_id"]),
                     test_name=domjudge_text(cached["test_name"]),
-                    hostname=hostname,
                 )
+            except Exception:
+                logger.exception(
+                    "failed to publish cached DOMjudge case job_id=%s case_id=%s",
+                    int(job_id),
+                    int(cached["case_id"]),
+                )
+        self._result._domjudge_finalize_if_ready(job_id)
         return pending_rows
 
 
     def _domjudge_try_prequeue_cache_finalize(self, *, task_id: str, run_id: str, payload: dict[str, object]) -> None:
+        with self._s.state_lock:
+            self._domjudge_try_prequeue_cache_finalize_locked(
+                task_id=task_id,
+                run_id=run_id,
+                payload=payload,
+            )
+
+    def _domjudge_try_prequeue_cache_finalize_locked(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        payload: dict[str, object],
+    ) -> None:
         safe_task_id = domjudge_text(task_id)
         if not safe_task_id:
             return
@@ -771,7 +813,7 @@ class DispatchHandler:
                 job_id = int(existing_job["job_id"])
                 existing_task_id = domjudge_text(existing_job.get("task_id"))
                 if safe_task_id != existing_task_id:
-                    self._domjudge_append_task_to_job(job_id, task_row)
+                    raise RuntimeError("judgehost run id already belongs to another task")
             else:
                 job_id = int(self._domjudge_prepare_job(prequeue_host, task_row))
             job_row = self._s.judgehost_state_store.fetch_job(int(job_id))
@@ -815,18 +857,20 @@ class DispatchHandler:
                     hostname,
                     self._core.normalize_hostname("prequeue-cache"),
                 }:
-                    self._s.judgehost_state_store.cancel_jobs_for_runs(
+                    cancelled_job_ids = self._s.judgehost_state_store.cancel_jobs_for_runs(
                         run_ids=[domjudge_text(job_row["run_id"])],
-                        final_status="failed",
                         now_text=now_text,
                     )
+                    for cancelled_job_id in cancelled_job_ids:
+                        self._result._domjudge_finalize_if_ready(cancelled_job_id)
                     return []
             elif task_row.get("status") not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                self._s.judgehost_state_store.cancel_jobs_for_runs(
+                cancelled_job_ids = self._s.judgehost_state_store.cancel_jobs_for_runs(
                     run_ids=[domjudge_text(job_row["run_id"])],
-                    final_status="failed",
                     now_text=now_text,
                 )
+                for cancelled_job_id in cancelled_job_ids:
+                    self._result._domjudge_finalize_if_ready(cancelled_job_id)
                 return []
         rows = self._s.judgehost_state_store.lease_cases(
             int(job_id),
@@ -878,7 +922,7 @@ class DispatchHandler:
             for row in rows:
                 case_task_id = domjudge_text(row["task_id"])
                 if case_task_id and case_task_id not in seen_task_ids:
-                    self._queue.renew_lease(case_task_id, hostname)
+                    self._queue.renew_domjudge_task_lease(case_task_id)
                     seen_task_ids.add(case_task_id)
                 case_task_row = self._core.task_by_id(case_task_id)
                 verification_id = "" if case_task_row is None else domjudge_text(case_task_row.get("verification_id"))
@@ -889,7 +933,7 @@ class DispatchHandler:
                         domjudge_text(row["test_name"]),
                     )
         else:
-            self._queue.renew_lease(safe_task_id, hostname)
+            self._queue.renew_domjudge_task_lease(safe_task_id)
             task_row = self._core.task_by_id(safe_task_id)
             verification_id = "" if task_row is None else domjudge_text(task_row.get("verification_id"))
             if verification_id:
@@ -906,6 +950,8 @@ class DispatchHandler:
         if not self._queue._host_enabled_conn(hostname=safe_host):
             self._queue._record_host_event_conn(hostname=safe_host, action="disabled")
             return []
+        for finalizing_job_id in self._s.judgehost_state_store.finalizing_job_ids():
+            self._result._domjudge_finalize_if_ready(finalizing_job_id)
         cap = self._s.fetch_batch_size if max_batchsize is None else max(1, min(256, int(max_batchsize)))
         active = self._s.judgehost_state_store.active_job_for_host(safe_host)
         if active is not None:
@@ -937,7 +983,7 @@ class DispatchHandler:
             active_job_id = int(active["job_id"])
             active_group_key = domjudge_text(active["group_key"])
             if active_group_key:
-                self._domjudge_absorb_grouped_tasks(
+                active_job_id = self._domjudge_absorb_grouped_tasks(
                     job_id=active_job_id,
                     hostname=safe_host,
                     group_key=active_group_key,
@@ -977,10 +1023,16 @@ class DispatchHandler:
                     )
                     if reuse_group_job:
                         active_job_id = int(existing_group_job["job_id"])
-                        self._domjudge_append_task_to_job(active_job_id, leased_task)
+                        outcome = self._domjudge_append_task_to_job(active_job_id, leased_task)
+                        if outcome == "closed":
+                            active_job_id = self._domjudge_prepare_job(
+                                safe_host,
+                                leased_task,
+                                group_key=group_key,
+                            )
                     else:
                         active_job_id = self._domjudge_prepare_job(safe_host, leased_task, group_key=group_key)
-                    self._domjudge_absorb_grouped_tasks(
+                    active_job_id = self._domjudge_absorb_grouped_tasks(
                         job_id=active_job_id,
                         hostname=safe_host,
                         group_key=group_key,
@@ -995,7 +1047,7 @@ class DispatchHandler:
                         active_job_id = int(existing_job["job_id"])
                         existing_task_id = domjudge_text(existing_job.get("task_id"))
                         if task_id and task_id != existing_task_id:
-                            self._domjudge_append_task_to_job(active_job_id, leased_task)
+                            raise RuntimeError("judgehost run id already belongs to another task")
                     else:
                         active_job_id = self._domjudge_prepare_job(safe_host, leased_task)
             except Exception as exc:
