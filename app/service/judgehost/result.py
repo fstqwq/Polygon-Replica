@@ -384,6 +384,10 @@ class ResultProcessor:
                 "summary": dict(case_result.get("summary") or {}),
             },
             notify_terminal=False,
+            # A grouped job may lease its task on one host and distribute the
+            # individual case to another. The reported case lease is the
+            # authority for this internal completion path.
+            allow_lease_owner_mismatch=True,
         )
         self._publish_verification_case_result(
             task_id=safe_task_id,

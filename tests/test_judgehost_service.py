@@ -7338,7 +7338,7 @@ class TestJudgehostService(SmokeBase):
         assert verification_row is not None
         self.assertIn(feedback_text, str(verification_row["fail_reason"] or ""))
 
-    def test_domjudge_finalize_case_task_notifies_case_before_task_terminal(self) -> None:
+    def test_domjudge_cross_host_case_notifies_before_task_terminal(self) -> None:
         service = config.judgehost_task_service
         self._reset_task_queue_state(service)
         verification_id = f"ver-jh-case-order-{uuid.uuid4().hex[:8]}"
@@ -7424,7 +7424,6 @@ class TestJudgehostService(SmokeBase):
 
         with (
             patch.object(service.queue, "poll_task_case_result", return_value=case_result),
-            patch.object(service.queue, "report_result", return_value={}) as report_result_mock,
             patch("app.service.judgehost.result.finalize_verification_task_result", return_value=final_result),
             patch(
                 "app.service.judgehost.result.notify_verification_case_reported",
@@ -7438,11 +7437,12 @@ class TestJudgehostService(SmokeBase):
             service.result._domjudge_finalize_case_task(
                 task_id=task_id,
                 test_name="001.in",
-                hostname="judgehost-order",
+                hostname="judgehost-case-worker",
             )
 
-        report_result_mock.assert_called_once()
-        self.assertFalse(bool(report_result_mock.call_args.kwargs.get("notify_terminal", True)))
+        task_row = service.state.tasks_by_id[task_id]
+        self.assertEqual(str(task_row["status"]), service.STATUS_FAILED)
+        self.assertEqual(str(task_row["lease_owner"]), "judgehost-case-worker")
         self.assertEqual(notifications, [("case", task_id), ("terminal", task_id)])
 
     def test_domjudge_cache_only_completed_job_reactivates_when_appending_new_tests(self) -> None:
