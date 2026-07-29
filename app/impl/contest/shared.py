@@ -36,12 +36,22 @@ _CONTEST_LATEX_JOB_NAME = "statements"
 _CONTEST_LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
 _CONTEST_BLANK_PAGES_MARKER = r"%\intentionallyblankpagestrue"
 _CONTEST_BLANK_PAGES_ENABLED = _CONTEST_BLANK_PAGES_MARKER.removeprefix("%")
+_CONTEST_CJK_ITALIC_OPTIONS = (
+    r"[ItalicFont={[FandolKai-Regular.otf]},"
+    r"BoldItalicFont={[FandolKai-Regular.otf]}]"
+)
+_CONTEST_CJK_MAIN_FONT_LINE = (
+    rf"\setCJKmainfont{{Noto Serif CJK SC}}{_CONTEST_CJK_ITALIC_OPTIONS}"
+)
+_CONTEST_CJK_SANS_FONT_LINE = (
+    rf"\setCJKsansfont{{Noto Sans CJK SC}}{_CONTEST_CJK_ITALIC_OPTIONS}"
+)
 _CONTEST_CJK_PREAMBLE_LINES = [
     r"% --- Engine-adaptive font loading ---",
     r"\usepackage{fontspec}",
     r"\usepackage{xeCJK}",
-    r"\setCJKmainfont{Noto Serif CJK SC}[ItalicFont=Noto Serif CJK SC]",
-    r"\setCJKsansfont{Noto Sans CJK SC}[ItalicFont=Noto Sans CJK SC]",
+    _CONTEST_CJK_MAIN_FONT_LINE,
+    _CONTEST_CJK_SANS_FONT_LINE,
     r"\setCJKmonofont{Noto Sans CJK SC}",
 ]
 
@@ -303,9 +313,9 @@ def _ensure_contest_statements_tex_cjk_support(statements_tex: Path) -> None:
     if not _latex_uses_package(text, "xeCJK"):
         insert_lines.append(r"\usepackage{xeCJK}")
     if r"\setCJKmainfont" not in text:
-        insert_lines.append(r"\setCJKmainfont{Noto Serif CJK SC}[ItalicFont=Noto Serif CJK SC]")
+        insert_lines.append(_CONTEST_CJK_MAIN_FONT_LINE)
     if r"\setCJKsansfont" not in text:
-        insert_lines.append(r"\setCJKsansfont{Noto Sans CJK SC}[ItalicFont=Noto Sans CJK SC]")
+        insert_lines.append(_CONTEST_CJK_SANS_FONT_LINE)
     if r"\setCJKmonofont" not in text:
         insert_lines.append(r"\setCJKmonofont{Noto Sans CJK SC}")
     if not insert_lines:
