@@ -110,6 +110,7 @@ class ContestVerificationStage(TypedDict):
     id: str
     status: str
     signature: str
+    source_commit: str
     created_at: str
     finished_at: str
 
@@ -517,6 +518,18 @@ class ContestService:
     def revoke_member(self, contest_id: int, user_id: int) -> None:
         self._store.revoke_member(int(contest_id), int(user_id))
 
+    def revoke_member_and_problem_access(
+        self,
+        contest_id: int,
+        actor_user_id: int,
+        user_id: int,
+    ) -> dict[str, int]:
+        return self._store.revoke_member_and_problem_access(
+            int(contest_id),
+            int(actor_user_id),
+            int(user_id),
+        )
+
     def properties_map(self, contest_id: int) -> dict[str, str]:
         result: dict[str, str] = {}
         for row in self._store.property_rows(int(contest_id)):
@@ -738,8 +751,12 @@ class ContestService:
     def reorder_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
         return self._store.reorder_problem_indices(int(contest_id), pairs)
 
-    def renumber_problem_indices(self, contest_id: int) -> None:
-        self._store.renumber_problem_indices(int(contest_id))
+    def renumber_problem_indices(
+        self,
+        contest_id: int,
+        ordered_contest_problem_ids: list[int],
+    ) -> bool:
+        return self._store.renumber_problem_indices(int(contest_id), ordered_contest_problem_ids)
 
     def selected_problems(self, contest_id: int, problem_ids: list[int]) -> list[ContestProblemEntry]:
         result: list[ContestProblemEntry] = []
@@ -935,6 +952,7 @@ class ContestService:
             "id": str(row["id"]),
             "status": str(row["status"]).strip().lower(),
             "signature": str(row["signature"] or ""),
+            "source_commit": str(row["source_commit"] or ""),
             "created_at": str(row["created_at"]),
             "finished_at": str(row["finished_at"]),
         }

@@ -203,7 +203,11 @@ def contest_access_revoke(contest: str, user: Annotated[str, Depends(require_ses
     safe_target = target_user.strip()
     membership = config.contest_service.membership_for_username(contest_id, safe_target)
     if membership is None:
-        return _contest_redirect(str(ctx["contest"]["slug"]), "access", message=f"{safe_target} is not a member")
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "access",
+            message=f"{safe_target} is not a member",
+        )
     if membership["role"] == "owner":
         return _contest_redirect(str(ctx["contest"]["slug"]), "access", message="owner access is fixed and cannot be transferred")
     config.contest_service.revoke_member(contest_id, membership["user_id"])
@@ -217,7 +221,67 @@ def contest_access_revoke(contest: str, user: Annotated[str, Depends(require_ses
             "target_user": safe_target,
         },
     )
-    return _contest_redirect(str(ctx["contest"]["slug"]), "access", message=f"revoked access for {safe_target}")
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "access",
+        message=f"revoked contest membership for {safe_target}; problem access was unchanged",
+    )
+
+
+def contest_access_revoke_with_problems(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    target_user: str = Form(...),
+):
+    ctx = _contest_ctx(contest, user, "access")
+    if not bool(ctx["access"].get("can_manage")):
+        raise HTTPException(status_code=403, detail=ctx["access"]["manage_block_reason"])
+    contest_id = int(ctx["contest"]["id"])
+    actor_user_id = int(ctx["user"]["id"])
+    safe_target = normalize_username_required(target_user)
+    membership = config.contest_service.membership_for_username(contest_id, safe_target)
+    if membership is None:
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "access",
+            message=f"{safe_target} is not a member",
+        )
+    if membership["role"] == "owner":
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "access",
+            message="owner access is fixed and cannot be transferred",
+        )
+    result = config.contest_service.revoke_member_and_problem_access(
+        contest_id,
+        actor_user_id,
+        membership["user_id"],
+    )
+    target_user_ctx = config.workspace_service.known_user(safe_target)
+    is_system_admin = int(target_user_ctx["is_system_admin"] or 0) == 1
+    audit(
+        actor_user_id,
+        None,
+        "contest.access.revoke-with-problems",
+        {
+            "contest_id": contest_id,
+            "contest_slug": str(ctx["contest"]["slug"]),
+            "target_user": safe_target,
+            "removed_acl_count": result["removed_acl_count"],
+            "preserved_owner_count": result["preserved_owner_count"],
+            "skipped_problem_count": result["skipped_problem_count"],
+            "system_admin_passthrough": is_system_admin,
+        },
+    )
+    message = (
+        f"revoked contest membership for {safe_target}; removed "
+        f"{result['removed_acl_count']} non-owner problem ACL(s), preserved "
+        f"{result['preserved_owner_count']} owner ACL(s), and skipped "
+        f"{result['skipped_problem_count']} problem(s) you cannot manage"
+    )
+    if is_system_admin:
+        message += "; system administrator access remains effective"
+    return _contest_redirect(str(ctx["contest"]["slug"]), "access", message=message)
 
 
 def contest_access_sync_user(contest: str, user: Annotated[str, Depends(require_session_user)], target_user: str = Form(...)):

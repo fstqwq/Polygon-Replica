@@ -6112,24 +6112,29 @@ class TestJudgehostService(SmokeBase):
         self.assertIsNotNone(finished_a)
         self.assertEqual(str(finished_a["status"] or ""), "ok")
 
-        service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id_b,
-            selected_tests=["001.in"],
-            verification_id="inv-recompile-b",
-            verification_run_ids=[run_id_b],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            force_recompile=True,
-        )
-        tasks_b = service.domjudge_fetch_work("judgehost-recompile", max_batchsize=8)
+        with patch.object(service._toolkit, "cache_delete", wraps=service._toolkit.cache_delete) as cache_delete:
+            service.enqueue_task(
+                problem=self.problem,
+                username=self.user,
+                artifact_verification_id=verification_id,
+                mode="pass-fail",
+                submission_path="solutions/ac.cpp",
+                upload_content=None,
+                upload_filename=None,
+                run_id=run_id_b,
+                selected_tests=["001.in"],
+                verification_id="inv-recompile-b",
+                verification_run_ids=[run_id_b],
+                expected_behavior="accepted",
+                verification_source="run.execute",
+                force_recompile=True,
+            )
+            tasks_b = service.domjudge_fetch_work("judgehost-recompile", max_batchsize=8)
         self.assertEqual(len(tasks_b), 1)
+        self.assertGreaterEqual(cache_delete.call_count, 1)
+        deleted_refs = {call.args for call in cache_delete.call_args_list}
+        self.assertEqual(len(deleted_refs), 1)
+        self.assertEqual(next(iter(deleted_refs))[0], service.CASE_CACHE_KIND)
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_a, case_id_b)

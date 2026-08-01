@@ -154,6 +154,31 @@ def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(
     return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=f"removed {removed} problem(s)")
 
 
+def _contest_problem_index_pairs(
+    contest_problem_ids: list[str],
+    contest_problem_indices: list[str],
+) -> list[tuple[int, str]]:
+    if not contest_problem_ids or len(contest_problem_ids) != len(contest_problem_indices):
+        raise ValueError("invalid problem order payload")
+    pairs: list[tuple[int, str]] = []
+    seen_ids: set[int] = set()
+    seen_indices: set[str] = set()
+    for raw_id, raw_index in zip(contest_problem_ids, contest_problem_indices, strict=True):
+        try:
+            contest_problem_id = int(raw_id)
+        except ValueError as exc:
+            raise ValueError("invalid contest problem id") from exc
+        if contest_problem_id <= 0 or contest_problem_id in seen_ids:
+            raise ValueError("invalid contest problem id")
+        index = _normalize_contest_problem_idx_required(raw_index)
+        if index in seen_indices:
+            raise ValueError("duplicate problem index")
+        seen_ids.add(contest_problem_id)
+        seen_indices.add(index)
+        pairs.append((contest_problem_id, index))
+    return pairs
+
+
 def contest_problems_reorder(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
@@ -166,50 +191,24 @@ def contest_problems_reorder(
         if not isinstance(write_block_reason, str) or not write_block_reason.strip():
             raise RuntimeError("missing write_block_reason")
         raise HTTPException(status_code=403, detail=write_block_reason)
-    ids_raw = list(contest_problem_ids)
-    idx_raw = list(contest_problem_indices)
-    if not ids_raw or len(ids_raw) != len(idx_raw):
-        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="invalid reorder payload")
-    pairs: list[tuple[int, str]] = []
-    seen_ids: set[int] = set()
-    seen_idx: set[str] = set()
-    for index, raw_id in enumerate(ids_raw):
-        try:
-            contest_problem_id = int(raw_id)
-        except Exception:
-            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="invalid contest problem id")
-        if contest_problem_id <= 0 or contest_problem_id in seen_ids:
-            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="invalid contest problem id")
-        idx = _normalize_contest_problem_idx_required(idx_raw[index])
-        if idx in seen_idx:
-            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="duplicate problem index")
-        seen_ids.add(contest_problem_id)
-        seen_idx.add(idx)
-        pairs.append((contest_problem_id, idx))
+    try:
+        pairs = _contest_problem_index_pairs(contest_problem_ids, contest_problem_indices)
+    except ValueError as exc:
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=str(exc))
     if not config.contest_service.reorder_problem_indices(int(ctx["contest"]["id"]), pairs):
-        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="contest problem not found")
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "problems",
+            message="problem order must include every contest problem",
+        )
     return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="problem order saved")
 
 
-def contest_problems_renumber(contest: str, user: Annotated[str, Depends(require_session_user)]):
-    ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        write_block_reason = ctx["access"].get("write_block_reason")
-        if not isinstance(write_block_reason, str) or not write_block_reason.strip():
-            raise RuntimeError("missing write_block_reason")
-        raise HTTPException(status_code=403, detail=write_block_reason)
-    config.contest_service.renumber_problem_indices(int(ctx["contest"]["id"]))
-    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="problem indices renumbered")
-
-
-def contest_problems_change_general(
+def contest_problems_renumber(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
-    selected_problem_ids: list[str] = Form([]),
-    problem_ids: list[str] = Form([]),
-    time_limit_ms_values: list[str] = Form([]),
-    memory_limit_mb_values: list[str] = Form([]),
-    retry_job_id: str = Form(""),
+    contest_problem_ids: list[str] = Form([]),
+    contest_problem_indices: list[str] = Form([]),
 ):
     ctx = _contest_ctx(contest, user, "problems")
     if not bool(ctx["access"].get("can_write")):
@@ -217,63 +216,98 @@ def contest_problems_change_general(
         if not isinstance(write_block_reason, str) or not write_block_reason.strip():
             raise RuntimeError("missing write_block_reason")
         raise HTTPException(status_code=403, detail=write_block_reason)
-    contest_id = int(ctx["contest"]["id"])
-    actor_user_id = int(ctx["user"]["id"])
-    selected_ids: list[int] = []
-    for raw in selected_problem_ids:
-        try:
-            value = int(raw)
-        except Exception:
-            continue
-        if value > 0 and value not in selected_ids:
-            selected_ids.append(value)
-    requested_map = _problem_general_payload_map(
-        list(problem_ids or []),
-        list(time_limit_ms_values or []),
-        list(memory_limit_mb_values or []),
+    try:
+        pairs = _contest_problem_index_pairs(contest_problem_ids, contest_problem_indices)
+    except ValueError as exc:
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=str(exc))
+    ordered_ids = [
+        contest_problem_id
+        for contest_problem_id, _ in sorted(pairs, key=lambda pair: pair[1])
+    ]
+    if not config.contest_service.renumber_problem_indices(int(ctx["contest"]["id"]), ordered_ids):
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "problems",
+            message="problem order must include every contest problem",
+        )
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "problems",
+        message="problem indices renumbered",
     )
-    safe_retry_job_id = retry_job_id.strip()
-    if safe_retry_job_id and not selected_ids:
-        retry_job = config.contest_service.load_job(contest_id, safe_retry_job_id)
-        if retry_job is None:
-            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="retry job not found")
-        retry_job_type = retry_job.get("job_type")
-        if not isinstance(retry_job_type, str):
-            raise RuntimeError("invalid retry job payload: missing job_type")
-        if retry_job_type != "change-general":
-            return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="retry job type is invalid")
-        summary = retry_job.get("summary")
-        if isinstance(summary, dict):
-            results = summary.get("results")
-            if isinstance(results, list):
-                for item in results:
-                    if not isinstance(item, dict):
-                        continue
-                    item_status = item.get("status")
-                    if not isinstance(item_status, str):
-                        raise RuntimeError("invalid retry job payload: missing result status")
-                    if item_status.strip() != "failed":
-                        continue
-                    pid = item.get("problem_id") if isinstance(item.get("problem_id"), int) else 0
-                    if pid <= 0:
-                        continue
-                    req = item.get("requested")
-                    if isinstance(req, dict):
-                        requested_time_limit_ms = req.get("time_limit_ms")
-                        requested_memory_limit_mb = req.get("memory_limit_mb")
-                        if not isinstance(requested_time_limit_ms, str) or not isinstance(requested_memory_limit_mb, str):
-                            raise RuntimeError("invalid retry job payload: malformed requested fields")
-                        requested_map[pid] = {
-                            "time_limit_ms": requested_time_limit_ms.strip(),
-                            "memory_limit_mb": requested_memory_limit_mb.strip(),
-                        }
-                    if pid not in selected_ids:
-                        selected_ids.append(pid)
+
+
+def _selected_problem_ids(raw_ids: list[str]) -> list[int]:
+    selected_ids: list[int] = []
+    for raw_id in raw_ids:
+        try:
+            problem_id = int(raw_id)
+        except ValueError:
+            continue
+        if problem_id > 0 and problem_id not in selected_ids:
+            selected_ids.append(problem_id)
+    return selected_ids
+
+
+def _failed_general_job_payload(
+    contest_id: int,
+    retry_job_id: str,
+) -> tuple[list[int], dict[int, dict[str, object]]]:
+    retry_job = config.contest_service.load_job(contest_id, retry_job_id)
+    if retry_job is None:
+        raise ValueError("retry job not found")
+    if retry_job["job_type"] != "change-general":
+        raise ValueError("retry job type is invalid")
+    summary = retry_job["summary"]
+    if not isinstance(summary, dict) or not isinstance(summary.get("results"), list):
+        raise ValueError("retry job report is invalid")
+    selected_ids: list[int] = []
+    requested_map: dict[int, dict[str, object]] = {}
+    for result in summary["results"]:
+        if not isinstance(result, dict) or result.get("status") != "failed":
+            continue
+        problem_id = result.get("problem_id")
+        requested = result.get("requested")
+        if not isinstance(problem_id, int) or problem_id <= 0 or not isinstance(requested, dict):
+            raise ValueError("retry job report is invalid")
+        time_limit_ms = requested.get("time_limit_ms")
+        memory_limit_mb = requested.get("memory_limit_mb")
+        if not isinstance(time_limit_ms, str) or not isinstance(memory_limit_mb, str):
+            raise ValueError("retry job report is invalid")
+        selected_ids.append(problem_id)
+        requested_map[problem_id] = {
+            "time_limit_ms": time_limit_ms,
+            "memory_limit_mb": memory_limit_mb,
+        }
     if not selected_ids:
-        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="select at least one problem to update")
+        raise ValueError("retry job has no failed problems")
+    return selected_ids, requested_map
+
+
+def _apply_general_changes(
+    ctx: dict[str, object],
+    selected_ids: list[int],
+    requested_map: dict[int, dict[str, object]],
+):
+    contest_ctx = ctx["contest"]
+    user_ctx = ctx["user"]
+    if not isinstance(contest_ctx, dict) or not isinstance(user_ctx, dict):
+        raise RuntimeError("invalid contest context")
+    contest_id = int(contest_ctx["id"])
+    actor_user_id = int(user_ctx["id"])
+    if not selected_ids:
+        return _contest_redirect(
+            str(contest_ctx["slug"]),
+            "problems",
+            message="select at least one problem to update",
+        )
     rows = config.contest_service.selected_problems(contest_id, selected_ids)
-    if not rows:
-        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="selected problems are not part of this contest")
+    if len(rows) != len(selected_ids):
+        return _contest_redirect(
+            str(contest_ctx["slug"]),
+            "problems",
+            message="selected problems are not part of this contest",
+        )
     results: list[dict[str, object]] = []
     for row in rows:
         pid = int(row["problem_id"])
@@ -283,8 +317,8 @@ def contest_problems_change_general(
         }
         requested = requested_map.get(pid, defaults)
         result = _run_problem_general_update(
-            contest_slug=str(ctx["contest"]["slug"]),
-            actor_username=str(ctx["user"]["username"]),
+            contest_slug=str(contest_ctx["slug"]),
+            actor_username=str(user_ctx["username"]),
             actor_user_id=actor_user_id,
             problem_id=pid,
             problem_slug=str(row["problem_slug"]),
@@ -296,7 +330,7 @@ def contest_problems_change_general(
     failed_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "failed"))
     skipped_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "skipped"))
     summary = {
-        "contest_slug": str(ctx["contest"]["slug"]),
+        "contest_slug": str(contest_ctx["slug"]),
         "job_type": "change-general",
         "results": results,
         "totals": {
@@ -314,7 +348,7 @@ def contest_problems_change_general(
         "contest.problems.change_general",
         {
             "contest_id": contest_id,
-            "contest_slug": str(ctx["contest"]["slug"]),
+            "contest_slug": str(contest_ctx["slug"]),
             "job_id": job_id,
             "total": len(results),
             "success": success_count,
@@ -323,8 +357,46 @@ def contest_problems_change_general(
         },
     )
     return _contest_redirect(
-        str(ctx["contest"]["slug"]),
+        str(contest_ctx["slug"]),
         "problems",
         query=f"job_id={quote_plus(job_id)}",
         message=f"change TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped",
     )
+
+
+def contest_problems_change_general(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    selected_problem_ids: list[str] = Form([]),
+    problem_ids: list[str] = Form([]),
+    time_limit_ms_values: list[str] = Form([]),
+    memory_limit_mb_values: list[str] = Form([]),
+):
+    ctx = _contest_ctx(contest, user, "problems")
+    if not bool(ctx["access"].get("can_write")):
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
+    selected_ids = _selected_problem_ids(selected_problem_ids)
+    requested_map = _problem_general_payload_map(
+        problem_ids,
+        time_limit_ms_values,
+        memory_limit_mb_values,
+    )
+    return _apply_general_changes(ctx, selected_ids, requested_map)
+
+
+def contest_problems_change_general_retry(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+    retry_job_id: str = Form(...),
+):
+    ctx = _contest_ctx(contest, user, "problems")
+    if not bool(ctx["access"].get("can_write")):
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
+    try:
+        selected_ids, requested_map = _failed_general_job_payload(
+            int(ctx["contest"]["id"]),
+            retry_job_id,
+        )
+    except ValueError as exc:
+        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=str(exc))
+    return _apply_general_changes(ctx, selected_ids, requested_map)

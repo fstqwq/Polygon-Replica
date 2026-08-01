@@ -3,7 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-from app.impl.contest.access import contest_access_grant, contest_access_page, contest_access_revoke, contest_access_sync_all, contest_access_sync_user
+from app.impl.contest.access import (
+    contest_access_grant,
+    contest_access_page,
+    contest_access_revoke,
+    contest_access_revoke_with_problems,
+    contest_access_sync_all,
+    contest_access_sync_user,
+)
 from app.impl.contest.overview import contest_overview_page
 from app.impl.contest.package import (
     contest_packages_artifact_download,
@@ -16,7 +23,16 @@ from app.impl.contest.package import (
     contest_statement_source_save,
     contest_statement_source_upload,
 )
-from app.impl.contest.problem import contest_problems_add, contest_problems_change_general, contest_problems_page, contest_problems_remove, contest_problems_remove_selected, contest_problems_renumber, contest_problems_reorder
+from app.impl.contest.problem import (
+    contest_problems_add,
+    contest_problems_change_general,
+    contest_problems_change_general_retry,
+    contest_problems_page,
+    contest_problems_remove,
+    contest_problems_remove_selected,
+    contest_problems_renumber,
+    contest_problems_reorder,
+)
 from app.impl.contest.property import contest_properties_page, contest_properties_save
 
 router = APIRouter()
@@ -72,6 +88,12 @@ router.add_api_route(
 )
 
 router.add_api_route(
+    "/contests/{contest}/problems/change-general/retry",
+    contest_problems_change_general_retry,
+    methods=["POST"],
+)
+
+router.add_api_route(
     "/contests/{contest}/properties",
     contest_properties_page,
     methods=["GET"],
@@ -100,6 +122,12 @@ router.add_api_route(
 router.add_api_route(
     "/contests/{contest}/access/revoke",
     contest_access_revoke,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/access/revoke-with-problems",
+    contest_access_revoke_with_problems,
     methods=["POST"],
 )
 

@@ -1555,19 +1555,27 @@
   }
 
   function initConfirmForms() {
-    document.querySelectorAll("form[data-confirm-message]").forEach(function (form) {
+    document.querySelectorAll("form").forEach(function (form) {
       form.addEventListener("submit", function (ev) {
         if (form.dataset.confirmApproved === "1") {
           form.dataset.confirmApproved = "0";
           return;
         }
+        var submitter = ev.submitter || null;
+        var msg = String(
+          (submitter && submitter.dataset.confirmMessage) || form.dataset.confirmMessage || ""
+        ).trim();
+        if (!msg) return;
         ev.preventDefault();
-        var msg = String(form.dataset.confirmMessage || "Are you sure?").trim();
         showConfirmDialog(msg).then(function (ok) {
           if (!ok) return;
           form.dataset.confirmApproved = "1";
           if (typeof form.requestSubmit === "function") {
-            form.requestSubmit();
+            if (submitter) {
+              form.requestSubmit(submitter);
+            } else {
+              form.requestSubmit();
+            }
           } else {
             form.submit();
           }

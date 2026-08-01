@@ -1446,8 +1446,10 @@ class TestUIRun(UIBaseSuite):
         list_page = run_page(_request("/problems/alice/sample/run"), "alice/sample", "alice")
         self.assertEqual(list_page.status_code, 200)
         list_html = list_page.body.decode("utf-8", errors="replace")
-        self.assertIn('method="post" action="/problems/alice/sample/run/rejudge"', list_html)
+        self.assertIn('action="/problems/alice/sample/run/rejudge"', list_html)
         self.assertIn(f'name="verification_id" value="{verification_id}"', list_html)
+        self.assertIn("Rejudge Without Cache", list_html)
+        self.assertIn("deletes matching cached case results", list_html)
         self.assertNotIn("/run/new?rerun_verification_id=", list_html)
 
         details_page = run_details_page(
@@ -1457,8 +1459,9 @@ class TestUIRun(UIBaseSuite):
         )
         self.assertEqual(details_page.status_code, 200)
         detail_html = details_page.body.decode("utf-8", errors="replace")
-        self.assertIn('method="post" action="/problems/alice/sample/run/rejudge"', detail_html)
+        self.assertIn('action="/problems/alice/sample/run/rejudge"', detail_html)
         self.assertIn(f'name="verification_id" value="{verification_id}"', detail_html)
+        self.assertIn("Rejudge Without Cache", detail_html)
         self.assertNotIn('name="solution_paths"', detail_html)
 
         with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_job:

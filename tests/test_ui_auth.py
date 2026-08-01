@@ -1257,6 +1257,8 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn('data-gen-script-output="1"', html)
         self.assertIn('data-judgehost-enable-toggle="1"', html)
         self.assertIn('data-judgehost-auth-block="1" hidden', html)
+        self.assertIn('class="btn danger-link" type="submit">Reset To Defaults</button>', html)
+        self.assertIn("Runtime keys reload immediately", html)
 
     def test_settings_page_runtime_runner_shows_auth_fields_when_judgehost_enabled(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")

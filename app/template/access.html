@@ -38,7 +38,12 @@
             </select>
             <button class="btn" type="submit">Save Role</button>
           </form>
-          <form class="inline-form" method="post" action="/problems/{{ ctx.problem.slug }}/access/revoke" data-confirm-message="Revoke access for {{ row.username }}? Any uncommitted workspace changes under this account may be discarded; uncommitted changes will be lost.">
+          <form
+            class="inline-form"
+            method="post"
+            action="/problems/{{ ctx.problem.slug }}/access/revoke"
+            data-confirm-message="Revoke direct problem access for {{ row.username }}? Existing working copies will remain stored."
+          >
             <input type="hidden" name="target_user" value="{{ row.username }}" />
             <button class="btn" type="submit">Revoke</button>
           </form>

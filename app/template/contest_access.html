@@ -28,11 +28,25 @@
         {% if row.role != "owner" %}
         <form method="post" action="/contests/{{ ctx.contest.slug }}/access/sync-user" class="inline-form">
           <input type="hidden" name="target_user" value="{{ row.username }}" />
-          <button class="btn" type="submit">Sync Problems</button>
+          <button class="btn" type="submit">Sync Problem Access</button>
         </form>
-        <form method="post" action="/contests/{{ ctx.contest.slug }}/access/revoke" class="inline-form">
+        <form
+          method="post"
+          action="/contests/{{ ctx.contest.slug }}/access/revoke"
+          class="inline-form"
+          data-confirm-message="Revoke contest membership for {{ row.username }}? Problem access and working copies will not be changed."
+        >
           <input type="hidden" name="target_user" value="{{ row.username }}" />
-          <button class="btn" type="submit" onclick="return confirm('Revoke access for {{ row.username }}? uncommitted changes will be lost.');">Revoke</button>
+          <button class="btn danger-link" type="submit">Revoke Contest Membership</button>
+        </form>
+        <form
+          method="post"
+          action="/contests/{{ ctx.contest.slug }}/access/revoke-with-problems"
+          class="inline-form"
+          data-confirm-message="Revoke contest membership and manageable non-owner problem access for {{ row.username }}? Owner access, system administrator access, unmanaged problems, and working copies are preserved."
+        >
+          <input type="hidden" name="target_user" value="{{ row.username }}" />
+          <button class="btn danger-link" type="submit">Revoke Membership + Problem Access</button>
         </form>
         {% else %}
         <span class="muted">fixed owner</span>
@@ -49,7 +63,7 @@
 
 {% if ctx.access.can_manage %}
 <section>
-  <h2>Grant / Update</h2>
+  <h2>Grant / Update Membership</h2>
   <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/access/grant">
     <label for="contest-target-user">User</label>
     <input id="contest-target-user" name="target_user" />
@@ -58,14 +72,14 @@
       <option value="read">read</option>
       <option value="write">write</option>
     </select>
-    <button class="btn" type="submit">Grant / Update</button>
+    <button class="btn" type="submit">Grant / Update Membership</button>
   </form>
   <p class="muted">
     After granting a member, remember to sync their problem access if they should actually open or edit contest problems.
     Current writable contest problems: {{ sync_problem_candidate_count }}.
   </p>
   <form class="form-row" method="post" action="/contests/{{ ctx.contest.slug }}/access/sync-all">
-    <button class="btn" type="submit">Sync All Members To Writable Contest Problems</button>
+    <button class="btn" type="submit">Sync All Members' Problem Access</button>
   </form>
 </section>
 {% else %}

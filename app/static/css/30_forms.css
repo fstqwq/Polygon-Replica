@@ -242,6 +242,37 @@ form {
   margin-left: var(--space-3);
 }
 
+.contest-build-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: var(--space-6);
+}
+
+.contest-build-card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  padding: var(--space-6);
+}
+
+.contest-build-card > h3,
+.contest-build-card > p {
+  margin: 0;
+}
+
+.contest-source-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.contest-source-actions .inline-action {
+  margin-left: 0;
+}
+
 .inline-meta-row {
   display: flex;
   flex-wrap: wrap;
@@ -599,6 +630,11 @@ textarea.textarea-md {
 
 .table-base tbody tr:nth-child(odd) td {
   background: var(--surface);
+}
+
+.table-base tbody tr.table-row-selected > td {
+  background: var(--surface-selected);
+  border-color: var(--accent-ring);
 }
 
 tr.table-row-dirty > td,

@@ -249,7 +249,8 @@ class VerificationStore:
         kind_tokens = list(kinds) or [Kind.ALL.value, Kind.CUSTOM.value]
         placeholders = ",".join(("?" for _ in kind_tokens))
         sql = f"""
-            SELECT id,status,signature,source_commit,kind,fail_reason,error,sanity_status,created_at,finished_at
+            SELECT id,status,signature,source_commit,kind,fail_reason,error,
+                   sanity_status,created_at,finished_at
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
         """
@@ -274,6 +275,44 @@ class VerificationStore:
             }
             for row in rows
         ]
+
+    def workspace_source_commit_verification_row(
+        self,
+        problem_id: int,
+        workspace_id: int,
+        source_commit: str,
+        *,
+        kinds: tuple[str, ...] = (Kind.ALL.value, Kind.CUSTOM.value),
+        ok_only: bool = False,
+    ) -> WorkspaceVerificationRow | None:
+        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.CUSTOM.value]
+        placeholders = ",".join(("?" for _ in kind_tokens))
+        sql = f"""
+            SELECT id,status,signature,source_commit,kind,fail_reason,error,
+                   sanity_status,created_at,finished_at
+            FROM verifications
+            WHERE problem_id=? AND workspace_id=? AND source_commit=?
+              AND kind IN ({placeholders})
+        """
+        params: list[object] = [problem_id, workspace_id, source_commit, *kind_tokens]
+        if ok_only:
+            sql += " AND status='ok'"
+        sql += " ORDER BY created_at DESC LIMIT 1"
+        row = self.db.fetch_one(sql, params)
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "status": str(row["status"] or ""),
+            "signature": str(row["signature"] or ""),
+            "source_commit": str(row["source_commit"] or ""),
+            "kind": str(row["kind"] or ""),
+            "fail_reason": str(row["fail_reason"] or ""),
+            "error": str(row["error"] or ""),
+            "sanity_status": str(row["sanity_status"] or ""),
+            "created_at": str(row["created_at"] or ""),
+            "finished_at": str(row["finished_at"] or ""),
+        }
 
     def workspace_verification_row(
         self,

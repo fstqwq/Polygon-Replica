@@ -1,35 +1,59 @@
 {% extends "contest_base.html" %}
 {% block content %}
-<h1 class="page-title">Contest Packages</h1>
+<h1 class="page-title">Statements &amp; Builds</h1>
 
 {% include "_flash_message.html" %}
 
 <section>
-  <h2>Build</h2>
+  <h2>Build Statements and Packages</h2>
   <p><strong>Problems in contest:</strong> {{ problem_count }}</p>
   {% if not ctx.access.can_write %}
   <p class="muted">Write access is required to start contest jobs.</p>
   {% elif problem_count <= 0 %}
   <p class="muted">Add at least one problem before running contest jobs.</p>
   {% else %}
-  <div class="form-row">
-    <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/preview/start">
-      <input type="hidden" name="language" value="{{ contest_statement_language }}" />
-      <label>
-        <input type="checkbox" name="insert_blank_pages" value="true" />
-        Insert blank pages after odd statements
-      </label>
-      <button class="btn" type="submit">Build Contest PDF</button>
-    </form>
-    <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">
-      <button class="btn primary-action" type="submit">Build Contest Package Bundle</button>
-    </form>
+  <div class="contest-build-grid">
+    <article class="contest-build-card">
+      <h3>Contest PDF</h3>
+      <p class="muted">
+        Compile all statements in <strong>{{ contest_statement_language }}</strong> into one PDF.
+      </p>
+      <form
+        class="form-stack"
+        method="post"
+        action="/contests/{{ ctx.contest.slug }}/packages/preview/start"
+      >
+        <label for="contest-pdf-language">Language</label>
+        <select id="contest-pdf-language" name="language">
+          {% for language in contest_statement_language_options %}
+          <option value="{{ language }}" {% if language == contest_statement_language %}selected{% endif %}>
+            {{ language }}
+          </option>
+          {% endfor %}
+        </select>
+        <label>
+          <input type="checkbox" name="insert_blank_pages" value="true" />
+          Insert blank pages after odd statements
+        </label>
+        <button class="btn primary-action" type="submit">Build Contest PDF</button>
+      </form>
+    </article>
+    <article class="contest-build-card">
+      <h3>ICPC Package Bundle</h3>
+      <p class="muted">
+        Build one ICPC ZIP per problem, a <code>manifest.json</code>, and an outer bundle
+        archive from each workspace HEAD.
+      </p>
+      <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build/start">
+        <button class="btn" type="submit">Build ICPC Package Bundle</button>
+      </form>
+    </article>
   </div>
   {% endif %}
 </section>
 
 <section>
-  <h2>Contest Statement Sources</h2>
+  <h2>Statement Sources</h2>
   <p class="muted">These files are copied into <code>statements/{{ contest_statement_language }}/</code> when building the contest PDF. Edit text sources such as <code>statements.tex</code> or <code>olymp.sty</code>, and upload external resources such as logos or images for TeX to reference.</p>
   {% if contest_statement_source_error %}
   <p class="flash">{{ contest_statement_source_error }}</p>
@@ -92,20 +116,19 @@
       <td>{{ "text" if row.is_text else "binary" }}</td>
       <td>{{ row.size_bytes if row.size_bytes is not none else "-" }}</td>
       <td>{{ row.created_at | local_time }}</td>
-      <td>
+      <td><div class="contest-source-actions">
         <a href="{{ row.download_href }}" target="_blank" rel="noopener">open</a>
         {% if row.is_text %}
-        · <a href="{{ row.edit_href }}">edit</a>
+        <a href="{{ row.edit_href }}">edit</a>
         {% endif %}
         {% if ctx.access.can_write %}
-        ·
         <form class="inline-action" method="post" action="/contests/{{ ctx.contest.slug }}/packages/statement/delete" data-confirm-message="Delete contest statement source {{ row.display_path }}?">
           <input type="hidden" name="language" value="{{ contest_statement_language }}" />
           <input type="hidden" name="path" value="{{ row.display_path }}" />
           <button class="link-button danger-link" type="submit">delete</button>
         </form>
         {% endif %}
-      </td>
+      </div></td>
     </tr>
     {% endfor %}
   </table>
@@ -115,7 +138,7 @@
 </section>
 
 <section>
-  <h2>Recent Jobs</h2>
+  <h2>Build History</h2>
   {% if job_rows %}
   <table class="table-base">
     <tr>
@@ -125,11 +148,12 @@
       <th>Summary</th>
       <th>Created</th>
       <th>Finished</th>
+      <th>Action</th>
     </tr>
     {% for row in job_rows %}
     {% set totals = row.summary.get("totals", {}) if row.summary else {} %}
-    <tr>
-      <td><a href="/contests/{{ ctx.contest.slug }}/packages?job_id={{ row.id }}&language={{ contest_statement_language }}"><code>{{ row.id }}</code></a></td>
+    <tr class="{% if selected_job and selected_job.id == row.id %}table-row-selected{% endif %}">
+      <td><code>{{ row.id }}</code></td>
       <td>{{ "pdf" if row.job_type == "pdf" else row.job_type }}</td>
       <td>{{ row.status | status_label }}</td>
       <td>
@@ -141,6 +165,11 @@
       </td>
       <td>{{ row.created_at | local_time }}</td>
       <td>{{ row.finished_at | local_time if row.finished_at else "-" }}</td>
+      <td>
+        <a href="/contests/{{ ctx.contest.slug }}/packages?job_id={{ row.id }}&language={{ contest_statement_language }}#job-report">
+          View Report
+        </a>
+      </td>
     </tr>
     {% endfor %}
   </table>
@@ -149,10 +178,11 @@
   {% endif %}
 </section>
 
-{% if selected_job and selected_job.summary %}
-<section>
+{% if selected_job %}
+<section id="job-report">
   <h2>Selected Job Report</h2>
   <p><strong>Job:</strong> <code>{{ selected_job.id }}</code> / {{ selected_job.job_type }} / {{ selected_job.status | status_label }}</p>
+  {% if selected_job.summary %}
   {% if selected_job.summary.get("language") %}
   <p><strong>Language:</strong> {{ selected_job.summary.get("language") }}</p>
   {% endif %}
@@ -164,6 +194,11 @@
   {% endif %}
   {% if selected_job.summary.get("error") %}
   <p class="danger"><strong>Error:</strong> {{ selected_job.summary.get("error") }}</p>
+  {% endif %}
+  {% if selected_job.summary.get("common_error") %}
+  <p class="danger">
+    <strong>All problems failed:</strong> {{ selected_job.summary.get("common_error") }}
+  </p>
   {% endif %}
   {% set selected_results = selected_job.summary.get("results") or [] %}
   {% if selected_results %}
@@ -180,13 +215,21 @@
       <td><code>{{ row.get("idx", "") }}</code></td>
       <td><code>{{ row.get("problem_slug", "") }}</code></td>
       <td>{{ row.get("status", "") | status_label }}</td>
-      <td><code>{{ row.get("source_commit", row.get("verification_id", "")) }}</code></td>
-      <td>{{ row.get("error", "") or row.get("warning", "") }}</td>
+      <td><code>{{ row.get("source_commit", "") }}</code></td>
+      <td>
+        {% if not selected_job.summary.get("common_error")
+          or row.get("error", "") != selected_job.summary.get("common_error", "") %}
+          {{ row.get("error", "") or row.get("warning", "") }}
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </table>
   {% else %}
   <p class="muted">No per-problem report was produced for this job.</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">This job has not produced a report yet.</p>
   {% endif %}
 </section>
 {% endif %}

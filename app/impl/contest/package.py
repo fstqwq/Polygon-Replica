@@ -187,6 +187,7 @@ def contest_packages_preview_start(
             language=current_language,
             job_id=job_id,
         ),
+        fragment="job-report",
         message=message,
     )
 
@@ -227,6 +228,7 @@ def contest_packages_build_start(contest: str, user: Annotated[str, Depends(requ
         str(ctx["contest"]["slug"]),
         "packages",
         query=f"job_id={quote_plus(job_id)}" if job_id else "",
+        fragment="job-report",
         message=message,
     )
 

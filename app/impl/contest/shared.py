@@ -13,7 +13,7 @@ from app.impl.runtime.config import config
 from .common import _contest_problem_slug_file_token
 from app.impl.workspace.context_operation import audit, normalize_contest_slug_required
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_verification import latest_workspace_signature_verification
+from app.impl.workspace.context_verification import latest_workspace_source_commit_verification
 from app.impl.workspace.access import workspace_access_context
 from app.service.repository.revision import workspace_revision_info
 from app.service.sandbox.base import ExecResult
@@ -22,7 +22,6 @@ from app.service.statement.context import normalize_statement_language
 from app.service.statement.render import render_statement_problem_assets_for_language
 from app.service.platform.git_process import run_git
 from app.service.verification.runtime import coerce_int, normalize_problem_mode
-from app.service.verification.signature import verification_signature
 from app.impl.workspace.problem_config import read_problem_config
 
 _C = config.constants
@@ -65,7 +64,7 @@ def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str]]:
         {"key": "access", "label": "Access", "href": f"{base}/access", "active": "1" if active == "access" else "0"},
         {
             "key": "packages",
-            "label": "Build PDF",
+            "label": "Statements & Builds",
             "href": f"{base}/packages",
             "active": "1" if active == "packages" else "0",
         },
@@ -695,10 +694,19 @@ def _prepare_contest_pdf_problem(
     return item
 
 
-def _contest_redirect(contest_slug: str, page: str, *, query: str = "", message: str = ""):
+def _contest_redirect(
+    contest_slug: str,
+    page: str,
+    *,
+    query: str = "",
+    fragment: str = "",
+    message: str = "",
+):
     target = f"/contests/{contest_slug}/{page}"
     if query:
         target += f"?{query}"
+    if fragment:
+        target += f"#{fragment}"
     return redirect_response(target, status_code=303, message=message)
 
 def _problem_general_payload_map(
@@ -1060,7 +1068,7 @@ def _run_contest_package_job_worker(
             "problem_id": problem_id,
             "problem_slug": problem_slug,
             "status": "failed",
-            "head_commit": "",
+            "source_commit": "",
             "verification_id": "",
             "package_file": "",
             "error": "",
@@ -1074,17 +1082,15 @@ def _run_contest_package_job_worker(
             config.workspace_service.ensure_workspace(problem_slug, actor_username, refresh_status=True)
             ws_ctx = config.workspace_service.workspace_context(problem_slug, actor_username, include_recent=False)
             workspace_id = int(ws_ctx["workspace"]["id"])
-            workspace_path = Path(str(ws_ctx["workspace"]["path"] or "")).resolve()
             head_commit_obj = ws_ctx["workspace"].get("head_commit")
             head_commit = str(head_commit_obj).strip() if head_commit_obj is not None else ""
-            item["head_commit"] = head_commit
+            item["source_commit"] = head_commit
             if not head_commit:
                 raise RuntimeError("no committed revision; commit changes first")
-            workspace_signature = verification_signature(workspace_path)
-            committed_verification = latest_workspace_signature_verification(
+            committed_verification = latest_workspace_source_commit_verification(
                 problem_id,
                 workspace_id,
-                workspace_signature,
+                head_commit,
                 ok_only=True,
             )
             verification_id = (
@@ -1098,7 +1104,6 @@ def _run_contest_package_job_worker(
                         problem_slug,
                         actor_username,
                         commit=head_commit,
-                        ref=head_commit,
                     )
                     or ""
                 ).strip()
@@ -1108,13 +1113,19 @@ def _run_contest_package_job_worker(
             if verification_row is None:
                 raise RuntimeError(f"verification metadata not found: {verification_id}")
             verification_status = str(verification_row["status"] or "").strip().lower()
-            recorded_signature = str(verification_row["signature"] or "").strip()
+            recorded_source_commit = str(verification_row["source_commit"] or "").strip()
             if verification_status != "ok":
                 raise RuntimeError(f"verification status is {verification_status}")
-            if recorded_signature != workspace_signature:
-                raise RuntimeError("verification is not from current workspace inputs")
+            if recorded_source_commit != head_commit:
+                raise RuntimeError("verification is not from the workspace HEAD")
             export_path = Path(
-                config.export_service.create_export(problem_slug, verification_id, "icpc")
+                config.export_service.create_export(
+                    problem_slug,
+                    verification_id,
+                    "icpc",
+                    workspace_id=workspace_id,
+                    source_commit=head_commit,
+                )
             ).resolve()
             problem_artifacts_root = (config.settings.artifacts_root / problem_slug).resolve()
             if problem_artifacts_root not in export_path.parents:
@@ -1150,6 +1161,18 @@ def _run_contest_package_job_worker(
             "failed": failed_count,
         },
     }
+    failed_errors = [
+        str(row.get("error") or "")
+        for row in results
+        if str(row.get("status") or "") != "success"
+    ]
+    if (
+        failed_count == len(results)
+        and failed_count > 1
+        and len(set(failed_errors)) == 1
+        and failed_errors[0]
+    ):
+        summary["common_error"] = failed_errors[0]
     (bundle_root / "manifest.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

@@ -407,8 +407,12 @@
     {% else %}
     <p class="muted">No editable system config keys were found.</p>
     {% endif %}
-    <form method="post" action="/settings/system-config/reset">
-      <button class="btn" type="submit">Reset To Defaults</button>
+    <form
+      method="post"
+      action="/settings/system-config/reset"
+      data-confirm-message="Reset all system configuration to defaults? Runtime keys reload immediately; restart-marked keys require a service restart."
+    >
+      <button class="btn danger-link" type="submit">Reset To Defaults</button>
     </form>
   </section>
   {% endif %}

@@ -82,7 +82,9 @@ Current judgehost auth accepts configured credentials for DOMjudge-compatible cl
 
 ### Contest
 - `/contests/{contest}/...`
-- overview, problems, properties, access, packages
+- overview, problems, properties, access, and Statements & Builds
+- contest package jobs verify and export each problem from that workspace's Git `HEAD`; dirty working-tree files are excluded
+- contest membership and direct problem ACLs are separate; the combined revoke action only removes non-owner ACLs on problems the actor can manage
 
 ### Agent
 - `/agent/sessions`, `/agent/connect`, approval, revoke, and disconnect pages
@@ -109,6 +111,8 @@ Current judgehost auth accepts configured credentials for DOMjudge-compatible cl
 - `/problems/{problem:path}/exports/{export_id}/{filename}`
 
 There is no current `/runs/{run_id}/artifacts/...` route.
+
+Rejudge is exposed as **Rejudge Without Cache** because it deletes matching case-result cache entries before scheduling the new verification.
 
 ### Tests
 - test-spec editing and verification actions

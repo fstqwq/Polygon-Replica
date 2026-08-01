@@ -62,8 +62,17 @@
     </table>
     <div class="form-row">
       <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/reorder">Save Index Order</button>
-      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/renumber">Renumber A,B,C...</button>
-      <button class="btn danger-link" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/remove-selected" onclick="return confirm('Remove selected problems? uncommitted changes will be lost.');">Remove Selected</button>
+      <button
+        class="btn"
+        type="submit"
+        formaction="/contests/{{ ctx.contest.slug }}/problems/renumber"
+      >Save and Renumber A, B, C...</button>
+      <button
+        class="btn danger-link"
+        type="submit"
+        formaction="/contests/{{ ctx.contest.slug }}/problems/remove-selected"
+        data-confirm-message="Remove selected problems from this contest? Problem repositories and working copies will not be changed."
+      >Remove Selected</button>
     </div>
   </form>
   {% else %}
@@ -97,13 +106,18 @@
       </tr>
       {% endfor %}
     </table>
-    <div class="form-row">
-      <button class="btn primary-action" type="submit">Apply To Selected</button>
-      {% if latest_job and latest_job.job_type == "change-general" %}
-      <button class="btn" type="submit" name="retry_job_id" value="{{ latest_job.id }}">Retry Failed From Last Job</button>
-      {% endif %}
-    </div>
+    <button class="btn primary-action" type="submit">Apply To Selected</button>
   </form>
+{% set retryable_job = latest_job
+  and latest_job.job_type == "change-general"
+  and latest_job.summary
+  and latest_job.summary.get("totals", {}).get("failed", 0) > 0 %}
+{% if retryable_job %}
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/change-general/retry">
+    <input type="hidden" name="retry_job_id" value="{{ latest_job.id }}" />
+    <button class="btn" type="submit">Retry Failed From Last Job</button>
+  </form>
+  {% endif %}
   {% endif %}
 </section>
 

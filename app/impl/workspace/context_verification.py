@@ -89,6 +89,24 @@ def latest_workspace_signature_verification(problem_id: int, workspace_id: int, 
     rows = [row for row in rows if str(row["signature"] or "") == safe_signature]
     return rows[0] if rows else None
 
+
+def latest_workspace_source_commit_verification(
+    problem_id: int,
+    workspace_id: int,
+    source_commit: str,
+    *,
+    ok_only: bool = False,
+):
+    if not source_commit:
+        return None
+    return config.verification_service._verification_store.workspace_source_commit_verification_row(
+        int(problem_id),
+        int(workspace_id),
+        source_commit,
+        kinds=(Kind.ALL.value, Kind.CUSTOM.value),
+        ok_only=bool(ok_only),
+    )
+
 def _verification_sources_signature(workspace: Path) -> str:
     return verification_signature(workspace)
 

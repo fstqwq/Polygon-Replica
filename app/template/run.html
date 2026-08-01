@@ -51,9 +51,14 @@
       </form>
       {% endif %}
       {% if not r.has_running %}
-      <form class="inline-form verification-inline-action" method="post" action="/problems/{{ ctx.problem.slug }}/run/rejudge">
+      <form
+        class="inline-form verification-inline-action"
+        method="post"
+        action="/problems/{{ ctx.problem.slug }}/run/rejudge"
+        data-confirm-message="Rejudge without cache? This creates a new verification, deletes matching cached case results, and does not reuse cached results."
+      >
         <input type="hidden" name="verification_id" value="{{ r.id }}" />
-        <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge</a>
+        <a href="#" class="linkish danger-link" data-submit-form="1">Rejudge Without Cache</a>
       </form>
       {% endif %}
     </td>

@@ -317,6 +317,77 @@ class ContestDiskStore:
             [int(contest_id), int(user_id)],
         )
 
+    def revoke_member_and_problem_access(
+        self,
+        contest_id: int,
+        actor_user_id: int,
+        user_id: int,
+    ) -> dict[str, int]:
+        def tx(conn: sqlite3.Connection) -> dict[str, int]:
+            membership = conn.execute(
+                "SELECT role FROM contest_members WHERE contest_id=? AND user_id=?",
+                [int(contest_id), int(user_id)],
+            ).fetchone()
+            if membership is None:
+                raise ValueError("contest membership not found")
+            if str(membership["role"]) == "owner":
+                raise ValueError("owner access is fixed and cannot be transferred")
+            actor = conn.execute(
+                "SELECT is_system_admin FROM users WHERE id=?",
+                [int(actor_user_id)],
+            ).fetchone()
+            if actor is None:
+                raise ValueError("actor user not found")
+            actor_is_admin = int(actor["is_system_admin"] or 0) == 1
+            problem_rows = conn.execute(
+                """
+                SELECT cp.problem_id,a.role AS actor_role
+                FROM contest_problems cp
+                LEFT JOIN repo_acl a
+                  ON a.problem_id=cp.problem_id AND a.user_id=?
+                WHERE cp.contest_id=?
+                """,
+                [int(actor_user_id), int(contest_id)],
+            ).fetchall()
+            manageable_problem_ids = [
+                int(row["problem_id"])
+                for row in problem_rows
+                if actor_is_admin or str(row["actor_role"] or "") in {"admin", "owner"}
+            ]
+            skipped_problem_count = len(problem_rows) - len(manageable_problem_ids)
+            removed_acl_count = 0
+            preserved_owner_count = 0
+            if manageable_problem_ids:
+                placeholders = ",".join(("?" for _ in manageable_problem_ids))
+                acl_rows = conn.execute(
+                    f"""
+                    SELECT role
+                    FROM repo_acl
+                    WHERE user_id=? AND problem_id IN ({placeholders})
+                    """,
+                    [int(user_id), *manageable_problem_ids],
+                ).fetchall()
+                removed_acl_count = sum(1 for row in acl_rows if str(row["role"]) != "owner")
+                preserved_owner_count = sum(1 for row in acl_rows if str(row["role"]) == "owner")
+                conn.execute(
+                    f"""
+                    DELETE FROM repo_acl
+                    WHERE user_id=? AND role<>'owner' AND problem_id IN ({placeholders})
+                    """,
+                    [int(user_id), *manageable_problem_ids],
+                )
+            conn.execute(
+                "DELETE FROM contest_members WHERE contest_id=? AND user_id=?",
+                [int(contest_id), int(user_id)],
+            )
+            return {
+                "removed_acl_count": removed_acl_count,
+                "preserved_owner_count": preserved_owner_count,
+                "skipped_problem_count": skipped_problem_count,
+            }
+
+        return self.db.write_transaction(tx)
+
     def property_rows(self, contest_id: int) -> list[ContestPropertyRecord]:
         rows = self.db.fetch_all(
             "SELECT key,value_json FROM contest_properties WHERE contest_id=?",
@@ -547,8 +618,8 @@ class ContestDiskStore:
                 return 0
             placeholders = ",".join(("?" for _ in contest_problem_ids))
             rows = conn.execute(
-                f"SELECT id FROM contest_problems WHERE contest_id=? AND id IN ({placeholders})",
-                [int(contest_id), *contest_problem_ids],
+                "SELECT id FROM contest_problems WHERE contest_id=?",
+                [int(contest_id)],
             ).fetchall()
             found_ids = {int(row["id"]) for row in rows}
             if found_ids != set(contest_problem_ids):
@@ -585,7 +656,15 @@ class ContestDiskStore:
             return len(safe_pairs)
         return int(self.db.write_transaction(tx)) > 0
 
-    def renumber_problem_indices(self, contest_id: int) -> None:
+    def renumber_problem_indices(
+        self,
+        contest_id: int,
+        ordered_contest_problem_ids: list[int],
+    ) -> bool:
+        safe_ids = [int(contest_problem_id) for contest_problem_id in ordered_contest_problem_ids]
+        if not safe_ids or len(set(safe_ids)) != len(safe_ids):
+            return False
+
         def idx_label(seq: int) -> str:
             value = max(1, int(seq))
             chars: list[str] = []
@@ -597,16 +676,27 @@ class ContestDiskStore:
 
         def tx(conn: sqlite3.Connection) -> int:
             rows = conn.execute(
-                "SELECT problem_id FROM contest_problems WHERE contest_id=? ORDER BY idx COLLATE NOCASE ASC, id ASC",
+                "SELECT id FROM contest_problems WHERE contest_id=?",
                 [int(contest_id)],
             ).fetchall()
-            for pos, row in enumerate(rows, start=1):
+            if {int(row["id"]) for row in rows} != set(safe_ids):
+                return 0
+            for pos, contest_problem_id in enumerate(safe_ids, start=1):
                 conn.execute(
-                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND problem_id=?",
-                    [idx_label(pos), int(contest_id), int(row[0])],
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [
+                        f"~tmp-renumber-{int(contest_id)}-{contest_problem_id}-{pos}~",
+                        int(contest_id),
+                        contest_problem_id,
+                    ],
                 )
-            return len(rows)
-        self.db.write_transaction(tx)
+            for pos, contest_problem_id in enumerate(safe_ids, start=1):
+                conn.execute(
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [idx_label(pos), int(contest_id), contest_problem_id],
+                )
+            return len(safe_ids)
+        return int(self.db.write_transaction(tx)) == len(safe_ids)
 
     def delete_contest(self, contest_id: int) -> None:
         def tx(conn: sqlite3.Connection) -> None:

@@ -1037,7 +1037,6 @@ class VerificationService:
         problem: str,
         username: str,
         commit: str | None = None,
-        ref: str | None = None,
         *,
         sample_only: bool = False,
         verification_id: str = "",
@@ -1054,9 +1053,10 @@ class VerificationService:
         workspace_dirty = bool(status.get("dirty"))
         snapshot_root: Path | None = None
         signature_root = workspace_path
+        source_commit = ""
         if commit:
-            resolved_commit = self.workspace_service.resolve_commit(workspace_path, commit)
-            snapshot_root = self.workspace_service.create_snapshot(workspace_path, resolved_commit)
+            source_commit = self.workspace_service.resolve_commit(workspace_path, commit)
+            snapshot_root = self.workspace_service.create_snapshot(workspace_path, source_commit)
             workspace_dirty = False
             signature_root = snapshot_root
         elif workspace_dirty or (not workspace_head):
@@ -1075,11 +1075,12 @@ class VerificationService:
             actor_user_id=actor_user_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            workspace_head=workspace_head,
+            workspace_head=source_commit or workspace_head,
             workspace_dirty=workspace_dirty,
             targets=[],
             verification_id=target_verification_id,
             signature=signature,
+            source_commit=source_commit,
             kind=Kind.SAMPLE.value if sample_only else Kind.ALL.value,
             sample_only=bool(sample_only),
             snapshot_root_override=snapshot_root,
