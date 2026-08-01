@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
 import re
 import shlex
+import threading
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 from app.db import now_iso
@@ -45,6 +48,26 @@ class DomjudgeToolkit:
     def __init__(self, state: JudgehostState) -> None:
         self._s = state
         self._executable_cache = DomjudgeExecutableCache(self._s.fs_manager.judgehost_executables_root)
+        self._cache_key_guard = threading.Lock()
+        self._cache_key_locks: dict[str, tuple[threading.Lock, int]] = {}
+
+    @contextlib.contextmanager
+    def cache_key_lock(self, kind: str, key_hash: str, signature: str) -> Iterator[None]:
+        token = f"{kind}:{key_hash}:{signature}"
+        with self._cache_key_guard:
+            lock, users = self._cache_key_locks.get(token, (threading.Lock(), 0))
+            self._cache_key_locks[token] = (lock, users + 1)
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+            with self._cache_key_guard:
+                current_lock, current_users = self._cache_key_locks[token]
+                if current_users == 1:
+                    self._cache_key_locks.pop(token)
+                else:
+                    self._cache_key_locks[token] = (current_lock, current_users - 1)
 
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_GENERATE_INPUT = "generate-input"

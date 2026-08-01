@@ -13,6 +13,7 @@ from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
 from app.service.platform.fs.layout import FsManager
 from app.service.verification.service import VerificationService
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.export.service import ExportService
 from app.service.repository.git import GitService
 from app.service.platform.judge_fs_index import JudgeFsIndexService
@@ -52,6 +53,7 @@ class RuntimeConfig:
     tex_sandbox_backend: SandboxBackend = field(init=False)
     tex_compile_service: TexCompileService = field(init=False)
     verification_service: VerificationService = field(init=False)
+    verification_task_store: VerificationTaskStore = field(init=False)
     preview_service: PreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
@@ -107,6 +109,7 @@ class RuntimeConfig:
 
     def __post_init__(self) -> None:
         self.db = DB(self.settings.db_path)
+        self.verification_task_store = VerificationTaskStore(self.db)
         self.system_config_service = SystemConfigService(self.db)
         self.smtp_config_service = SmtpConfigService(self.db)
         self.judge_fs_index_service = JudgeFsIndexService(self.settings.cache_root)
@@ -120,7 +123,11 @@ class RuntimeConfig:
         test_spec.apply_runtime_values(self.constants)
         toolchain.apply_runtime_values(self.constants)
         workspace.apply_runtime_values(self.constants)
-        self.workspace_service = workspace.WorkspaceService(self.db, self.settings)
+        self.workspace_service = workspace.WorkspaceService(
+            self.db,
+            self.settings,
+            verification_task_store=self.verification_task_store,
+        )
         self.agent_service = AgentService(self.db, self.workspace_service, constants=self.constants)
         self.contest_service = ContestService(self.db, self.settings)
         self.git_service = GitService()
@@ -141,12 +148,14 @@ class RuntimeConfig:
             self.settings,
             self.constants,
             judge_fs_index_service=self.judge_fs_index_service,
+            verification_task_store=self.verification_task_store,
         )
         self.verification_service = VerificationService(
             self.db,
             self.workspace_service,
             self.artifact_service,
             self.judgehost_task_service,
+            task_store=self.verification_task_store,
             judge_fs_index_service=self.judge_fs_index_service,
             constants=self.constants,
         )

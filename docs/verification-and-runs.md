@@ -163,12 +163,10 @@ The runtime keeps four distinct lifecycle layers:
 
 Cancellation moves both pending and leased cases for the cancelled run directly
 to `cancelled`; late judgedaemon callbacks are acknowledged without reviving
-the case. A compact terminal task remains retained with its runtime-scoped job,
-so task retention cannot break later job aggregation or `run_id` fingerprint
-checks.
+the case.
 
 Job closure is an atomic claim. The state store rechecks all job cases and changes
-`queued/leased` to `finalizing` under the same lock and transaction used by case
+`queued/leased` to `finalizing` under the same writer lock used by case
 append. A task arriving after that claim receives a new grouped job instead of
 reopening the old one.
 
@@ -181,6 +179,24 @@ before the job becomes `completed/failed`. Only then is the job work root remove
 Executable scripts have a different lifetime: they remain runtime-scoped and are
 cleared at service startup, not when an individual job or verification finishes.
 
+Task dispatch uses indexed ready/group/deadline heaps and a writer-priority RWLock.
+Fetch, lease expiry, and status counts do not sort or scan historical tasks. Job
+and case state is also held in typed indexed memory records rather than a shared
+in-memory SQLite connection. The verification runtime overlay is one
+`RuntimeConfig`-owned store protected by the same lock policy; task store instances
+do not share class-level dictionaries. Verification dependency indegrees and
+dependents are built once, so each DAG edge is processed once. Terminal case results
+are persisted in batches of at most 256 rows or 5 ms before successors are released.
+
+After a verification's final detail and status are durable, one process-wide
+deadline scheduler starts a 60-second quiet window. Late result, internal-error,
+debug-info, or lease-return activity restarts that verification's window. At the
+deadline only that verification's indexed terminal task/case identities are
+removed; a shared job remains until its final owner is quiet. Unknown callbacks
+after cleanup are acknowledged as idempotent no-ops. This cleanup never removes
+the exact case cache or executable cache, so it does not reduce cache hit rate and
+does not require a periodic full-store retention scan.
+
 `run_id` identifies one immutable judgehost task. Repeating the same request is
 idempotent; reusing the same `run_id` with a different payload is rejected.
 
@@ -190,7 +206,8 @@ Current cache behavior for execution results:
 - only exact case cache remains
 - solve-output cache has been removed
 - cache lookup happens inside the judgehost adapter before work is sent to judgedaemon
-- cache-hit results still update `verification_tasks` and artifact refs through the normal finalize path
+- same-key cache reads/materialization are serialized without blocking unrelated keys
+- cache-hit results still update `verification_tasks` and artifact refs through the normal batched finalize path
 
 ## Worker Queue
 

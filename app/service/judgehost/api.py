@@ -7,9 +7,11 @@ from app.runtime_value import RuntimeValues
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.repository.workspace import WorkspaceService
+from app.service.verification.task_store import VerificationTaskStore
 from app.setting import Settings
 
 from .core import JudgehostCore
+from .cleanup import JudgehostTerminalCleanup
 from .dispatch import DispatchHandler
 from .enqueue import TaskEnqueue
 from .result import ResultProcessor
@@ -34,6 +36,8 @@ class Judgehost:
         fs_manager: FsManager,
         settings: Settings,
         constants: RuntimeValues,
+        *,
+        verification_task_store: VerificationTaskStore,
         judge_fs_index_service: JudgeFsIndexService | None = None,
     ) -> None:
         _ = settings
@@ -44,6 +48,7 @@ class Judgehost:
             fs_manager=fs_manager,
             constants=constants,
             judge_fs_index_service=judge_fs_index_service,
+            verification_task_store=verification_task_store,
         )
         self._toolkit = DomjudgeToolkit(self._state)
         self._core = JudgehostCore(self._state)
@@ -51,6 +56,11 @@ class Judgehost:
         self._result = ResultProcessor(self._state, self._core, self._queue, self._toolkit)
         self._dispatch = DispatchHandler(self._state, self._core, self._queue, self._result, self._toolkit)
         self._enqueue = TaskEnqueue(self._state, self._core, self._dispatch, self._toolkit)
+        self._terminal_cleanup = JudgehostTerminalCleanup(
+            self._state.task_store,
+            self._state.judgehost_state_store,
+        )
+        self._state.touch_verification_runtime = self._terminal_cleanup.touch
         self.apply_runtime_values(constants)
 
     @property
@@ -171,6 +181,12 @@ class Judgehost:
 
     def forget_domjudge_runs(self, *args, **kwargs):
         return self._queue.forget_domjudge_runs(*args, **kwargs)
+
+    def schedule_verification_cleanup(self, verification_id: str) -> None:
+        self._terminal_cleanup.schedule(verification_id)
+
+    def touch_verification_runtime(self, verification_id: str) -> None:
+        self._terminal_cleanup.touch(verification_id)
 
     def resolve_artifact_blob(self, *args, **kwargs):
         return self._toolkit.resolve_artifact_blob(*args, **kwargs)
@@ -325,9 +341,8 @@ class Judgehost:
         return self.resolve_artifact_blob(output_diff_ref)
 
     def reset_runtime_state(self) -> None:
+        self._state.task_store.reset()
         with self._state.state_lock:
-            self._state.tasks_by_id.clear()
-            self._state.task_id_by_run.clear()
             self._state.hosts_state.clear()
             self._state.peer_hostname_by_client_addr.clear()
             self._state.host_judged_case_events.clear()

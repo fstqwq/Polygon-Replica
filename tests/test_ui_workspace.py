@@ -305,7 +305,7 @@ class TestUIWorkspace(UIBaseSuite):
         )
         from app.service.verification.task_store import VerificationTaskStore
 
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {

@@ -97,7 +97,7 @@ def _verification_runtime_progress(
     failure_log = logs_dir / "failure.log"
     compile_log = logs_dir / "compile.log"
     tests_total = _verification_tests_total(verification_detail)
-    verification_rows = VerificationTaskStore(config.db).list_rows(verification_id)
+    verification_rows = config.verification_task_store.list_rows(verification_id)
     outputs_generated = len(
         [
             row

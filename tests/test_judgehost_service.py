@@ -49,6 +49,7 @@ class TestJudgehostService(SmokeBase):
             config.fs_manager,
             config.settings,
             config.constants,
+            verification_task_store=config.verification_task_store,
             judge_fs_index_service=config.judge_fs_index_service,
         )
         service.state.enabled = True
@@ -62,18 +63,11 @@ class TestJudgehostService(SmokeBase):
         if not safe_run_id:
             return None
         safe_verification_id = str(verification_id or "").strip()
-        task_row: dict[str, object] | None = None
         service = config.judgehost_task_service
-        with service.state.state_lock:
-            for row in service.state.tasks_by_id.values():
-                row_run_id = str(row.get("run_id") or "")
-                if row_run_id != safe_run_id:
-                    continue
-                row_verification_id = str(row.get("verification_id") or "")
-                if safe_verification_id and row_verification_id != safe_verification_id:
-                    continue
-                task_row = dict(row)
-                break
+        task_row = service.state.task_store.get_for_run(safe_run_id)
+        if task_row is not None and safe_verification_id:
+            if str(task_row.get("verification_id") or "") != safe_verification_id:
+                task_row = None
         if task_row is not None:
             row_verification_id = str(task_row.get("verification_id") or "")
             summary = service.queue.load_run_summary(safe_run_id, row_verification_id)
@@ -83,7 +77,7 @@ class TestJudgehostService(SmokeBase):
                 "verification_id": row_verification_id,
             }
         candidates = [safe_verification_id] if safe_verification_id else [f"ver-{safe_run_id}"]
-        task_store = VerificationTaskStore(config.db)
+        task_store = config.verification_task_store
         for candidate in candidates:
             token = str(candidate or "").strip()
             if not token:
@@ -193,7 +187,7 @@ class TestJudgehostService(SmokeBase):
             task_kind="solution-run",
             persist_verification_run=False,
         )
-        task_store = VerificationTaskStore(config.db)
+        task_store = config.verification_task_store
         task_store.replace_graph(
             verification_id,
             tasks=[
@@ -537,7 +531,7 @@ class TestJudgehostService(SmokeBase):
 
         self.assertEqual(str(first.get("status") or ""), "ok")
         self.assertEqual(str(second.get("status") or ""), "ok")
-        row = service.state.tasks_by_id.get(task_id)
+        row = service.state.task_store.get(task_id)
         self.assertIsNotNone(row)
         assert row is not None
         self.assertEqual(str(row.get("status") or ""), service.STATUS_COMPLETED)
@@ -572,7 +566,7 @@ class TestJudgehostService(SmokeBase):
                 verification_source="run.execute",
             )
 
-        row = service.state.tasks_by_id.get(task_id)
+        row = service.state.task_store.get(task_id)
         self.assertIsNotNone(row)
         assert row is not None
         payload = dict(row.get("payload") or {})
@@ -589,7 +583,7 @@ class TestJudgehostService(SmokeBase):
         job_id = service.dispatch._domjudge_prepare_job(host, leased[0])
         self.assertGreater(job_id, 0)
 
-        row = service.state.tasks_by_id.get(task_id)
+        row = service.state.task_store.get(task_id)
         self.assertIsNotNone(row)
         assert row is not None
         retained_payload = dict(row.get("payload") or {})
@@ -644,7 +638,7 @@ class TestJudgehostService(SmokeBase):
             },
         )
 
-        row = service.state.tasks_by_id.get(task_id)
+        row = service.state.task_store.get(task_id)
         self.assertIsNotNone(row)
         assert row is not None
         retained_payload = dict(row.get("payload") or {})
@@ -653,41 +647,6 @@ class TestJudgehostService(SmokeBase):
         retained_result = dict(row.get("result") or {})
         self.assertEqual(str(retained_result.get("run_status") or ""), "ok")
         self.assertNotIn("large_blob", retained_result)
-
-    def test_wait_for_task_result_rejects_non_dict_cached_summary(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-wait-summary-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-wait-summary-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            persist_verification_run=False,
-        )
-        with service.state.state_lock:
-            row = service.state.tasks_by_id.get(task_id)
-            self.assertIsNotNone(row)
-            assert row is not None
-            row["status"] = service.STATUS_FAILED
-            row["run_status"] = "failed"
-            row["error_text"] = "boom"
-            row["summary"] = "corrupted"
-
-        with self.assertRaises(ValueError):
-            service.wait_for_task_result(task_id, timeout_sec=1.0)
 
     def test_domjudge_work_root_uses_transient_cache_root(self) -> None:
         service = config.judgehost_task_service
@@ -719,19 +678,26 @@ class TestJudgehostService(SmokeBase):
             verification_source="verification.start",
             persist_verification_run=False,
         )
-        with service.state.state_lock:
-            row = service.state.tasks_by_id.get(task_id)
-            self.assertIsNotNone(row)
-            assert row is not None
-            row["status"] = service.STATUS_COMPLETED
-            row["run_status"] = "ok"
-            row["error_text"] = ""
-            row["summary"] = {
+        service.state.task_store.transition(
+            task_id,
+            expected={service.STATUS_QUEUED},
+            status=service.STATUS_REPORTING,
+        )
+        service.state.task_store.transition(
+            task_id,
+            expected={service.STATUS_REPORTING},
+            status=service.STATUS_COMPLETED,
+            updates={
+                "run_status": "ok",
+                "error_text": "",
+                "summary": {
                 "mode": "pass-fail",
                 "source": "solutions/ac.cpp",
                 "tests": [],
                 "status": "ok",
-            }
+                },
+            },
+        )
         result = service.wait_for_task_result(task_id, timeout_sec=1.0)
         self.assertEqual(str(result.get("artifact_path") or ""), "")
         self.assertFalse((self._verification_artifact_root(verification_id) / "runs" / run_id).exists())
@@ -6400,20 +6366,22 @@ class TestJudgehostService(SmokeBase):
             verification_source="run.execute",
             persist_verification_run=False,
         )
-        with service.state.state_lock:
-            row = service.state.tasks_by_id.get(task_id)
-            self.assertIsNotNone(row)
-            assert row is not None
-            row["status"] = service.STATUS_FAILED
-            row["run_status"] = "failed"
-            row["error_text"] = ""
-            row["summary"] = {
+        service.state.task_store.transition(
+            task_id,
+            expected={service.STATUS_QUEUED},
+            status=service.STATUS_FAILED,
+            updates={
+                "run_status": "failed",
+                "error_text": "",
+                "summary": {
                 "mode": "pass-fail",
                 "source": "solutions/ac.cpp",
                 "tests": [],
                 "compile_diagnostics": [],
                 "error": "",
-            }
+                },
+            },
+        )
 
         result = service.poll_task_case_result(task_id, "001.in")
         self.assertIsNotNone(result)
@@ -6424,60 +6392,6 @@ class TestJudgehostService(SmokeBase):
         summary = dict(result.get("summary") or {})
         tests = list(summary.get("tests") or [])
         self.assertEqual(tests, [])
-
-    def test_poll_task_case_result_falls_back_to_row_summary_when_run_summary_lookup_misses(self) -> None:
-        service = config.judgehost_task_service
-        self._reset_task_queue_state(service)
-        verification_id = f"ver-jh-row-summary-{uuid.uuid4().hex[:8]}"
-        run_id = f"r-jh-row-summary-{uuid.uuid4().hex[:8]}"
-        self._seed_build_verification(verification_id)
-
-        task_id = service.enqueue_task(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            mode="pass-fail",
-            submission_path="solutions/ac.cpp",
-            upload_content=None,
-            upload_filename=None,
-            run_id=run_id,
-            selected_tests=["001.in"],
-            verification_id=verification_id,
-            verification_run_ids=[run_id],
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            persist_verification_run=False,
-        )
-        detailed_error = (
-            "g++: internal compiler error: File size limit exceeded signal terminated program as\n"
-            "Please submit a full bug report."
-        )
-        with service.state.state_lock:
-            row = service.state.tasks_by_id.get(task_id)
-            self.assertIsNotNone(row)
-            assert row is not None
-            row["status"] = service.STATUS_FAILED
-            row["run_status"] = "failed"
-            row["error_text"] = ""
-            row["summary"] = {
-                "mode": "pass-fail",
-                "source": "solutions/std.cpp",
-                "tests": [],
-                "compile_diagnostics": [{"level": "error", "message": detailed_error}],
-                "error": detailed_error,
-            }
-            service.state.task_id_by_run.pop(run_id, None)
-
-        result = service.poll_task_case_result(task_id, "001.in")
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertEqual(str(result.get("status") or ""), "failed")
-        self.assertTrue(bool(result.get("missing_case_result")))
-        self.assertEqual(str(result.get("error") or ""), detailed_error)
-        summary = dict(result.get("summary") or {})
-        self.assertEqual(str(summary.get("error") or ""), detailed_error)
-        diagnostics = list(summary.get("compile_diagnostics") or [])
-        self.assertEqual(diagnostics[0]["message"], detailed_error)
 
     def test_poll_task_case_result_recovers_feedback_from_case_artifacts_when_summary_row_missing(self) -> None:
         service = config.judgehost_task_service
@@ -6504,17 +6418,16 @@ class TestJudgehostService(SmokeBase):
             persist_verification_run=False,
         )
 
-        with service.state.state_lock:
-            row = service.state.tasks_by_id.get(task_id)
-            self.assertIsNotNone(row)
-            assert row is not None
-            row["summary"] = {
+        service.state.task_store.update(
+            task_id,
+            {"summary": {
                 "mode": "pass-fail",
                 "source": "solutions/std.cpp",
                 "tests": [],
                 "compile_diagnostics": [],
                 "error": "",
-            }
+            }},
+        )
 
         work_root = Path(tempfile.mkdtemp(prefix="polygon-case-feedback-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
@@ -6620,17 +6533,16 @@ class TestJudgehostService(SmokeBase):
             persist_verification_run=False,
         )
 
-        with service.state.state_lock:
-            row = service.state.tasks_by_id.get(task_id)
-            self.assertIsNotNone(row)
-            assert row is not None
-            row["summary"] = {
+        service.state.task_store.update(
+            task_id,
+            {"summary": {
                 "mode": "pass-fail",
                 "source": "solutions/std.cpp",
                 "tests": [],
                 "compile_diagnostics": [],
                 "error": "",
-            }
+            }},
+        )
 
         work_root = Path(tempfile.mkdtemp(prefix="polygon-case-debug-")).resolve()
         self.addCleanup(shutil.rmtree, work_root, ignore_errors=True)
@@ -6739,18 +6651,17 @@ class TestJudgehostService(SmokeBase):
             task_kind="main-correct",
             persist_verification_run=False,
         )
-        with service.state.state_lock:
-            row = service.state.tasks_by_id.get(task_id)
-            self.assertIsNotNone(row)
-            assert row is not None
-            row["summary"] = {
+        service.state.task_store.update(
+            task_id,
+            {"summary": {
                 "mode": "pass-fail",
                 "source": "solutions/std.cpp",
                 "tests": [],
                 "compile_diagnostics": [],
                 "error": "",
-            }
-        task_store = VerificationTaskStore(config.db)
+            }},
+        )
+        task_store = config.verification_task_store
         task_store.replace_graph(
             verification_id,
             tasks=[

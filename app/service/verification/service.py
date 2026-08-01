@@ -67,6 +67,7 @@ class VerificationService:
         workspace_service: WorkspaceService,
         artifacts: ArtifactService,
         judgehost_task_service: Judgehost,
+        task_store: VerificationTaskStore,
         judge_fs_index_service: JudgeFsIndexService | None = None,
         constants: RuntimeValues | None = None,
     ):
@@ -74,6 +75,7 @@ class VerificationService:
         self.workspace_service = workspace_service
         self.artifacts = artifacts
         self.judgehost_task_service = judgehost_task_service
+        self.task_store = task_store
         self.judge_fs_index_service = judge_fs_index_service
         self._verification_inflight_lock = threading.RLock()
         self._applied_aux_display_text_limit_bytes: int | None = None
@@ -109,7 +111,7 @@ class VerificationService:
         token = run_id
         if not token:
             return ""
-        task_store = VerificationTaskStore(self.db)
+        task_store = self.task_store
         for row in self._verification_store.list_rows(
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
@@ -672,7 +674,7 @@ class VerificationService:
         if not self.workspace_verification_exists(int(problem_id), int(workspace_id), safe_verification_id):
             return None
         values: list[str] = []
-        for row in VerificationTaskStore(self.db).list_rows(safe_verification_id):
+        for row in self.task_store.list_rows(safe_verification_id):
             run_id = str(row["run_id"] or "")
             if run_id and run_id not in values:
                 values.append(run_id)
@@ -690,7 +692,7 @@ class VerificationService:
                 tokens.add(input_ref)
             if answer_ref:
                 tokens.add(answer_ref)
-        for row in VerificationTaskStore(self.db).list_rows(safe_verification_id):
+        for row in self.task_store.list_rows(safe_verification_id):
             output_ref = str(row["output_ref"] or "")
             if output_ref:
                 tokens.add(output_ref)
@@ -748,7 +750,7 @@ class VerificationService:
 
 
     def verification_runtime_summary(self, verification_id: str) -> dict[str, object]:
-        rows = VerificationTaskStore(self.db).list_rows_for_list(verification_id)
+        rows = self.task_store.list_rows_for_list(verification_id)
         counts = task_counts(rows)
         return {
             "task_graph": bool(rows),
@@ -818,10 +820,10 @@ class VerificationService:
         )
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
-        VerificationTaskStore(self.db).cancel_unfinished_tasks(verification_id, reason=reason)
+        self.task_store.cancel_unfinished_tasks(verification_id, reason=reason)
 
     def verification_ids_with_unfinished_tasks(self) -> list[str]:
-        return VerificationTaskStore(self.db).verification_ids_with_unfinished_tasks()
+        return self.task_store.verification_ids_with_unfinished_tasks()
 
     def finalize_cancelled_unfinished_records(
         self,

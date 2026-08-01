@@ -292,7 +292,7 @@ def _verification_task_run_status(rows: list[VerificationTaskRow]) -> str:
     return "ok"
 
 def _verification_task_rows_failure_hint(verification_id: str) -> str:
-    rows = VerificationTaskStore(config.db).list_rows(verification_id)
+    rows = config.verification_task_store.list_rows(verification_id)
     grouped: dict[str, list[VerificationTaskRow]] = {}
     order: list[str] = []
     for row in rows:

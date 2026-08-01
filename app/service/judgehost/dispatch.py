@@ -654,9 +654,8 @@ class DispatchHandler:
         )
 
     def _domjudge_apply_cache_shortcuts_for_job(self, job_id: int, *, hostname: str) -> int:
-        # Cached artifacts participate in the same work-root lifetime as
-        # judgehost callbacks; finalization must not delete them mid-publish.
-        with self._s.state_lock:
+        # Serialize only this job's artifact activity; unrelated hosts remain concurrent.
+        with self._result._job_activity(int(job_id)):
             return self._domjudge_apply_cache_shortcuts_for_job_locked(
                 job_id,
                 hostname=hostname,
@@ -690,15 +689,31 @@ class DispatchHandler:
         cached_case_updates: list[dict[str, object]] = []
         pending_rows = 0
         for row in rows:
-            shortcut = self._domjudge_try_cache_shortcut(
-                hostname=hostname,
-                job_row=job_row,
-                case_row=row,
+            cache_key_hash, cache_signature = self._toolkit.case_cache_ref(
+                source_hash=domjudge_lower_text(job_row["source_hash"]),
+                compile_hash=domjudge_lower_text(job_row["compile_hash"]),
+                run_hash=domjudge_lower_text(job_row["run_hash"]),
+                compare_hash=domjudge_lower_text(job_row["compare_hash"]),
                 compile_config_hash=compile_config_hash,
                 run_config_hash=run_config_hash,
                 compare_config_hash=compare_config_hash,
                 toolchain_cmd_digest=toolchain_cmd_digest,
+                testcase_hash=domjudge_lower_text(row["testcase_hash"]),
             )
+            with self._toolkit.cache_key_lock(
+                self.CASE_CACHE_KIND,
+                cache_key_hash,
+                cache_signature,
+            ):
+                shortcut = self._domjudge_try_cache_shortcut(
+                    hostname=hostname,
+                    job_row=job_row,
+                    case_row=row,
+                    compile_config_hash=compile_config_hash,
+                    run_config_hash=run_config_hash,
+                    compare_config_hash=compare_config_hash,
+                    toolchain_cmd_digest=toolchain_cmd_digest,
+                )
             if shortcut is None:
                 pending_rows += 1
                 continue
@@ -776,12 +791,11 @@ class DispatchHandler:
 
 
     def _domjudge_try_prequeue_cache_finalize(self, *, task_id: str, run_id: str, payload: dict[str, object]) -> None:
-        with self._s.state_lock:
-            self._domjudge_try_prequeue_cache_finalize_locked(
-                task_id=task_id,
-                run_id=run_id,
-                payload=payload,
-            )
+        self._domjudge_try_prequeue_cache_finalize_locked(
+            task_id=task_id,
+            run_id=run_id,
+            payload=payload,
+        )
 
     def _domjudge_try_prequeue_cache_finalize_locked(
         self,
@@ -824,11 +838,12 @@ class DispatchHandler:
                 self._domjudge_release_prepared_job_for_queue(int(job_id))
                 return
 
-            with self._s.state_lock:
-                row = self._s.tasks_by_id.get(safe_task_id)
-                if row is not None and row.get("status") == self.STATUS_ENQUEUING:
-                    row["status"] = self.STATUS_QUEUED
-                    row["updated_at"] = now_iso()
+            self._s.task_store.transition(
+                safe_task_id,
+                expected={self.STATUS_ENQUEUING},
+                status=self.STATUS_QUEUED,
+                updates={"updated_at": now_iso()},
+            )
             self._result._domjudge_finalize_if_ready(int(job_id))
         except Exception as exc:
             if job_id > 0:

@@ -891,7 +891,7 @@ class TestAgentAPI(SmokeBase):
                     ],
                 },
             )
-            task_store = VerificationTaskStore(config.db)
+            task_store = config.verification_task_store
             task_store.replace_graph(
                 verification_id,
                 tasks=[

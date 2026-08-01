@@ -90,24 +90,3 @@ def domjudge_languages_payload() -> list[dict[str, object]]:
         {"id": "java", "extensions": ["java"]},
         {"id": "py", "extensions": ["py"]},
     ]
-
-
-def task_status_counts(
-    task_rows: dict[str, dict[str, object]],
-    *,
-    queued: str,
-    leased: str,
-    completed: str,
-    failed: str,
-) -> dict[str, int]:
-    out = {
-        str(queued): 0,
-        str(leased): 0,
-        str(completed): 0,
-        str(failed): 0,
-    }
-    for row in task_rows.values():
-        token = domjudge_lower_text(row.get("status"))
-        if token in out:
-            out[token] = int(out[token]) + 1
-    return out

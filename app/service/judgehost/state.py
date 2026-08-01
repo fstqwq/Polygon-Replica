@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import threading
+from collections import deque
 from dataclasses import dataclass
 from dataclasses import field
+from typing import Callable
 
 from app.db import DB
 from app.runtime_value import RuntimeValues
@@ -11,6 +13,9 @@ from app.service.memory.judgehost_state_store import JudgehostStateStore
 from app.service.platform.fs.layout import FsManager
 from app.service.platform.judge_fs_index import JudgeFsIndexService
 from app.service.repository.workspace import WorkspaceService
+from app.service.verification.task_store import VerificationTaskStore
+
+from .task_store import JudgehostTaskStore
 
 
 @dataclass
@@ -20,6 +25,7 @@ class JudgehostState:
     fs_manager: FsManager
     constants: RuntimeValues
     judge_fs_index_service: JudgeFsIndexService | None
+    verification_task_store: VerificationTaskStore
     verification_store: VerificationStore = field(init=False)
 
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -41,11 +47,14 @@ class JudgehostState:
     max_binary_payload_bytes: int = 8388608
 
     lease_requeue_next_ts: float = 0.0
-    tasks_by_id: dict[str, dict[str, object]] = field(default_factory=dict)
-    task_id_by_run: dict[str, str] = field(default_factory=dict)
+    task_store: JudgehostTaskStore = field(init=False)
+    touch_verification_runtime: Callable[[str], None] = field(
+        init=False,
+        default=lambda _verification_id: None,
+    )
     hosts_state: dict[str, dict[str, object]] = field(default_factory=dict)
     peer_hostname_by_client_addr: dict[str, str] = field(default_factory=dict)
-    host_judged_case_events: dict[str, list[float]] = field(default_factory=dict)
+    host_judged_case_events: dict[str, deque[float]] = field(default_factory=dict)
     host_last_judging: dict[str, dict[str, str]] = field(default_factory=dict)
     testcase_registry_by_hash: dict[str, dict[str, object]] = field(default_factory=dict)
 
@@ -53,3 +62,4 @@ class JudgehostState:
 
     def __post_init__(self) -> None:
         self.verification_store = VerificationStore(self.db)
+        self.task_store = JudgehostTaskStore()

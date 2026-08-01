@@ -1415,7 +1415,7 @@ class TestUIRun(UIBaseSuite):
                 },
             ],
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -1710,7 +1710,7 @@ class TestUIRun(UIBaseSuite):
                 "source_paths": ["solutions/accepted.cpp"],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -1762,7 +1762,7 @@ class TestUIRun(UIBaseSuite):
         self.assertTrue(str(verification_row["finished_at"] or ""))
         rows = {
             str(row["id"]): row
-            for row in VerificationTaskStore(config.db).list_rows(verification_id)
+            for row in config.verification_task_store.list_rows(verification_id)
         }
         self.assertEqual(str(rows["vt-cancel-leased"]["status"] or ""), VerificationTaskStore.TASK_LEASED)
         self.assertEqual(str(rows["vt-cancel-pending"]["status"] or ""), VerificationTaskStore.TASK_CANCELLED)
@@ -1792,7 +1792,7 @@ class TestUIRun(UIBaseSuite):
             runs=[],
             summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -1830,7 +1830,7 @@ class TestUIRun(UIBaseSuite):
         verification_row = db_fetch_one("SELECT status FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or "").strip().lower(), "failed")
-        rows = VerificationTaskStore(config.db).list_rows(verification_id)
+        rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(
             [str(row["status"] or "") for row in rows],
             [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
@@ -1855,7 +1855,7 @@ class TestUIRun(UIBaseSuite):
             runs=[],
             summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -1892,7 +1892,7 @@ class TestUIRun(UIBaseSuite):
         ):
             cancel_resp = run_export_impl.run_cancel(problem="alice/sample", user="alice", verification_id=verification_id)
         self.assertEqual(cancel_resp.status_code, 303)
-        rows = VerificationTaskStore(config.db).list_rows(verification_id)
+        rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(
             [str(row["status"] or "") for row in rows],
             [VerificationTaskStore.TASK_CANCELLED, VerificationTaskStore.TASK_CANCELLED],
@@ -2032,7 +2032,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -2280,7 +2280,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -2383,7 +2383,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -2499,7 +2499,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -2584,7 +2584,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -2694,7 +2694,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -2810,7 +2810,7 @@ class TestUIRun(UIBaseSuite):
                 "error": "verification cancelled by user",
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -3900,7 +3900,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4189,7 +4189,7 @@ class TestUIRun(UIBaseSuite):
             {"input_ref": input_ref, "answer_ref": answer_ref},
         )
 
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4333,7 +4333,7 @@ class TestUIRun(UIBaseSuite):
                 ),
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4436,7 +4436,7 @@ class TestUIRun(UIBaseSuite):
             "001.in",
             {"input_ref": input_ref, "answer_ref": answer_ref},
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4542,7 +4542,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4625,7 +4625,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4695,7 +4695,7 @@ class TestUIRun(UIBaseSuite):
                 ],
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4835,7 +4835,7 @@ class TestUIRun(UIBaseSuite):
                 "error": "validator reported mismatch",
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4913,7 +4913,7 @@ class TestUIRun(UIBaseSuite):
                 "error": "Test data did not hit: n max=3",
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -4989,7 +4989,7 @@ class TestUIRun(UIBaseSuite):
                 "error": "empty output probe was accepted",
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -5078,7 +5078,7 @@ class TestUIRun(UIBaseSuite):
                 "run_config_json": '{"time_limit_ms":1000,"memory_limit_mb":1024,"pass_limit":1}',
             },
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {

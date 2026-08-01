@@ -8,6 +8,7 @@ from typing import TypedDict, cast
 
 from app.db import DB, now_iso
 from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
+from app.service.platform.rwlock import WriterPriorityRWLock
 from app.service.verification.task_metadata import normalize_diagnostics_json_text
 
 
@@ -99,15 +100,12 @@ class VerificationTaskStore:
     TASK_FAILED = "failed"
     TASK_CANCELLED = "cancelled"
 
-    _shared_runtime_by_task_id: dict[str, _RuntimeTaskState] = {}
-    _shared_logical_run_id_by_task_id: dict[str, str] = {}
-    _shared_fail_reason_by_verification_id: dict[str, str] = {}
-
     def __init__(self, db: DB) -> None:
         self.db = db
-        self._runtime_by_task_id = self._shared_runtime_by_task_id
-        self._logical_run_id_by_task_id = self._shared_logical_run_id_by_task_id
-        self._fail_reason_by_verification_id = self._shared_fail_reason_by_verification_id
+        self._runtime_lock = WriterPriorityRWLock()
+        self._runtime_by_task_id: dict[str, _RuntimeTaskState] = {}
+        self._logical_run_id_by_task_id: dict[str, str] = {}
+        self._fail_reason_by_verification_id: dict[str, str] = {}
 
     @staticmethod
     def _limit_bytes() -> int:
@@ -197,18 +195,17 @@ class VerificationTaskStore:
             conn.execute("UPDATE verifications SET fail_reason='' WHERE id=?", [verification_id])
         self.db.write_transaction(_tx)
         task_ids = {str(item["id"]) for item in tasks}
-        to_drop = [task_id for task_id in self._runtime_by_task_id.keys() if task_id in task_ids]
-        for task_id in to_drop:
-            self._runtime_by_task_id.pop(task_id, None)
-        logical_ids_to_drop = [task_id for task_id in self._logical_run_id_by_task_id.keys() if task_id in task_ids]
-        for task_id in logical_ids_to_drop:
-            self._logical_run_id_by_task_id.pop(task_id, None)
-        self._runtime_by_task_id.update(runtime_initial)
-        self._logical_run_id_by_task_id.update(logical_run_ids)
-        self._fail_reason_by_verification_id.pop(verification_id, None)
+        with self._runtime_lock.write_lock():
+            for task_id in task_ids:
+                self._runtime_by_task_id.pop(task_id, None)
+                self._logical_run_id_by_task_id.pop(task_id, None)
+            self._runtime_by_task_id.update(runtime_initial)
+            self._logical_run_id_by_task_id.update(logical_run_ids)
+            self._fail_reason_by_verification_id.pop(verification_id, None)
 
     def _runtime_status(self, row: dict[str, object]) -> _RuntimeTaskState | None:
-        return self._runtime_by_task_id.get(str(row["id"]))
+        with self._runtime_lock.read_lock():
+            return self._runtime_by_task_id.get(str(row["id"]))
 
     def _row_order(self, row: dict[str, object]) -> tuple[object, ...]:
         return (
@@ -236,7 +233,9 @@ class VerificationTaskStore:
         expected_behavior = str(row["expected_behavior"] or "")
         task_kind = str(row["task_kind"] or "")
         task_id = str(row["id"] or "")
-        logical_run_id = str(row["logical_run_id"] or self._logical_run_id_by_task_id.get(task_id) or "")
+        with self._runtime_lock.read_lock():
+            runtime_logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
+        logical_run_id = str(row["logical_run_id"] or runtime_logical_run_id)
         return {
             "id": task_id,
             "verification_id": verification_id,
@@ -277,12 +276,14 @@ class VerificationTaskStore:
         else:
             status = self.TASK_PENDING
         task_id = str(row["id"] or "")
+        with self._runtime_lock.read_lock():
+            runtime_logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
         return {
             "id": task_id,
             "verification_id": str(row["verification_id"] or ""),
             "task_kind": str(row["task_kind"] or ""),
             "source_path": str(row["source_path"] or ""),
-            "logical_run_id": str(self._logical_run_id_by_task_id.get(task_id) or ""),
+            "logical_run_id": str(row["logical_run_id"] or runtime_logical_run_id),
             "test_name": str(row["test_name"] or ""),
             "expected_behavior": str(row["expected_behavior"] or ""),
             "status": status,
@@ -299,7 +300,8 @@ class VerificationTaskStore:
             dict(row)
             for row in self.db.fetch_all(
                 """
-                SELECT id,verification_id,task_kind,source_path,test_name,expected_behavior,final_status,verdict
+                SELECT id,verification_id,task_kind,source_path,logical_run_id,
+                       test_name,expected_behavior,final_status,verdict
                 FROM verification_tasks
                 WHERE verification_id=?
                 """,
@@ -314,11 +316,12 @@ class VerificationTaskStore:
         safe_test_name = str(test_name or "")
         if (not safe_task_id) or (not safe_test_name):
             return None
-        candidate_ids = [
-            task_id
-            for task_id, runtime in self._runtime_by_task_id.items()
-            if runtime.judgehost_task_id == safe_task_id
-        ]
+        with self._runtime_lock.read_lock():
+            candidate_ids = [
+                task_id
+                for task_id, runtime in self._runtime_by_task_id.items()
+                if runtime.judgehost_task_id == safe_task_id
+            ]
         if not candidate_ids:
             return None
         rows = self.db.fetch_all(
@@ -335,11 +338,12 @@ class VerificationTaskStore:
         safe_task_id = str(judgehost_task_id or "")
         if not safe_task_id:
             return []
-        candidate_ids = [
-            task_id
-            for task_id, runtime in self._runtime_by_task_id.items()
-            if runtime.judgehost_task_id == safe_task_id
-        ]
+        with self._runtime_lock.read_lock():
+            candidate_ids = [
+                task_id
+                for task_id, runtime in self._runtime_by_task_id.items()
+                if runtime.judgehost_task_id == safe_task_id
+            ]
         if not candidate_ids:
             return []
         rows = self.db.fetch_all(
@@ -356,23 +360,25 @@ class VerificationTaskStore:
         return [str(row["verification_id"] or "") for row in rows if str(row["verification_id"] or "")]
 
     def set_task_queued(self, task_id: str, *, run_id: str, judgehost_task_id: str) -> None:
-        self._runtime_by_task_id[task_id] = _RuntimeTaskState(
-            status=self.TASK_QUEUED,
-            run_id=run_id,
-            judgehost_task_id=judgehost_task_id,
-            started_at="",
-        )
+        with self._runtime_lock.write_lock():
+            self._runtime_by_task_id[task_id] = _RuntimeTaskState(
+                status=self.TASK_QUEUED,
+                run_id=run_id,
+                judgehost_task_id=judgehost_task_id,
+                started_at="",
+            )
 
     def set_task_leased(self, task_id: str) -> None:
-        current = self._runtime_by_task_id.get(task_id)
-        if current is None:
-            return
-        self._runtime_by_task_id[task_id] = _RuntimeTaskState(
-            status=self.TASK_LEASED,
-            run_id=current.run_id,
-            judgehost_task_id=current.judgehost_task_id,
-            started_at=current.started_at or now_iso(),
-        )
+        with self._runtime_lock.write_lock():
+            current = self._runtime_by_task_id.get(task_id)
+            if current is None:
+                return
+            self._runtime_by_task_id[task_id] = _RuntimeTaskState(
+                status=self.TASK_LEASED,
+                run_id=current.run_id,
+                judgehost_task_id=current.judgehost_task_id,
+                started_at=current.started_at or now_iso(),
+            )
 
     def save_task_result(
         self,
@@ -393,7 +399,8 @@ class VerificationTaskStore:
         output_ref: str,
         answer_correct: bool = False,
     ) -> None:
-        logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
+        with self._runtime_lock.read_lock():
+            logical_run_id = self._logical_run_id_by_task_id.get(task_id, "")
         finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
         limit_bytes = self._limit_bytes()
         safe_compile_log = bounded_display_text(compile_log, limit_bytes=limit_bytes)
@@ -427,6 +434,64 @@ class VerificationTaskStore:
                 task_id,
             ],
         )
+
+    def save_task_results(self, results: list[dict[str, object]]) -> None:
+        if not results:
+            return
+        limit_bytes = self._limit_bytes()
+        task_ids = [str(result["task_id"]) for result in results]
+        with self._runtime_lock.read_lock():
+            logical_run_ids = {
+                task_id: self._logical_run_id_by_task_id.get(task_id, "")
+                for task_id in task_ids
+            }
+        params: list[list[object]] = []
+        for result in results:
+            status = str(result["status"])
+            task_id = str(result["task_id"])
+            finished_at = (
+                now_iso()
+                if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED}
+                else None
+            )
+            params.append(
+                [
+                    status,
+                    str(result["verdict"]),
+                    result["runtime_sec"],
+                    result["cpu_sec"],
+                    result["wall_sec"],
+                    result["memory_kb"],
+                    1 if bool(result["answer_correct"]) else 0,
+                    logical_run_ids[task_id],
+                    bounded_display_text(str(result["compile_log"]), limit_bytes=limit_bytes),
+                    normalize_diagnostics_json_text(
+                        str(result["diagnostics_json"]),
+                        message_limit=limit_bytes,
+                    ),
+                    bounded_display_text(str(result["error_text"]), limit_bytes=limit_bytes),
+                    bounded_display_text(str(result["feedback_text"]), limit_bytes=limit_bytes),
+                    str(result["output_ref"]),
+                    finished_at,
+                    task_id,
+                ]
+            )
+
+        def _tx(conn: sqlite3.Connection) -> None:
+            conn.executemany(
+                """
+                UPDATE verification_tasks
+                SET final_status=?, verdict=?, runtime_sec=?, cpu_sec=?, wall_sec=?,
+                    memory_kb=?, answer_correct=?, logical_run_id=?, compile_log=?,
+                    diagnostics_json=?, error_text=?, feedback_text=?, output_ref=?,
+                    finished_at=?
+                WHERE id=? AND final_status=''
+                """,
+                params,
+            )
+
+        self.db.write_transaction(_tx)
+
     def overwrite_task_result(
         self,
         task_id: str,
@@ -446,7 +511,8 @@ class VerificationTaskStore:
         output_ref: str,
         answer_correct: bool = False,
     ) -> None:
-        logical_run_id = self._logical_run_id_by_task_id.get(task_id, run_id)
+        with self._runtime_lock.read_lock():
+            logical_run_id = self._logical_run_id_by_task_id.get(task_id, run_id)
         finished_at = now_iso() if status in {self.TASK_DONE, self.TASK_FAILED, self.TASK_CANCELLED} else None
         limit_bytes = self._limit_bytes()
         safe_compile_log = bounded_display_text(compile_log, limit_bytes=limit_bytes)
@@ -486,10 +552,11 @@ class VerificationTaskStore:
             "UPDATE verifications SET fail_reason=? WHERE id=?",
             [safe_reason, verification_id],
         )
-        if safe_reason:
-            self._fail_reason_by_verification_id[verification_id] = safe_reason
-        else:
-            self._fail_reason_by_verification_id.pop(verification_id, None)
+        with self._runtime_lock.write_lock():
+            if safe_reason:
+                self._fail_reason_by_verification_id[verification_id] = safe_reason
+            else:
+                self._fail_reason_by_verification_id.pop(verification_id, None)
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
         finished_at = now_iso()
@@ -551,10 +618,14 @@ class VerificationTaskStore:
             )
 
     def set_fail_flag(self, verification_id: str, *, reason: str) -> None:
-        if verification_id in self._fail_reason_by_verification_id:
-            return
-        self._fail_reason_by_verification_id[verification_id] = self._normalize_display_text(reason)
+        with self._runtime_lock.write_lock():
+            if verification_id in self._fail_reason_by_verification_id:
+                return
+            self._fail_reason_by_verification_id[verification_id] = (
+                self._normalize_display_text(reason)
+            )
 
     def fail_state(self, verification_id: str) -> tuple[bool, str]:
-        fail_reason = self._fail_reason_by_verification_id.get(verification_id, "")
+        with self._runtime_lock.read_lock():
+            fail_reason = self._fail_reason_by_verification_id.get(verification_id, "")
         return (bool(fail_reason), fail_reason)

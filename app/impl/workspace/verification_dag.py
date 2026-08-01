@@ -841,7 +841,7 @@ def run_workspace_verification_dag(
     workspace_path = Path(workspace_path_text).resolve()
     if (not workspace_path.exists()) or (not workspace_path.is_dir()) or workspace_path.is_symlink():
         raise RuntimeError("workspace path is unavailable")
-    task_store = VerificationTaskStore(config.db)
+    task_store = config.verification_task_store
     layout = config.fs_manager.prepare_verification_layout(verification_id)
     runtime_layout = config.fs_manager.prepare_verification_runtime_layout(verification_id)
     snapshot_root = snapshot_root_override
@@ -899,6 +899,9 @@ def run_workspace_verification_dag(
                 "error": str(exc),
             },
         )
+        # All task rows, final detail, status, and audit data are durable before
+        # the quiet-window cleanup can retire process-local judgehost records.
+        config.judgehost_task_service.schedule_verification_cleanup(verification_id)
         if snapshot_root.exists():
             import shutil
 
@@ -1202,6 +1205,8 @@ def run_workspace_verification_dag(
                 "fail_reason": summary.get("fail_reason") or "",
             },
         )
+        # Schedule only after final detail, status, and audit writes are durable.
+        config.judgehost_task_service.schedule_verification_cleanup(verification_id)
     finally:
         if snapshot_root.exists():
             import shutil

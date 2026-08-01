@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import secrets
 import time
+from collections import deque
 from pathlib import Path
 
 from app.db import now_iso
 from app.runtime_value import RuntimeValues
-from app.service.judgehost.shared import _HOSTNAME_RE, _RUN_ID_RE, task_status_counts
+from app.service.judgehost.shared import _HOSTNAME_RE, _RUN_ID_RE
 
 from .state import JudgehostState
 
@@ -78,21 +79,10 @@ class JudgehostCore:
         return token
 
     def task_status_counts(self) -> dict[str, int]:
-        with self._s.state_lock:
-            return task_status_counts(
-                self._s.tasks_by_id,
-                queued=self.STATUS_QUEUED,
-                leased=self.STATUS_LEASED,
-                completed=self.STATUS_COMPLETED,
-                failed=self.STATUS_FAILED,
-            )
+        return self._s.task_store.status_counts()
 
     def task_by_id(self, task_id: str) -> dict[str, object] | None:
-        with self._s.state_lock:
-            row = self._s.tasks_by_id.get(task_id.strip())
-            if row is None:
-                return None
-            return dict(row)
+        return self._s.task_store.get(task_id.strip())
 
     def task_payload(self, task_id: str) -> dict[str, object]:
         row = self.task_by_id(task_id)
@@ -107,12 +97,12 @@ class JudgehostCore:
         with self._s.state_lock:
             events = self._s.host_judged_case_events.get(safe_host)
             if events is None:
-                events = []
+                events = deque()
                 self._s.host_judged_case_events[safe_host] = events
             events.append(ts)
             cutoff = ts - (5 * 3600.0)
             while events and events[0] < cutoff:
-                events.pop(0)
+                events.popleft()
             self._s.host_last_judging[safe_host] = {"label": label, "updated_at": now_text}
 
     def bind_request_peer_hostname(self, peer_addr: str, hostname: str) -> None:

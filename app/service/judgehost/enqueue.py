@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-import time
 import uuid
 from typing import cast
 from pathlib import Path
@@ -993,84 +992,76 @@ class TaskEnqueue:
         task_id = ""
         summary: dict[str, object] | None = None
         while True:
-            with self._s.state_lock:
-                existing_task_id = (
-                    TaskEnqueue._normalize_text(existing_task_id_obj)
-                    if (existing_task_id_obj := self._s.task_id_by_run.get(safe_run_id)) is not None
-                    else ""
-                )
-                if existing_task_id:
-                    existing_task = self._s.tasks_by_id.get(existing_task_id)
-                    if existing_task is None:
-                        self._s.task_id_by_run.pop(safe_run_id, None)
-                    else:
-                        existing_fingerprint = str(existing_task.get("enqueue_fingerprint") or "")
-                        if existing_fingerprint != enqueue_fingerprint:
-                            raise RuntimeError("judgehost run id reused with different payload")
-                        existing_status = (
-                            TaskEnqueue._normalize_status(existing_status_obj)
-                            if (existing_status_obj := existing_task.get("status")) is not None
-                            else ""
-                        )
-                        if existing_status != self.STATUS_ENQUEUING:
-                            return existing_task_id
-                if not existing_task_id or existing_task_id not in self._s.tasks_by_id:
-                    task_id = f"jt-{uuid.uuid4().hex[:12]}"
-                    source_label_obj = payload.get("source_label")
-                    if source_label_obj is None:
-                        source_label_obj = payload.get("source_name")
-                    source_label = str(source_label_obj) if source_label_obj is not None else "upload"
-                    summary = self._initial_summary(
-                        run_id=safe_run_id,
-                        task_id=task_id,
-                        mode=mode,
-                        pass_limit=max(
-                            1,
-                            int(
-                                cast(dict[str, object], cast(dict[str, object], payload["domjudge_precomputed"])["run_config"]).get(
-                                    "pass_limit",
-                                    1,
-                                )
-                                or 1
-                            ),
-                        ),
-                        source_label=source_label,
-                        selected_tests=selected,
-                        verification_id=safe_verification_id,
-                        verification_run_ids=verification_run_id_list,
-                        expected_behavior=expected_behavior,
-                        verification_source=verification_source,
-                        task_kind=safe_task_kind,
-                        compile_only=bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY),
-                    )
-                    now_text = now_iso()
-                    self._s.tasks_by_id[task_id] = {
-                        "id": task_id,
-                        "run_id": safe_run_id,
-                        "problem_slug": str(problem),
-                        "username": str(username),
-                        "artifact_verification_id": str(artifact_verification_id),
-                        "mode": str(mode),
-                        "verification_id": safe_verification_id,
-                        "run_id": safe_run_id,
-                        "status": self.STATUS_ENQUEUING,
-                        "payload": dict(payload),
-                        "result": {},
-                        "persist_verification_run": bool(persist_verification_run),
-                        "error_text": "",
-                        "lease_owner": "",
-                        "lease_expires_at": "",
-                        "created_at": now_text,
-                        "updated_at": now_text,
-                        "completed_at": "",
-                        "attempt_count": 0,
-                        "summary": dict(summary),
-                        "enqueue_fingerprint": enqueue_fingerprint,
-                    }
-                    self._s.task_id_by_run[safe_run_id] = task_id
-                    break
-            # Another thread is creating the same run task; wait for terminal enqueue step.
-            time.sleep(0.01)
+            existing_task = self._s.task_store.get_for_run(safe_run_id)
+            if existing_task is not None:
+                existing_fingerprint = str(existing_task.get("enqueue_fingerprint") or "")
+                if existing_fingerprint != enqueue_fingerprint:
+                    raise RuntimeError("judgehost run id reused with different payload")
+                existing_task_id = str(existing_task["id"])
+                existing_status = TaskEnqueue._normalize_status(existing_task["status"])
+                if existing_status != self.STATUS_ENQUEUING:
+                    return existing_task_id
+                generation = self._s.task_store.change_generation()
+                self._s.task_store.wait_for_change(generation, 0.05)
+                continue
+            task_id = f"jt-{uuid.uuid4().hex[:12]}"
+            source_label_obj = payload.get("source_label")
+            if source_label_obj is None:
+                source_label_obj = payload.get("source_name")
+            source_label = str(source_label_obj) if source_label_obj is not None else "upload"
+            summary = self._initial_summary(
+                run_id=safe_run_id,
+                task_id=task_id,
+                mode=mode,
+                pass_limit=max(
+                    1,
+                    int(
+                        cast(
+                            dict[str, object],
+                            cast(dict[str, object], payload["domjudge_precomputed"])["run_config"],
+                        ).get("pass_limit", 1)
+                        or 1
+                    ),
+                ),
+                source_label=source_label,
+                selected_tests=selected,
+                verification_id=safe_verification_id,
+                verification_run_ids=verification_run_id_list,
+                expected_behavior=expected_behavior,
+                verification_source=verification_source,
+                task_kind=safe_task_kind,
+                compile_only=bool(safe_task_kind == self._TASK_KIND_COMPILE_ONLY),
+            )
+            now_text = now_iso()
+            task_row = {
+                "id": task_id,
+                "run_id": safe_run_id,
+                "problem_slug": str(problem),
+                "username": str(username),
+                "artifact_verification_id": str(artifact_verification_id),
+                "mode": str(mode),
+                "verification_id": safe_verification_id,
+                "status": self.STATUS_ENQUEUING,
+                "payload": dict(payload),
+                "result": {},
+                "persist_verification_run": bool(persist_verification_run),
+                "error_text": "",
+                "lease_owner": "",
+                "lease_expires_at": "",
+                "created_at": now_text,
+                "updated_at": now_text,
+                "completed_at": "",
+                "attempt_count": 0,
+                "summary": dict(summary),
+                "enqueue_fingerprint": enqueue_fingerprint,
+            }
+            try:
+                self._s.task_store.insert(task_row)
+            except RuntimeError as exc:
+                if str(exc) != "judgehost task already exists":
+                    raise
+                continue
+            break
 
         if summary is None or not task_id:
             raise RuntimeError("failed to allocate judgehost task")
@@ -1081,14 +1072,12 @@ class TaskEnqueue:
                 run_id=safe_run_id,
                 payload=dict(payload),
             )
-        with self._s.state_lock:
-            row = self._s.tasks_by_id.get(task_id)
-            if row is not None:
-                row_status_obj = row.get("status")
-                row_status = TaskEnqueue._normalize_status(row_status_obj) if row_status_obj is not None else ""
-                if row_status == self.STATUS_ENQUEUING:
-                    row["status"] = self.STATUS_QUEUED
-                    row["updated_at"] = now_iso()
+        self._s.task_store.transition(
+            task_id,
+            expected={self.STATUS_ENQUEUING},
+            status=self.STATUS_QUEUED,
+            updates={"updated_at": now_iso()},
+        )
         return task_id
 
     def enqueue_compile_only_task(

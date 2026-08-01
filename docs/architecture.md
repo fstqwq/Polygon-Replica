@@ -134,6 +134,13 @@ What each area means:
 - `runtime/judgehost-executables/<kind>/<script_hash>`: runtime-scoped DOMjudge executable scripts; startup clears them with the runtime cache, verification completion does not
 - `judge-fs-index`: content-addressed blobs for testcase files, exact case-cache payloads, and verification artifact blobs referenced from SQLite
 
+Judgehost task/job/case scheduling state is process-local and indexed in memory.
+It is not stored in SQLite: startup reconciliation fails durable inflight
+`verification_tasks`, while fresh work creates new runtime records. Terminal job
+workdirs are deleted immediately; runtime identities use a verification-scoped
+60-second quiet window, and content-addressed caches keep their independent
+startup-scoped lifetime.
+
 ### Artifacts root
 
 `artifacts_root` is still used for durable export and contest files.

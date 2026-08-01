@@ -311,7 +311,7 @@ class TestSecurity(SmokeBase):
                 None,
             ],
         )
-        VerificationTaskStore(config.db).replace_graph(
+        config.verification_task_store.replace_graph(
             verification_id,
             tasks=[
                 {
@@ -344,7 +344,7 @@ class TestSecurity(SmokeBase):
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or "").lower(), "running")
         self.assertFalse(str(verification_row["finished_at"] or "").strip())
-        task_rows = VerificationTaskStore(config.db).list_rows(verification_id)
+        task_rows = config.verification_task_store.list_rows(verification_id)
         self.assertEqual(len(task_rows), 1)
         self.assertEqual(str(task_rows[0]["status"] or ""), VerificationTaskStore.TASK_QUEUED)
 

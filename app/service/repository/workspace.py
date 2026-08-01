@@ -20,6 +20,7 @@ from app.service.platform.workspace_path import is_hidden_workspace_path
 from app.setting import Settings
 from app.service.platform.git_process import run_git
 from app.service.repository.revision import workspace_revision_info
+from app.service.verification.task_store import VerificationTaskStore
 
 PROBLEM_ID_RULE_MESSAGE: str = "invalid problem id"
 USERNAME_RULE_MESSAGE: str = "invalid username"
@@ -53,10 +54,16 @@ class WorkspaceService:
     REPO_ROLES = {"owner", "write", "read"}
     ACCESS_ROLES = {"admin", "owner", "write", "read"}
 
-    def __init__(self, db: DB, settings: Settings):
+    def __init__(
+        self,
+        db: DB,
+        settings: Settings,
+        *,
+        verification_task_store: VerificationTaskStore,
+    ):
         self.db = db
         self.settings = settings
-        self._store = WorkspaceDiskStore(db)
+        self._store = WorkspaceDiskStore(db, verification_task_store=verification_task_store)
         self._problem_cache: dict[str, dict] = {}
         self._user_cache: dict[str, dict] = {}
         self._cache_lock = threading.Lock()

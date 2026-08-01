@@ -97,8 +97,9 @@ class UserContestOverviewRow(TypedDict):
 
 
 class WorkspaceDiskStore:
-    def __init__(self, db: DB):
+    def __init__(self, db: DB, *, verification_task_store: VerificationTaskStore):
         self.db = db
+        self.verification_task_store = verification_task_store
 
     @staticmethod
     def _optional_int(value: object) -> int | None:
@@ -804,7 +805,7 @@ class WorkspaceDiskStore:
                 [int(problem_id)],
             ).fetchall()
             collected_run_ids: list[str] = []
-            task_store = VerificationTaskStore(self.db)
+            task_store = self.verification_task_store
             for row in verification_rows:
                 if row is None:
                     continue

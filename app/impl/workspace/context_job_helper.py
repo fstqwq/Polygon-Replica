@@ -88,7 +88,7 @@ def record_async_run_failure(
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
-    task_store = VerificationTaskStore(config.db)
+    task_store = config.verification_task_store
     task_id = task_store.allocate_id()
     test_name = artifact_failed_test or _failed_test_name(detail_error, synthesized_test_names if synthesize_failed_tests else None)
     config.verification_service.begin_verification_record(

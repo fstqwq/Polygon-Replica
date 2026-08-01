@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import heapq
 import queue
 import threading
+import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, cast
 
 from .task_store import VerificationTaskRow, VerificationTaskStore
 from .types import is_cancel_reason
@@ -57,38 +59,123 @@ class _VerificationEvent:
 _COORDINATOR_LOCK = threading.Lock()
 _COORDINATORS_BY_VERIFICATION_ID: dict[str, "VerificationRuntimeCoordinator"] = {}
 _PUBLISH_READY_BATCH_SIZE = 256
+_RESULT_BATCH_MAX_WAIT_SEC = 0.005
+_TERMINAL_TASK_STATUSES = frozenset(
+    {
+        VerificationTaskStore.TASK_DONE,
+        VerificationTaskStore.TASK_FAILED,
+        VerificationTaskStore.TASK_CANCELLED,
+    }
+)
 
 
-def _parent_status_by_child(
-    rows: list[VerificationTaskRow],
-    edges: list[tuple[str, str]],
-) -> dict[str, list[str]]:
-    status_by_id = {str(row["id"]): str(row["status"]) for row in rows}
-    parents_by_child: dict[str, list[str]] = {}
-    for parent_id, child_id in edges:
-        parents = parents_by_child.get(child_id)
-        if parents is None:
-            parents = []
-            parents_by_child[child_id] = parents
-        parents.append(status_by_id.get(parent_id, ""))
-    return parents_by_child
+class _IncrementalDagState:
+    def __init__(self, rows: list[VerificationTaskRow], edges: list[tuple[str, str]]) -> None:
+        ordered_rows = sorted(rows, key=lambda row: (int(row["queue_index"]), str(row["id"])))
+        self.rows_by_id = {
+            str(row["id"]): cast(VerificationTaskRow, dict(row))
+            for row in ordered_rows
+        }
+        self.status_by_id = {
+            task_id: str(row["status"])
+            for task_id, row in self.rows_by_id.items()
+        }
+        self.dependents_by_parent: dict[str, list[str]] = {}
+        self.remaining_parents = {task_id: 0 for task_id in self.rows_by_id}
+        for parent_id, child_id in edges:
+            if child_id not in self.rows_by_id:
+                continue
+            if self.status_by_id.get(parent_id) != VerificationTaskStore.TASK_DONE:
+                self.remaining_parents[child_id] += 1
+            if parent_id in self.rows_by_id:
+                self.dependents_by_parent.setdefault(parent_id, []).append(child_id)
 
+        self.ready: list[tuple[int, str]] = []
+        self.ready_ids: set[str] = set()
+        for task_id, row in self.rows_by_id.items():
+            if self.status_by_id[task_id] == VerificationTaskStore.TASK_PENDING:
+                self._enqueue_if_ready(task_id, int(row["queue_index"]))
 
-def _ready_rows(
-    rows: list[VerificationTaskRow],
-    edges: list[tuple[str, str]],
-) -> list[VerificationTaskRow]:
-    parent_statuses = _parent_status_by_child(rows, edges)
-    ready: list[VerificationTaskRow] = []
-    for row in rows:
-        if str(row["status"]) != VerificationTaskStore.TASK_PENDING:
-            continue
-        task_id = str(row["id"])
-        statuses = parent_statuses.get(task_id, [])
-        if statuses and any(token != VerificationTaskStore.TASK_DONE for token in statuses):
-            continue
-        ready.append(row)
-    return ready
+        self.task_ids_by_judgehost_id: dict[str, list[str]] = {}
+        self.task_id_by_case: dict[tuple[str, str], str] = {}
+        for task_id in self.rows_by_id:
+            self._index_runtime_identity(task_id)
+        self.terminal_count = sum(
+            status in _TERMINAL_TASK_STATUSES
+            for status in self.status_by_id.values()
+        )
+
+    def _enqueue_if_ready(self, task_id: str, queue_index: int | None = None) -> None:
+        if self.remaining_parents[task_id] != 0 or task_id in self.ready_ids:
+            return
+        row = self.rows_by_id[task_id]
+        ready_order = int(row["queue_index"]) if queue_index is None else queue_index
+        heapq.heappush(self.ready, (ready_order, task_id))
+        self.ready_ids.add(task_id)
+
+    def pop_ready(self) -> VerificationTaskRow | None:
+        while self.ready:
+            _queue_index, task_id = heapq.heappop(self.ready)
+            self.ready_ids.discard(task_id)
+            if self.status_by_id[task_id] != VerificationTaskStore.TASK_PENDING:
+                continue
+            if self.remaining_parents[task_id] != 0:
+                continue
+            return self.rows_by_id[task_id]
+        return None
+
+    def _index_runtime_identity(self, task_id: str) -> None:
+        row = self.rows_by_id[task_id]
+        judgehost_task_id = str(row["judgehost_task_id"])
+        if not judgehost_task_id:
+            return
+        task_ids = self.task_ids_by_judgehost_id.setdefault(judgehost_task_id, [])
+        if task_id not in task_ids:
+            task_ids.append(task_id)
+        test_name = str(row["test_name"])
+        if test_name:
+            self.task_id_by_case[(judgehost_task_id, test_name)] = task_id
+
+    def set_runtime_identity(self, task_id: str, *, run_id: str, judgehost_task_id: str) -> None:
+        row = self.rows_by_id[task_id]
+        row["run_id"] = run_id
+        row["judgehost_task_id"] = judgehost_task_id
+        self._index_runtime_identity(task_id)
+
+    def transition(self, task_id: str, status: str) -> bool:
+        previous = self.status_by_id[task_id]
+        if previous == status or previous in _TERMINAL_TASK_STATUSES:
+            return False
+        self.status_by_id[task_id] = status
+        self.rows_by_id[task_id]["status"] = status
+        if status not in _TERMINAL_TASK_STATUSES:
+            return True
+        self.terminal_count += 1
+        if status != VerificationTaskStore.TASK_DONE:
+            return True
+        for child_id in self.dependents_by_parent.get(task_id, []):
+            remaining = self.remaining_parents[child_id]
+            if remaining <= 0:
+                continue
+            self.remaining_parents[child_id] = remaining - 1
+            if self.status_by_id[child_id] == VerificationTaskStore.TASK_PENDING:
+                self._enqueue_if_ready(child_id)
+        return True
+
+    def task_for_case(self, judgehost_task_id: str, test_name: str) -> VerificationTaskRow | None:
+        task_id = self.task_id_by_case.get((judgehost_task_id, test_name))
+        if task_id is None:
+            return None
+        return self.rows_by_id[task_id]
+
+    def tasks_for_judgehost_id(self, judgehost_task_id: str) -> list[VerificationTaskRow]:
+        return [
+            self.rows_by_id[task_id]
+            for task_id in self.task_ids_by_judgehost_id.get(judgehost_task_id, [])
+        ]
+
+    def is_terminal(self) -> bool:
+        return bool(self.rows_by_id) and self.terminal_count == len(self.rows_by_id)
 
 
 def _save_result(
@@ -97,25 +184,40 @@ def _save_result(
     task_store: VerificationTaskStore,
     result: TaskExecutionResult,
 ) -> None:
-    task_store.save_task_result(
-        result.task_id,
-        status=result.status,
-        verdict=result.verdict,
-        run_id=result.run_id,
-        judgehost_task_id=result.judgehost_task_id,
-        runtime_sec=result.runtime_sec,
-        cpu_sec=result.cpu_sec,
-        wall_sec=result.wall_sec,
-        memory_kb=result.memory_kb,
-        compile_log=result.compile_log,
-        diagnostics_json=result.diagnostics_json,
-        error_text=result.error_text,
-        feedback_text=result.feedback_text,
-        output_ref=result.output_ref,
-        answer_correct=result.answer_correct,
+    _save_results(verification_id=verification_id, task_store=task_store, results=[result])
+
+
+def _save_results(
+    *,
+    verification_id: str,
+    task_store: VerificationTaskStore,
+    results: list[TaskExecutionResult],
+) -> None:
+    task_store.save_task_results(
+        [
+            {
+                "task_id": result.task_id,
+                "status": result.status,
+                "verdict": result.verdict,
+                "run_id": result.run_id,
+                "judgehost_task_id": result.judgehost_task_id,
+                "runtime_sec": result.runtime_sec,
+                "cpu_sec": result.cpu_sec,
+                "wall_sec": result.wall_sec,
+                "memory_kb": result.memory_kb,
+                "compile_log": result.compile_log,
+                "diagnostics_json": result.diagnostics_json,
+                "error_text": result.error_text,
+                "feedback_text": result.feedback_text,
+                "output_ref": result.output_ref,
+                "answer_correct": result.answer_correct,
+            }
+            for result in results
+        ]
     )
-    if result.fail_flag_reason:
-        task_store.set_fail_flag(verification_id, reason=result.fail_flag_reason)
+    for result in results:
+        if result.fail_flag_reason:
+            task_store.set_fail_flag(verification_id, reason=result.fail_flag_reason)
 
 
 class VerificationRuntimeCoordinator:
@@ -130,7 +232,7 @@ class VerificationRuntimeCoordinator:
         self.verification_id = verification_id
         self._task_store = task_store
         self._callbacks = callbacks
-        self._edges = list(edges)
+        self._dag = _IncrementalDagState(task_store.list_rows(verification_id), edges)
         self._events: queue.Queue[_VerificationEvent] = queue.Queue()
         self._applied_fail_reason = ""
         self._cancel_reason = ""
@@ -175,10 +277,93 @@ class VerificationRuntimeCoordinator:
 
     def run(self) -> None:
         self.enqueue_bootstrap()
+        deferred: _VerificationEvent | None = None
         while True:
-            event = self._events.get()
-            if self._handle_event(event):
+            event = self._events.get() if deferred is None else deferred
+            deferred = None
+            if event.kind not in {"case_reported", "task_terminal"}:
+                if self._handle_event(event):
+                    return
+                continue
+            events = [event]
+            deadline = time.monotonic() + _RESULT_BATCH_MAX_WAIT_SEC
+            while len(events) < _PUBLISH_READY_BATCH_SIZE:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    candidate = self._events.get(timeout=remaining)
+                except queue.Empty:
+                    break
+                if candidate.kind not in {"case_reported", "task_terminal"}:
+                    deferred = candidate
+                    break
+                events.append(candidate)
+            if self._handle_terminal_events(events):
                 return
+
+    def _handle_terminal_events(self, events: list[_VerificationEvent]) -> bool:
+        prepared: list[tuple[str, TaskExecutionResult]] = []
+        prepared_task_ids: set[str] = set()
+        for event in events:
+            if event.kind == "case_reported":
+                if event.result is None:
+                    continue
+                row = self._dag.task_for_case(event.judgehost_task_id, event.test_name)
+                if row is None:
+                    continue
+                task_id = str(row["id"])
+                if (
+                    task_id in prepared_task_ids
+                    or self._dag.status_by_id[task_id] in _TERMINAL_TASK_STATUSES
+                ):
+                    continue
+                result = cast(
+                    TaskExecutionResult,
+                    event.result["final_result"]
+                    if "final_result" in event.result
+                    else event.result,
+                )
+                prepared.append((task_id, result))
+                prepared_task_ids.add(task_id)
+                continue
+            if not event.judgehost_task_id:
+                continue
+            for row in self._dag.tasks_for_judgehost_id(event.judgehost_task_id):
+                task_id = str(row["id"])
+                if task_id in prepared_task_ids:
+                    continue
+                if self._dag.status_by_id[task_id] not in {
+                    VerificationTaskStore.TASK_QUEUED,
+                    VerificationTaskStore.TASK_LEASED,
+                }:
+                    continue
+                result = self._callbacks.resolve_case_result(
+                    event.judgehost_task_id,
+                    str(row["test_name"]),
+                )
+                if result is None:
+                    continue
+                from .task_result_finalize import finalize_verification_task_result
+
+                prepared.append((task_id, finalize_verification_task_result(row, result=result)))
+                prepared_task_ids.add(task_id)
+        if not prepared:
+            return False
+        _save_results(
+            verification_id=self.verification_id,
+            task_store=self._task_store,
+            results=[result for _task_id, result in prepared],
+        )
+        for task_id, result in prepared:
+            self._dag.transition(task_id, result.status)
+        self._publish_ready_rows()
+        self._apply_fail_flag()
+        self._callbacks.persist_state()
+        if self._is_terminal():
+            self._callbacks.persist_state()
+            return True
+        return False
 
     def _handle_event(self, event: _VerificationEvent) -> bool:
         changed = False
@@ -187,7 +372,11 @@ class VerificationRuntimeCoordinator:
         elif event.kind == "case_leased":
             changed = self._mark_case_leased(event.judgehost_task_id, event.test_name)
         elif event.kind == "case_reported":
-            changed = self._finalize_case_result(event.judgehost_task_id, event.test_name, event.result)
+            changed = self._finalize_case_result(
+                event.judgehost_task_id,
+                event.test_name,
+                event.result,
+            )
             if changed:
                 changed = self._publish_ready_rows() or changed
         elif event.kind == "task_terminal":
@@ -208,16 +397,7 @@ class VerificationRuntimeCoordinator:
         return False
 
     def _is_terminal(self) -> bool:
-        rows = self._task_store.list_rows(self.verification_id)
-        return bool(rows) and all(
-            str(row["status"])
-            in {
-                VerificationTaskStore.TASK_DONE,
-                VerificationTaskStore.TASK_FAILED,
-                VerificationTaskStore.TASK_CANCELLED,
-            }
-            for row in rows
-        )
+        return self._dag.is_terminal()
 
     def _apply_fail_flag(self) -> bool:
         fail_flag, fail_reason = self._task_store.fail_state(self.verification_id)
@@ -228,11 +408,22 @@ class VerificationRuntimeCoordinator:
         cancel_reason = fail_reason or "cancelled after main-correct failure"
         if cancel_reason == self._applied_fail_reason:
             return False
-        if self._cancel_reason and cancel_reason == self._cancel_reason and is_cancel_reason(cancel_reason):
+        if (
+            self._cancel_reason
+            and cancel_reason == self._cancel_reason
+            and is_cancel_reason(cancel_reason)
+        ):
             self._applied_fail_reason = cancel_reason
             return False
         self._callbacks.cancel_queued_tasks(cancel_reason)
+        cancelled_task_ids = [
+            task_id
+            for task_id, status in self._dag.status_by_id.items()
+            if status in {VerificationTaskStore.TASK_PENDING, VerificationTaskStore.TASK_QUEUED}
+        ]
         self._task_store.cancel_not_started_tasks(self.verification_id, reason=cancel_reason)
+        for task_id in cancelled_task_ids:
+            self._dag.transition(task_id, VerificationTaskStore.TASK_CANCELLED)
         self._applied_fail_reason = cancel_reason
         return True
 
@@ -242,41 +433,50 @@ class VerificationRuntimeCoordinator:
         changed = False
         published_count = 0
         while True:
-            rows = self._task_store.list_rows(self.verification_id)
-            ready_rows = _ready_rows(rows, self._edges)
-            if not ready_rows:
+            row = self._dag.pop_ready()
+            if row is None:
                 break
-            for row in ready_rows:
-                published = self._callbacks.publish_task(row)
-                task_id = str(row["id"])
-                if published.terminal_result is None:
-                    self._task_store.set_task_queued(
-                        task_id,
-                        run_id=published.run_id,
-                        judgehost_task_id=published.judgehost_task_id,
-                    )
-                else:
-                    _save_result(
-                        verification_id=self.verification_id,
-                        task_store=self._task_store,
-                        result=published.terminal_result,
-                    )
-                changed = True
-                published_count += 1
-                if published_count >= _PUBLISH_READY_BATCH_SIZE:
-                    self.enqueue_bootstrap()
-                    return changed
-            if self._task_store.fail_state(self.verification_id)[0]:
-                break
+            published = self._callbacks.publish_task(row)
+            task_id = str(row["id"])
+            if published.terminal_result is None:
+                self._task_store.set_task_queued(
+                    task_id,
+                    run_id=published.run_id,
+                    judgehost_task_id=published.judgehost_task_id,
+                )
+                self._dag.set_runtime_identity(
+                    task_id,
+                    run_id=published.run_id,
+                    judgehost_task_id=published.judgehost_task_id,
+                )
+                self._dag.transition(task_id, VerificationTaskStore.TASK_QUEUED)
+            else:
+                _save_result(
+                    verification_id=self.verification_id,
+                    task_store=self._task_store,
+                    result=published.terminal_result,
+                )
+                self._dag.set_runtime_identity(
+                    task_id,
+                    run_id=published.terminal_result.run_id,
+                    judgehost_task_id=published.terminal_result.judgehost_task_id,
+                )
+                self._dag.transition(task_id, published.terminal_result.status)
+            changed = True
+            published_count += 1
+            if published_count >= _PUBLISH_READY_BATCH_SIZE:
+                self.enqueue_bootstrap()
+                return changed
         return changed
 
     def _mark_case_leased(self, judgehost_task_id: str, test_name: str) -> bool:
-        row = self._task_store.find_runtime_row_by_judgehost_case(judgehost_task_id, test_name)
+        row = self._dag.task_for_case(judgehost_task_id, test_name)
         if row is None:
             return False
         if str(row["status"]) != VerificationTaskStore.TASK_QUEUED:
             return False
         self._task_store.set_task_leased(str(row["id"]))
+        self._dag.transition(str(row["id"]), VerificationTaskStore.TASK_LEASED)
         return True
 
     def _finalize_case_result(
@@ -287,22 +487,30 @@ class VerificationRuntimeCoordinator:
     ) -> bool:
         if result is None:
             return False
-        row = self._task_store.find_runtime_row_by_judgehost_case(judgehost_task_id, test_name)
+        row = self._dag.task_for_case(judgehost_task_id, test_name)
         if row is None:
             return False
+        task_id = str(row["id"])
+        if self._dag.status_by_id[task_id] in _TERMINAL_TASK_STATUSES:
+            return False
         final_result = result
+        execution_result = cast(
+            TaskExecutionResult,
+            final_result["final_result"] if "final_result" in final_result else final_result,
+        )
         _save_result(
             verification_id=self.verification_id,
             task_store=self._task_store,
-            result=final_result["final_result"] if "final_result" in final_result else final_result,
+            result=execution_result,
         )
+        self._dag.transition(task_id, execution_result.status)
         return True
 
     def _finalize_terminal_task(self, judgehost_task_id: str) -> bool:
         if not judgehost_task_id:
             return False
         changed = False
-        for row in self._task_store.find_runtime_rows_by_judgehost_task_id(judgehost_task_id):
+        for row in self._dag.tasks_for_judgehost_id(judgehost_task_id):
             status = str(row["status"])
             if status not in {VerificationTaskStore.TASK_QUEUED, VerificationTaskStore.TASK_LEASED}:
                 continue
@@ -317,6 +525,7 @@ class VerificationRuntimeCoordinator:
                 task_store=self._task_store,
                 result=final_result,
             )
+            self._dag.transition(str(row["id"]), final_result.status)
             changed = True
         return changed
 

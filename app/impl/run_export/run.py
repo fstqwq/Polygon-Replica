@@ -35,7 +35,6 @@ from app.impl.run_export.query import (
     _run_detail_use_compact_layout,
 )
 from app.service.verification.task_scheduler import notify_verification_cancelled
-from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import ACTIVE, Status
 
 _C = config.constants
@@ -227,7 +226,7 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
             normalized_run_ids.append(token)
     verification_run_ids = dedupe_preserve_order(normalized_run_ids)
     reason = "verification cancelled by user"
-    task_store = VerificationTaskStore(config.db)
+    task_store = config.verification_task_store
     config.verification_service.cancel_verification_if_active(
         safe_verification_id,
         reason=reason,

@@ -16,7 +16,6 @@ from app.service.verification.task_scheduler import (
     TaskPublishResult,
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
-    _ready_rows,
 )
 from app.service.verification.task_store import VerificationTaskStore
 from app.impl.workspace.verification_dag_plan import VerificationTestPlan
@@ -34,6 +33,8 @@ def _task_row(
 ) -> dict[str, object]:
     return {
         "id": task_id,
+        "verification_id": "verification",
+        "predecessor_task_id": "",
         "task_kind": task_kind,
         "source_path": source_path,
         "logical_run_id": logical_run_id,
@@ -41,6 +42,23 @@ def _task_row(
         "expected_behavior": "accepted",
         "queue_index": queue_index,
         "status": status,
+        "verdict": "",
+        "run_id": "",
+        "judgehost_task_id": "",
+        "runtime_sec": None,
+        "cpu_sec": None,
+        "wall_sec": None,
+        "memory_kb": None,
+        "answer_correct": False,
+        "compile_log": "",
+        "diagnostics_json": "[]",
+        "error_text": "",
+        "feedback_text": "",
+        "output_ref": "",
+        "started_at": None,
+        "finished_at": None,
+        "created_at": "",
+        "updated_at": "",
     }
 
 
@@ -72,13 +90,16 @@ def _sanity_test_plan(
 class _InMemoryTaskStore:
     def __init__(self, rows: list[dict[str, object]], edges: list[tuple[str, str]]) -> None:
         self._rows = [dict(row) for row in rows]
-        self._edges = [{"parent_task_id": parent, "child_task_id": child} for parent, child in edges]
         self._fail_flag = False
         self._fail_reason = ""
         self._lock = threading.Lock()
+        self.list_rows_calls = 0
+        self.saved_task_ids: list[str] = []
+        self.save_batch_sizes: list[int] = []
 
     def list_rows(self, verification_id: str) -> list[dict[str, object]]:
         with self._lock:
+            self.list_rows_calls += 1
             return [dict(row) for row in sorted(self._rows, key=lambda item: (int(item["queue_index"]), str(item["id"])))]
 
     def set_task_queued(self, task_id: str, *, run_id: str, judgehost_task_id: str) -> None:
@@ -131,7 +152,29 @@ class _InMemoryTaskStore:
                 row["feedback_text"] = feedback_text
                 row["output_ref"] = output_ref
                 row["answer_correct"] = bool(answer_correct)
+                self.saved_task_ids.append(task_id)
                 return
+
+    def save_task_results(self, results: list[dict[str, object]]) -> None:
+        self.save_batch_sizes.append(len(results))
+        for result in results:
+            self.save_task_result(
+                str(result["task_id"]),
+                status=str(result["status"]),
+                verdict=str(result["verdict"]),
+                run_id=str(result["run_id"]),
+                judgehost_task_id=str(result["judgehost_task_id"]),
+                runtime_sec=result["runtime_sec"],  # type: ignore[arg-type]
+                cpu_sec=result["cpu_sec"],  # type: ignore[arg-type]
+                wall_sec=result["wall_sec"],  # type: ignore[arg-type]
+                memory_kb=result["memory_kb"],  # type: ignore[arg-type]
+                compile_log=str(result["compile_log"]),
+                diagnostics_json=str(result["diagnostics_json"]),
+                error_text=str(result["error_text"]),
+                feedback_text=str(result["feedback_text"]),
+                output_ref=str(result["output_ref"]),
+                answer_correct=bool(result["answer_correct"]),
+            )
 
     def cancel_unfinished_tasks(self, verification_id: str, *, reason: str) -> None:
         with self._lock:
@@ -1023,23 +1066,6 @@ class TestVerificationTaskScheduler(SmokeBase):
         )
         publish_order: list[str] = []
         first_published = threading.Event()
-        final_result = TaskExecutionResult(
-            task_id="vt-000",
-            status=VerificationTaskStore.TASK_DONE,
-            verdict="OK",
-            run_id="r-vt-000",
-            judgehost_task_id="jt-vt-000",
-            runtime_sec=0.01,
-            cpu_sec=0.01,
-            wall_sec=0.01,
-            memory_kb=1,
-            compile_log="",
-            diagnostics_json="[]",
-            error_text="",
-            feedback_text="",
-            output_ref="",
-        )
-
         def _publish(row: dict[str, object]) -> TaskPublishResult:
             task_id = str(row["id"])
             publish_order.append(task_id)
@@ -1067,11 +1093,30 @@ class TestVerificationTaskScheduler(SmokeBase):
         thread.start()
         try:
             self.assertTrue(first_published.wait(timeout=2.0))
-            coordinator.enqueue_case_reported(
-                "jt-vt-000",
-                "001.in",
-                {"final_result": final_result},
-            )
+            for index in range(total_tasks):
+                task_id = f"vt-{index:03}"
+                coordinator.enqueue_case_reported(
+                    f"jt-{task_id}",
+                    f"{index + 1:03}.in",
+                    {
+                        "final_result": TaskExecutionResult(
+                            task_id=task_id,
+                            status=VerificationTaskStore.TASK_DONE,
+                            verdict="OK",
+                            run_id=f"r-{task_id}",
+                            judgehost_task_id=f"jt-{task_id}",
+                            runtime_sec=0.01,
+                            cpu_sec=0.01,
+                            wall_sec=0.01,
+                            memory_kb=1,
+                            compile_log="",
+                            diagnostics_json="[]",
+                            error_text="",
+                            feedback_text="",
+                            output_ref="",
+                        )
+                    },
+                )
             self._wait_until(
                 lambda: len(publish_order) == total_tasks,
                 timeout=2.0,
@@ -1079,15 +1124,21 @@ class TestVerificationTaskScheduler(SmokeBase):
                 message="ready batch was not fully published before handling case events",
             )
             self._wait_until(
-                lambda: str({str(row["id"]): row for row in store.list_rows("ver-large-batch")}["vt-000"]["status"])
-                == VerificationTaskStore.TASK_DONE,
+                lambda: all(
+                    str(row["status"]) == VerificationTaskStore.TASK_DONE
+                    for row in store.list_rows("ver-large-batch")
+                ),
                 timeout=2.0,
                 interval=0.01,
-                message="case result was not handled after publishing ready batch",
+                message="batched case results were not handled after publishing ready rows",
             )
             self.assertEqual(len(publish_order), total_tasks)
+            self.assertEqual(sum(store.save_batch_sizes), total_tasks)
+            self.assertTrue(all(size <= 256 for size in store.save_batch_sizes))
+            self.assertLess(len(store.save_batch_sizes), total_tasks)
         finally:
-            coordinator.enqueue_cancel("test shutdown")
+            if thread.is_alive():
+                coordinator.enqueue_cancel("test shutdown")
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
@@ -1513,7 +1564,7 @@ class TestVerificationTaskScheduler(SmokeBase):
 
     def test_cancel_not_started_tasks_leaves_leased_rows_reportable(self) -> None:
         self._insert_verification_row("ver-cancel")
-        task_store = VerificationTaskStore(config.db)
+        task_store = config.verification_task_store
         task_store.replace_graph(
             "ver-cancel",
             tasks=[
@@ -1676,7 +1727,7 @@ class TestVerificationTaskScheduler(SmokeBase):
     def test_task_store_caps_frontend_display_fields(self) -> None:
         verification_id = f"ver-display-cap-{self.test_id}"
         self._insert_verification_row(verification_id)
-        task_store = VerificationTaskStore(config.db)
+        task_store = config.verification_task_store
         task_store.replace_graph(
             verification_id,
             tasks=[
@@ -1745,7 +1796,7 @@ class TestVerificationTaskScheduler(SmokeBase):
                 "error": "cancelled on service startup",
             },
         )
-        task_store = VerificationTaskStore(config.db)
+        task_store = config.verification_task_store
         task_store.replace_graph(
             verification_id,
             tasks=[
@@ -1946,22 +1997,152 @@ class TestVerificationTaskScheduler(SmokeBase):
         self.assertEqual(parts.verdict, "CE")
         self.assertEqual(parts.error_text, "compile error")
 
-    def test_ready_rows_require_all_parent_tasks_done(self) -> None:
-        rows = [
-            _task_row("parent-done", task_kind="generate-input", status=VerificationTaskStore.TASK_DONE, queue_index=1),
-            _task_row("parent-leased", task_kind="generate-input", status=VerificationTaskStore.TASK_LEASED, queue_index=2),
-            _task_row("child-ready", task_kind="main-correct", status=VerificationTaskStore.TASK_PENDING, queue_index=3),
-            _task_row("child-blocked", task_kind="main-correct", status=VerificationTaskStore.TASK_PENDING, queue_index=4),
-            _task_row("root-pending", task_kind="generate-input", status=VerificationTaskStore.TASK_PENDING, queue_index=5),
-        ]
-        ready = _ready_rows(
-            rows,
-            [
-                ("parent-done", "child-ready"),
-                ("parent-leased", "child-blocked"),
+    def test_runtime_coordinator_indexes_rows_once_for_an_incremental_dag(self) -> None:
+        task_count = 64
+        task_ids = [f"vt-{index:03}" for index in range(task_count)]
+        store = _InMemoryTaskStore(
+            rows=[
+                _task_row(
+                    task_id,
+                    task_kind="solution-run",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=index,
+                    test_name=f"{index:03}.in",
+                )
+                for index, task_id in enumerate(task_ids, start=1)
             ],
+            edges=list(zip(task_ids, task_ids[1:])),
         )
-        self.assertEqual([str(row["id"]) for row in ready], ["child-ready", "root-pending"])
+        publish_order: list[str] = []
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            publish_order.append(task_id)
+            return TaskPublishResult(
+                task_id=task_id,
+                run_id=f"run-{task_id}",
+                judgehost_task_id=f"judgehost-{task_id}",
+                terminal_result=TaskExecutionResult(
+                    task_id=task_id,
+                    status=VerificationTaskStore.TASK_DONE,
+                    verdict="AC",
+                    run_id=f"run-{task_id}",
+                    judgehost_task_id=f"judgehost-{task_id}",
+                    runtime_sec=0.001,
+                    cpu_sec=0.001,
+                    wall_sec=0.001,
+                    memory_kb=1,
+                    compile_log="",
+                    diagnostics_json="[]",
+                    error_text="",
+                    feedback_text="",
+                    output_ref="",
+                ),
+            )
+
+        coordinator = VerificationRuntimeCoordinator(
+            "ver-incremental-chain",
+            task_store=store,
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=_publish,
+                resolve_case_result=lambda _task_id, _test_name: None,
+                cancel_queued_tasks=lambda _reason: None,
+                persist_state=lambda: {},
+            ),
+            edges=list(zip(task_ids, task_ids[1:])),
+        )
+
+        coordinator.run()
+
+        self.assertEqual(publish_order, task_ids)
+        self.assertEqual(store.saved_task_ids, task_ids)
+        self.assertEqual(store.list_rows_calls, 1)
+
+    def test_task_terminal_compensation_is_idempotent_and_unlocks_each_edge_once(self) -> None:
+        verification_id = "ver-terminal-compensation"
+        rows = [
+            {
+                **_task_row(
+                    task_id,
+                    task_kind="solution-run",
+                    status=VerificationTaskStore.TASK_QUEUED,
+                    queue_index=index,
+                    test_name=f"{index:03}.in",
+                ),
+                "verification_id": verification_id,
+                "run_id": "run-shared",
+                "judgehost_task_id": "judgehost-shared",
+            }
+            for index, task_id in enumerate(("vt-parent-a", "vt-parent-b"), start=1)
+        ]
+        rows.append(
+            {
+                **_task_row(
+                    "vt-child",
+                    task_kind="solution-run",
+                    status=VerificationTaskStore.TASK_PENDING,
+                    queue_index=3,
+                    test_name="003.in",
+                ),
+                "verification_id": verification_id,
+            }
+        )
+        store = _InMemoryTaskStore(
+            rows=rows,
+            edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],
+        )
+        published: list[str] = []
+        finalized: list[str] = []
+
+        def _publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            published.append(task_id)
+            return TaskPublishResult(task_id, f"run-{task_id}", f"judgehost-{task_id}")
+
+        def _finalize(row: dict[str, object], *, result: dict[str, object]) -> TaskExecutionResult:
+            task_id = str(row["id"])
+            finalized.append(task_id)
+            return TaskExecutionResult(
+                task_id=task_id,
+                status=VerificationTaskStore.TASK_DONE,
+                verdict="AC",
+                run_id=str(row["run_id"]),
+                judgehost_task_id=str(row["judgehost_task_id"]),
+                runtime_sec=0.001,
+                cpu_sec=0.001,
+                wall_sec=0.001,
+                memory_kb=1,
+                compile_log="",
+                diagnostics_json="[]",
+                error_text="",
+                feedback_text="",
+                output_ref="",
+            )
+
+        coordinator = VerificationRuntimeCoordinator(
+            verification_id,
+            task_store=store,
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=_publish,
+                resolve_case_result=lambda _task_id, _test_name: {"status": "ok"},
+                cancel_queued_tasks=lambda _reason: None,
+                persist_state=lambda: {},
+            ),
+            edges=[("vt-parent-a", "vt-child"), ("vt-parent-b", "vt-child")],
+        )
+        with patch(
+            "app.service.verification.task_result_finalize.finalize_verification_task_result",
+            side_effect=_finalize,
+        ):
+            self.assertTrue(coordinator._finalize_terminal_task("judgehost-shared"))
+            self.assertTrue(coordinator._publish_ready_rows())
+            self.assertFalse(coordinator._finalize_terminal_task("judgehost-shared"))
+            self.assertFalse(coordinator._publish_ready_rows())
+
+        self.assertEqual(finalized, ["vt-parent-a", "vt-parent-b"])
+        self.assertEqual(store.saved_task_ids, ["vt-parent-a", "vt-parent-b"])
+        self.assertEqual(published, ["vt-child"])
+        self.assertEqual(store.list_rows_calls, 1)
 
     def test_truncated_metadata_helpers_mark_oversized_values(self) -> None:
         compile_meta = canonical_truncated_text("x" * 32, limit=8)
@@ -1981,7 +2162,7 @@ class TestVerificationTaskScheduler(SmokeBase):
     def test_task_store_persists_fail_flag(self) -> None:
         verification_id = f"ver-task-store-{self.test_id}"
         self._insert_verification_row(verification_id)
-        store = VerificationTaskStore(config.db)
+        store = config.verification_task_store
         store.set_fail_flag(verification_id, reason="main failed")
         self.assertEqual(store.fail_state(verification_id), (True, "main failed"))
         self.assertIsNotNone(VerificationStore(config.db).record_row(verification_id))
@@ -1989,7 +2170,7 @@ class TestVerificationTaskScheduler(SmokeBase):
     def test_task_store_keeps_first_fail_flag_reason(self) -> None:
         verification_id = f"ver-task-store-first-{self.test_id}"
         self._insert_verification_row(verification_id)
-        store = VerificationTaskStore(config.db)
+        store = config.verification_task_store
         store.set_fail_flag(verification_id, reason="generate-input / generators/gen.cpp / 001.in: validator failed")
         store.set_fail_flag(verification_id, reason="verification cancelled by user")
         self.assertEqual(

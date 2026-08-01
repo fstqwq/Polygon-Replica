@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import logging
 import json
 import re
 import shutil
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -33,7 +36,6 @@ from app.service.verification.test_rows import (
 )
 from app.service.verification.task_result_finalize import finalize_verification_task_result
 from app.service.verification.task_scheduler import notify_verification_case_reported
-from app.service.verification.task_store import VerificationTaskStore
 
 from .core import JudgehostCore
 from .state import JudgehostState
@@ -64,6 +66,31 @@ class ResultProcessor:
         self._core = core
         self._queue = queue
         self._toolkit = toolkit
+        self._job_activity_guard = threading.Lock()
+        self._job_activity_locks: dict[int, tuple[threading.RLock, int]] = {}
+
+    @contextlib.contextmanager
+    def _job_activity(self, job_id: int) -> Iterator[None]:
+        safe_job_id = int(job_id)
+        with self._job_activity_guard:
+            lock, users = self._job_activity_locks.get(safe_job_id, (threading.RLock(), 0))
+            self._job_activity_locks[safe_job_id] = (lock, users + 1)
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+            with self._job_activity_guard:
+                current_lock, current_users = self._job_activity_locks[safe_job_id]
+                if current_users == 1:
+                    self._job_activity_locks.pop(safe_job_id)
+                else:
+                    self._job_activity_locks[safe_job_id] = (current_lock, current_users - 1)
+
+    def _touch_task_verification(self, task_id: str) -> None:
+        task = self._s.task_store.get(task_id)
+        if task is not None:
+            self._s.touch_verification_runtime(domjudge_text(task.get("verification_id")))
 
     def _domjudge_task_accepts_case_updates(self, task_id: str) -> bool:
         task_row = self._core.task_by_id(task_id)
@@ -161,11 +188,7 @@ class ResultProcessor:
         judgehost_block = dict(cast(dict[str, object], summary.get("judgehost") or {}))
         judgehost_block["task_id"] = task_id
         summary["judgehost"] = judgehost_block
-        with self._s.state_lock:
-            row = self._s.tasks_by_id.get(task_id)
-            if row is not None:
-                row["summary"] = summary
-                row["updated_at"] = now_iso()
+        self._s.task_store.update(task_id, {"summary": summary, "updated_at": now_iso()})
     def domjudge_get_source_files(self, submit_id: str, contest_id: str | None = None) -> list[dict[str, object]]:
         safe_submit = domjudge_text(submit_id)
         if not safe_submit:
@@ -375,7 +398,7 @@ class ResultProcessor:
         test_name: str,
         case_result: dict[str, object],
     ) -> None:
-        verification_task_store = VerificationTaskStore(self._s.db)
+        verification_task_store = self._s.verification_task_store
         verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
             task_id,
             test_name,
@@ -600,46 +623,42 @@ class ResultProcessor:
             for row in cases
         ):
             return False
-        # Keep result extraction, terminal notification, and the task state
-        # transition together. A concurrent job finalizer must not delete the
-        # shared work root while another case callback is still reporting.
-        with self._s.state_lock:
-            task_row = self._s.tasks_by_id.get(safe_task_id)
-            if task_row is None:
-                return False
-            task_status = domjudge_lower_text(task_row["status"])
-            if task_status in {"completed", "failed"}:
-                return True
-            if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
-                return False
-            payload = self._domjudge_task_result_payload(
-                task_id=safe_task_id,
-                job_row=job_row,
-                cases=cases,
-                force_failed=force_failed,
-                error_text=error_text,
-            )
-            cancelled_case_result = {
-                "task_id": safe_task_id,
-                "verification_id": domjudge_text(task_row["verification_id"]),
-                "run_id": domjudge_text(task_row["run_id"]),
-                "artifact_path": "",
-                "status": "failed",
-                "task_status": self.STATUS_FAILED,
-                "missing_case_result": True,
-                "error": domjudge_text(payload.get("error"), default="judgehost task cancelled"),
-                "summary": dict(cast(dict[str, object], payload["summary"])),
-            }
-            for case_row in cases:
-                if domjudge_lower_text(case_row["status"]) != "cancelled":
-                    continue
-                self._publish_verification_case_result(
-                    task_id=safe_task_id,
-                    test_name=domjudge_text(case_row["test_name"]),
-                    case_result=cancelled_case_result,
-                )
-            self._queue.finalize_domjudge_task(task_id=safe_task_id, payload=payload)
+        task_row = self._s.task_store.get(safe_task_id)
+        if task_row is None:
+            return False
+        task_status = domjudge_lower_text(task_row["status"])
+        if task_status in {"completed", "failed"}:
             return True
+        if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+            return False
+        payload = self._domjudge_task_result_payload(
+            task_id=safe_task_id,
+            job_row=job_row,
+            cases=cases,
+            force_failed=force_failed,
+            error_text=error_text,
+        )
+        cancelled_case_result = {
+            "task_id": safe_task_id,
+            "verification_id": domjudge_text(task_row["verification_id"]),
+            "run_id": domjudge_text(task_row["run_id"]),
+            "artifact_path": "",
+            "status": "failed",
+            "task_status": self.STATUS_FAILED,
+            "missing_case_result": True,
+            "error": domjudge_text(payload.get("error"), default="judgehost task cancelled"),
+            "summary": dict(cast(dict[str, object], payload["summary"])),
+        }
+        for case_row in cases:
+            if domjudge_lower_text(case_row["status"]) != "cancelled":
+                continue
+            self._publish_verification_case_result(
+                task_id=safe_task_id,
+                test_name=domjudge_text(case_row["test_name"]),
+                case_result=cancelled_case_result,
+            )
+        self._queue.finalize_domjudge_task(task_id=safe_task_id, payload=payload)
+        return True
 
     def _domjudge_publish_and_finalize_ready_tasks(
         self,
@@ -695,7 +714,7 @@ class ResultProcessor:
         force_failed: bool = False,
         error_text: str = "",
     ) -> None:
-        with self._s.state_lock:
+        with self._job_activity(int(job_id)):
             claim = self._s.judgehost_state_store.claim_job_finalization(
                 int(job_id),
                 now_text=now_iso(),
@@ -735,20 +754,21 @@ class ResultProcessor:
                 error_text=error_text,
             ):
                 return
+            task_rows = {task_id: self._s.task_store.get(task_id) for task_id in task_ids}
             unfinished_task_ids = [
                 task_id
-                for task_id in task_ids
-                if (
-                    (task_row := self._s.tasks_by_id.get(task_id)) is None
-                    or domjudge_lower_text(task_row["status"]) not in {"completed", "failed"}
-                )
+                for task_id, task_row in task_rows.items()
+                if task_row is None
+                or domjudge_lower_text(task_row["status"]) not in {"completed", "failed"}
             ]
             if unfinished_task_ids:
                 unfinished_statuses = {
                     task_id: (
                         "<missing>"
-                        if self._s.tasks_by_id.get(task_id) is None
-                        else domjudge_lower_text(self._s.tasks_by_id[task_id]["status"])
+                        if task_rows[task_id] is None
+                        else domjudge_lower_text(
+                            cast(dict[str, object], task_rows[task_id])["status"]
+                        )
                     )
                     for task_id in unfinished_task_ids
                 }
@@ -771,7 +791,8 @@ class ResultProcessor:
                 for row in cases
             )
             has_failed_tasks = any(
-                domjudge_lower_text(self._s.tasks_by_id[task_id]["status"]) == self.STATUS_FAILED
+                domjudge_lower_text(cast(dict[str, object], task_rows[task_id])["status"])
+                == self.STATUS_FAILED
                 for task_id in task_ids
             )
             finished_at = now_iso()
@@ -792,9 +813,12 @@ class ResultProcessor:
             shutil.rmtree(Path(domjudge_text(job_row["work_root"])).resolve(), ignore_errors=True)
 
     def domjudge_update_judging(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> None:
-        # Result extraction and final cleanup share this lock so a finalizer
-        # cannot remove the work root while another callback still consumes it.
-        with self._s.state_lock:
+        case_row = self._s.judgehost_state_store.fetch_case(int(judgetask_id))
+        if case_row is None:
+            logger.info("ignoring update for unknown judging run id: %s", int(judgetask_id))
+            return
+        self._touch_task_verification(domjudge_text(case_row["task_id"]))
+        with self._job_activity(int(case_row["job_id"])):
             self._domjudge_update_judging_locked(hostname, judgetask_id, payload)
 
     def _domjudge_update_judging_locked(
@@ -859,7 +883,15 @@ class ResultProcessor:
                 self._domjudge_finalize_if_ready(job_id)
 
     def domjudge_add_judging_run(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> int:
-        with self._s.state_lock:
+        case_row = self._s.judgehost_state_store.fetch_case(int(judgetask_id))
+        if case_row is None:
+            logger.info(
+                "ignoring add_judging_run for unknown judging run id: %s",
+                int(judgetask_id),
+            )
+            return int(judgetask_id)
+        self._touch_task_verification(domjudge_text(case_row["task_id"]))
+        with self._job_activity(int(case_row["job_id"])):
             return self._domjudge_add_judging_run_locked(hostname, judgetask_id, payload)
 
     def _domjudge_add_judging_run_locked(
@@ -1044,7 +1076,8 @@ class ResultProcessor:
         shortcut_eligible = verdict != "FL"
         if compile_only and verdict != "OK":
             shortcut_eligible = False
-        self._toolkit.store_case_cache(
+        with self._toolkit.cache_key_lock(self.CASE_CACHE_KIND, case_key_hash, case_signature):
+            self._toolkit.store_case_cache(
                 key_parts={"key_hash": case_key_hash, "signature": case_signature},
                 tags={
                     "source_hash": source_hash,
@@ -1181,6 +1214,9 @@ class ResultProcessor:
                 debug_text = job_debug if not debug_text else f"{debug_text}\n{job_debug}"
             result_id = case_id
             target_case_id = case_id
+            case_identity = self._s.judgehost_state_store.fetch_case(case_id)
+            if case_identity is not None:
+                self._touch_task_verification(domjudge_text(case_identity["task_id"]))
         else:
             job_row = self._s.judgehost_state_store.job_debug_context(case_id)
             if job_row is None:
@@ -1188,6 +1224,9 @@ class ResultProcessor:
             job_id = int(job_row["job_id"])
             debug_text = domjudge_text(job_row["debug_text"])
             result_id = job_id
+            job_identity = self._s.judgehost_state_store.fetch_job(job_id)
+            if job_identity is not None:
+                self._touch_task_verification(domjudge_text(job_identity["task_id"]))
         payload_text = self._domjudge_debug_payload_text({} if payload is None else payload)
         if payload_text:
             debug_text = payload_text if not debug_text else f"{debug_text}\n{payload_text}"
@@ -1384,6 +1423,7 @@ class ResultProcessor:
             safe_task_id = domjudge_text(job_row["task_id"])
             safe_run_id = domjudge_text(job_row["run_id"])
             target_job_id = int(job_row["job_id"])
+        self._touch_task_verification(safe_task_id)
         debug_payload = {} if payload is None else payload
         if debug_payload:
             logger.debug(
@@ -1420,7 +1460,7 @@ class ResultProcessor:
                             "error": debug_text,
                             "summary": case_summary,
                         }
-                        verification_task_store = VerificationTaskStore(self._s.db)
+                        verification_task_store = self._s.verification_task_store
                         verification_task_row = verification_task_store.find_runtime_row_by_judgehost_case(
                             safe_task_id,
                             safe_test_name,
