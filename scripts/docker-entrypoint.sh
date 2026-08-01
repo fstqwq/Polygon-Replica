@@ -21,9 +21,11 @@ fi
 
 HOST=${POLYGON_REPLICA_HOST:-0.0.0.0}
 PORT=${POLYGON_REPLICA_PORT:-8001}
+KEEPALIVE_TIMEOUT_SEC=${POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC:-30}
 
 exec uvicorn app.main:app \
   --host "$HOST" \
   --port "$PORT" \
+  --timeout-keep-alive "$KEEPALIVE_TIMEOUT_SEC" \
   --proxy-headers \
   --forwarded-allow-ips='*'

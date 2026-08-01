@@ -114,6 +114,8 @@ sudo journalctl -u polygon-replica.service -n 200 --no-pager
 ```
 
 The installed service file is `scripts/systemd/polygon-replica.service`.
+Its 30-second HTTP keep-alive exceeds the judgedaemon fetch interval, avoiding
+periodic reuse of connections that uvicorn has just closed.
 
 ## Nginx
 

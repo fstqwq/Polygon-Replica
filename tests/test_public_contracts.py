@@ -57,6 +57,17 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_server_entrypoints_outlive_judgedaemon_fetch_interval(self) -> None:
+        local_script = (ROOT / "scripts" / "start_local.sh").read_text(encoding="utf-8")
+        docker_script = (ROOT / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")
+        systemd_unit = (ROOT / "scripts" / "systemd" / "polygon-replica.service").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC:-30", local_script)
+        self.assertIn("POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC:-30", docker_script)
+        self.assertIn("--timeout-keep-alive 30", systemd_unit)
+
     def test_danger_link_templates_use_canonical_class(self) -> None:
         expected_patterns = {
             ROOT / "app" / "template" / "run.html": [

@@ -8,7 +8,7 @@ User=judgehost
 Group=judgehost
 WorkingDirectory=/opt/polygon-replica
 EnvironmentFile=/etc/polygon-replica.env
-ExecStart=/opt/polygon-replica/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --proxy-headers --forwarded-allow-ips=*
+ExecStart=/opt/polygon-replica/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --timeout-keep-alive 30 --proxy-headers --forwarded-allow-ips=*
 Restart=always
 RestartSec=2
 
