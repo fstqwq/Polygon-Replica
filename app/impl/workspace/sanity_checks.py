@@ -19,7 +19,7 @@ from .runtime_threshold import (
     evaluate_summary_runtime_threshold,
     runtime_threshold_reason,
 )
-from .verification_dag_plan import VerificationTestPlan
+from app.service.verification.plan import VerificationTestPlan
 
 SANITY_PENDING = "pending"
 SANITY_RUNNING = "running"

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import secrets
-import time
-from collections import deque
 from pathlib import Path
 
-from app.db import now_iso
 from app.runtime_value import RuntimeValues
 from app.service.judgehost.shared import _HOSTNAME_RE, _RUN_ID_RE
 
@@ -88,21 +85,6 @@ class JudgehostCore:
         if row is None:
             return {}
         return dict(row["payload"])
-
-    def record_host_judging(self, hostname: str, *, label: str = "-", updated_at: str | None = None) -> None:
-        safe_host = self.normalize_hostname(hostname)
-        ts = time.time()
-        now_text = now_iso() if updated_at is None else updated_at
-        with self._s.state_lock:
-            events = self._s.host_judged_case_events.get(safe_host)
-            if events is None:
-                events = deque()
-                self._s.host_judged_case_events[safe_host] = events
-            events.append(ts)
-            cutoff = ts - (5 * 3600.0)
-            while events and events[0] < cutoff:
-                events.popleft()
-            self._s.host_last_judging[safe_host] = {"label": label, "updated_at": now_text}
 
     def bind_request_peer_hostname(self, peer_addr: str, hostname: str) -> None:
         safe_peer = str(peer_addr or "").strip()

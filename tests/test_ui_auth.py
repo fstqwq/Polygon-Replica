@@ -9,12 +9,15 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.responses import PlainTextResponse
 from app.service.auth.password_hash import password_verifier_storage_hash
+from app import main_constant
+from app.impl.auth.password_envelope import PasswordEnvelopeStore
+from .common import E2ETestBase
 
 from .ui_support import (
     ADMIN_CONFIG_DEFAULTS,
     AUTH_COOKIE_NAME,
     Request,
-    UIBaseSuite,
+    UIHelpersMixin,
     _cookie_value_from_response,
     _extract_hidden_input_value,
     _flash_messages_from_response,
@@ -63,7 +66,15 @@ SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
 SUDO_COOKIE_MAX_AGE = int(config.constants.SUDO_COOKIE_MAX_AGE)
 
 
-class TestUIAuth(UIBaseSuite):
+class TestUIAuth(UIHelpersMixin, E2ETestBase):
+    seed_primary_workspace = False
+    seed_default_workspace = True
+
+    def test_password_crypto_production_parameters_remain_strong(self) -> None:
+        self.assertEqual(main_constant.PASSWORD_HASH_ITERS, 240_000)
+        private_key = PasswordEnvelopeStore()._key_factory()
+        self.assertEqual(private_key.key_size, 2048)
+
     def _replace_auth_constants(self, **overrides: object) -> None:
         previous = config.constants.to_dict()
         updated = dict(previous)
@@ -1286,12 +1297,12 @@ class TestUIAuth(UIBaseSuite):
         self.assertIn('data-judgehost-api-username="1"', html)
         self.assertIn('data-judgehost-api-token="1"', html)
 
-    def test_settings_page_formats_judgehost_last_seen_in_user_timezone(self) -> None:
+    def test_settings_page_formats_judgehost_telemetry(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
 
-        raw_last_seen = "2026-02-28T21:43:08.505465+00:00"
+        raw_last_judging = "2026-02-28T21:43:08.505465+00:00"
         fake_status = {
             "enabled": True,
             "auth_configured": True,
@@ -1301,13 +1312,17 @@ class TestUIAuth(UIBaseSuite):
             "hosts": [
                 {
                     "hostname": "judgehost-lastseen-time",
+                    "enabled": True,
                     "online": True,
                     "age_sec": 3,
-                    "last_seen_at": raw_last_seen,
+                    "last_seen_at": raw_last_judging,
                     "last_action": "heartbeat",
                     "active_leases": 0,
                     "last_task_id": "",
                     "last_run_id": "",
+                    "judged_case_count": 42,
+                    "last_judging_at": raw_last_judging,
+                    "recent_avg_per_case_sec": 0.125,
                 }
             ],
         }
@@ -1316,8 +1331,13 @@ class TestUIAuth(UIBaseSuite):
         self.assertEqual(resp.status_code, 200)
         html = resp.body.decode("utf-8", errors="replace")
         self.assertIn("judgehost-lastseen-time", html)
-        self.assertIn("Disabled", html)
-        self.assertNotIn(raw_last_seen, html)
+        self.assertIn("Count", html)
+        self.assertIn("Last Judging Time", html)
+        self.assertIn("Recent Avg Per Case", html)
+        self.assertIn(">42<", html)
+        self.assertIn("0.125 s", html)
+        self.assertIn(config.templates.env.filters["local_time"](raw_last_judging), html)
+        self.assertNotIn(raw_last_judging, html)
 
     def test_settings_config_category_update_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:

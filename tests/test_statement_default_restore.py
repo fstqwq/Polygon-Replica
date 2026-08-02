@@ -10,7 +10,7 @@ from app.impl.problem.file import files_page, files_restore_default
 from app.impl.runtime.config import config
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 
-from .common import SmokeBase
+from .common import WorkspaceTestBase
 from .db_helpers import db_fetch_one
 from .ui_support import _flash_messages_from_response, _request
 
@@ -18,9 +18,9 @@ from .ui_support import _flash_messages_from_response, _request
 workspace_service = config.workspace_service
 
 
-class TestStatementDefaultRestore(SmokeBase):
+class TestStatementDefaultRestore(WorkspaceTestBase):
     def test_files_page_offers_restore_only_for_supported_text_paths(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        ws = self._workspace_path()
         action = f"/problems/{self.problem}/files/restore-default"
         for rel in STATEMENT_DEFAULT_FILES:
             with self.subTest(path=rel):
@@ -50,7 +50,7 @@ class TestStatementDefaultRestore(SmokeBase):
         self.assertNotIn(action, self._files_html("statement/olymp.sty", user=self.user))
 
     def test_restore_is_exact_isolated_recreates_missing_file_and_audits(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        ws = self._workspace_path()
         custom = {
             rel: f"custom {index}\n"
             for index, rel in enumerate(STATEMENT_DEFAULT_FILES)
@@ -101,7 +101,7 @@ class TestStatementDefaultRestore(SmokeBase):
         )
 
     def test_restore_rejects_other_paths_and_read_only_users(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        ws = self._workspace_path()
         unrelated = ws / "statement/olymp.sty.bak"
         unrelated.write_text("keep\n", encoding="utf-8")
         rejected = {

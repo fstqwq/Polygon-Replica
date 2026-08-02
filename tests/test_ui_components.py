@@ -4,9 +4,10 @@ from unittest.mock import patch
 
 from app.impl.workspace.problem_config import read_problem_config
 
+from .common import E2ETestBase
 from .ui_support import (
     Path,
-    UIBaseSuite,
+    UIHelpersMixin,
     _flash_cookie_header,
     _flash_messages_from_response,
     _request,
@@ -44,7 +45,10 @@ from .ui_support import (
 )
 
 
-class TestUIComponents(UIBaseSuite):
+class TestUIComponents(UIHelpersMixin, E2ETestBase):
+    seed_primary_workspace = True
+    seed_default_workspace = False
+
     def test_read_problem_config_rejects_persisted_shape_without_pass_limit(
         self,
     ) -> None:

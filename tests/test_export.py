@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from .common import SmokeBase
+from .common import E2ETestBase
 from .ui_support import _flash_messages_from_response, _request
 from app.impl.run_export import export as export_page_module
 from app.impl.run_export import import_source as export_import_module
@@ -32,7 +32,7 @@ export_service = config.export_service
 workspace_service = config.workspace_service
 
 
-class TestExport(SmokeBase):
+class TestExport(E2ETestBase):
     def _seed_export_tests(self, workspace: Path, token: str) -> list[str]:
         tracked = [
             f"tests/manual/{token}.in",

@@ -6,9 +6,10 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
+from .common import E2ETestBase
 from .db_helpers import db_execute, db_fetch_one
 from .ui_support import (
-    UIBaseSuite,
+    UIHelpersMixin,
     _request,
     config,
     settings_page,
@@ -21,7 +22,10 @@ _KEY = base64.urlsafe_b64encode(b"0" * 32).decode("ascii").rstrip("=")
 _WRONG_KEY = base64.urlsafe_b64encode(b"1" * 32).decode("ascii").rstrip("=")
 
 
-class TestSmtpConfig(UIBaseSuite):
+class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
+    seed_primary_workspace = True
+    seed_default_workspace = False
+
     def test_secret_box_round_trip_uses_envelope_ciphertext(self) -> None:
         with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
             box = SecretBox.from_environment()

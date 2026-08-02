@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import cast
 from typing import TypedDict
 
@@ -653,6 +654,12 @@ class DispatchHandler(DispatchCacheMixin):
                     case_task_id,
                     domjudge_text(row["test_name"]),
                 )
+        self._s.host_telemetry.record_batch_leased(
+            hostname,
+            int(job_id),
+            [int(row["id"]) for row in rows],
+            leased_monotonic=time.monotonic(),
+        )
         return out
 
     def domjudge_fetch_work(self, hostname: str, max_batchsize: int | None = None) -> list[dict[str, object]]:

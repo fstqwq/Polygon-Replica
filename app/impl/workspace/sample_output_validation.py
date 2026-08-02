@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.impl.runtime.config import config
 
-from .verification_dag_plan import VerificationTestPlan
+from app.service.verification.plan import VerificationTestPlan
 from .verification_payload import prepared_payload_for_uploaded_source
 
 

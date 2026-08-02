@@ -527,36 +527,9 @@ class TaskQueue:
 
     def _host_status_rows(self) -> tuple[list[dict[str, object]], int]:
         now_dt = datetime.now(timezone.utc)
-        now_ts = time.time()
         active_by_host = self._s.job_scheduler.active_lease_counts()
-        cases_5m: dict[str, int] = {}
-        cases_15m: dict[str, int] = {}
-        cases_1h: dict[str, int] = {}
-        cases_5h: dict[str, int] = {}
+        telemetry_by_host = self._s.host_telemetry.snapshot()
         with self._s.state_lock:
-            for host, events in self._s.host_judged_case_events.items():
-                cutoff = now_ts - (5 * 3600.0)
-                while events and events[0] < cutoff:
-                    events.popleft()
-                c5 = 0
-                c15 = 0
-                c1h = 0
-                c5h = 0
-                for ts in events:
-                    age = now_ts - float(ts)
-                    if age <= 5 * 3600:
-                        c5h += 1
-                        if age <= 3600:
-                            c1h += 1
-                            if age <= 900:
-                                c15 += 1
-                                if age <= 300:
-                                    c5 += 1
-                cases_5m[host] = c5
-                cases_15m[host] = c15
-                cases_1h[host] = c1h
-                cases_5h[host] = c5h
-            last_judging_by_host = {k: dict(v) for k, v in self._s.host_last_judging.items()}
             host_rows = sorted(
                 (dict(row) for row in self._s.hosts_state.values()),
                 key=lambda item: (
@@ -582,13 +555,7 @@ class TaskQueue:
                 is_online = delta <= float(self._s.online_window_sec)
             if is_online and enabled_flag:
                 online_count += 1
-            count_5m = int(cases_5m.get(hostname, 0))
-            count_15m = int(cases_15m.get(hostname, 0))
-            count_1h = int(cases_1h.get(hostname, 0))
-            count_5h = int(cases_5h.get(hostname, 0))
-            last_judging = dict(last_judging_by_host.get(hostname, {}))
-            last_judging_label = last_judging.get("label")
-            last_judging_at = last_judging.get("updated_at")
+            telemetry = telemetry_by_host.get(hostname)
             rows_out.append(
                 {
                     "hostname": hostname,
@@ -602,16 +569,11 @@ class TaskQueue:
                     "last_run_id": str(row.get("last_run_id") or ""),
                     "active_leases": int(active_by_host.get(hostname, 0)),
                     "update_count": int(row.get("update_count") or 0),
-                    "load_5m": float(count_5m / 300.0),
-                    "load_15m": float(count_15m / 900.0),
-                    "load_1h": float(count_1h / 3600.0),
-                    "load_5h": float(count_5h / 18000.0),
-                    "judged_cases_5m": count_5m,
-                    "judged_cases_15m": count_15m,
-                    "judged_cases_1h": count_1h,
-                    "judged_cases_5h": count_5h,
-                    "last_judging": last_judging_label,
-                    "last_judging_at": last_judging_at,
+                    "judged_case_count": 0 if telemetry is None else telemetry["judged_case_count"],
+                    "last_judging_at": None if telemetry is None else telemetry["last_judging_at"],
+                    "recent_avg_per_case_sec": (
+                        None if telemetry is None else telemetry["recent_avg_per_case_sec"]
+                    ),
                 }
             )
         return rows_out, online_count
@@ -638,6 +600,7 @@ class TaskQueue:
                 hostname,
                 now_text=now_text,
             )
+            self._s.host_telemetry.release_host(hostname)
         return {
             "released_tasks": 0,
             "released_jobs": released_jobs,

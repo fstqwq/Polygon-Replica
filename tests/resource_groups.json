@@ -1,0 +1,52 @@
+{
+  "unit": [
+    "test_build_config_format.py",
+    "test_judgehost_host_telemetry.py",
+    "test_judgehost_scheduler.py",
+    "test_polygon_package_import.py",
+    "test_polygon_package_rules.py",
+    "test_public_contracts.py",
+    "test_icpc_package_import.py",
+    "test_run_display.py",
+    "test_statement_style.py",
+    "test_verification_analysis.py",
+    "test_verification_runtime_coordinator.py",
+    "test_workspace_path_security.py"
+  ],
+  "db": [
+    "test_db_sql_trace.py",
+    "test_judgehost_lifecycle.py"
+  ],
+  "workspace": [
+    "test_statement_default_restore.py",
+    "test_testlib_source.py"
+  ],
+  "executor": [
+    "test_import_policy.py",
+    "test_judgehost_scripts.py",
+    "test_tex_sandbox.py"
+  ],
+  "large-fixture": [
+    "test_large_package_import.py"
+  ],
+  "e2e": [
+    "test_agent_api.py",
+    "test_backend_minimal.py",
+    "test_contest_access_actions.py",
+    "test_contest_builds.py",
+    "test_contest_problem_actions.py",
+    "test_export.py",
+    "test_judgehost_service.py",
+    "test_polygon_package_preview.py",
+    "test_preview.py",
+    "test_security.py",
+    "test_smtp_config.py",
+    "test_ui_auth.py",
+    "test_ui_components.py",
+    "test_ui_contests.py",
+    "test_ui_run.py",
+    "test_ui_workspace.py",
+    "test_verification_task_scheduler.py",
+    "test_worker_queue_service.py"
+  ]
+}

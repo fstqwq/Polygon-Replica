@@ -3,15 +3,39 @@ name: CI
 on: [push]
 
 jobs:
-  build:
+  static:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python 3.12
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Install system dependencies
+        cache: pip
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt pylint
+    - name: Run static checks
+      run: |
+        PYTHONPATH="$GITHUB_WORKSPACE" python -m pylint app
+        PYTHONPATH="$GITHUB_WORKSPACE" bash tests/scripts/check.sh
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [unit, db, workspace, executor, large-fixture, e2e]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: pip
+    - name: Install sandbox dependency
+      if: matrix.group == 'workspace' || matrix.group == 'executor' || matrix.group == 'e2e'
       run: |
         sudo apt-get update
         sudo apt-get install -y bubblewrap
@@ -23,14 +47,19 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt pylint
+        pip install -r requirements.txt
     - name: Configure git identity for tests
       run: |
         git config --global user.name "Polygon Replica CI"
         git config --global user.email "ci@polygon-replica.local"
-    - name: Analysing the code with pylint
-      run: |
-        PYTHONPATH="$GITHUB_WORKSPACE" python -m pylint app
-    - name: Run project tests
-      run: |
-        PYTHONPATH="$GITHUB_WORKSPACE" bash tests/scripts/test.sh
+    - name: Run ${{ matrix.group }} tests
+      env:
+        POLYGON_REPLICA_TEST_GROUPS: ${{ matrix.group }}
+      run: PYTHONPATH="$GITHUB_WORKSPACE" bash tests/scripts/test.sh
+    - name: Upload timing summary
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-timings-${{ matrix.group }}
+        path: .test-results/${{ matrix.group }}.json
+        if-no-files-found: warn

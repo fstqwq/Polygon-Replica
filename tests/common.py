@@ -8,6 +8,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 _TESTSUITE_BASE = Path("/tmp/polygon-replica")
 _TESTSUITE_ROOT = Path(
@@ -94,7 +95,10 @@ def ensure_local_env() -> None:
 ensure_local_env()
 
 from app.impl.runtime.config import config  # noqa: E402
+import app.impl.auth.password_envelope as password_envelope_module  # noqa: E402
+from app.impl.auth.password_envelope import PasswordEnvelopeStore  # noqa: E402
 from app.service.platform.testlib_source import maintained_testlib_header  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 
 
 def _expected_test_db_path() -> Path:
@@ -113,6 +117,16 @@ def _assert_test_runtime_paths() -> None:
 
 
 _assert_test_runtime_paths()
+
+# Full-runtime tests exercise the envelope protocol, not RSA key generation cost.
+# The production defaults remain covered separately by an explicit contract test.
+_TEST_PASSWORD_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+password_envelope_module.password_envelope_store = PasswordEnvelopeStore(
+    key_factory=lambda: _TEST_PASSWORD_KEY
+)
+_test_runtime_values = config.constants.to_dict()
+_test_runtime_values["PASSWORD_HASH_ITERS"] = 10_000
+config.constants.replace(_test_runtime_values)
 
 
 def _wait_for_worker_group(lock_attr: str, workers_attr: str, timeout_sec: float = 300.0) -> None:
@@ -145,70 +159,115 @@ preview_service = config.preview_service
 workspace_service = config.workspace_service
 
 
-def _quote_sql_identifier(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
+_DB_TEMPLATE_PATH = suite_root() / "fixture-template" / "metadata.db"
 
 
-def _clear_metadata_tables_for_test() -> None:
+def _checkpoint_database() -> None:
     _assert_test_runtime_paths()
     with db.conn() as conn:
-        conn.execute("PRAGMA foreign_keys=OFF")
-        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        table_names = [str(row[0]) for row in rows]
-        for table_name in table_names:
-            if table_name.startswith("sqlite_"):
-                continue
-            conn.execute(f"DELETE FROM {_quote_sql_identifier(table_name)}")
-        if "sqlite_sequence" in table_names:
-            conn.execute("DELETE FROM sqlite_sequence")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
-class SmokeBase(unittest.TestCase):
+def _database_sidecars(path: Path) -> tuple[Path, Path]:
+    return (Path(f"{path}-wal"), Path(f"{path}-shm"))
+
+
+def _initialize_database_template() -> None:
+    db.init()
+    _checkpoint_database()
+    _DB_TEMPLATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(db.path, _DB_TEMPLATE_PATH)
+
+
+def _restore_database_template() -> None:
+    _assert_test_runtime_paths()
+    for sidecar in _database_sidecars(db.path):
+        sidecar.unlink(missing_ok=True)
+    replacement = db.path.with_name(f".{db.path.name}.{uuid.uuid4().hex}.tmp")
+    replacement.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(_DB_TEMPLATE_PATH, replacement)
+        os.replace(replacement, db.path)
+    finally:
+        replacement.unlink(missing_ok=True)
+
+
+def _clear_runtime_files() -> None:
+    roots = {
+        Path(config.settings.bare_root),
+        Path(config.settings.workspace_root),
+        Path(config.settings.artifacts_root),
+        Path(config.settings.cache_root),
+    }
+    for root in roots:
+        _rmtree_retry(root)
+
+
+_initialize_database_template()
+
+
+class RuntimeDBTestBase(unittest.TestCase):
+    """Database reset shared by fixtures that use the global runtime graph."""
+
     def setUp(self) -> None:
-        try:
-            _wait_for_verification_workers(timeout_sec=10.0)
-        except Exception:
-            pass
-        try:
-            _wait_for_export_workers(timeout_sec=10.0)
-        except Exception:
-            pass
-        config.judgehost_task_service.reset_runtime_state()
-        workspace_service.clear_identity_caches()
-        _cleanup_stale_testsuite_roots(exclude=suite_root())
-        _cleanup_testsuite_root()
-        self.addCleanup(_cleanup_testsuite_root)
-        db.init()
-        _clear_metadata_tables_for_test()
+        _restore_database_template()
         self.test_id = uuid.uuid4().hex[:8]
         self.user = self.random_id("alice")
         self.problem = f"{self.user}/{self.random_id('sample')}"
         self.default_user = "alice"
         self.default_problem = "alice/sample"
 
-        self._seed_workspace(self.problem, self.user)
-        self._seed_workspace(self.default_problem, self.default_user)
+    def random_id(self, prefix: str) -> str:
+        safe_prefix = str(prefix or "").strip("-")[:7] or "user"
+        return f"{safe_prefix}-{uuid.uuid4().hex[:8]}"
 
-    def _seed_workspace(self, problem: str, user: str) -> Path:
+    def _artifact_root(self, artifact_id: str) -> Path:
+        problem = str(getattr(self, "problem", "alice/sample"))
+        return Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / artifact_id
+
+
+class WorkspaceTestBase(RuntimeDBTestBase):
+    """DB fixture that creates real Git workspaces only when requested."""
+
+    allow_worker_submit = False
+
+    def _seed_workspace(self, problem: str, user: str, *, profile: str = "full") -> Path:
+        if profile not in {"repository", "statement", "verification", "full"}:
+            raise ValueError(f"unknown workspace seed profile: {profile}")
         workspace_service.ensure_problem(problem)
         ws = Path(workspace_service.ensure_workspace(problem, user))
         workspace_service.grant_repo_access(problem, user, "owner")
-        for rel in [
-            "statement",
-            "statement-sections/english",
-            "config",
-            "validators",
-            "checkers",
-            "interactors",
-            "generators",
-            "solutions",
-            "tests/manual",
-            "tests/generator",
-            "third_party/testlib",
-        ]:
+        if profile == "repository":
+            return ws
+
+        rel_paths: list[str] = []
+        if profile in {"statement", "full"}:
+            rel_paths.extend(["statement", "statement-sections/english"])
+        if profile in {"verification", "full"}:
+            rel_paths.extend(
+                [
+                    "config",
+                    "validators",
+                    "checkers",
+                    "interactors",
+                    "generators",
+                    "solutions",
+                    "tests/manual",
+                    "tests/generator",
+                    "third_party/testlib",
+                ]
+            )
+        for rel in rel_paths:
             (ws / rel).mkdir(parents=True, exist_ok=True)
+
+        if profile in {"statement", "full"}:
+            self._seed_statement_files(ws)
+        if profile in {"verification", "full"}:
+            self._seed_verification_files(ws)
+        return ws
+
+    @staticmethod
+    def _seed_statement_files(ws: Path) -> None:
         statement_template = ws / "statement/statements.ftl"
         if not statement_template.exists():
             statement_template.write_text(
@@ -243,6 +302,9 @@ class SmokeBase(unittest.TestCase):
             path = ws / rel
             if not path.exists():
                 path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def _seed_verification_files(ws: Path) -> None:
         problem_cfg = ws / "config/problem.json"
         problem_cfg_payload: dict[str, object] = {
             "input_file": "stdin",
@@ -258,22 +320,66 @@ class SmokeBase(unittest.TestCase):
         )
         testlib = ws / "third_party/testlib/testlib.h"
         if not testlib.exists():
-            source = maintained_testlib_header(
-                repo_root=Path(__file__).resolve().parents[1]
-            )
+            source = maintained_testlib_header(repo_root=Path(__file__).resolve().parents[1])
             testlib.write_bytes(source.read_bytes())
-        return ws
-
-    def random_id(self, prefix: str) -> str:
-        safe_prefix = str(prefix or "").strip("-")[:7] or "user"
-        return f"{safe_prefix}-{uuid.uuid4().hex[:8]}"
-
-    def _artifact_root(self, artifact_id: str) -> Path:
-        problem = str(getattr(self, "problem", "alice/sample"))
-        return Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / artifact_id
 
     def _workspace_path(self) -> Path:
         problem = str(getattr(self, "problem", "alice/sample"))
         user = str(getattr(self, "user", "alice"))
-        ctx = workspace_service.workspace_context(problem, user, include_recent=False)
+        try:
+            ctx = workspace_service.workspace_context(problem, user, include_recent=False)
+        except Exception:
+            return self._seed_workspace(problem, user)
         return Path(str(ctx["workspace"]["path"]))
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace_service.clear_identity_caches()
+        if not self.allow_worker_submit:
+            submit_guard = patch.object(
+                config.worker_queue_service,
+                "submit",
+                side_effect=AssertionError("workspace tests may not submit worker jobs"),
+            )
+            submit_guard.start()
+            self.addCleanup(submit_guard.stop)
+
+
+class WorkerTestBase(WorkspaceTestBase):
+    """Workspace fixture that owns and drains asynchronous runtime workers."""
+
+    allow_worker_submit = True
+
+    def setUp(self) -> None:
+        _wait_for_verification_workers(timeout_sec=10.0)
+        _wait_for_export_workers(timeout_sec=10.0)
+        config.judgehost_task_service.reset_runtime_state()
+        self._clear_test_files()
+        super().setUp()
+        self.addCleanup(self._cleanup_workers)
+
+    def _clear_test_files(self) -> None:
+        pass
+
+    @staticmethod
+    def _cleanup_workers() -> None:
+        _wait_for_verification_workers(timeout_sec=10.0)
+        _wait_for_export_workers(timeout_sec=10.0)
+        config.judgehost_task_service.reset_runtime_state()
+
+
+class E2ETestBase(WorkerTestBase):
+    """Full application fixture retained only for end-to-end tests."""
+
+    seed_primary_workspace = True
+    seed_default_workspace = False
+
+    def _clear_test_files(self) -> None:
+        _clear_runtime_files()
+
+    def setUp(self) -> None:
+        super().setUp()
+        if self.seed_primary_workspace:
+            self._seed_workspace(self.problem, self.user)
+        if self.seed_default_workspace:
+            self._seed_workspace(self.default_problem, self.default_user)

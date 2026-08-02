@@ -11,10 +11,11 @@ from urllib.parse import parse_qs, urlparse
 
 from app.main_util import TEXTAREA_MAX_BYTES
 from app.service.statement.signature import statement_sources_signature
+from .common import E2ETestBase
 
 from .ui_support import (
     Path,
-    UIBaseSuite,
+    UIHelpersMixin,
     _flash_messages_from_response,
     _request,
     _wait_for_row,
@@ -48,12 +49,14 @@ from .ui_support import (
 )
 import app.impl.workspace.context_job as workspace_context_job
 import app.impl.workspace.context_verification as workspace_verification_module
-import app.impl.workspace.run_view_detail as run_view_detail_module
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind
 
 
-class TestUIRun(UIBaseSuite):
+class TestUIRun(UIHelpersMixin, E2ETestBase):
+    seed_primary_workspace = False
+    seed_default_workspace = True
+
     class _FakeUpload:
         def __init__(self, data: bytes):
             self._buf = io.BytesIO(data)
@@ -4084,22 +4087,6 @@ class TestUIRun(UIBaseSuite):
         self.assertIn("<h2>Diagnostics</h2>", html)
         self.assertNotIn("Compile Diagnostics", html)
 
-    def test_run_detail_failure_reason_rewrites_generic_reason_with_source(self) -> None:
-        from app.impl.workspace.run_view_detail import _rewrite_failure_reason_with_source
-
-        generic_reason = "required=[AC], allowed=[AC], got=[TL]"
-        reason = _rewrite_failure_reason_with_source(
-            generic_reason,
-            [
-                {
-                    "source": "solutions/ac_python.py",
-                    "match_reason": generic_reason,
-                    "error": "",
-                }
-            ],
-        )
-        self.assertEqual(reason, "ac_python.py: required=[AC], allowed=[AC], got=[TL]")
-
     def test_verification_match_omits_rule_reason_for_incomplete_solution_run(self) -> None:
         matched, completed, observed_pass, reason = workspace_impl._verification_solution_match(
             "rejected",
@@ -4109,37 +4096,6 @@ class TestUIRun(UIBaseSuite):
         self.assertFalse(matched)
         self.assertFalse(completed)
         self.assertFalse(observed_pass)
-        self.assertEqual(reason, "")
-
-    def test_run_detail_failure_reason_rewrites_incomplete_reason_with_column_error(self) -> None:
-        from app.impl.workspace.run_view_detail import _rewrite_failure_reason_with_source
-
-        generic_reason = "required=[WA, TL, RE, CE], allowed=[AC, WA, TL, RE, CE], got=[]: cancelled on service startup"
-        reason = _rewrite_failure_reason_with_source(
-            generic_reason,
-            [
-                {
-                    "source": "solutions/luangao.cpp",
-                    "match_reason": "",
-                    "error": "cancelled on service startup",
-                }
-            ],
-        )
-        self.assertEqual(reason, "luangao.cpp: cancelled on service startup")
-
-    def test_run_detail_failure_reason_does_not_promote_transient_running_state(self) -> None:
-        from app.impl.workspace.run_view_detail import _rewrite_failure_reason_with_source
-
-        reason = _rewrite_failure_reason_with_source(
-            "",
-            [
-                {
-                    "source": "solutions/std.cpp",
-                    "match_reason": "running",
-                    "error": "",
-                }
-            ],
-        )
         self.assertEqual(reason, "")
 
     def test_run_details_reads_runtime_inputs_answers_and_column_outputs_for_task_graph(self) -> None:
@@ -4497,19 +4453,6 @@ class TestUIRun(UIBaseSuite):
         self.assertRegex(detail_html, r"(?s)<table class=\"sol-metrics\">.*?<th>Status</th>.*?<th>Feedback</th>")
         self.assertIn('<span class="vmeta">2ms (3ms wall)</span>', detail_html)
         self.assertIn('<span class="vmeta">1MB</span>', detail_html)
-
-    def test_generation_status_text_uses_generation_specific_labels(self) -> None:
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_DONE, "AC"), "OK")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_DONE, "OK"), "OK")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "WA"), "validation failed")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "TL"), "generator TL")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "TLX"), "generator TL")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "RE"), "generator RE")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "CE"), "generator CE")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_FAILED, "FL"), "validator failed")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_PENDING, "WA"), "pending")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_LEASED, "WA"), "running")
-        self.assertEqual(run_view_detail_module._generation_status_text(VerificationTaskStore.TASK_CANCELLED, "WA"), "cancelled")
 
     def test_run_details_page_keeps_test_popup_available_for_generate_stage_failure(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

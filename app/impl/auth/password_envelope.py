@@ -4,6 +4,7 @@ import base64
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -103,10 +104,15 @@ def _envelope_signature(
 class PasswordEnvelopeStore:
     """In-memory one-time RSA envelope store for password verifier submission."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, key_factory: Callable[[], rsa.RSAPrivateKey] | None = None) -> None:
         self._lock = threading.RLock()
         self._entries: dict[str, _PasswordEnvelopeEntry] = {}
         self._issue_times_by_key: dict[str, list[float]] = {}
+        self._key_factory = key_factory or self._generate_private_key
+
+    @staticmethod
+    def _generate_private_key() -> rsa.RSAPrivateKey:
+        return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
     def _prune_locked(self, now_ts: int) -> None:
         expired = [
@@ -159,7 +165,7 @@ class PasswordEnvelopeStore:
             raise ValueError("invalid password token")
         with self._lock:
             self._check_rate_limit_locked(str(rate_key or "").strip(), time.monotonic())
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_key = self._key_factory()
         public_der = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.DER,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,

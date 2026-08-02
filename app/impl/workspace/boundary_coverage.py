@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.impl.workspace.verification_dag_plan import VerificationTestPlan
+from app.service.verification.plan import VerificationTestPlan
 
 BOUNDARY_COVERAGE_CHECK = "boundary_coverage"
 

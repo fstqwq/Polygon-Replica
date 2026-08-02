@@ -13,7 +13,7 @@ from app.service.judgehost.job_scheduler import JobScheduler
 from app.service.judgehost.job_scheduler_models import JobSpec, JudgehostCaseRow, JudgehostJobRow
 from app.service.platform.rwlock import WriterPriorityRWLock
 
-from .common import SmokeBase, config
+from .db_fixture import DBTestBase
 
 
 _NOW = "2026-07-29T00:00:00+00:00"
@@ -357,16 +357,16 @@ class TestWriterPriorityRWLock(unittest.TestCase):
                     pass
 
 
-class TestJudgehostLifecycle(SmokeBase):
+class TestJudgehostLifecycle(DBTestBase):
     def _service(self) -> Judgehost:
         service = Judgehost(
-            config.db,
-            config.workspace_service,
-            config.fs_manager,
-            config.settings,
-            config.constants,
-            verification_task_store=config.verification_task_store,
-            judge_fs_index_service=config.judge_fs_index_service,
+            self.db,
+            self.workspace_service,
+            self.fs_manager,
+            self.settings,
+            self.constants,
+            verification_task_store=self.verification_task_store,
+            judge_fs_index_service=self.judge_fs_index_service,
         )
         service.state.enabled = True
         service.state.api_token = "test-token"

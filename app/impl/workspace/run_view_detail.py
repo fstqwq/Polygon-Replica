@@ -50,7 +50,6 @@ from app.impl.workspace.context_verification import (
     _expected_status_rule,
     _status_rule_expected_display,
     _verification_solution_match,
-    _verification_solution_failure_hint,
 )
 from app.impl.workspace.run_view_list import (
     _latest_iso_timestamp,
@@ -63,6 +62,9 @@ from app.impl.workspace.run_view_list import (
     _run_timeout_ms_from_summary,
 )
 from app.impl.workspace.run_display import (
+    generation_status_text as _generation_status_text,
+    rewrite_failure_reason_with_source as _rewrite_failure_reason_with_source,
+    verification_solution_failure_hint as _verification_solution_failure_hint,
     run_actual_display,
     run_actual_short,
     run_cpu_wall_ms_text,
@@ -80,7 +82,6 @@ _C = config.constants
 _TASK_KIND_GENERATE_INPUT = "generate-input"
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
-_TRANSIENT_REASON_TOKENS = {"running", "queued", "pending"}
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
 _SANITY_CHECK_ORDER = (
     "empty_output_stability",
@@ -290,67 +291,6 @@ def _detail_sanity_context(
         ),
         "checked_count": int(payload["sanity_checked_count"]),
     }
-
-
-def _rewrite_failure_reason_with_source(current_reason: str, columns: list[dict[str, object]]) -> str:
-    source_reason = ""
-    generic_match_reasons: set[str] = set()
-    generic_error_texts: set[str] = set()
-    for col in columns:
-        source_path = str(col.get("source") or "")
-        match_reason = str(col.get("match_reason") or "")
-        error_text = str(col.get("error") or "")
-        if match_reason:
-            generic_match_reasons.add(match_reason.strip())
-        if error_text:
-            generic_error_texts.add(error_text.strip())
-        if not (match_reason or error_text):
-            continue
-        if (not error_text) and match_reason in _TRANSIENT_REASON_TOKENS:
-            continue
-        reason = _verification_solution_failure_hint(source_path, match_reason, error_text)
-        if reason:
-            source_reason = reason
-            break
-    if not source_reason:
-        return current_reason
-    if not current_reason:
-        return source_reason
-    if current_reason in generic_match_reasons or current_reason in generic_error_texts:
-        return source_reason
-    if current_reason in {"verification failed", "solution run did not complete", "verification mismatch"}:
-        return source_reason
-    if current_reason.startswith("required=[") and ", allowed=[" in current_reason and ", got=[" in current_reason:
-        return source_reason
-    return current_reason
-
-
-def _generation_status_text(status: str, verdict: str) -> str:
-    status_token = str(status or "")
-    verdict_token = str(verdict or "").upper()
-    if status_token == VerificationTaskStore.TASK_LEASED:
-        return "running"
-    if status_token in {VerificationTaskStore.TASK_QUEUED, VerificationTaskStore.TASK_PENDING}:
-        return "pending"
-    if status_token == VerificationTaskStore.TASK_CANCELLED:
-        return "cancelled"
-    if verdict_token in {"OK", "AC"}:
-        return "OK"
-    if verdict_token == "WA":
-        return "validation failed"
-    if verdict_token.startswith("TL"):
-        return "generator TL"
-    if verdict_token == "RE":
-        return "generator RE"
-    if verdict_token in {"CE", "COMPILE_ERROR", "COMPILE ERROR"}:
-        return "generator CE"
-    if verdict_token in {"FL", "FAIL", "FAILED"}:
-        return "validator failed"
-    if status_token == VerificationTaskStore.TASK_DONE:
-        return "OK"
-    if status_token == VerificationTaskStore.TASK_FAILED:
-        return verdict_token or "FL"
-    return status_token or "-"
 
 
 def _generate_detail_from_task_row(

@@ -14,7 +14,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from starlette.requests import Request
 
-from .common import SmokeBase
 import app.impl.auth.middleware as auth_middleware_module
 from app.impl.auth.password_envelope import password_envelope_store
 import app.impl.contest.access as contest_access_module
@@ -694,9 +693,9 @@ def _wait_for_row(sql: str, params: list[object], timeout_sec: float = 8.0):
         time.sleep(0.05)
     return db.fetch_one(sql, params)
 
-class UIBaseSuite(SmokeBase):
-    def setUp(self) -> None:
-        super().setUp()
+
+class UIHelpersMixin:
+    """UI helpers without database, workspace, or worker lifecycle ownership."""
 
     def _prepare_verification_workspace(self, problem: str, user: str = "alice") -> Path:
         safe_problem = str(problem or "").strip()

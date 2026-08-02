@@ -10,9 +10,10 @@ from .db_helpers import (
 
 from app.service.platform.git_process import run_git
 
+from .common import E2ETestBase
 from .ui_support import (
     Path,
-    UIBaseSuite,
+    UIHelpersMixin,
     _flash_messages_from_response,
     _register_with_password_envelope,
     _request,
@@ -38,7 +39,10 @@ from .ui_support import (
 )
 
 
-class TestUIContests(UIBaseSuite):
+class TestUIContests(UIHelpersMixin, E2ETestBase):
+    seed_primary_workspace = False
+    seed_default_workspace = True
+
     def _create_contest(self, slug: str, title: str = "UI Contest") -> int:
         resp = contests_root_create(
             _request("/contests/create"),

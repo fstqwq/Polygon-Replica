@@ -13,51 +13,16 @@ fi
 : "${POLYGON_REPLICA_TESTSUITE_STALE_TTL_SEC:=3600}"
 export POLYGON_REPLICA_TESTSUITE_STALE_TTL_SEC
 
-if command -v rg >/dev/null 2>&1; then
-  mapfile -t PY_FILES < <(rg --files app tests scripts | rg '\.py$')
+if [[ "$#" -gt 0 ]]; then
+  groups=("$@")
+elif [[ -n "${POLYGON_REPLICA_TEST_GROUPS:-}" ]]; then
+  IFS=',' read -r -a groups <<< "$POLYGON_REPLICA_TEST_GROUPS"
 else
-  mapfile -t PY_FILES < <(find app tests scripts -type f -name '*.py' -print)
+  groups=(unit db workspace executor large-fixture e2e)
 fi
 
-if [[ ${#PY_FILES[@]} -eq 0 ]]; then
-  echo "No python files under app/ tests/ or scripts/."
-  exit 0
-fi
-
-echo "[1/5] Syntax check (py_compile)"
-python -m py_compile "${PY_FILES[@]}"
-
-echo "[2/5] Lint check (pyflakes)"
-python -m pyflakes "${PY_FILES[@]}"
-
-echo "[3/5] Dead code check (vulture, confidence=70)"
-python -m vulture app tests --min-confidence 70
-
-echo "[4/5] Import architecture policy checks"
-bash tests/scripts/check-import-policy.sh
-bash tests/scripts/check-refactor-placeholders.sh
-
-echo "[5/5] Unit tests"
-: "${POLYGON_REPLICA_INCLUDE_SLOW_TESTS:=0}"
-if [[ "$POLYGON_REPLICA_INCLUDE_SLOW_TESTS" == "1" ]]; then
-  echo "Running full unittest suite (including slow ui integration tests)."
-  mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name 'test_*.py' -print | sort)
-else
-  echo "Running fast unittest suite (skipping slow ui integration tests: tests/test_ui_*.py)."
-  echo "Set POLYGON_REPLICA_INCLUDE_SLOW_TESTS=1 to include them."
-  mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name 'test_*.py' ! -name 'test_ui_*.py' -print | sort)
-fi
-
-if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
-  echo "No test files selected."
-  exit 0
-fi
-
-TEST_MODULES=()
-for file in "${TEST_FILES[@]}"; do
-  module="${file%.py}"
-  module="${module//\//.}"
-  TEST_MODULES+=("$module")
+for group in "${groups[@]}"; do
+  # Each resource contract is enforced in a fresh interpreter. In particular,
+  # unit tests must prove that they never load the global runtime config.
+  python tests/scripts/run_test_groups.py "$group"
 done
-
-python -m unittest -v "${TEST_MODULES[@]}"

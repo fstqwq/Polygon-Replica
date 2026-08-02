@@ -337,6 +337,5 @@ class Judgehost:
         with self._state.state_lock:
             self._state.hosts_state.clear()
             self._state.peer_hostname_by_client_addr.clear()
-            self._state.host_judged_case_events.clear()
-            self._state.host_last_judging.clear()
+        self._state.host_telemetry.reset()
         self._state.job_scheduler.reset()

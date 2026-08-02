@@ -978,6 +978,7 @@ class ResultProcessor:
                 logger.error("DOMjudge job finalization claim disappeared job_id=%s", int(job_id))
                 self._schedule_finalization_retry(int(job_id))
                 return
+            self._s.host_telemetry.record_job_terminal(int(job_id))
             self._clear_finalization_retry(int(job_id))
             work_root_text = domjudge_text(job_row["work_root"])
             if work_root_text:
@@ -1054,6 +1055,8 @@ class ResultProcessor:
                 self._domjudge_finalize_if_ready(job_id)
 
     def domjudge_add_judging_run(self, hostname: str, judgetask_id: int, payload: dict[str, object]) -> int:
+        reported_monotonic = time.monotonic()
+        reported_at = now_iso()
         case_row = self._s.job_scheduler.fetch_case(int(judgetask_id))
         if case_row is None:
             logger.info(
@@ -1063,13 +1066,22 @@ class ResultProcessor:
             return int(judgetask_id)
         self._touch_task_verification(domjudge_text(case_row["task_id"]))
         with self._job_activity(int(case_row["job_id"])):
-            return self._domjudge_add_judging_run_locked(hostname, judgetask_id, payload)
+            return self._domjudge_add_judging_run_locked(
+                hostname,
+                judgetask_id,
+                payload,
+                reported_at=reported_at,
+                reported_monotonic=reported_monotonic,
+            )
 
     def _domjudge_add_judging_run_locked(
         self,
         hostname: str,
         judgetask_id: int,
         payload: dict[str, object],
+        *,
+        reported_at: str,
+        reported_monotonic: float,
     ) -> int:
         safe_host = self._core.normalize_hostname(hostname)
         case_id = int(judgetask_id)
@@ -1324,7 +1336,13 @@ class ResultProcessor:
             case_id,
             runresult,
         )
-        self._core.record_host_judging(safe_host, label=f"j{job_id}", updated_at=now_text)
+        self._s.host_telemetry.record_case_reported(
+            safe_host,
+            job_id,
+            case_id,
+            reported_at=reported_at,
+            reported_monotonic=reported_monotonic,
+        )
         if not compile_only:
             try:
                 self._domjudge_update_verification_run_case_progress(

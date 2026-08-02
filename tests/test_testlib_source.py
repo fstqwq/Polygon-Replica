@@ -7,10 +7,10 @@ from pathlib import Path
 
 from app.impl.problem.compile_check import _testlib_extra_sources
 from app.service.platform.testlib_source import maintained_testlib_header, workspace_testlib_header
-from .common import SmokeBase
+from .common import WorkspaceTestBase
 
 
-class TestWorkspaceTestlibSource(SmokeBase):
+class TestWorkspaceTestlibSource(WorkspaceTestBase):
     def test_workspace_seed_copies_maintained_testlib(self) -> None:
         workspace = self._workspace_path()
         workspace_header = workspace / "third_party" / "testlib" / "testlib.h"

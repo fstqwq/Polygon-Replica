@@ -42,7 +42,8 @@ from .sanity_checks import (
     run_verification_sanity_checks,
 )
 from .runtime_threshold import time_limit_ms_from_run_config_json
-from .verification_dag_plan import VerificationTestPlan, build_verification_execution_plan
+from app.service.verification.plan import VerificationTestPlan
+from .verification_dag_plan import build_verification_execution_plan
 from .verification_payload import prepared_payload_for_uploaded_source as _prepared_payload_for_uploaded_source
 from .problem_config import read_problem_config
 

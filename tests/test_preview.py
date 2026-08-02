@@ -25,19 +25,21 @@ from app.service.statement.constant import (
     STATEMENT_TEMPLATE_REL,
 )
 from app.impl.workspace.sample_output_validation import validate_custom_sample_outputs
-from app.impl.workspace.verification_dag_plan import VerificationTestPlan
+from app.service.verification.plan import VerificationTestPlan
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.render import render_statement_main
 from app.service.statement.signature import statement_sources_signature
 from app.service.verification.signature import verification_fingerprint, verification_signature
-from .common import SmokeBase
+from .common import E2ETestBase
 from app.impl.runtime.config import config
 
 preview_service = config.preview_service
 
 
-class TestPreview(SmokeBase):
+class TestPreview(E2ETestBase):
+    seed_default_workspace = True
+
     def test_preview_service_and_statement_layout(self) -> None:
         ws = self._workspace_path()
         self.assertTrue((ws / "statement").is_dir())

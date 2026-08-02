@@ -3,36 +3,23 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import unittest
 import zipfile
 from pathlib import Path
 
 from app.service.importing.icpc import ICPCPackageImportService
-from .common import SmokeBase
 
 
-class TestICPCPackageImport(SmokeBase):
-    def test_import_reference_icpc_packages(self) -> None:
-        service = ICPCPackageImportService()
-        package_dir = Path("third_party/icpc-package-examples")
-        expected = {
-            "ecf50-prac-a.zip": ("interactive", 2, 2000, 0),
-            "ecf50-prac-b.zip": ("interactive", 1, 6000, 0),
-            "ecf50-prac-c.zip": ("pass-fail", 1, 2000, 4),
-            "ecf50-prac-d.zip": ("pass-fail", 1, 2000, 2),
-        }
-        for package_name, (mode, pass_limit, time_limit_ms, sample_count) in expected.items():
-            package = package_dir / package_name
-            self.assertTrue(package.is_file(), f"missing ICPC package fixture: {package}")
-            with tempfile.TemporaryDirectory(prefix=f"icpc-import-{package.stem}-") as td:
-                ws = Path(td)
-                result = service.import_package(ws, package.name, package.read_bytes())
-                problem_cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
-                self.assertEqual(problem_cfg.get("mode"), mode, package_name)
-                self.assertEqual(problem_cfg.get("pass_limit"), pass_limit, package_name)
-                self.assertEqual(problem_cfg.get("time_limit_ms"), time_limit_ms, package_name)
-                self.assertTrue((ws / "tests" / "spec.json").is_file(), package_name)
-                self.assertGreater(int(result.get("tests", {}).get("total") or 0), 0, package_name)
-                self.assertEqual(int(result.get("tests", {}).get("sample") or 0), sample_count, package_name)
+class TestICPCPackageImport(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="icpc-import-")
+        self.workspace = Path(self._temp_dir.name)
+
+    def tearDown(self) -> None:
+        self._temp_dir.cleanup()
+
+    def _workspace_path(self) -> Path:
+        return self.workspace
 
     def test_import_icpc_package_basic_layout(self) -> None:
         ws = self._workspace_path()

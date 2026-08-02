@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from app.db import CURRENT_SCHEMA_COLUMNS
 from .db_helpers import db_connection, db_execute, db_fetch_one, db_write_transaction, write_preview_summary
-from .common import SmokeBase
+from .common import E2ETestBase
 from .ui_support import _flash_messages_from_response, _request
 from app.impl.preview.preview import (
     preview_page,
@@ -41,7 +41,9 @@ from app.service.disk.verification_store import VerificationStore
 from app.service.platform.git_process import run_git
 
 
-class TestBackendMinimal(SmokeBase):
+class TestBackendMinimal(E2ETestBase):
+    seed_default_workspace = True
+
     class _FakeUpload:
         def __init__(self, filename: str, data: bytes):
             self.filename = filename

@@ -60,6 +60,19 @@ POLYGON_SOLUTION_TAG_EXPECTED: dict[str, str] = {
 }
 
 
+def polygon_solution_expected_from_tag(tag: str) -> str:
+    if not tag:
+        return "unknown"
+    direct = POLYGON_SOLUTION_TAG_EXPECTED.get(tag)
+    if direct is not None:
+        return normalize_expected_behavior(direct)
+    expected = normalize_expected_behavior(tag)
+    if expected != "unknown":
+        return expected
+    normalized = tag.replace("-", "_").replace(" ", "_")
+    return normalize_expected_behavior(normalized)
+
+
 PolygonTestRow = TypedDict(
     "PolygonTestRow",
     {
@@ -835,21 +848,6 @@ class PolygonPackageImportService:
             "generator_sources": generator_sources,
         }
 
-    def _solution_expected_from_tag(self, tag: str) -> str:
-        if not tag:
-            return "unknown"
-        direct = POLYGON_SOLUTION_TAG_EXPECTED.get(tag)
-        if direct is not None:
-            return normalize_expected_behavior(direct)
-        expected = normalize_expected_behavior(tag)
-        if expected != "unknown":
-            return expected
-        normalized = tag.replace("-", "_").replace(" ", "_")
-        expected = normalize_expected_behavior(normalized)
-        if expected != "unknown":
-            return expected
-        return "unknown"
-
     @staticmethod
     def _solution_suffix_from_source_type(source_type: str) -> str:
         if not source_type:
@@ -905,7 +903,7 @@ class PolygonPackageImportService:
             payload = _read_bytes_from_zip(zf, info)
             self._write_bytes(workspace, Path(target_rel), payload)
             tag = row["tag"]
-            expected = self._solution_expected_from_tag(tag)
+            expected = polygon_solution_expected_from_tag(tag)
             self._write_text(workspace, Path(f"{target_rel}.desc"), render_solution_desc(expected, ""))
             if not accepted_source and (expected == "accepted"):
                 accepted_source = target_rel

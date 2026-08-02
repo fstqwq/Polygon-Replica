@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
 
-from .common import SmokeBase
+from .common import E2ETestBase
 from .db_helpers import db_execute, db_fetch_one
 from .ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_envelope
 from app.impl.runtime.config import config
@@ -17,7 +17,9 @@ from app.service.verification.task_store import VerificationTaskStore
 workspace_service = config.workspace_service
 
 
-class TestAgentAPI(SmokeBase):
+class TestAgentAPI(E2ETestBase):
+    seed_default_workspace = True
+
     def _issue_auth_cookie(self, username: str, password: str = "StrongPass123") -> tuple[str, str]:
         reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)

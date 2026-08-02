@@ -335,8 +335,9 @@
           <th>Hostname</th>
           <th>Enabled</th>
           <th>State</th>
-          <th>Load (5m/15m/1h/5h)</th>
-          <th>Last Judging</th>
+          <th>Count</th>
+          <th>Last Judging Time</th>
+          <th>Recent Avg Per Case</th>
           <th>Action</th>
         </tr>
       </thead>
@@ -355,8 +356,9 @@
             <span class="danger">{{ 'offline' | status_label }}</span>
             {% endif %}
           </td>
-          <td class="muted">{{ "%.2f"|format(row.get('load_5m', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_15m', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_1h', 0.0) | float) }} / {{ "%.2f"|format(row.get('load_5h', 0.0) | float) }}</td>
-          <td><code>{{ row.get('last_judging') if row.get('last_judging') else '-' }}</code></td>
+          <td>{{ row.get('judged_case_count', 0) }}</td>
+          <td>{{ row.get('last_judging_at') | local_time if row.get('last_judging_at') else '-' }}</td>
+          <td class="muted">{% if row.get('recent_avg_per_case_sec') is not none %}{{ "%.3f s"|format(row.get('recent_avg_per_case_sec') | float) }}{% else %}-{% endif %}</td>
           <td>
             <form
               class="inline-form settings-judgehost-toggle-form"

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from .common import SmokeBase, suite_root
+from .common import E2ETestBase, suite_root
 from app.impl.runtime.config import config
 from app.impl.problem.checker import checker_rename_source, checker_set_standard
 from app.impl.problem.file import (
@@ -39,8 +39,6 @@ from app.impl.run_export.artifact import artifact_file
 from app.impl.run_export.run import run_cancel, run_execute
 from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.main_util import TEXTAREA_MAX_BYTES
-from app.service.platform.workspace_path import is_hidden_workspace_path, safe_workspace_path
-from app.service.problem.test_spec import parse_gen_command_tokens
 from app.service.verification.task_store import VerificationTaskStore
 from .ui_support import _register_with_password_envelope
 
@@ -136,7 +134,9 @@ def _flash_messages_from_response(response) -> list[str]:
     return result
 
 
-class TestSecurity(SmokeBase):
+class TestSecurity(E2ETestBase):
+    seed_default_workspace = True
+
     class _FakeUpload:
         def __init__(self, data: bytes):
             self._buf = data
@@ -229,23 +229,6 @@ class TestSecurity(SmokeBase):
             artifact_file("alice/sample", "bob", verification_id, "logs/compile.log")
         self.assertEqual(denied.exception.status_code, 404)
         self.assertIn("workspace", str(denied.exception.detail))
-
-    def test_hidden_workspace_path_helper_and_safe_path_reject_dot_segments(self) -> None:
-        self.assertTrue(is_hidden_workspace_path((".env",)))
-        self.assertTrue(is_hidden_workspace_path(("notes", ".cache", "secret.txt")))
-        self.assertTrue(is_hidden_workspace_path((".gitignore",)))
-        self.assertFalse(is_hidden_workspace_path(("notes", "readme.txt")))
-
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        with self.assertRaises(HTTPException) as denied:
-            safe_workspace_path(ws, ".env")
-        self.assertEqual(denied.exception.status_code, 400)
-        self.assertEqual(str(denied.exception.detail), "hidden path is not allowed")
-
-        with self.assertRaises(HTTPException) as nested_denied:
-            safe_workspace_path(ws, "notes/.cache/secret.txt")
-        self.assertEqual(nested_denied.exception.status_code, 400)
-        self.assertEqual(str(nested_denied.exception.detail), "hidden path is not allowed")
 
     def test_artifact_download_rejects_path_traversal(self) -> None:
         alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -401,16 +384,6 @@ class TestSecurity(SmokeBase):
         self.assertEqual(denied.exception.status_code, 404)
         self.assertIn("artifact", str(denied.exception.detail).lower())
         self.assertIn("not found", str(denied.exception.detail).lower())
-
-    def test_tests_spec_gen_command_shell_tokens_do_not_escape(self) -> None:
-        marker = suite_root() / f"compile-escape-{uuid.uuid4().hex[:8]}.txt"
-        marker.unlink(missing_ok=True)
-        injected_cmd = f"gen.cpp 7 && touch {marker.as_posix()}"
-        tokens = parse_gen_command_tokens(injected_cmd)
-        self.assertEqual(tokens[:2], ["gen.cpp", "7"])
-        self.assertIn("&&", tokens)
-        self.assertIn(marker.as_posix(), tokens)
-        self.assertFalse(marker.exists())
 
     def test_files_save_rejects_path_traversal_escape(self) -> None:
         marker = suite_root() / f"files-save-escape-{uuid.uuid4().hex[:8]}.txt"

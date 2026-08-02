@@ -5,12 +5,15 @@ import threading
 from pathlib import Path
 from typing import TypedDict
 from app.impl.runtime.config import config
-from app.service.platform.error_text import bounded_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.signature import verification_fingerprint, verification_signature
 from app.service.verification.types import Kind
-from .run_display import run_actual_failed_codes, run_actual_short
+from .run_display import (
+    run_actual_failed_codes,
+    run_actual_short,
+    verification_solution_failure_hint as _verification_solution_failure_hint,
+)
 
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
 _VERIFICATION_FINGERPRINT_CACHE_MAX = 1024
@@ -263,21 +266,6 @@ def _verification_solution_match(
     if rule_reason:
         return (False, True, observed_pass, rule_reason)
     return (False, True, observed_pass, "verification mismatch")
-
-def _verification_solution_failure_hint(source_path: str, reason: str, error_text: str = "") -> str:
-    source_label = _source_basename_label(source_path)
-    if not source_label:
-        source_label = 'solution'
-    rich_error = bounded_display_text(error_text)
-    if reason and rich_error:
-        detail = f'{reason}: {rich_error}'
-    elif reason:
-        detail = reason
-    elif rich_error:
-        detail = rich_error
-    else:
-        detail = 'verification mismatch'
-    return bounded_display_text(f'{source_label}: {detail}')
 
 def _verification_task_run_status(rows: list[VerificationTaskRow]) -> str:
     statuses = {row["status"] for row in rows}

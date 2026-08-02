@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-import uuid
-from unittest import TestCase
 from unittest.mock import patch
 
 from app.db import DB, now_iso, sqlite3
-from .common import suite_root
+from .db_fixture import DBTestBase
 
 
 class _TraceValues:
@@ -14,12 +12,7 @@ class _TraceValues:
         self.DB_SQL_TRACE_ENABLED = bool(enabled)
 
 
-class TestDBSqlTrace(TestCase):
-    def _make_db(self) -> DB:
-        root = suite_root() / f"db-trace-{uuid.uuid4().hex[:8]}"
-        root.mkdir(parents=True, exist_ok=True)
-        return DB(root / "trace.db")
-
+class TestDBSqlTrace(DBTestBase):
     @staticmethod
     def _fetch_one(db: DB, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Row | None:
         with db.conn() as conn:
@@ -46,38 +39,34 @@ class TestDBSqlTrace(TestCase):
         return rows
 
     def test_db_trace_is_disabled_by_default(self) -> None:
-        db = self._make_db()
-        db.init()
         with patch("app.db.logger.info") as info:
-            row = self._fetch_one(db,"SELECT 1 AS value")
+            row = self._fetch_one(self.db, "SELECT 1 AS value")
         self.assertIsNotNone(row)
         self.assertEqual(int(row["value"] or 0), 1)
         info.assert_not_called()
 
     def test_db_trace_can_be_enabled_at_runtime(self) -> None:
-        db = self._make_db()
-        db.init()
-        db.apply_runtime_values(_TraceValues(True))
+        self.db.apply_runtime_values(_TraceValues(True))
         with patch("app.db.logger.info") as info:
-            row = self._fetch_one(db,"SELECT 1 AS value")
+            row = self._fetch_one(self.db, "SELECT 1 AS value")
         self.assertIsNotNone(row)
         sql_texts = self._trace_sql_texts(info)
         self.assertTrue(any(text == "SELECT 1 AS value" for text in sql_texts), sql_texts)
 
     def test_db_trace_redacts_details_and_value_json_sql(self) -> None:
-        db = self._make_db()
-        db.init()
-        db.apply_runtime_values(_TraceValues(True))
+        self.db.apply_runtime_values(_TraceValues(True))
         payload = {"kind": "verification.start", "blob": "Y" * 1024}
         with patch("app.db.logger.info") as info:
-            self._execute(db,
+            self._execute(
+                self.db,
                 """
                 INSERT INTO audit_log(actor_user_id,problem_id,action,details_json,created_at)
                 VALUES(?,?,?,?,?)
                 """,
                 [None, None, "verification.start", json.dumps(payload), now_iso()],
             )
-            self._execute(db,
+            self._execute(
+                self.db,
                 """
                 INSERT INTO system_config(key,value_json,updated_at,updated_by_user_id)
                 VALUES(?,?,?,?)

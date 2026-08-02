@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from .common import E2ETestBase
 from .db_helpers import db_fetch_one
-from .ui_support import UIBaseSuite, _request, config, contests_root_create, uuid, workspace_service
+from .ui_support import (
+    UIHelpersMixin,
+    _request,
+    config,
+    contests_root_create,
+    uuid,
+    workspace_service,
+)
 
 
-class ContestActionBase(UIBaseSuite):
+class ContestActionBase(UIHelpersMixin, E2ETestBase):
+    seed_primary_workspace = False
+    seed_default_workspace = True
+
     def _create_contest(self, slug: str, title: str = "Contest Actions") -> int:
         response = contests_root_create(
             _request("/contests/create"),

@@ -24,11 +24,13 @@ from app.service.statement.constant import (
 )
 from app.service.statement.render import ensure_statement_language_sources
 from app.impl.run_export.import_source import import_package_as_new_problem
+from .package_builders import polygon_contest_package, polygon_problem_package
+from .common import E2ETestBase
 
 from .ui_support import (
     AUTH_COOKIE_NAME,
     Path,
-    UIBaseSuite,
+    UIHelpersMixin,
     _cookie_value_from_response,
     _flash_messages_from_response,
     _post_form_request,
@@ -73,7 +75,10 @@ from .ui_support import (
 SUDO_COOKIE_NAME = config.constants.SUDO_COOKIE_NAME
 
 
-class TestUIWorkspace(UIBaseSuite):
+class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
+    seed_primary_workspace = False
+    seed_default_workspace = True
+
     def _ensure_committed_head(self, problem: str, user: str) -> tuple[Path, str]:
         ws = Path(workspace_service.ensure_workspace(problem, user))
         head_res = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"])
@@ -1430,13 +1435,11 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_problems_root_import_creates_new_problem(self) -> None:
         class _Upload:
-            def __init__(self, path: Path):
-                self.filename = path.name
-                self.file = path.open("rb")
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = io.BytesIO(content)
 
-        package_path = Path("third_party/polygon-package-examples/run-twice-guess-the-number-46$linux.zip")
-        self.assertTrue(package_path.exists(), f"missing package fixture: {package_path}")
-        upload = _Upload(package_path)
+        upload = _Upload("synthetic-problem.zip", polygon_problem_package())
         target_slug = f"root-import-{uuid.uuid4().hex[:8]}"
         resp = problems_root_import(
             _post_request("/problems/import"),
@@ -1459,15 +1462,13 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_problems_root_import_recovers_from_stale_user_cache(self) -> None:
         class _Upload:
-            def __init__(self, path: Path):
-                self.filename = path.name
-                self.file = path.open("rb")
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = io.BytesIO(content)
 
-        package_path = Path("third_party/polygon-package-examples/run-twice-guess-the-number-46$linux.zip")
-        self.assertTrue(package_path.exists(), f"missing package fixture: {package_path}")
         workspace_service.set_cached_user("alice", {"id": 2_147_483_647, "username": "alice"})
 
-        upload = _Upload(package_path)
+        upload = _Upload("synthetic-problem.zip", polygon_problem_package())
         target_slug = f"root-import-cache-{uuid.uuid4().hex[:8]}"
         resp = problems_root_import(
             _post_request("/problems/import"),
@@ -1667,13 +1668,11 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_contests_root_import_polygon_contest_package_creates_contest_and_normalizes_newlines(self) -> None:
         class _Upload:
-            def __init__(self, path: Path):
-                self.filename = path.name
-                self.file = path.open("rb")
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = io.BytesIO(content)
 
-        package = Path("third_party/polygon-package-examples/contest/contest-55738.zip")
-        self.assertTrue(package.exists(), f"missing contest package fixture: {package}")
-        upload = _Upload(package)
+        upload = _Upload("synthetic-contest.zip", polygon_contest_package())
         target_slug = f"contest-import-{uuid.uuid4().hex[:8]}"
         custom_problem_slugs = {
             1: f"contest-problem-a-{uuid.uuid4().hex[:8]}",
@@ -1737,7 +1736,7 @@ class TestUIWorkspace(UIBaseSuite):
 
         contest_row = db_fetch_one("SELECT id,title FROM contests WHERE slug=?", [target_slug])
         self.assertIsNotNone(contest_row)
-        self.assertIn("The 2025 ICPC Asia East Continent Final Practice Contest", str(contest_row["title"] or ""))
+        self.assertEqual(str(contest_row["title"] or ""), "Synthetic Contest")
         contest_id = int(contest_row["id"])
         default_language_row = db_fetch_one(
             "SELECT value_json FROM contest_properties WHERE contest_id=? AND key='statement_default_language'",
@@ -1822,12 +1821,11 @@ class TestUIWorkspace(UIBaseSuite):
 
     def test_contest_import_confirm_rolls_back_partial_contest_on_problem_import_failure(self) -> None:
         class _Upload:
-            def __init__(self, path: Path):
-                self.filename = path.name
-                self.file = path.open("rb")
+            def __init__(self, filename: str, content: bytes):
+                self.filename = filename
+                self.file = io.BytesIO(content)
 
-        package = Path("third_party/polygon-package-examples/contest/contest-55738.zip")
-        upload = _Upload(package)
+        upload = _Upload("synthetic-contest.zip", polygon_contest_package())
         target_slug = f"contest-import-{uuid.uuid4().hex[:8]}"
 
         resp = contests_root_import(
